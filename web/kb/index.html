@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=20260818c">
-<link rel="stylesheet" href="/css/themes.css?v=20260818c">
-<link rel="stylesheet" href="/css/materials.css?v=20260818c">
-<link rel="stylesheet" href="/css/app.css?v=20260818c">
+<link rel="icon" type="image/png" href="/icon.png?v=20260818f">
+<link rel="stylesheet" href="/css/themes.css?v=20260818f">
+<link rel="stylesheet" href="/css/materials.css?v=20260818f">
+<link rel="stylesheet" href="/css/app.css?v=20260818f">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -76,16 +76,13 @@
   <header class="topbar">
     <button id="side-toggle" class="side-toggle" title="目录" aria-label="Toggle sidebar">☰</button>
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260818c" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260818f" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
     <nav class="nav">
       <a href="#/" class="nav-link" data-route="graph">
         <svg class="ic" aria-hidden="true"><use href="#i-graph"/></svg><span data-i18n="nav.graph">关系图谱</span>
-      </a>
-      <a href="#/overview" class="nav-link" data-route="overview">
-        <svg class="ic" aria-hidden="true"><use href="#i-grid"/></svg><span data-i18n="nav.overview">最新总览</span>
       </a>
       <a href="#/novel" class="nav-link" data-route="novel">
         <svg class="ic" aria-hidden="true"><use href="#i-book"/></svg><span data-i18n="nav.novel">小说管理</span>
@@ -141,26 +138,6 @@
         </div>
       </div>
       <button id="side-collapse" class="side-collapse" title="收起/展开侧栏" aria-label="Collapse sidebar"><span>«</span></button>
-    </section>
-
-    <!-- 二级页:最新总览 -->
-    <section id="view-overview" class="view view-overview">
-      <div class="ov-head">
-        <h1 data-i18n="nav.overview">最新总览</h1>
-        <p class="ov-sub" data-i18n="overview.sub">知识库全貌 · 分类浏览 · 最近更新</p>
-        <p id="ov-live" class="live-tag"></p>
-      </div>
-      <div id="stats" class="stats"></div>
-      <div class="ov-body">
-        <div class="ov-left">
-          <h2 class="ov-section-title"><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg><span data-i18n="overview.sections">按分类浏览</span></h2>
-          <div id="cat-groups" class="cat-groups"></div>
-        </div>
-        <aside class="ov-side">
-          <h2 class="ov-section-title"><svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg><span data-i18n="recent.title">最近更新</span></h2>
-          <div id="recent-list" class="recent-list"></div>
-        </aside>
-      </div>
     </section>
 
     <!-- 二级页:Comfy UI(内嵌 Web UI) -->
@@ -649,31 +626,6 @@
           </div>
         </div>
         <div class="settings-group">
-          <div class="settings-label"><span class="sl-emoji">📊</span><span data-i18n="settings.overview">最新总览</span></div>
-          <div class="settings-row">
-            <span class="settings-row-label" data-i18n="settings.recentCount">最近更新条数</span>
-            <input type="number" id="set-recent-count" class="settings-input" min="0" max="999" step="1">
-            <span class="settings-hint" data-i18n="settings.recentCountHint">0 = 全部</span>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label" data-i18n="settings.catLimit">每分类页数上限</span>
-            <input type="number" id="set-cat-limit" class="settings-input" min="0" max="100" step="1">
-            <span class="settings-hint" data-i18n="settings.catLimitHint">0 = 全部</span>
-          </div>
-          <div class="settings-row settings-row-top">
-            <span class="settings-row-label" data-i18n="settings.statCards">统计卡指标</span>
-            <div class="settings-toggles">
-              <label class="toggle"><input type="checkbox" data-stat="pages"><span class="tk"></span><span data-i18n="stats.pages">知识页</span></label>
-              <label class="toggle"><input type="checkbox" data-stat="categories"><span class="tk"></span><span data-i18n="stats.categories">分类</span></label>
-              <label class="toggle"><input type="checkbox" data-stat="links"><span class="tk"></span><span data-i18n="stats.links">双向链接</span></label>
-              <label class="toggle"><input type="checkbox" data-stat="words"><span class="tk"></span><span data-i18n="stats.words">总字数</span></label>
-              <label class="toggle"><input type="checkbox" data-stat="avgWords"><span class="tk"></span><span data-i18n="stats.avgWords">平均字数</span></label>
-              <label class="toggle"><input type="checkbox" data-stat="lastUpdate"><span class="tk"></span><span data-i18n="stats.lastUpdate">最后更新</span></label>
-              <label class="toggle"><input type="checkbox" data-stat="topCat"><span class="tk"></span><span data-i18n="stats.topCat">最多页分类</span></label>
-            </div>
-          </div>
-        </div>
-        <div class="settings-group">
           <div class="settings-label"><span class="sl-emoji">📚</span><span data-i18n="settings.manager">管理页</span></div>
           <div class="settings-row">
             <span class="settings-row-label" data-i18n="settings.showNovel">小说管理页</span>
@@ -726,14 +678,13 @@
       </div>
     </div>
   </div>
-  <script src="/vendor/echarts.min.js?v=20260818c"></script>
-  <script src="/js/i18n.js?v=20260818c"></script>
-  <script src="/js/markdown.js?v=20260818c"></script>
-  <script src="/js/app.js?v=20260818c"></script>
-  <script src="/js/graph.js?v=20260818c"></script>
-  <script src="/js/overview.js?v=20260818c"></script>
-  <script src="/js/comfy.js?v=20260818c"></script>
-  <script src="/js/dirview.js?v=20260818c"></script>
-  <script src="/js/manju.js?v=20260818c"></script>
+  <script src="/vendor/echarts.min.js?v=20260818f"></script>
+  <script src="/js/i18n.js?v=20260818f"></script>
+  <script src="/js/markdown.js?v=20260818f"></script>
+  <script src="/js/app.js?v=20260818f"></script>
+  <script src="/js/graph.js?v=20260818f"></script>
+  <script src="/js/comfy.js?v=20260818f"></script>
+  <script src="/js/dirview.js?v=20260818f"></script>
+  <script src="/js/manju.js?v=20260818f"></script>
 </body>
 </html>

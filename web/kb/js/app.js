@@ -4,24 +4,21 @@ const App = {
   style: "default",
   pendingCat: null,
   pageCache: {},
-  overviewPrefs: null,
 
   async init() {
     this.theme = localStorage.getItem("kbw-theme") || "nebula";
     this.applyTheme(this.theme, true);
     this.style = localStorage.getItem("kbw-style") || "default";
     this.applyStyle(this.style, true);
-    this.loadOverviewPrefs();
     await I18N.init();
     this.bindControls();
     this.initTooltip();
     this.initStars();
     window.addEventListener("hashchange", () => this.route());
-    // 语言切换后重渲染当前视图(侧栏/图例/总览/管理页为动态内容)
+    // 语言切换后重渲染当前视图(侧栏/图例/管理页为动态内容)
     document.addEventListener("i18n:changed", () => {
       const r = this.currentRoute();
-      if (r === "overview") OverviewView.render();
-      else if (r === "comfy" && typeof ComfyView !== "undefined") ComfyView.renderStatus();
+      if (r === "comfy" && typeof ComfyView !== "undefined") ComfyView.renderStatus();
       else if (r === "novel" && typeof NovelView !== "undefined") NovelView.render();
       else if (r === "manju" && typeof ManjuView !== "undefined") ManjuView.render();
       else if (typeof GraphView !== "undefined") {
@@ -67,26 +64,16 @@ const App = {
     // 顶栏搜索:按视图分发(关系图谱=搜节点,最新总览=搜内容,内嵌页禁用)
     const ts = document.getElementById("top-search");
     if (ts) {
-      const isOverview = () => App.currentRoute() === "overview";
       const syncSearch = () => {
-        const r = App.currentRoute();
-        ts.placeholder = I18N.t(isOverview() ? "overview.search" : "graph.search");
-        ts.value = isOverview()
-          ? OverviewView.search || ""
-          : r === "graph" && typeof GraphView !== "undefined"
-            ? GraphView.search || ""
-            : "";
+        ts.placeholder = I18N.t("graph.search");
+        ts.value = App.currentRoute() === "graph" && typeof GraphView !== "undefined" ? GraphView.search || "" : "";
       };
       let st = null;
       ts.addEventListener("input", () => {
         clearTimeout(st);
         st = setTimeout(() => {
           const q = ts.value.trim();
-          const r = App.currentRoute();
-          if (r === "overview") {
-            OverviewView.search = q;
-            OverviewView.render();
-          } else if (r === "graph" && typeof GraphView !== "undefined") {
+          if (App.currentRoute() === "graph" && typeof GraphView !== "undefined") {
             GraphView.search = q;
             GraphView.applyOption();
           }
@@ -191,45 +178,6 @@ const App = {
     }
     const llmSave = document.getElementById("set-llm-save");
     if (llmSave) llmSave.addEventListener("click", saveLLMSettings);
-    // 最新总览展示设置:改动即保存,总览页可见时立即重渲染
-    const rerenderIfOverview = () => {
-      if ((location.hash || "#/").startsWith("#/overview")) OverviewView.render();
-    };
-    const ovCount = document.getElementById("set-recent-count");
-    const ovLimit = document.getElementById("set-cat-limit");
-    if (ovCount) {
-      ovCount.value = this.overviewPrefs.recentCount;
-      ovCount.addEventListener("change", () => {
-        // 0 = 全部(不限条数),上限放宽为任意数
-        const v = Math.min(999, Math.max(0, parseInt(ovCount.value, 10) || 0));
-        ovCount.value = v;
-        this.overviewPrefs.recentCount = v;
-        this.saveOverviewPrefs();
-        rerenderIfOverview();
-      });
-    }
-    if (ovLimit) {
-      ovLimit.value = this.overviewPrefs.catLimit;
-      ovLimit.addEventListener("change", () => {
-        const v = Math.min(100, Math.max(0, parseInt(ovLimit.value, 10) || 0));
-        ovLimit.value = v;
-        this.overviewPrefs.catLimit = v;
-        this.saveOverviewPrefs();
-        rerenderIfOverview();
-      });
-    }
-    document.querySelectorAll("input[data-stat]").forEach((cb) => {
-      cb.checked = this.overviewPrefs.stats.includes(cb.dataset.stat);
-      cb.addEventListener("change", () => {
-        const k = cb.dataset.stat;
-        const set = new Set(this.overviewPrefs.stats);
-        if (cb.checked) set.add(k);
-        else set.delete(k);
-        this.overviewPrefs.stats = [...set];
-        this.saveOverviewPrefs();
-        rerenderIfOverview();
-      });
-    });
     // 管理页设置:页面开关 + 目录选择(localStorage)
     ["novel", "manju"].forEach((key) => {
       const cb = document.getElementById("set-show-" + key);
@@ -324,29 +272,6 @@ const App = {
   },
 
   /* 最新总览展示偏好:统计卡指标 / 每分类页数上限 / 最近更新条数 */
-  loadOverviewPrefs() {
-    const d = {
-      recentCount: 12,
-      catLimit: 0,
-      stats: ["pages", "categories", "links", "words", "avgWords", "lastUpdate", "topCat"],
-    };
-    let saved = null;
-    try {
-      saved = JSON.parse(localStorage.getItem("kbw-ov-prefs") || "null");
-    } catch (e) {
-      saved = null;
-    }
-    this.overviewPrefs = Object.assign(d, saved || {});
-    if (!Array.isArray(this.overviewPrefs.stats)) {
-      this.overviewPrefs.stats = d.stats;
-    } else {
-      // 新指标自动纳入已有配置(去重,保持默认顺序)
-      this.overviewPrefs.stats = [...new Set([...d.stats, ...this.overviewPrefs.stats])];
-    }
-  },
-  saveOverviewPrefs() {
-    localStorage.setItem("kbw-ov-prefs", JSON.stringify(this.overviewPrefs));
-  },
 
   /* 材质风格:与配色主题正交(data-style 管质感,不重建色板) */
   applyStyle(name, silent) {
@@ -520,10 +445,9 @@ const App = {
     if (el) el.textContent = I18N.t("live.refreshed") + " " + new Date().toLocaleTimeString();
   },
 
-  /* 当前路由:graph / overview / comfy / novel / manju */
+  /* 当前路由:graph / comfy / novel / manju */
   currentRoute() {
     const hash = location.hash || "#/";
-    if (hash.startsWith("#/overview")) return "overview";
     if (hash.startsWith("#/comfy")) return "comfy";
     if (hash.startsWith("#/novel")) return "novel";
     if (hash.startsWith("#/manju")) return "manju";
@@ -533,11 +457,9 @@ const App = {
   route() {
     const route = this.currentRoute();
     document.getElementById("view-graph").classList.toggle("is-active", route === "graph");
-    document.getElementById("view-overview").classList.toggle("is-active", route === "overview");
     document.getElementById("view-comfy").classList.toggle("is-active", route === "comfy");
     document.getElementById("view-novel").classList.toggle("is-active", route === "novel");
     document.getElementById("view-manju").classList.toggle("is-active", route === "manju");
-    document.body.classList.toggle("view-overview-active", route === "overview");
     document.body.classList.toggle("view-comfy-active", route === "comfy");
     document.body.classList.toggle("view-dir-active", route === "novel" || route === "manju");
     document.body.classList.toggle("view-graph-active", route === "graph");
@@ -548,8 +470,7 @@ const App = {
     // 路由切换时关闭管理页遗留弹窗(宽阅读器/单视频弹窗)
     if (typeof NovelView !== "undefined") NovelView.closeReader();
     if (typeof ManjuView !== "undefined") ManjuView.closeFilmModal();
-    if (route === "overview") OverviewView.render();
-    else if (route === "comfy") ComfyView.enter();
+    if (route === "comfy") ComfyView.enter();
     else if (route === "novel") NovelView.enter();
     else if (route === "manju") {
       ManjuView.enter();

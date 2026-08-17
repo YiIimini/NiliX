@@ -35,7 +35,7 @@ func BuildGraph(s *Store) *Graph {
 	sort.Strings(catNames)
 	for _, c := range catNames {
 		nodes = append(nodes, GraphNode{
-			ID: "cat:" + c, Name: c, Category: c,
+			ID: "cat:" + c, Name: c, Category: c, Top: c,
 			Color: catColor[c], Size: catCount[c]*2, IsHub: true,
 		})
 	}
@@ -44,8 +44,12 @@ func BuildGraph(s *Store) *Graph {
 		if p.ID == indexID {
 			continue
 		}
+		top := p.Category
+		if i := strings.Index(p.RelPath, "/"); i > 0 {
+			top = p.RelPath[:i] // 路径首段 = 根目录大类(Category 是子类)
+		}
 		nodes = append(nodes, GraphNode{
-			ID: p.ID, Name: p.Title, Category: p.Category,
+			ID: p.ID, Name: p.Title, Category: p.Category, Top: top,
 			Color: p.Color, Size: len(p.Links) + 1, Mtime: p.Mtime,
 		})
 	}

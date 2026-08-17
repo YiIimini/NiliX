@@ -67,6 +67,13 @@ func (s *Store) Reload() error {
 	return nil
 }
 
+// LoadedAt 返回本次扫描完成时间(每代数据唯一,可作缓存指纹)。
+func (s *Store) LoadedAt() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadedAt
+}
+
 // Snapshot 返回页面深拷贝(避免外部并发读写)
 func (s *Store) Snapshot() []*Page {
 	s.mu.RLock()

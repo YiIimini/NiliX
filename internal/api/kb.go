@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -13,14 +14,27 @@ func (s *Server) handleKBMeta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.kbStore.Meta())
 }
 
-// handleKBGraph 知识图谱。
+// handleKBGraph 知识图谱(预序列化字节缓存:同一代扫描直接回放,~0ms;
+// /api/reload 触发新扫描后按 LoadedAt 指纹自动重建——等价 git 版本键,且免去每次跑 git status 的开销)。
 func (s *Server) handleKBGraph(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, kb_work.BuildGraph(s.kbStore))
-}
-
-// handleKBOverview 知识库总览。
-func (s *Server) handleKBOverview(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, kb_work.BuildOverview(s.kbStore))
+	gen := s.kbStore.LoadedAt()
+	s.kbGraphMu.RLock()
+	hit := s.kbGraphGen.Equal(gen) && len(s.kbGraphJSON) > 0
+	b := s.kbGraphJSON
+	s.kbGraphMu.RUnlock()
+	if !hit {
+		var err error
+		b, err = json.Marshal(kb_work.BuildGraph(s.kbStore))
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "graph marshal: "+err.Error())
+			return
+		}
+		s.kbGraphMu.Lock()
+		s.kbGraphJSON, s.kbGraphGen = b, gen
+		s.kbGraphMu.Unlock()
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = w.Write(b)
 }
 
 // handleKBPage 单个知识页。

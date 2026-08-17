@@ -126,28 +126,53 @@ const GraphView = {
       listEl.innerHTML =
         html || `<div class="side-empty">🔗 ${I18N.t("side.empty")}</div>`;
     } else {
-      titleEl.textContent = I18N.t("side.title.all");
       if (icon) icon.setAttribute("href", "#i-list");
-      const nodes = this.data.nodes.filter((n) => !n.isHub);
-      countEl.textContent = nodes.length;
-      // 分组;组内按最新更新时间降序,分类组按组内最新时间排序(最新更新的分类置顶)
-      const groups = {};
-      nodes.forEach((n) => {
-        (groups[n.category] = groups[n.category] || []).push(n);
-      });
-      const entries = Object.entries(groups).map(([cat, list]) => {
-        list.sort((a, b) => (b.mtime || "").localeCompare(a.mtime || ""));
-        return [cat, list, (list[0] && list[0].mtime) || ""];
-      });
-      entries.sort((a, b) => b[2].localeCompare(a[2]));
-      let html = "";
-      entries.forEach(([cat, list]) => {
-        // 分类色统一走主题派生色,与图谱图例(导航条)一一对应
-        const color = App.catColor(cat);
-        html += `<div class="side-group-title" data-cat="${cat.replace(/"/g, "&quot;")}" style="color:${color}"><span class="gdot" style="background:${color}"></span>${cat}</div>`;
-        html += list.map((n) => item(n, false)).join("");
-      });
-      listEl.innerHTML = html;
+      const nodes = this.data.nodes.filter((n) => !n.isHub && !n.isIndex);
+      if (this._topFilter) {
+        // 大类下钻:该大类页面按子类分组,顶部返回行
+        titleEl.textContent = this._topFilter;
+        const sub = nodes.filter((n) => (n.top || n.category) === this._topFilter);
+        countEl.textContent = sub.length;
+        const groups = {};
+        sub.forEach((n) => { (groups[n.category] = groups[n.category] || []).push(n); });
+        const entries = Object.entries(groups).map(([cat, list]) => {
+          list.sort((a, b) => (b.mtime || "").localeCompare(a.mtime || ""));
+          return [cat, list, (list[0] && list[0].mtime) || ""];
+        });
+        entries.sort((a, b) => b[2].localeCompare(a[2]));
+        let html = `<div class="side-item side-back" title="返回大类列表"><span class="si-dot" style="background:var(--muted)">←</span><span class="si-name" style="color:var(--muted)">全部大类</span></div>`;
+        entries.forEach(([cat, list]) => {
+          const color = App.catColor(cat);
+          html += `<div class="side-group-title" style="color:${color}"><span class="gdot" style="background:${color}"></span>${cat}</div>`;
+          html += list.map((n) => item(n, false)).join("");
+        });
+        listEl.innerHTML = html;
+      } else {
+        // 索引只列根目录大类(小类/页面不直接显示),点击下钻
+        titleEl.textContent = I18N.t("side.title.all");
+        const counts = {};
+        nodes.forEach((n) => { const t = n.top || n.category; counts[t] = (counts[t] || 0) + 1; });
+        const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+        countEl.textContent = entries.length;
+        listEl.innerHTML = entries.map(([cat, cnt]) => {
+          const color = App.catColor(cat);
+          return `<div class="side-item side-cat" data-cat="${cat.replace(/"/g, "&quot;")}" title="查看「${cat}」大类(含 ${cnt} 页)">
+            <span class="si-dot" style="background:${color}"></span>
+            <span class="si-name" style="color:${color}">${cat}</span>
+            <span class="si-meta">📄 ${cnt}</span>
+          </div>`;
+        }).join("");
+      }
+      listEl.querySelectorAll(".side-cat").forEach((el2) =>
+        el2.addEventListener("click", () => { this._topFilter = el2.dataset.cat; this.renderSide(null); })
+      );
+      const back = listEl.querySelector(".side-back");
+      if (back) back.addEventListener("click", () => { this._topFilter = null; this.renderSide(null); });
+      // 下钻视图里的页面项:点击选中图谱节点
+      listEl.querySelectorAll(".side-item[data-page]").forEach((el2) =>
+        el2.addEventListener("click", () => this.select(el2.dataset.page))
+      );
+      return;
     }
     listEl.querySelectorAll(".side-item").forEach((el2) =>
       el2.addEventListener("click", () => this.select(el2.dataset.page))
@@ -353,6 +378,7 @@ const GraphView = {
     this.chart.setOption(
       {
         backgroundColor: "transparent",
+        animation: false,
         series: [
           {
             type: "graph",
@@ -365,7 +391,7 @@ const GraphView = {
               edgeLength: [60, 140],
               gravity: 0.06,
               friction: 0.5,
-              layoutAnimation: true,
+              layoutAnimation: false,
             },
             // Obsidian:无箭头(需显式禁用,否则走 ECharts 默认 circle+arrow)
             edgeSymbol: ["none", "none"],

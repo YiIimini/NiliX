@@ -132,7 +132,6 @@ func onReady(url string) func() {
 		systray.SetTitle("NiliX")
 		systray.SetTooltip("NiliX")
 		mGraph := systray.AddMenuItem("关系图谱", "打开知识库关系图谱")
-		mOverview := systray.AddMenuItem("最新总览", "打开知识库最新总览")
 		mNovel := systray.AddMenuItem("小说管理", "打开小说管理")
 		mManju := systray.AddMenuItem("漫剧管理", "打开漫剧管理页")
 		mComfy := systray.AddMenuItem("ComfyUI", "打开 ComfyUI 页面")
@@ -144,8 +143,6 @@ func onReady(url string) func() {
 				select {
 				case <-mGraph.ClickedCh:
 					openBrowser(url)
-				case <-mOverview.ClickedCh:
-					openBrowser(url + "#/overview")
 				case <-mNovel.ClickedCh:
 					openBrowser(url + "#/novel")
 				case <-mManju.ClickedCh:

@@ -42,6 +42,7 @@ type GraphNode struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Category string `json:"category"`
+	Top      string `json:"top"`     // 根目录大类(侧栏索引只显示大类)
 	Color    string `json:"color"`
 	Size     int    `json:"size"`
 	Mtime    string `json:"mtime"`   // RFC3339(页面节点;枢纽/索引节点为空)

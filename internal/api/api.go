@@ -26,6 +26,9 @@ type Server struct {
 	renderMgr *render.Manager
 	sysmon    *sysmon.Collector
 	kbStore   *kb_work.Store
+	kbGraphMu     sync.RWMutex
+	kbGraphJSON   []byte
+	kbGraphGen    time.Time
 	kbRoot    string
 	kbFS      fs.FS
 	islandFS  fs.FS
@@ -46,7 +49,6 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/meta", s.handleKBMeta)
 	mux.HandleFunc("GET /api/graph", s.handleKBGraph)
-	mux.HandleFunc("GET /api/overview", s.handleKBOverview)
 	mux.HandleFunc("GET /api/page", s.handleKBPage)
 	mux.HandleFunc("GET /api/asset", s.handleKBAsset)
 	mux.HandleFunc("POST /api/reload", s.handleKBReload)
