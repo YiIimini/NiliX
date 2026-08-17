@@ -1,6 +1,7 @@
 package kb_work
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -140,10 +141,19 @@ func scan(root string) ([]*Page, []Category, string, error) {
 		scanCatDir(root, catDir, catDir, cat.Color, cat, &cats, &pages)
 	}
 
-	// 解析双链:按文件名(去 .md)解析
+	// 同名页 ID 去重:后者追加 ~N 后缀。ECharts 图谱对重复节点 ID 会崩
+	// (Cannot set properties of undefined (setting 'dataIndex')),双链按名解析指向首个页面。
 	byBase := map[string]*Page{}
+	seenBase := map[string]int{}
 	for _, p := range pages {
-		byBase[strings.ToLower(p.ID)] = p
+		base := strings.ToLower(p.ID)
+		seenBase[base]++
+		if seenBase[base] > 1 {
+			p.ID = fmt.Sprintf("%s~%d", p.ID, seenBase[base])
+		}
+		if _, ok := byBase[base]; !ok {
+			byBase[base] = p
+		}
 	}
 	for _, p := range pages {
 		for _, raw := range p.RawLinks {
