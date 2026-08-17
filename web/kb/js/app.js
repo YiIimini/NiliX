@@ -21,28 +21,9 @@ const App = {
       if (r === "comfy" && typeof ComfyView !== "undefined") ComfyView.renderStatus();
       else if (r === "novel" && typeof NovelView !== "undefined") NovelView.render();
       else if (r === "manju" && typeof ManjuView !== "undefined") ManjuView.render();
-      else if (typeof GraphView !== "undefined") {
-        GraphView.renderLegend();
-        GraphView.renderSide(GraphView.selectedId);
-        GraphView.renderBottom(GraphView.selectedId);
-      }
-    });
-    document.getElementById("detail-close").addEventListener("click", () => this.closeDetail());
-    document.addEventListener("click", (e) => {
-      const dp = document.getElementById("detail");
-      if (!dp || !dp.classList.contains("is-open")) return;
-      if (e.target.closest("#detail, .graph-canvas, #side, .side-collapse")) return;
-      this.closeDetail();
-    });
-    document.getElementById("detail").addEventListener("click", (e) => {
-      const w = e.target.closest(".md-wiki");
-      if (w) this.openDetail(w.dataset.page);
-      const c = e.target.closest(".link-chip, .rel-item");
-      if (c) this.openDetail(c.dataset.page);
     });
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
-        this.closeDetail();
         const m = document.getElementById("settings-modal");
         if (m && m.classList.contains("is-open")) {
           m.classList.remove("is-open");
@@ -50,45 +31,11 @@ const App = {
         }
       }
     });
-    // overview 路由:详情为居中弹窗,点击遮罩/面板空白处关闭;
-    // 点击数据条目则由条目自身切换详情,不触发关闭
-    document.addEventListener("click", (e) => {
-      if (this.currentRoute() !== "overview") return;
-      const d = document.getElementById("detail");
-      if (!d || !d.classList.contains("is-open")) return;
-      if (e.target.closest(".ct-item, .tl-item")) return;
-      if (e.target === d || !d.contains(e.target)) {
-        this.closeDetail();
-      }
-    });
-    this.restoreSideCollapse();
     this.applyNavVisibility();
     this.route();
   },
 
   bindControls() {
-    // 顶栏搜索:按视图分发(关系图谱=搜节点,最新总览=搜内容,内嵌页禁用)
-    const ts = document.getElementById("top-search");
-    if (ts) {
-      const syncSearch = () => {
-        ts.placeholder = I18N.t("graph.search");
-        ts.value = App.currentRoute() === "graph" && typeof GraphView !== "undefined" ? GraphView.search || "" : "";
-      };
-      let st = null;
-      ts.addEventListener("input", () => {
-        clearTimeout(st);
-        st = setTimeout(() => {
-          const q = ts.value.trim();
-          if (App.currentRoute() === "graph" && typeof GraphView !== "undefined") {
-            GraphView.search = q;
-            GraphView.applyOption();
-          }
-        }, 180);
-      });
-      window.addEventListener("hashchange", syncSearch);
-      document.addEventListener("i18n:changed", syncSearch);
-      syncSearch();
-    }
     // 主题配色(设置弹窗内胶囊按钮,含内层装饰圆点)
     document.querySelectorAll(".theme-opt").forEach((b) =>
       b.addEventListener("click", () => this.applyTheme(b.dataset.theme))
@@ -102,13 +49,6 @@ const App = {
     document.querySelectorAll(".style-opt").forEach((b) =>
       b.addEventListener("click", () => this.applyStyle(b.dataset.style))
     );
-    // 小屏抽屉式侧栏开关
-    const toggle = document.getElementById("side-toggle");
-    if (toggle) {
-      toggle.addEventListener("click", () =>
-        document.getElementById("side").classList.toggle("open")
-      );
-    }
     // 设置弹窗:开关 + 点击遮罩关闭
     const modal = document.getElementById("settings-modal");
     const openSettings = () => {
@@ -218,33 +158,7 @@ const App = {
         pick.textContent = I18N.t("dir.pick");
       });
     });
-    // 桌面端侧栏折叠(记忆状态,图谱自动撑满);按钮悬浮贴侧栏右缘,折叠后贴页面左缘。
-    // 侧栏宽度随断点变化(300/260/220),按钮 left 由实测宽度同步而非写死。
-    const sideBtn = document.getElementById("side-collapse");
-    const syncSideBtn = () => {
-      if (!sideBtn) return;
-      if (document.body.classList.contains("side-collapsed")) { sideBtn.style.right = "0px"; return; }
-      const panel = document.querySelector(".side-panel");
-      // computed 宽度在 view 隐藏(display:none)或折叠动画中也能取到断点目标值
-      if (panel) sideBtn.style.right = parseFloat(getComputedStyle(panel).width) + "px";
-    };
-    if (sideBtn) {
-      sideBtn.addEventListener("click", () => {
-        document.body.classList.toggle("side-collapsed");
-        localStorage.setItem("kbw-side-collapsed", document.body.classList.contains("side-collapsed") ? "1" : "0");
-        syncSideBtn();
-        setTimeout(syncSideBtn, 350); // 展开动画结束后按最终宽度再校一次
-        setTimeout(() => {
-          if (typeof GraphView !== "undefined" && GraphView.chart) GraphView.chart.resize();
-        }, 350);
-      });
-      syncSideBtn();
-      let syncTimer = null;
-      window.addEventListener("resize", () => {
-        clearTimeout(syncTimer);
-        syncTimer = setTimeout(syncSideBtn, 150);
-      });
-    }
+
   },
 
   /* 管理页导航链接按设置开关显示/隐藏 */
@@ -257,11 +171,6 @@ const App = {
   },
 
   /* 恢复侧栏折叠记忆状态 */
-  restoreSideCollapse() {
-    if (localStorage.getItem("kbw-side-collapsed") === "1") {
-      document.body.classList.add("side-collapsed");
-    }
-  },
 
   applyTheme(name, silent) {
     this.theme = name;
@@ -273,7 +182,6 @@ const App = {
     );
     if (!silent) {
       document.dispatchEvent(new CustomEvent("theme:changed", { detail: name }));
-      if (typeof GraphView !== "undefined") GraphView.refreshTheme();
     }
   },
 
@@ -451,110 +359,37 @@ const App = {
     if (el) el.textContent = I18N.t("live.refreshed") + " " + new Date().toLocaleTimeString();
   },
 
-  /* 当前路由:graph / comfy / novel / manju */
+  /* 当前路由:comfy / novel / manju(默认工作台) */
   currentRoute() {
-    const hash = location.hash || "#/";
+    const hash = location.hash || "#/manju";
     if (hash.startsWith("#/comfy")) return "comfy";
     if (hash.startsWith("#/novel")) return "novel";
-    if (hash.startsWith("#/manju")) return "manju";
-    return "graph";
+    return "manju";
   },
 
   route() {
     const route = this.currentRoute();
-    document.getElementById("view-graph").classList.toggle("is-active", route === "graph");
     document.getElementById("view-comfy").classList.toggle("is-active", route === "comfy");
     document.getElementById("view-novel").classList.toggle("is-active", route === "novel");
     document.getElementById("view-manju").classList.toggle("is-active", route === "manju");
     document.body.classList.toggle("view-comfy-active", route === "comfy");
     document.body.classList.toggle("view-dir-active", route === "novel" || route === "manju");
-    document.body.classList.toggle("view-graph-active", route === "graph");
     document.querySelectorAll(".nav-link").forEach((a) =>
       a.classList.toggle("is-active", a.dataset.route === route)
     );
-    this.closeDetail();
     // 路由切换时关闭管理页遗留弹窗(宽阅读器/单视频弹窗)
     if (typeof NovelView !== "undefined") NovelView.closeReader();
     if (typeof ManjuView !== "undefined") ManjuView.closeFilmModal();
     if (route === "comfy") ComfyView.enter();
     else if (route === "novel") NovelView.enter();
-    else if (route === "manju") {
+    else {
       ManjuView.enter();
       if (typeof ManjuWorkbench !== "undefined") ManjuWorkbench.enter();
-    } else GraphView.render();
+    }
     // 离开漫剧管理页时停止其轮询(iframe/状态常驻仅在本页需要)
     if (route !== "manju" && typeof ManjuWorkbench !== "undefined") ManjuWorkbench.leave();
   },
 
-  async openDetail(id) {
-    let p;
-    try {
-      p = await this.getPage(id);
-    } catch (e) {
-      return;
-    }
-    document.getElementById("d-title").textContent = p.title || id;
-    document.getElementById("d-title").style.color = App.catColor(p.category);
-    const meta = [];
-    if (p.category)
-      meta.push(`<span class="chip"><span class="dot" style="background:${App.catColor(p.category)}"></span><b>${I18N.t("detail.category")}</b> ${p.category}</span>`);
-    if (p.words) meta.push(`<span class="chip"><b>${I18N.t("detail.words")}</b> ${p.words}</span>`);
-    if (p.mtime) meta.push(`<span class="chip"><b>${I18N.t("detail.updated")}</b> ${this.fmtDate(p.mtime)}</span>`);
-    document.getElementById("d-meta").innerHTML = meta.join("");
-    document.getElementById("d-content").innerHTML = Markdown.render(p.markdown || "", p.category);
-    // 右栏关联文章:ID → 图谱节点(名称/分类色),点击联动更新整弹窗
-    const esc = (s) => String(s == null ? "" : String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])));
-    const lk = document.getElementById("d-links");
-    const nodesById = typeof GraphView !== "undefined" && GraphView.data
-      ? GraphView.data.nodes.reduce((m2, n) => (m2[n.id] = n, m2), {})
-      : {};
-    if (p.links && p.links.length) {
-      lk.innerHTML = p.links
-        .map((t) => {
-          const n = nodesById[t];
-          const name = n ? n.name : t;
-          const cat = n ? n.category : "";
-          const color = cat ? App.catColor(cat) : "var(--muted)";
-          return `<div class="rel-item" data-page="${String(t).replace(/"/g, "&quot;")}">
-            <span class="si-dot" style="background:${color}"></span>
-            <span class="rel-name">${esc(name)}</span>
-            ${cat ? `<span class="rel-cat" style="color:${color}">${esc(cat)}</span>` : ""}
-          </div>`;
-        })
-        .join("");
-    } else {
-      lk.innerHTML = `<span class="chip">${I18N.t("detail.noLinks")}</span>`;
-    }
-    const d = document.getElementById("detail");
-    d.classList.add("is-open");
-    d.setAttribute("aria-hidden", "false");
-    document.body.classList.add("panel-open"); // 图谱可视区右缩,节点居中
-    // 每次打开/切换内容:正文滚动区回到顶部(不残留上次位置)
-    const sc = d.querySelector(".detail-scroll");
-    if (sc) sc.scrollTop = 0;
-    this.afterPanelChange();
-  },
-
-  /* 详情面板开合过渡后,图谱 resize 重新布局(节点随可视区居中) */
-  afterPanelChange() {
-    setTimeout(() => {
-      if (
-        typeof GraphView !== "undefined" &&
-        GraphView.chart &&
-        document.getElementById("view-graph").classList.contains("is-active")
-      ) {
-        GraphView.chart.resize();
-      }
-    }, 320); // 等 CSS 0.3s 过渡
-  },
-
-  closeDetail() {
-    const d = document.getElementById("detail");
-    d.classList.remove("is-open");
-    d.setAttribute("aria-hidden", "true");
-    document.body.classList.remove("panel-open");
-    this.afterPanelChange();
-  },
 
   fmtDate(iso) {
     const dt = new Date(iso);

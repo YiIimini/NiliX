@@ -211,6 +211,7 @@ body:not(.view-graph-active) .side-collapse { display: none; }
   display: flex; flex-direction: column;
   background: var(--panel);
   border-left: 1px solid var(--panel-border);
+  box-shadow: -14px 0 34px rgba(0, 0, 0, 0.18);
   backdrop-filter: blur(var(--blur, 14px));
   -webkit-backdrop-filter: blur(var(--blur, 14px));
   z-index: 15;
@@ -992,6 +993,7 @@ body.view-dir-active .top-search { display: none; }
   box-shadow: var(--shadow), 0 22px 60px rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(var(--blur, 14px));
   -webkit-backdrop-filter: blur(var(--blur, 14px));
+  overflow: hidden; /* 长文约束在面板内,由内部双栏各自滚动 */
   transform: translateY(14px) scale(0.96);
   opacity: 0;
   visibility: hidden;
@@ -1019,10 +1021,11 @@ body.view-dir-active .top-search { display: none; }
   .detail-side { border-left: none; border-top: 1px solid var(--line); max-height: 32vh; padding-left: 0; }
 }
 .detail-inner {
-  height: 100%;
+  flex: 1;
+  min-height: 0; /* 关键:受 max-height 面板约束,长文不撑爆(否则只剩角落 X 可见) */
   display: flex;
   flex-direction: column; /* 标题固定 + 正文独立滚动 */
-  padding: 26px 26px 40px;
+  padding: 26px 26px 24px;
 }
 /* 正文滚动区:标题/分类 TAG 固定在上方,仅此区滚动 */
 .detail-scroll {
