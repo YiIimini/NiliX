@@ -28,10 +28,16 @@ const App = {
       }
     });
     document.getElementById("detail-close").addEventListener("click", () => this.closeDetail());
+    document.addEventListener("click", (e) => {
+      const dp = document.getElementById("detail");
+      if (!dp || !dp.classList.contains("is-open")) return;
+      if (e.target.closest("#detail, .graph-canvas, #side, .side-collapse")) return;
+      this.closeDetail();
+    });
     document.getElementById("detail").addEventListener("click", (e) => {
       const w = e.target.closest(".md-wiki");
       if (w) this.openDetail(w.dataset.page);
-      const c = e.target.closest(".link-chip");
+      const c = e.target.closest(".link-chip, .rel-item");
       if (c) this.openDetail(c.dataset.page);
     });
     document.addEventListener("keydown", (e) => {
@@ -217,10 +223,10 @@ const App = {
     const sideBtn = document.getElementById("side-collapse");
     const syncSideBtn = () => {
       if (!sideBtn) return;
-      if (document.body.classList.contains("side-collapsed")) { sideBtn.style.left = "0px"; return; }
+      if (document.body.classList.contains("side-collapsed")) { sideBtn.style.right = "0px"; return; }
       const panel = document.querySelector(".side-panel");
       // computed 宽度在 view 隐藏(display:none)或折叠动画中也能取到断点目标值
-      if (panel) sideBtn.style.left = parseFloat(getComputedStyle(panel).width) + "px";
+      if (panel) sideBtn.style.right = parseFloat(getComputedStyle(panel).width) + "px";
     };
     if (sideBtn) {
       sideBtn.addEventListener("click", () => {
@@ -496,10 +502,25 @@ const App = {
     if (p.mtime) meta.push(`<span class="chip"><b>${I18N.t("detail.updated")}</b> ${this.fmtDate(p.mtime)}</span>`);
     document.getElementById("d-meta").innerHTML = meta.join("");
     document.getElementById("d-content").innerHTML = Markdown.render(p.markdown || "", p.category);
+    // 右栏关联文章:ID → 图谱节点(名称/分类色),点击联动更新整弹窗
+    const esc = (s) => String(s == null ? "" : String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])));
     const lk = document.getElementById("d-links");
+    const nodesById = typeof GraphView !== "undefined" && GraphView.data
+      ? GraphView.data.nodes.reduce((m2, n) => (m2[n.id] = n, m2), {})
+      : {};
     if (p.links && p.links.length) {
       lk.innerHTML = p.links
-        .map((t) => `<span class="link-chip" data-page="${t.replace(/"/g, "&quot;")}">↗ ${t}</span>`)
+        .map((t) => {
+          const n = nodesById[t];
+          const name = n ? n.name : t;
+          const cat = n ? n.category : "";
+          const color = cat ? App.catColor(cat) : "var(--muted)";
+          return `<div class="rel-item" data-page="${String(t).replace(/"/g, "&quot;")}">
+            <span class="si-dot" style="background:${color}"></span>
+            <span class="rel-name">${esc(name)}</span>
+            ${cat ? `<span class="rel-cat" style="color:${color}">${esc(cat)}</span>` : ""}
+          </div>`;
+        })
         .join("");
     } else {
       lk.innerHTML = `<span class="chip">${I18N.t("detail.noLinks")}</span>`;

@@ -84,6 +84,9 @@ const GraphView = {
       else this.chart.dispatchAction({ type: "unselect", seriesIndex: 0 });
     }
     this.renderSide(id);
+    // 详情宽弹窗:选中页面节点即打开(分类枢纽不弹);取消选中则关闭
+    if (id && !String(id).startsWith("cat:") && typeof App !== "undefined") App.openDetail(id);
+    else if (!id && typeof App !== "undefined") App.closeDetail();
     this.renderBottom(id);
     if (id) App.openDetail(id);
     else App.closeDetail();

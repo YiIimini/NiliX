@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=20260818f">
-<link rel="stylesheet" href="/css/themes.css?v=20260818f">
-<link rel="stylesheet" href="/css/materials.css?v=20260818f">
-<link rel="stylesheet" href="/css/app.css?v=20260818f">
+<link rel="icon" type="image/png" href="/icon.png?v=20260818g">
+<link rel="stylesheet" href="/css/themes.css?v=20260818g">
+<link rel="stylesheet" href="/css/materials.css?v=20260818g">
+<link rel="stylesheet" href="/css/app.css?v=20260818g">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -76,7 +76,7 @@
   <header class="topbar">
     <button id="side-toggle" class="side-toggle" title="目录" aria-label="Toggle sidebar">☰</button>
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260818f" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260818g" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -111,13 +111,7 @@
   <main class="stage">
     <!-- 首页:关系图谱 -->
     <section id="view-graph" class="view view-graph is-active">
-      <aside id="side" class="side-panel">
-        <div class="side-head">
-          <span class="side-head-t"><svg class="ic" aria-hidden="true"><use id="side-icon" href="#i-list"/></svg><span id="side-title" data-i18n="side.title.all">全部页面</span></span>
-          <span id="side-count" class="side-count"></span>
-        </div>
-        <div id="side-list" class="side-list"></div>
-      </aside>
+
       <div class="graph-wrap">
         <div id="graph" class="graph-canvas"></div>
         <div class="graph-hud">
@@ -137,7 +131,14 @@
           <div id="bb-meta" class="bb-meta"></div>
         </div>
       </div>
-      <button id="side-collapse" class="side-collapse" title="收起/展开侧栏" aria-label="Collapse sidebar"><span>«</span></button>
+      <aside id="side" class="side-panel">
+        <div class="side-head">
+          <span class="side-head-t"><svg class="ic" aria-hidden="true"><use id="side-icon" href="#i-list"/></svg><span id="side-title" data-i18n="side.title.all">全部页面</span></span>
+          <span id="side-count" class="side-count"></span>
+        </div>
+        <div id="side-list" class="side-list"></div>
+      </aside>
+      <button id="side-collapse" class="side-collapse" title="收起/展开侧栏" aria-label="Collapse sidebar"><span>»</span></button>
     </section>
 
     <!-- 二级页:Comfy UI(内嵌 Web UI) -->
@@ -493,10 +494,15 @@
         <h2 id="d-title" class="detail-title"></h2>
         <div class="detail-meta" id="d-meta"></div>
       </div>
-      <div class="detail-scroll">
-        <div id="d-content" class="detail-content markdown-body"></div>
-        <div class="detail-links-head">🔗 <span data-i18n="detail.links">相关链接</span></div>
-        <div id="d-links" class="detail-links"></div>
+      <!-- 宽弹窗双栏 7:3:左正文 / 右关联文章(点击联动更新) -->
+      <div class="detail-cols">
+        <div class="detail-scroll">
+          <div id="d-content" class="detail-content markdown-body"></div>
+        </div>
+        <aside class="detail-side">
+          <div class="detail-links-head">🔗 <span data-i18n="detail.links">关联文章</span></div>
+          <div id="d-links" class="detail-links detail-rel-list"></div>
+        </aside>
       </div>
     </div>
   </aside>
@@ -678,13 +684,13 @@
       </div>
     </div>
   </div>
-  <script src="/vendor/echarts.min.js?v=20260818f"></script>
-  <script src="/js/i18n.js?v=20260818f"></script>
-  <script src="/js/markdown.js?v=20260818f"></script>
-  <script src="/js/app.js?v=20260818f"></script>
-  <script src="/js/graph.js?v=20260818f"></script>
-  <script src="/js/comfy.js?v=20260818f"></script>
-  <script src="/js/dirview.js?v=20260818f"></script>
-  <script src="/js/manju.js?v=20260818f"></script>
+  <script src="/vendor/echarts.min.js?v=20260818g"></script>
+  <script src="/js/i18n.js?v=20260818g"></script>
+  <script src="/js/markdown.js?v=20260818g"></script>
+  <script src="/js/app.js?v=20260818g"></script>
+  <script src="/js/graph.js?v=20260818g"></script>
+  <script src="/js/comfy.js?v=20260818g"></script>
+  <script src="/js/dirview.js?v=20260818g"></script>
+  <script src="/js/manju.js?v=20260818g"></script>
 </body>
 </html>
