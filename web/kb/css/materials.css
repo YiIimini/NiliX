@@ -1,0 +1,101 @@
+/* ============ 材质风格系统:与主题配色正交 ============
+ * data-theme 决定色彩,data-style 决定材质质感(玻璃/金属)
+ * 风格层覆盖的变量:
+ *   --panel / --surface / --surface-2  面板与卡片背景(可为多层渐变)
+ *   --shadow       外阴影
+ *   --chip-bg      小标签/按钮底色
+ *   --blur         玻璃模糊强度(面板类组件统一引用 var(--blur))
+ * 材质基调用 color-mix 基于当前主题的 --bg/--accent 派生,保证与配色联动 */
+
+:root { --blur: 14px; }
+
+/* 1. 默认:当前未来科技玻璃(半透明 + 中等模糊 + 细描边) */
+html[data-style="default"] {
+  --blur: 14px;
+}
+
+/* 2. 玻璃流体:更通透 + 强模糊 + 顶部流光渐变 */
+html[data-style="glass-fluid"] {
+  --blur: 22px;
+  --panel:
+    linear-gradient(165deg, rgba(255,255,255,.10), rgba(255,255,255,.02) 40%, rgba(0,0,0,.10)),
+    linear-gradient(90deg, transparent 0%, rgba(255,255,255,.05) 50%, transparent 100%),
+    color-mix(in srgb, var(--bg) 62%, transparent);
+  --surface:
+    linear-gradient(165deg, rgba(255,255,255,.07), rgba(255,255,255,.01) 50%),
+    color-mix(in srgb, var(--bg) 72%, transparent);
+  --surface-2:
+    linear-gradient(165deg, rgba(255,255,255,.05), transparent 55%),
+    color-mix(in srgb, var(--bg) 80%, transparent);
+  --panel-border: color-mix(in srgb, var(--accent) 22%, transparent);
+  --shadow: 0 18px 60px rgba(0,0,0,.45);
+  --chip-bg: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* 3. 玻璃磨砂:磨砂质感(更强模糊 + 低透明度 + 细腻颗粒) */
+html[data-style="frosted"] {
+  --blur: 26px;
+  --panel:
+    repeating-linear-gradient(0deg, rgba(255,255,255,.014) 0 1px, transparent 1px 3px),
+    color-mix(in srgb, var(--bg) 50%, transparent);
+  --surface:
+    repeating-linear-gradient(0deg, rgba(255,255,255,.010) 0 1px, transparent 1px 3px),
+    color-mix(in srgb, var(--bg) 58%, transparent);
+  --surface-2:
+    repeating-linear-gradient(0deg, rgba(255,255,255,.008) 0 1px, transparent 1px 3px),
+    color-mix(in srgb, var(--bg) 66%, transparent);
+  --panel-border: color-mix(in srgb, var(--accent) 18%, transparent);
+  --shadow: 0 18px 55px rgba(0,0,0,.5);
+  --chip-bg: color-mix(in srgb, var(--accent) 11%, transparent);
+}
+
+/* 4. 金属哑光:实心金属 + 横向拉丝纹理 + 无光泽 */
+html[data-style="brushed"] {
+  --blur: 0px;
+  --panel:
+    repeating-linear-gradient(90deg, rgba(255,255,255,.022) 0 1px, transparent 1px 4px),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg) 88%, white 6%), color-mix(in srgb, var(--bg) 96%, black 4%));
+  --surface:
+    repeating-linear-gradient(90deg, rgba(255,255,255,.016) 0 1px, transparent 1px 4px),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg) 92%, white 4%), color-mix(in srgb, var(--bg) 98%, black 2%));
+  --surface-2: color-mix(in srgb, var(--bg) 97%, white 3%);
+  --panel-border: color-mix(in srgb, var(--accent) 24%, transparent);
+  --shadow: 0 14px 40px rgba(0,0,0,.55);
+  --chip-bg: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* 5. 金属高光:亮面金属 + 顶部镜面高光 + 反射渐变 */
+html[data-style="polished"] {
+  --blur: 0px;
+  --panel:
+    linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.03) 38%, rgba(0,0,0,.10)),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg) 80%, white 8%), color-mix(in srgb, var(--bg) 92%, black 6%));
+  --surface:
+    linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02) 42%),
+    color-mix(in srgb, var(--bg) 86%, white 4%);
+  --surface-2:
+    linear-gradient(180deg, rgba(255,255,255,.07), transparent 45%),
+    color-mix(in srgb, var(--bg) 90%, white 3%);
+  --panel-border: color-mix(in srgb, var(--accent) 28%, transparent);
+  --shadow: 0 18px 45px rgba(0,0,0,.5);
+  --chip-bg: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* ============ 风格选择器(设置弹窗内) ============ */
+.style-switch { display: flex; flex-wrap: wrap; gap: 8px; }
+.style-opt {
+  padding: 7px 14px;
+  background: var(--chip-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12.5px; letter-spacing: 1px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+}
+.style-opt:hover { color: var(--text); border-color: var(--accent); transform: translateY(-1px); }
+.style-opt.is-active {
+  color: var(--text);
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--glow);
+}

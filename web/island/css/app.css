@@ -1,0 +1,664 @@
+/* ============ ZCode 主题系统监测悬浮窗 ============ */
+/* 通用隐藏(服务行按钮等;原仅有 .settings-panel.hidden,按钮隐藏类从未生效) */
+.hidden { display: none !important; }
+/* 炫酷特效(设置中开启才显示,默认关闭) */
+@property --a {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+/* Harness 深空主题(默认):深蓝黑底 + 亮蓝强调,文字高对比 */
+:root {
+  --bg: #0a0f1e;
+  --text: #eef2fb;
+  --muted: #b4c2da;
+  --dim: #8595b3;
+  --border: rgba(148, 180, 255, 0.16);
+  --accent: #6799fe;
+  --accent-2: #8fb4ff;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --danger: #fb7185;
+  --read: #60a5fa;
+  --write: #c4b5fd;
+  --track: rgba(148, 180, 255, 0.12);
+  --glow: rgba(103, 153, 254, 0.5);
+  /* 深黑玻璃色(胶囊与展开面板统一,iOS 灵动岛同款;顶部略提亮,避免圆角处"深黑硬边") */
+  --glass-top: #26262e;
+  --glass-mid: #101014;
+  --glass-bot: #050507;
+  --glass-edge: rgba(255, 255, 255, 0.14);
+  --sheen: rgba(255, 255, 255, 0.11);
+  --zmark-a: #1e1e24;
+  --zmark-b: #101014;
+}
+
+/* 白色主题(白天) */
+html[data-theme="light"] {
+  --bg: #f2f4f8;
+  --text: #1a1c22;
+  --muted: #5a6472;
+  --dim: #8a93a0;
+  --border: rgba(15, 23, 42, 0.12);
+  --accent: #2563eb;
+  --accent-2: #0ea5e9;
+  --ok: #16a34a;
+  --warn: #d97706;
+  --danger: #dc2626;
+  --read: #0284c7;
+  --write: #9333ea;
+  --track: rgba(15, 23, 42, 0.10);
+  --glow: rgba(37, 99, 235, 0.30);
+  --glass-top: #ffffff;
+  --glass-mid: #f7f9fc;
+  --glass-bot: #e6eaf1;
+  --glass-edge: rgba(255, 255, 255, 0.95);
+  --sheen: rgba(255, 255, 255, 0.55);
+  --zmark-a: #1e293b;
+  --zmark-b: #334155;
+}
+
+/* 页面背景透明:由 WebView2 逐像素 alpha 呈现(圆角/异形外区域透出桌面) */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+  font-family: ui-sans-serif, system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+.card {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  /* Harness 深空玻璃背景(圆角由窗口区域物理裁剪兜底,CSS 圆角防内容外露) */
+  background:
+    linear-gradient(180deg, var(--glass-top) 0%, var(--glass-mid) 42%, var(--glass-bot) 100%);
+  border-radius: 22px; /* 收起胶囊圆角 ≈ miniR-1 */
+  /* 浅色描边用内阴影环(inset box-shadow 沿 border-radius 走,圆角处不丢失;
+     1px border/1px 环在圆角弧线上会被抗锯齿抹掉,故用 2px 环) */
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 255, 255, 0.12),
+    0 8px 30px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+/* 展开态:四角直角,深黑玻璃背景 */
+body.island-expanded .card {
+  border-radius: 0;
+  background:
+    linear-gradient(180deg, var(--glass-top) 0%, var(--glass-mid) 42%, var(--glass-bot) 100%);
+}
+/* 收起态:同样深黑玻璃垫底(CSS 圆角裁剪出胶囊;背景绝不能透明——
+   WebView2 默认白底会从胶囊圆角外透出,形成白色块) */
+body.island-collapsed .card {
+  background:
+    linear-gradient(180deg, var(--glass-top) 0%, var(--glass-mid) 55%, var(--glass-bot) 100%);
+}
+
+/* ============ 炫酷特效(设置开启时生效) ============ */
+/* 灵动岛纯黑卡片无玻璃光泽/霓虹描边(card::before/::after 特效已移除),
+   特效仅作用于面板内部:进度条扫光 / 每核呼吸 / 数值滚动 */
+
+/* ---- 灵动岛双形态:收起胶囊 / 展开面板 ---- */
+body.island-collapsed #full { display: none; }
+body.island-collapsed #pill { display: flex; }
+body.island-expanded #pill { display: none; }
+body.island-expanded #full { display: flex; }
+/* 展开/收起内容淡入,配合窗口尺寸动画更顺滑 */
+body.island-expanded #full { animation: islandFadeIn 0.22s ease; }
+body.island-collapsed #pill { animation: islandFadeIn 0.22s ease; }
+@keyframes islandFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 收起态胶囊:不透明深黑玻璃(iOS 灵动岛同款)——深黑渐变 + 玻璃高光 + 描边 + 投影 + 流光。
+   WebView2 限制:CSS 半透明与白底合成发白、系统毛玻璃与透明合成冲突,故用不透明玻璃 */
+.pill {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  height: 100%;
+  padding: 0 24px;
+  cursor: default;
+  user-select: none;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 38%, rgba(0, 0, 0, 0.22) 100%),
+    linear-gradient(180deg, var(--glass-top) 0%, var(--glass-mid) 55%, var(--glass-bot) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 6px 22px rgba(0, 0, 0, 0.5);
+}
+/* 流动光泽:常驻的流体高光(黑玻璃上反光) */
+.pill::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 28%, rgba(255, 255, 255, 0.11) 46%, transparent 62%);
+  background-size: 250% 100%;
+  animation: pillSheen 5.5s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes pillSheen {
+  0%, 100% { background-position: 130% 0; }
+  50%      { background-position: -30% 0; }
+}
+.pill-item {
+  display: inline-flex;
+  align-items: baseline; /* 字母与数字按文字基线对齐(center 会让大写字母视觉偏上) */
+  gap: 5px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+.pill-item b {
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(240, 245, 255, 0.98);
+  letter-spacing: 0.5px;
+}
+/* 指标文字按负载实时变色:<50 绿 / 50-75 黄 / ≥75 红(深黑底上鲜艳清晰) */
+.pill-item em {
+  font-style: normal;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+  transition: color 0.3s;
+}
+.pill-item.ok em { color: var(--ok); text-shadow: 0 0 9px color-mix(in srgb, var(--ok) 55%, transparent); }
+.pill-item.warn em { color: var(--warn); text-shadow: 0 0 9px color-mix(in srgb, var(--warn) 55%, transparent); }
+.pill-item.hot em { color: var(--danger); text-shadow: 0 0 9px color-mix(in srgb, var(--danger) 55%, transparent); }
+.pill-sep {
+  font-size: 11px;
+  color: rgba(210, 225, 255, 0.5);
+  line-height: 1;
+}
+.pill-clock {
+  margin-left: 6px;
+  font-size: 13px;
+  color: #fff;
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+
+/* ---- HUD 面板内容 ---- */
+/* 高度自适应:由 JS 测量内容高度后通知 Go 调整窗口大小,故用自然高度而非撑满 */
+.full { display: flex; flex-direction: column; height: auto; position: relative; }
+
+/* 卡片顶/底正中的呼吸氛围灯横条(展开态装饰;颜色与状态灯联动:低载绿 / 中载黄 / 高载红快闪) */
+.ambient {
+  width: 36px;
+  height: 3px;
+  border-radius: 2px;
+  --ambient-color: var(--ok);
+  background: var(--ambient-color);
+  box-shadow: 0 0 10px var(--ambient-color);
+  opacity: 0.6;
+  animation: ambientBreathe 2.4s ease-in-out infinite;
+}
+/* 顶部双条行:两条独立横条,间距一条长度,整体居中 */
+.ambient-row {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 36px;
+  z-index: 10;
+  pointer-events: none;
+}
+/* 胶囊顶部单条:仅作用于直接子级(底部双条在 ambient-row 内,不受此绝对定位影响) */
+.pill > .ambient {
+  position: absolute;
+  top: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+/* 胶囊底部氛围呼吸条:双条,与 HUD 卡片顶部一致 */
+.pill .ambient-row.bottom {
+  top: auto;
+  bottom: 1px;
+}
+/* 底部单条:独立绝对定位贴底居中 */
+.ambient.bottom {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+}
+body.warn .ambient { --ambient-color: var(--warn); }
+body.high .ambient { --ambient-color: var(--danger); animation-name: ambientBreatheWarn; }
+@keyframes ambientBreathe {
+  0%, 100% { opacity: 0.3; box-shadow: 0 0 4px var(--ambient-color); }
+  50% { opacity: 0.95; box-shadow: 0 0 14px var(--ambient-color); }
+}
+@keyframes ambientBreatheWarn {
+  0%, 100% { opacity: 0.55; box-shadow: 0 0 6px var(--ambient-color); }
+  50% { opacity: 1; box-shadow: 0 0 16px var(--ambient-color); }
+}
+
+.dragbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: default; /* 灵动岛固定居中,不支持拖拽 */
+  background: linear-gradient(180deg, rgba(250,250,250,0.04), transparent);
+  position: relative; /* 标题绝对定位居中 */
+}
+
+.zmark {
+  width: 21px;
+  height: 21px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, var(--zmark-a) 0%, var(--zmark-b) 100%);
+  border: 1px solid var(--border);
+  color: #fff;
+  font-weight: 800;
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.btitle {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.btag {
+  font-size: 8.5px;
+  letter-spacing: 2.5px;
+  color: var(--dim);
+  margin-left: 6px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+  opacity: 0.4;
+  transition: opacity 0.3s;
+  margin-left: auto; /* 标题脱离文档流后,把它推到右上角 */
+}
+.status-dot.live { opacity: 1; animation: pulse 2s infinite; }
+body.high .status-dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+/* 收起胶囊状态点跟随负载警示 */
+body.warn .pill-dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+body.high .pill-dot { background: var(--danger); box-shadow: 0 0 8px var(--danger); animation: pulseWarn 1s infinite; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 4px var(--ok);} 50% { box-shadow: 0 0 10px var(--ok);} }
+body.high .status-dot { animation-name: pulseWarn; }
+@keyframes pulseWarn { 0%,100% { box-shadow: 0 0 4px var(--warn);} 50% { box-shadow: 0 0 12px var(--warn);} }
+
+.btn-close {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.2s, color 0.2s;
+}
+.btn-close:hover { background: rgba(231, 0, 11, 0.16); color: var(--danger); }
+
+/* 主题切换按钮(现为设置按钮入口) */
+.theme-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.2s, color 0.2s, transform 0.3s;
+}
+.theme-btn:hover { background: var(--track); color: var(--accent); transform: rotate(40deg); }
+
+/* 顶栏可操作图标(设置/收起):保留 DOM 与 JS 绑定,仅视觉隐藏;关闭按钮保留显示 */
+#settings-btn, #btn-collapse { display: none; }
+
+/* ============ 设置面板 ============ */
+.settings-panel {
+  position: absolute;
+  top: 40px; right: 8px;
+  z-index: 20;
+  width: 212px;
+  padding: 10px 14px 12px;
+  background: linear-gradient(180deg, var(--glass-top), var(--glass-bot));
+  border: 1px solid rgba(14, 165, 233, 0.22);
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 1px rgba(14, 165, 233, 0.12),
+    0 8px 26px rgba(0, 0, 0, 0.5);
+}
+.settings-panel.hidden { display: none; }
+.set-title {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--dim);
+  margin-bottom: 6px;
+}
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 0;
+}
+.set-lbl { font-size: 11.5px; color: var(--text); letter-spacing: 0.5px; }
+.set-seg { display: flex; gap: 4px; }
+.set-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: 1px;
+  padding: 3px 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+.set-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(14, 165, 233, 0.12);
+}
+/* 设置开关 */
+.set-switch { position: relative; cursor: pointer; }
+.set-switch input { display: none; }
+.set-switch .tk {
+  display: block;
+  width: 30px; height: 16px;
+  border-radius: 999px;
+  background: var(--track);
+  border: 1px solid var(--border);
+  transition: background 0.2s, border-color 0.2s;
+}
+.set-switch .tk::after {
+  content: "";
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--dim);
+  transition: left 0.2s, background 0.2s;
+}
+.set-switch input:checked + .tk {
+  background: rgba(14, 165, 233, 0.28);
+  border-color: var(--accent);
+}
+.set-switch input:checked + .tk::after {
+  left: 17px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+
+/* ---- 指标行 ---- */
+.rows {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px 6px;
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.lbl {
+  width: 34px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+.fill {
+  position: relative;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.6s ease, background 0.6s ease;
+  box-shadow: 0 0 8px rgba(14, 165, 233, 0.55);
+}
+/* 进度条扫光(特效开) */
+body:not(.no-effects) .fill::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0; left: -40%;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+  animation: fillSweep 2.2s linear infinite;
+  pointer-events: none;
+}
+@keyframes fillSweep {
+  0%   { left: -40%; }
+  100% { left: 110%; }
+}
+/* 负载率着色:<50% 绿 / 50-75% 黄 / ≥75% 红 */
+.fill.ok   { background: linear-gradient(90deg, #00a63e, #2fbf5e); box-shadow: 0 0 8px rgba(0, 166, 62, 0.5); }
+.fill.warn { background: linear-gradient(90deg, #f0b100, #f5c33b); box-shadow: 0 0 8px rgba(240, 177, 0, 0.5); }
+.fill.hot  { background: linear-gradient(90deg, #e7000b, #ff4d55); box-shadow: 0 0 8px rgba(231, 0, 11, 0.55); }
+
+.val {
+  width: 50px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.5px;
+  transition: color 0.4s ease;
+}
+.val.ok   { color: var(--ok); }
+.val.warn { color: var(--warn); }
+.val.hot  { color: var(--danger); }
+
+.temp {
+  width: 44px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.temp.ok   { color: var(--ok); }
+.temp.warn { color: var(--warn); }
+.temp.hot  { color: var(--danger); }
+
+.sub {
+  font-size: 10.5px;
+  color: var(--dim);
+  padding-left: 42px;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+.sub.cap { padding-left: 0; }
+
+.io {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+}
+.io .mono {
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.io .r { color: var(--read); }
+.io .w { color: var(--write); }
+
+/* 分隔装饰条:主题色渐变发光细线 + 呼吸氛围灯(明暗律动) */
+.divider {
+  height: 1px;
+  margin: 3px 0 3px;
+  background: linear-gradient(90deg, transparent, var(--accent) 28%, var(--accent) 72%, transparent);
+  flex-shrink: 0;
+  animation: dividerBreathe 3.2s ease-in-out infinite;
+}
+@keyframes dividerBreathe {
+  0%, 100% { opacity: 0.3; box-shadow: 0 0 4px var(--glow); }
+  50%      { opacity: 0.9; box-shadow: 0 0 14px var(--glow); }
+}
+
+/* KB 服务状态 */
+/* KB 服务状态球:描边定形 + 在线雷达脉冲 */
+.kb-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--dim);
+  border: 1px solid var(--border);
+  transition: background 0.3s, border-color 0.3s;
+}
+.kb-dot.on {
+  background: var(--ok);
+  border-color: var(--ok);
+  animation: kbPulse 2s ease-in-out infinite;
+}
+.kb-dot.off {
+  background: var(--danger);
+  border-color: var(--danger);
+  opacity: 0.85;
+}
+@keyframes kbPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.30); }
+  50%      { box-shadow: 0 0 0 4px rgba(22, 163, 74, 0); }
+}
+.kb-txt { color: var(--muted); }
+.kb-start {
+  border: 1px solid var(--border);
+  background: var(--row);
+  color: var(--accent-2);
+  font-size: 10px;
+  padding: 2px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+}
+.kb-start:hover { border-color: var(--accent); color: var(--accent); }
+/* 停止服务:危险红 */
+.kb-start.kb-stop { color: var(--danger); }
+.kb-start.kb-stop:hover { border-color: var(--danger); color: var(--danger); }
+.kb-start:disabled { opacity: 0.6; cursor: default; }
+
+/* ---- 每核负载条 ---- */
+.cores {
+  display: flex;
+  gap: 2px;
+  height: 13px;
+  padding: 0 42px 0 42px;
+  margin: -1px 0 1px;
+  flex-shrink: 0;
+}
+.core {
+  flex: 1;
+  position: relative;
+  background: var(--track);
+  border-radius: 1.5px;
+  overflow: hidden;
+}
+.core i {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  border-radius: 1.5px;
+  opacity: 0.9;
+  transition: height 0.5s ease, background 0.4s ease;
+}
+/* 核心条呼吸(特效开) */
+body:not(.no-effects) .core i {
+  animation: coreBreathe 3.2s ease-in-out infinite;
+}
+@keyframes coreBreathe {
+  0%, 100% { opacity: 0.78; }
+  50%      { opacity: 1; }
+}
+/* 每核负载着色:<50% 绿 / 50-75% 黄 / ≥75% 红 */
+.core i.ok   { background: linear-gradient(180deg, #2fbf5e, #00a63e); }
+.core i.warn { background: linear-gradient(180deg, #f5c33b, #f0b100); }
+.core i.hot  { background: linear-gradient(180deg, #ff4d55, #e7000b); }
+
+/* ---- 页脚 ---- */
+.foot {
+  height: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  font-size: 10px;
+  color: var(--dim);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.foot .ts { margin-left: auto; }
+/* 右下角时钟:年月日 时间 星期 */
+.foot .clock {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  letter-spacing: 0.5px;
+}
+
+/* ============ 圆 / 椭圆态:律动指示(v5 已移除,保留滚动条隐藏) ============ */
+::-webkit-scrollbar { width: 0; height: 0; }
+/* NiliX 应用图标(替代字母 Z):沿用 .zmark 尺寸/圆角,去掉底色避免从透明圆角透出 */
+.zmark-img { background: transparent; display: block; object-fit: cover; font-size: 0; }

@@ -1,0 +1,1061 @@
+package api
+
+// 漫剧智能体调度层:审片官(视觉判分) + 修复师(提示词返工) + 剧本师复核 + 例外升级。
+// 复用既有六阶段管线(stagePlan/Assets/Encode/Render/QC/Assemble),智能模式在 qc 阶段
+// 之后插入「判分 → 修复 → 定点重渲染(≤maxRetries 轮) → 升级推送」闭环;
+// 日志契约(━━━ 阶段 X ━━━ / [i/n])保持不变,前端进度解析不受影响。
+// 审片维度对齐 MiniMax H3 官方能力边界,见 internal/agent/judge.go。
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/jpeg"
+	"math"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"nilix/internal/agent"
+)
+
+// ---- manjuLLM 适配 agent.TextLLM(避免包循环依赖) ----
+
+type manjuAgentLLM struct{ l *manjuLLM }
+
+func (m manjuAgentLLM) ChatJSON(system, user string, temp float64) (map[string]any, error) {
+	return m.l.chatJSON(system, user, temp)
+}
+
+// ---- 配置(项目 config.json 的 agent 节) ----
+
+func loadAgentCfg(ctx *manjuCtx) agent.Config {
+	acfg := agent.DefaultConfig()
+	if m, ok := ctx.cfg["agent"].(map[string]any); ok {
+		if b, ok := m["enabled"].(bool); ok {
+			acfg.Enabled = b
+		}
+		acfg.VisionBaseURL = str(m["vision_base_url"])
+		acfg.VisionAPIKey = str(m["vision_api_key"])
+		acfg.VisionModel = str(m["vision_model"])
+		if v, ok := manjuToFloat(m["pass_score"]); ok && v > 0 {
+			acfg.PassScore = v
+		}
+		if n, ok := manjuToInt(m["max_retries"]); ok {
+			acfg.MaxRetries = n
+		}
+		if n, ok := manjuToInt(m["frames_per_shot"]); ok && n > 0 {
+			acfg.FramesPerShot = n
+		}
+	}
+	acfg.Normalize()
+	return acfg
+}
+
+// visionClient 按配置构造视觉客户端(地址/Key 缺省回退项目文本 LLM 的)
+func (ctx *manjuCtx) visionClient(acfg agent.Config) *agent.VisionClient {
+	base := strings.TrimSpace(acfg.VisionBaseURL)
+	if base == "" {
+		base = ctx.llm.baseURL
+	}
+	key := strings.TrimSpace(acfg.VisionAPIKey)
+	if key == "" {
+		key = ctx.llm.apiKey
+	}
+	return agent.NewVisionClient(base, key, strings.TrimSpace(acfg.VisionModel), 180*time.Second)
+}
+
+// ---- 审片状态落盘(<项目>/agent_state.json,随项目目录删除) ----
+
+type manjuAgentEscalation struct {
+	EP       string  `json:"ep"`
+	Shot     int     `json:"shot"`
+	Score    float64 `json:"score"`
+	Reason   string  `json:"reason"`
+	At       int64   `json:"at"`
+	Resolved bool    `json:"resolved"`
+	Action   string  `json:"action,omitempty"` // ignore / retry-passed / retry-rendered
+}
+
+type manjuAgentPlanReview struct {
+	Score       float64  `json:"score"`
+	Issues      []string `json:"issues,omitempty"`
+	Suggestions []string `json:"suggestions,omitempty"`
+	At          int64    `json:"at"`
+}
+
+type manjuAgentState struct {
+	Episode     string                     `json:"episode"`
+	PassScore   float64                    `json:"passScore"`
+	MaxRetries  int                        `json:"maxRetries"`
+	VisionModel string                     `json:"visionModel,omitempty"`
+	PlanReview  *manjuAgentPlanReview      `json:"planReview,omitempty"`
+	Shots       map[string]*agent.Judgment `json:"shots"` // 镜头ID → 最新结论(当前集)
+	Escalations []manjuAgentEscalation     `json:"escalations,omitempty"`
+	UpdatedAt   int64                      `json:"updatedAt"`
+}
+
+var manjuAgentMu sync.Mutex
+
+func manjuAgentStatePath(project string) string {
+	return filepath.Join(manjuRoot, project, "agent_state.json")
+}
+
+func loadAgentState(project string) *manjuAgentState {
+	manjuAgentMu.Lock()
+	defer manjuAgentMu.Unlock()
+	return loadAgentStateLocked(project)
+}
+
+func loadAgentStateLocked(project string) *manjuAgentState {
+	st := &manjuAgentState{Shots: map[string]*agent.Judgment{}}
+	b, err := os.ReadFile(manjuAgentStatePath(project))
+	if err == nil {
+		_ = json.Unmarshal(b, st)
+	}
+	if st.Shots == nil {
+		st.Shots = map[string]*agent.Judgment{}
+	}
+	return st
+}
+
+func saveAgentStateLocked(project string, st *manjuAgentState) {
+	st.UpdatedAt = time.Now().Unix()
+	b, _ := json.MarshalIndent(st, "", "  ")
+	_ = os.MkdirAll(filepath.Dir(manjuAgentStatePath(project)), 0755)
+	_ = os.WriteFile(manjuAgentStatePath(project), b, 0644)
+}
+
+// agentStatusSummary status 接口附带的审片摘要(前端审片报告面板数据源)
+func agentStatusSummary(configPath string) map[string]any {
+	out := map[string]any{"configured": false, "shots": []any{}, "escalations": []any{}}
+	if configPath == "" {
+		return out
+	}
+	project := filepath.Base(filepath.Dir(configPath))
+	ctx, err := newManjuCtx(configPath, "", "", "", "")
+	if err != nil {
+		return out
+	}
+	acfg := loadAgentCfg(ctx)
+	out["configured"] = acfg.Enabled
+	out["visionModel"] = acfg.VisionModel
+	out["passScore"] = acfg.PassScore
+	out["maxRetries"] = acfg.MaxRetries
+	st := loadAgentState(project)
+	out["episode"] = st.Episode
+	if st.PlanReview != nil {
+		out["planReview"] = st.PlanReview
+	}
+	ids := make([]string, 0, len(st.Shots))
+	for k := range st.Shots {
+		ids = append(ids, k)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		a, ea := strconv.Atoi(ids[i])
+		b, eb := strconv.Atoi(ids[j])
+		if ea == nil && eb == nil {
+			return a < b
+		}
+		return ids[i] < ids[j]
+	})
+	shotsOut := make([]any, 0, len(ids))
+	for _, id := range ids {
+		j := st.Shots[id]
+		if j == nil {
+			continue
+		}
+		shotsOut = append(shotsOut, map[string]any{
+			"id": id, "status": j.Status, "score": j.Score, "retries": j.Retries,
+			"issues": j.Issues, "dimensions": j.Dimensions, "fallback": j.Fallback,
+			"qcFlags": j.QCFlags, "error": j.Error, "judgedAt": j.JudgedAt,
+		})
+	}
+	out["shots"] = shotsOut
+	esc := []any{}
+	for _, e := range st.Escalations {
+		if !e.Resolved {
+			esc = append(esc, e)
+		}
+	}
+	out["escalations"] = esc
+	out["escalationCount"] = len(esc)
+	return out
+}
+
+// ---- 智能体主管线(替代 manjuPipelineRun 的调度壳,阶段函数全部复用) ----
+
+// manjuAgentPipelineRun 智能模式执行:与 manjuPipelineRun 同签名同日志契约;
+// plan 后加剧本师复核,qc 阶段扩展为「机械质检 + 审片 + 返工闭环 + 升级」。
+func manjuAgentPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
+	acfg := loadAgentCfg(ctx)
+	stages := []string{"plan", "assets", "encode", "render", "qc", "assemble"}
+	if phase != "all" {
+		stages = []string{phase}
+	}
+	for _, st := range stages {
+		if lg.stopped() {
+			lg.logf("⏹ 任务已被手动停止。已完成产物保留,可直接再点同按钮续跑。")
+			return 0
+		}
+		lg.logStage(st)
+		var err error
+		switch st {
+		case "plan":
+			err = stagePlan(ctx, lg)
+			if err == nil && acfg.Enabled {
+				agentPlanReview(ctx, lg, acfg)
+			}
+		case "assets":
+			err = stageAssets(ctx, lg)
+		case "encode":
+			err = stageEncode(ctx, lg)
+		case "render":
+			err = stageRender(ctx, lg)
+		case "qc":
+			err = agentJudgeAndRework(ctx, lg, acfg)
+		case "assemble":
+			err = stageAssemble(ctx, lg)
+		}
+		if err != nil {
+			lg.logf("❌ 阶段 " + st + " 失败: " + err.Error())
+			return 1
+		}
+	}
+	return 0
+}
+
+// agentPlanReview 剧本师复核(advisory:只报告不改动,结论落 agent_state 供工作台展示)
+func agentPlanReview(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) {
+	plan, shots, err := ctx.loadPlan()
+	if err != nil {
+		return
+	}
+	var b strings.Builder
+	b.WriteString("剧名: " + ctx.project + " / 集: " + ctx.episode)
+	if t := str(plan["episode_title"]); t != "" {
+		b.WriteString("《" + t + "》")
+	}
+	b.WriteString(fmt.Sprintf("\n角色 %d / 场景 %d / 镜头 %d\n", len(anyArr(plan["characters"])), len(anyArr(plan["scenes"])), len(shots)))
+	for i, s := range shots {
+		if i >= 24 {
+			b.WriteString(fmt.Sprintf("…(共 %d 镜,余略)\n", len(shots)))
+			break
+		}
+		b.WriteString(fmt.Sprintf("镜%d[%s·%s·%ds] %s | 台词:%s 旁白:%s\n", s.ID, s.Scene, s.ShotSize, s.Duration,
+			truncate(s.Action, 40), truncate(s.Dialogue, 30), truncate(s.Narration, 30)))
+	}
+	score, issues, sugg, err := agent.PlanReview(manjuAgentLLM{ctx.llm}, b.String())
+	if err != nil {
+		lg.logf("📖 剧本师复核跳过: " + err.Error())
+		return
+	}
+	lg.logf(fmt.Sprintf("📖 剧本师复核: %.0f 分", score))
+	for _, is := range issues {
+		lg.logf("    ⚠️ " + is)
+	}
+	manjuAgentMu.Lock()
+	st := loadAgentStateLocked(ctx.project)
+	st.Episode = ctx.episode
+	st.PlanReview = &manjuAgentPlanReview{Score: score, Issues: issues, Suggestions: sugg, At: time.Now().Unix()}
+	st.PassScore, st.MaxRetries, st.VisionModel = acfg.PassScore, acfg.MaxRetries, acfg.VisionModel
+	saveAgentStateLocked(ctx.project, st)
+	manjuAgentMu.Unlock()
+	if score < 60 {
+		manjuNotifySend(fmt.Sprintf("漫剧《%s》%s · 📖 剧本复核 %.0f 分偏低,建议先看工作台审片报告再继续渲染", ctx.project, ctx.episode, score))
+	}
+}
+
+// ---- 机械质检(JSON 报告) ----
+
+// runMediaOut 跑媒体辅助脚本并捕获完整 stdout(不写运行日志,供 JSON 解析)
+func (ctx *manjuCtx) runMediaOut(args ...string) (string, error) {
+	script := ensureMediaHelper()
+	cmd := exec.Command(manjuPython, append([]string{script}, args...)...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUNBUFFERED=1")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	if err := cmd.Wait(); err != nil {
+		return out.String(), err
+	}
+	return out.String(), nil
+}
+
+// runQCJSON 机械质检并返回问题镜头报告 {镜头ID: flags}
+func (ctx *manjuCtx) runQCJSON(lg *manjuLogger, clipsEp string) (map[int][]string, error) {
+	jsonPath := filepath.Join(os.TempDir(), fmt.Sprintf("manju_qc_%d.json", time.Now().UnixNano()))
+	defer os.Remove(jsonPath)
+	if _, err := ctx.runMediaOut("qc", "--dir", clipsEp, "--json", jsonPath); err != nil {
+		// 质检脚本自身失败(如目录空):不影响判分流程,视为无机械问题
+		lg.logf("  ⚠️ 机械质检异常(忽略,继续审片): " + err.Error())
+		return map[int][]string{}, nil
+	}
+	b, err := os.ReadFile(jsonPath)
+	if err != nil {
+		return map[int][]string{}, nil
+	}
+	var report struct {
+		Shots map[string]struct {
+			OK    bool     `json:"ok"`
+			Flags []string `json:"flags"`
+		} `json:"shots"`
+	}
+	if json.Unmarshal(b, &report) != nil {
+		return map[int][]string{}, nil
+	}
+	out := map[int][]string{}
+	for name, r := range report.Shots {
+		id, err := strconv.Atoi(strings.TrimSuffix(strings.ToLower(name), ".mp4"))
+		if err != nil || r.OK {
+			continue
+		}
+		out[id] = r.Flags
+	}
+	return out, nil
+}
+
+// ---- 审片 + 返工闭环 ----
+
+// shotFramesDir 抽帧输出目录 analysis/_frames/<ep>/<NN>/
+func (ctx *manjuCtx) shotFramesDir(shotID int) string {
+	return filepath.Join(ctx.analysisDir, "_frames", ctx.episode, fmt.Sprintf("%02d", shotID))
+}
+
+// extractFrames 抽帧(媒体辅助脚本),返回 JPEG 路径列表
+func (ctx *manjuCtx) extractFrames(lg *manjuLogger, clip string, shotID, count int) ([]string, error) {
+	dir := ctx.shotFramesDir(shotID)
+	_ = os.RemoveAll(dir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+	out, err := ctx.runMediaOut("frames", "--video", clip, "--out-dir", dir, "--count", strconv.Itoa(count))
+	if err != nil {
+		return nil, fmt.Errorf("抽帧失败: %w", err)
+	}
+	m := parseJSONLine(out)
+	var frames []string
+	if m != nil {
+		if arr, ok := m["frames"].([]any); ok {
+			for _, x := range arr {
+				if s := str(x); s != "" {
+					frames = append(frames, s)
+				}
+			}
+		}
+	}
+	if len(frames) == 0 {
+		// 兜底:目录里有什么 jpg 用什么
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if strings.HasSuffix(strings.ToLower(e.Name()), ".jpg") {
+				frames = append(frames, filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	if len(frames) == 0 {
+		return nil, fmt.Errorf("抽帧 0 张")
+	}
+	return frames, nil
+}
+
+// shotMetaFromPlan 从方案组装审片输入元数据
+func shotMetaFromPlan(s manjuShot, charMap, sceneMap map[string]map[string]any, styleDesc string) agent.ShotMeta {
+	meta := agent.ShotMeta{
+		ShotID: s.ID, Scene: s.Scene, Characters: s.Characters, ShotSize: s.ShotSize,
+		Camera: s.Camera, Action: s.Action, Dialogue: s.Dialogue, Narration: s.Narration,
+		StyleDesc: styleDesc, HasChar: len(s.Characters) > 0,
+	}
+	if sc, ok := sceneMap[s.Scene]; ok {
+		meta.SceneDesc = str(sc["description"])
+	}
+	if meta.HasChar {
+		if c, ok := charMap[s.Characters[0]]; ok {
+			meta.CharDesc = strings.TrimSpace(str(c["appearance"]) + ";" + str(c["costume"]))
+		}
+	}
+	return meta
+}
+
+// refImagesFor 镜头参考图:R2V=角色定妆照(优先正脸),FL2VA=场景图
+func (ctx *manjuCtx) refImagesFor(s manjuShot) []string {
+	var out []string
+	if len(s.Characters) > 0 {
+		cid := s.Characters[0]
+		for _, rel := range []string{"characters/" + cid + "_face.png", "characters/" + cid + ".png"} {
+			p := filepath.Join(ctx.assetsDir, rel)
+			if fileExists(p) {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	if s.Scene != "" {
+		p := filepath.Join(ctx.assetsDir, "scenes", s.Scene+".png")
+		if fileExists(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// judgeShots 对给定镜头逐个审片(已有 mp4 才判),写状态并返回本轮失败的镜头ID。
+func (ctx *manjuCtx) judgeShots(lg *manjuLogger, acfg agent.Config, plan map[string]any, shots []manjuShot, qcBad map[int][]string) []int {
+	project := ctx.project
+	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
+	if !acfg.VisionReady() {
+		// 审片官未配置:机械质检问题直接进失败集(升级用),不打分不返工
+		var failed []int
+		for id, flags := range qcBad {
+			lg.logf(fmt.Sprintf("🤖 镜头 %d 机械质检未过: %s(视觉模型未配置,无法判分返工)", id, strings.Join(flags, "、")))
+			failed = append(failed, id)
+		}
+		return failed
+	}
+	vc := ctx.visionClient(acfg)
+	charMap, sceneMap := planCharSceneMaps(plan)
+	styleDesc := manjuStyleDesc(ctx.style).asset
+	var failed []int
+	for _, s := range shots {
+		clip := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
+		if !fileExists(clip) {
+			continue
+		}
+		jd := &agent.Judgment{Status: "pending", JudgedAt: time.Now().Unix(), Model: acfg.VisionModel}
+		jd.QCFlags = qcBad[s.ID]
+		frames, ferr := ctx.extractFrames(lg, clip, s.ID, acfg.FramesPerShot)
+		if ferr != nil {
+			jd.Error = ferr.Error()
+			lg.logf("🤖 审片 镜头 " + strconv.Itoa(s.ID) + " 抽帧失败: " + ferr.Error())
+		} else {
+			meta := shotMetaFromPlan(s, charMap, sceneMap, styleDesc)
+			if j, err := agent.Judge(vc, meta, frames, ctx.refImagesFor(s), acfg.PassScore); err != nil {
+				jd.Error = err.Error()
+				lg.logf("🤖 审片 镜头 " + strconv.Itoa(s.ID) + " 调用失败: " + truncate(err.Error(), 160))
+			} else {
+				jd = j
+				jd.QCFlags = qcBad[s.ID]
+				mark := "✅"
+				if jd.Status != "pass" {
+					mark = "❌"
+					failed = append(failed, s.ID)
+				}
+				weak := agent.WeakDims(jd.Dimensions, 60)
+				weakStr := ""
+				if len(weak) > 0 {
+					parts := make([]string, 0, len(weak))
+					for _, d := range weak {
+						parts = append(parts, fmt.Sprintf("%s%.0f", d.Name, jd.Dimensions[d.Key]))
+					}
+					weakStr = "(弱项:" + strings.Join(parts, "/") + ")"
+				}
+				lg.logf(fmt.Sprintf("🤖 审片 镜头 %d: %.1f 分 %s %s", s.ID, jd.Score, mark, weakStr))
+				for _, is := range jd.Issues {
+					lg.logf("      · " + is)
+				}
+			}
+		}
+		// 机械质检 bad 的镜头无论判分如何都进失败集(黑屏/无声必须返工)
+		if len(jd.QCFlags) > 0 {
+			found := false
+			for _, id := range failed {
+				if id == s.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				failed = append(failed, s.ID)
+			}
+		}
+		manjuAgentMu.Lock()
+		st := loadAgentStateLocked(project)
+		if st.Episode != ctx.episode {
+			// 换集:审片报告翻页(旧集升级记录随报告清空,成片/日志仍在)
+			st.Episode = ctx.episode
+			st.Shots = map[string]*agent.Judgment{}
+			st.Escalations = nil
+		}
+		if prev := st.Shots[strconv.Itoa(s.ID)]; prev != nil {
+			jd.Retries = prev.Retries
+		}
+		if jd.Status == "pass" && len(jd.QCFlags) == 0 && jd.Retries > 0 {
+			jd.Status = "fixed"
+		}
+		st.Shots[strconv.Itoa(s.ID)] = jd
+		st.PassScore, st.MaxRetries, st.VisionModel = acfg.PassScore, acfg.MaxRetries, acfg.VisionModel
+		saveAgentStateLocked(project, st)
+		manjuAgentMu.Unlock()
+	}
+	return failed
+}
+
+func planCharSceneMaps(plan map[string]any) (charMap, sceneMap map[string]map[string]any) {
+	charMap = map[string]map[string]any{}
+	for _, c := range anyArr(plan["characters"]) {
+		if m, ok := c.(map[string]any); ok {
+			charMap[str(m["id"])] = m
+		}
+	}
+	sceneMap = map[string]map[string]any{}
+	for _, s := range anyArr(plan["scenes"]) {
+		if m, ok := s.(map[string]any); ok {
+			sceneMap[str(m["id"])] = m
+		}
+	}
+	return
+}
+
+// clearShotArtifacts 删镜头 mp4 + 条件缓存(.pt),让定点重渲染真正重做
+// (提示词改动只在重新编码时生效;缓存名不含提示词指纹,必须显式删)。
+func (ctx *manjuCtx) clearShotArtifacts(s manjuShot) {
+	_ = os.Remove(filepath.Join(ctx.clipsDir, ctx.episode, fmt.Sprintf("%02d.mp4", s.ID)))
+	_ = os.Remove(h3CachePath(ctx.sharedModels, ctx.shotCacheName(s.ID)))
+}
+
+// updateShotPrompt 把修复师的新提示词写回方案 json + 逐镜提示词缓存
+func (ctx *manjuCtx) updateShotPrompt(s manjuShot, newPrompt string) error {
+	plan, _, err := ctx.loadPlan()
+	if err != nil {
+		return err
+	}
+	shotObjs, _ := plan["shots"].([]any)
+	for _, x := range shotObjs {
+		if m, ok := x.(map[string]any); ok {
+			if n, ok := manjuToInt(m["shot_id"]); ok && n == s.ID {
+				m["h3_prompt"] = newPrompt
+				break
+			}
+		}
+	}
+	if err := ctx.writePlan(plan); err != nil {
+		return err
+	}
+	promptsPath := filepath.Join(ctx.analysisDir, ctx.episode+"_shots_prompts.json")
+	prompts := map[string]any{}
+	if b, err := os.ReadFile(promptsPath); err == nil {
+		_ = json.Unmarshal(b, &prompts)
+	}
+	prompts[strconv.Itoa(s.ID)] = newPrompt
+	if b, err := json.MarshalIndent(prompts, "", "  "); err == nil {
+		_ = os.WriteFile(promptsPath, b, 0644)
+	}
+	return nil
+}
+
+// agentJudgeAndRework 智能模式 qc 阶段主体:机械质检 → 审片 → 返工闭环 → 升级。
+// 永不因个别镜头失败中断整集(例外升级给人,成片继续合成)。
+func agentJudgeAndRework(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) error {
+	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
+	if entries, err := os.ReadDir(clipsEp); err != nil || len(entries) == 0 {
+		lg.logf("  ⏭ 该集无镜头可审片，跳过")
+		return nil
+	}
+	plan, shots, err := ctx.ensurePlanAndPrompts(lg)
+	if err != nil {
+		return err
+	}
+	selected := ctx.selectedShots(shots)
+	if len(selected) == 0 {
+		lg.logf("  ⏭ 没有需要处理的镜头")
+		return nil
+	}
+	qcBad, _ := ctx.runQCJSON(lg, clipsEp)
+	lg.logf(fmt.Sprintf("🤖 审片官开始判分: %d 镜(视觉模型 %s)", len(selected), orDefault(acfg.VisionModel, "未配置→仅机械质检")))
+	failed := ctx.judgeShots(lg, acfg, plan, selected, qcBad)
+
+	// 返工闭环:修复提示词 → 删旧产物 → 定点重编码重渲染 → 复审(预算封顶)
+	round := 0
+	for len(failed) > 0 && round < acfg.MaxRetries && acfg.VisionReady() && !lg.stopped() {
+		round++
+		ids := make([]string, 0, len(failed))
+		var fixTargets []manjuShot
+		for _, s := range selected {
+			for _, id := range failed {
+				if s.ID == id {
+					fixTargets = append(fixTargets, s)
+					ids = append(ids, strconv.Itoa(s.ID))
+				}
+			}
+		}
+		lg.logf(fmt.Sprintf("🔧 返工第 %d/%d 轮: 镜头 %s", round, acfg.MaxRetries, strings.Join(ids, ",")))
+		charMap, sceneMap := planCharSceneMaps(plan)
+		for _, s := range fixTargets {
+			jd := loadAgentStateShot(ctx.project, s.ID)
+			np, ferr := agent.FixPrompt(manjuAgentLLM{ctx.llm}, shotMetaFromPlan(s, charMap, sceneMap, manjuStyleDesc(ctx.style).asset), s.H3Prompt, jd)
+			if ferr != nil {
+				lg.logf("  ⚠️ 镜头 " + strconv.Itoa(s.ID) + " 修复师失败(按原提示词重渲染): " + truncate(ferr.Error(), 120))
+			} else {
+				if err := ctx.updateShotPrompt(s, np); err != nil {
+					lg.logf("  ⚠️ 镜头 " + strconv.Itoa(s.ID) + " 提示词回写失败: " + err.Error())
+				} else {
+					s.H3Prompt = np
+					lg.logf(fmt.Sprintf("  ✏️ 镜头 %d 提示词已修复(%d 字)", s.ID, len([]rune(np))))
+				}
+			}
+			ctx.clearShotArtifacts(s)
+			bumpAgentRetries(ctx.project, s.ID)
+		}
+		// 定点重跑编码+渲染(临时收窄 only)
+		prevOnly := ctx.only
+		ctx.only = strings.Join(ids, ",")
+		lg.logStage("encode")
+		if err := stageEncode(ctx, lg); err != nil {
+			ctx.only = prevOnly
+			return fmt.Errorf("返工预编码失败: %w", err)
+		}
+		lg.logStage("render")
+		if err := stageRender(ctx, lg); err != nil {
+			ctx.only = prevOnly
+			return fmt.Errorf("返工渲染失败: %w", err)
+		}
+		ctx.only = prevOnly
+		// 复审(只审本轮重做的镜头)
+		plan2, shots2, err := ctx.ensurePlanAndPrompts(lg)
+		if err != nil {
+			return err
+		}
+		var redoShots []manjuShot
+		for _, s := range shots2 {
+			for _, id := range failed {
+				if s.ID == id {
+					redoShots = append(redoShots, s)
+				}
+			}
+		}
+		qcBad2, _ := ctx.runQCJSON(lg, clipsEp)
+		failed = ctx.judgeShots(lg, acfg, plan2, redoShots, qcBad2)
+	}
+
+	// 升级:预算耗尽仍未通过的镜头 → 推送 + 状态记录(成片照常合成,人再拍板)
+	if len(failed) > 0 {
+		sort.Ints(failed)
+		parts := make([]string, 0, len(failed))
+		for _, id := range failed {
+			jd := loadAgentStateShot(ctx.project, id)
+			reason := strings.Join(jd.Issues, ";")
+			if reason == "" {
+				reason = strings.Join(jd.QCFlags, ";")
+			}
+			if reason == "" {
+				reason = "判分未达标"
+			}
+			escalateShot(ctx, lg, id, jd.Score, reason, acfg)
+			parts = append(parts, fmt.Sprintf("镜%d(%.0f分)", id, jd.Score))
+		}
+		lg.logf("⚠️ 已升级待人拍板: " + strings.Join(parts, "、") + "(工作台「审片报告」可重试/忽略)")
+		manjuNotifySend(fmt.Sprintf("漫剧《%s》%s · ⚠️ %d 个镜头审片未达标已升级: %s(重试 %d 轮耗尽)",
+			ctx.project, ctx.episode, len(failed), strings.Join(parts, "、"), acfg.MaxRetries))
+	} else {
+		lg.logf("🎉 审片全部通过")
+	}
+	return nil
+}
+
+// loadAgentStateShot 读某镜头最新结论(无则空 Judgment)
+func loadAgentStateShot(project string, shotID int) *agent.Judgment {
+	manjuAgentMu.Lock()
+	defer manjuAgentMu.Unlock()
+	st := loadAgentStateLocked(project)
+	if j := st.Shots[strconv.Itoa(shotID)]; j != nil {
+		cp := *j
+		return &cp
+	}
+	return &agent.Judgment{}
+}
+
+// bumpAgentRetries 返工轮数 +1
+func bumpAgentRetries(project string, shotID int) {
+	manjuAgentMu.Lock()
+	defer manjuAgentMu.Unlock()
+	st := loadAgentStateLocked(project)
+	if j := st.Shots[strconv.Itoa(shotID)]; j != nil {
+		j.Retries++
+		saveAgentStateLocked(project, st)
+	}
+}
+
+// escalateShot 记录升级(同镜未解决的升级只更新不重复)
+func escalateShot(ctx *manjuCtx, lg *manjuLogger, shotID int, score float64, reason string, acfg agent.Config) {
+	manjuAgentMu.Lock()
+	st := loadAgentStateLocked(ctx.project)
+	st.Episode = ctx.episode
+	found := false
+	for i := range st.Escalations {
+		e := &st.Escalations[i]
+		if e.EP == ctx.episode && e.Shot == shotID && !e.Resolved {
+			e.Score, e.Reason, e.At = score, reason, time.Now().Unix()
+			found = true
+			break
+		}
+	}
+	if !found {
+		st.Escalations = append(st.Escalations, manjuAgentEscalation{
+			EP: ctx.episode, Shot: shotID, Score: score, Reason: reason, At: time.Now().Unix(),
+		})
+	}
+	saveAgentStateLocked(ctx.project, st)
+	manjuAgentMu.Unlock()
+}
+
+// ---- 手动操作:重审 / 升级处理 ----
+
+// manjuAgentJudgeOne 手动重审一个已有镜头(同步,前端等结果)
+func manjuAgentJudgeOne(configPath, episode string, shotID int) (*agent.Judgment, error) {
+	ctx, err := newManjuCtx(configPath, episode, "", "", "")
+	if err != nil {
+		return nil, err
+	}
+	acfg := loadAgentCfg(ctx)
+	if !acfg.VisionReady() {
+		return nil, fmt.Errorf("未配置视觉模型(设置弹窗「智能体」里填写)")
+	}
+	clip := filepath.Join(ctx.clipsDir, ctx.episode, fmt.Sprintf("%02d.mp4", shotID))
+	if !fileExists(clip) {
+		return nil, fmt.Errorf("镜头 %d 尚未渲染", shotID)
+	}
+	plan, shots, err := ctx.ensurePlanAndPrompts(&manjuLogger{state: manjuState})
+	if err != nil {
+		return nil, err
+	}
+	var target []manjuShot
+	for _, s := range shots {
+		if s.ID == shotID {
+			target = append(target, s)
+		}
+	}
+	if len(target) == 0 {
+		return nil, fmt.Errorf("方案中无镜头 %d", shotID)
+	}
+	lg := &manjuLogger{state: manjuState, proj: ctx.project, ep: ctx.episode}
+	_ = ctx.judgeShots(lg, acfg, plan, target, nil)
+	return loadAgentStateShot(ctx.project, shotID), nil
+}
+
+// manjuAgentReworkRun 定点返工一个镜头(升级卡「重试」触发,后台任务)
+// 流程:修复提示词 → 重编码重渲染 → 复审;通过自动解除升级。
+func manjuAgentReworkRun(w http.ResponseWriter, configPath, episode string, shotID int) {
+	manjuState.mu.Lock()
+	if manjuState.running {
+		manjuState.mu.Unlock()
+		http.Error(w, `{"error":"已有任务运行中，先停止"}`, http.StatusConflict)
+		return
+	}
+	projName := filepath.Base(filepath.Dir(configPath))
+	manjuState.running = true
+	manjuState.stage = "render"
+	manjuState.log = ""
+	manjuState.rc = nil
+	manjuState.done = false
+	manjuState.started = time.Now()
+	manjuState.baseElapsed = 0
+	manjuState.stopped = false
+	manjuState.project = projName
+	manjuState.episode = episode
+	manjuState.mu.Unlock()
+	writeManjuDiskState(projName, &manjuDiskState{Running: true, Stage: "render", StartedAt: time.Now().Unix(), Episode: episode})
+	_ = os.WriteFile(manjuRunLogPath(projName), nil, 0644)
+
+	go func() {
+		rc := 1
+		runFile, _ := os.OpenFile(manjuRunLogPath(projName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		defer func() {
+			if runFile != nil {
+				_ = runFile.Close()
+			}
+			manjuFinish(rc)
+		}()
+		ctx, err := newManjuCtx(configPath, episode, "", strconv.Itoa(shotID), "")
+		if err != nil {
+			return
+		}
+		lg := newManjuLogger(manjuState, runFile, ctx.project, ctx.episode)
+		acfg := loadAgentCfg(ctx)
+		lg.logf(fmt.Sprintf("🤖 定点返工: 镜头 %d(修复提示词 → 重编码 → 重渲染 → 复审)", shotID))
+		plan, shots, err := ctx.ensurePlanAndPrompts(lg)
+		if err != nil {
+			lg.logf("❌ 读取方案失败: " + err.Error())
+			return
+		}
+		var target manjuShot
+		found := false
+		for _, s := range shots {
+			if s.ID == shotID {
+				target, found = s, true
+			}
+		}
+		if !found {
+			lg.logf("❌ 方案中无镜头 " + strconv.Itoa(shotID))
+			return
+		}
+		jd := loadAgentStateShot(ctx.project, shotID)
+		if strings.TrimSpace(target.H3Prompt) != "" && acfg.VisionReady() {
+			charMap, sceneMap := planCharSceneMaps(plan)
+			if np, ferr := agent.FixPrompt(manjuAgentLLM{ctx.llm}, shotMetaFromPlan(target, charMap, sceneMap, manjuStyleDesc(ctx.style).asset), target.H3Prompt, jd); ferr == nil {
+				if err := ctx.updateShotPrompt(target, np); err == nil {
+					lg.logf("  ✏️ 提示词已按审片意见修复")
+				}
+			}
+		}
+		ctx.clearShotArtifacts(target)
+		bumpAgentRetries(ctx.project, shotID)
+		lg.logStage("encode")
+		if err := stageEncode(ctx, lg); err != nil {
+			lg.logf("❌ 预编码失败: " + err.Error())
+			return
+		}
+		lg.logStage("render")
+		if err := stageRender(ctx, lg); err != nil {
+			lg.logf("❌ 渲染失败: " + err.Error())
+			return
+		}
+		if acfg.VisionReady() {
+			plan2, shots2, _ := ctx.ensurePlanAndPrompts(lg)
+			var redo []manjuShot
+			for _, s := range shots2 {
+				if s.ID == shotID {
+					redo = append(redo, s)
+				}
+			}
+			if failed := ctx.judgeShots(lg, acfg, plan2, redo, nil); len(failed) == 0 {
+				resolveEscalation(ctx.project, ctx.episode, shotID, "retry-passed")
+				lg.logf("🎉 镜头 " + strconv.Itoa(shotID) + " 返工通过,升级已解除")
+			} else {
+				escalateShot(ctx, lg, shotID, loadAgentStateShot(ctx.project, shotID).Score, "定点返工仍未达标", acfg)
+			}
+		} else {
+			resolveEscalation(ctx.project, ctx.episode, shotID, "retry-rendered")
+			lg.logf("✅ 镜头 " + strconv.Itoa(shotID) + " 已重渲染(未配置视觉模型,跳过复审)")
+		}
+		rc = 0
+	}()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// resolveEscalation 解除一条升级
+func resolveEscalation(project, episode string, shotID int, action string) {
+	manjuAgentMu.Lock()
+	defer manjuAgentMu.Unlock()
+	st := loadAgentStateLocked(project)
+	for i := range st.Escalations {
+		e := &st.Escalations[i]
+		if e.EP == episode && e.Shot == shotID && !e.Resolved {
+			e.Resolved = true
+			e.Action = action
+		}
+	}
+	if j := st.Shots[strconv.Itoa(shotID)]; j != nil && action == "ignore" {
+		j.Status = "accepted"
+	}
+	saveAgentStateLocked(project, st)
+}
+
+// ---- HTTP 端点 ----
+
+func registerAgentRoutes(mux *http.ServeMux) {
+	// 审片状态 + 配置读取(key 打码)
+	mux.HandleFunc("GET /api/manju/agent", func(w http.ResponseWriter, r *http.Request) {
+		configPath := r.URL.Query().Get("config")
+		if configPath == "" {
+			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+			return
+		}
+		res := agentStatusSummary(configPath)
+		if ctx, err := newManjuCtx(configPath, "", "", "", ""); err == nil {
+			acfg := loadAgentCfg(ctx)
+			masked := ""
+			if len(acfg.VisionAPIKey) > 9 {
+				masked = acfg.VisionAPIKey[:5] + "…" + acfg.VisionAPIKey[len(acfg.VisionAPIKey)-4:]
+			}
+			res["hasVisionKey"] = acfg.VisionAPIKey != ""
+			res["visionKeyMasked"] = masked
+			res["visionBaseUrl"] = acfg.VisionBaseURL
+			res["agentEnabled"] = acfg.Enabled
+		}
+		writeJSON(w, http.StatusOK, res)
+	})
+
+	// 保存智能体配置(写入项目 config.json 的 agent 节,留空字段沿用旧值)
+	mux.HandleFunc("POST /api/manju/agent/settings", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		configPath := str(body["config"])
+		if configPath == "" {
+			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+			return
+		}
+		cfg, err := readManjuConfig(configPath)
+		if err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
+		A, _ := cfg["agent"].(map[string]any)
+		if A == nil {
+			A = map[string]any{}
+		}
+		if m, ok := body["agent"].(map[string]any); ok {
+			if b, ok := m["enabled"].(bool); ok {
+				A["enabled"] = b
+			}
+			for _, k := range []string{"vision_base_url", "vision_api_key", "vision_model"} {
+				if v := strings.TrimSpace(str(m[k])); v != "" {
+					A[k] = v
+				}
+			}
+			if v, ok := manjuToFloat(m["pass_score"]); ok && v > 0 && v <= 100 {
+				A["pass_score"] = v
+			}
+			if n, ok := manjuToInt(m["max_retries"]); ok && n >= 0 && n <= 4 {
+				A["max_retries"] = n
+			}
+		}
+		cfg["agent"] = A
+		if err := writeManjuConfig(configPath, cfg); err != nil {
+			http.Error(w, `{"error":"保存失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+
+	// 手动重审一个镜头(同步返回结论)
+	mux.HandleFunc("POST /api/manju/agent/judge", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		configPath := str(body["config"])
+		episode := orDefault(str(body["episode"]), "EP01")
+		shotID, ok := manjuToInt(body["shot"])
+		if configPath == "" || !ok {
+			http.Error(w, `{"error":"missing config/shot"}`, http.StatusBadRequest)
+			return
+		}
+		manjuState.mu.Lock()
+		running := manjuState.running
+		manjuState.mu.Unlock()
+		if running {
+			http.Error(w, `{"error":"任务运行中,结束后再重审"}`, http.StatusConflict)
+			return
+		}
+		jd, err := manjuAgentJudgeOne(configPath, episode, shotID)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "judgment": jd})
+	})
+
+	// 升级处理:retry(定点返工,后台任务) / ignore(接受现状)
+	mux.HandleFunc("POST /api/manju/agent/resolve", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		configPath := str(body["config"])
+		episode := orDefault(str(body["episode"]), "EP01")
+		shotID, ok := manjuToInt(body["shot"])
+		action := str(body["action"])
+		if configPath == "" || !ok || (action != "retry" && action != "ignore") {
+			http.Error(w, `{"error":"missing config/shot/action(retry|ignore)"}`, http.StatusBadRequest)
+			return
+		}
+		project := filepath.Base(filepath.Dir(configPath))
+		if action == "ignore" {
+			resolveEscalation(project, episode, shotID, "ignore")
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+			return
+		}
+		manjuAgentReworkRun(w, configPath, episode, shotID)
+	})
+
+	// 视觉模型连通测试(拿项目第一张定妆照问一句话)
+	mux.HandleFunc("POST /api/manju/agent/vision-test", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		configPath := str(body["config"])
+		if configPath == "" {
+			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+			return
+		}
+		ctx, err := newManjuCtx(configPath, "", "", "", "")
+		if err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
+		acfg := loadAgentCfg(ctx)
+		if !acfg.VisionReady() {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "未填写视觉模型名"})
+			return
+		}
+		vc := ctx.visionClient(acfg)
+		testImg := ""
+		entries, _ := os.ReadDir(filepath.Join(ctx.assetsDir, "characters"))
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".png") && !strings.Contains(e.Name(), "_face") {
+				testImg = filepath.Join(ctx.assetsDir, "characters", e.Name())
+				break
+			}
+		}
+		if testImg == "" {
+			// 没有定妆照也能测连通:生成一张合成测试图(深底白 N)
+			p, ierr := syntheticVisionTestImage()
+			if ierr != nil {
+				writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "生成测试图失败: " + ierr.Error()})
+				return
+			}
+			defer os.Remove(p)
+			testImg = p
+		}
+		out, err := vc.ChatJSON("你是连通测试助手,只输出 JSON,不要输出其它内容。",
+			`描述这张图,严格输出 {"desc":"一句话描述"} 格式的 JSON。`, []string{testImg}, 0.1)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		reply := ""
+		if len(out) > 0 {
+			reply = fmt.Sprint(out)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "visionModel": acfg.VisionModel, "reply": reply})
+	})
+}
+
+// syntheticVisionTestImage 生成 224×224 深底白 N 测试图(项目无角色定妆照时的连通测试兜底)
+func syntheticVisionTestImage() (string, error) {
+	const s = 224
+	img := image.NewRGBA(image.Rect(0, 0, s, s))
+	draw.Draw(img, img.Bounds(), &image.Uniform{color.RGBA{19, 25, 38, 255}}, image.Point{}, draw.Src)
+	white := &image.Uniform{color.RGBA{233, 237, 245, 255}}
+	// 三笔构成 N:左竖线 + 对角线 + 右竖线,线宽 18
+	thick := func(x0, y0, x1, y1, w int) {
+		steps := int(math.Max(math.Abs(float64(x1-x0)), math.Abs(float64(y1-y0)))) * 2
+		for i := 0; i <= steps; i++ {
+			x := x0 + (x1-x0)*i/steps
+			y := y0 + (y1-y0)*i/steps
+			draw.Draw(img, image.Rect(x-w/2, y-w/2, x+w/2+1, y+w/2+1), white, image.Point{}, draw.Src)
+		}
+	}
+	thick(70, 60, 70, 164, 18)
+	thick(70, 164, 154, 60, 18)
+	thick(154, 60, 154, 164, 18)
+	f, err := os.CreateTemp("", "nilix_vision_test_*.jpg")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 88}); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}

@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="nebula" data-style="default">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NiliX</title>
+<link rel="icon" type="image/png" href="/icon.png?v=20260818c">
+<link rel="stylesheet" href="/css/themes.css?v=20260818c">
+<link rel="stylesheet" href="/css/materials.css?v=20260818c">
+<link rel="stylesheet" href="/css/app.css?v=20260818c">
+</head>
+<body>
+  <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <symbol id="i-graph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/>
+      <path d="M10.6 6.5 6.4 16.3M13.4 6.5l4.2 9.8M7.2 18h9.6"/>
+    </symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/>
+      <rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>
+    </symbol>
+    <symbol id="i-page" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/>
+    </symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+    </symbol>
+    <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/>
+      <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>
+    </symbol>
+    <symbol id="i-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 7V5h16v2M12 5v14M9 19h6"/>
+    </symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>
+    </symbol>
+    <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>
+    </symbol>
+    <symbol id="i-conn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 12h7"/>
+    </symbol>
+    <symbol id="i-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/>
+    </symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4.5 19a9 9 0 1 1 15 0"/><path d="M12 13l3.5-4M12 13a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2z"/>
+    </symbol>
+    <symbol id="i-trophy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 5H4v2a3 3 0 0 0 3 3M17 5h3v2a3 3 0 0 1-3 3M12 14v4M8 21h8M10 18h4"/>
+    </symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+    </symbol>
+    <symbol id="i-comfy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3.5" y="3.5" width="6" height="6" rx="1.5"/><rect x="14.5" y="3.5" width="6" height="6" rx="1.5"/>
+      <rect x="3.5" y="14.5" width="6" height="6" rx="1.5"/><rect x="14.5" y="14.5" width="6" height="6" rx="1.5"/>
+      <path d="M9.5 6.5h5M6.5 9.5v5M17.5 9.5v5M9.5 17.5h5"/>
+    </symbol>
+    <symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 4h6v6M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>
+    </symbol>
+    <symbol id="i-book" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19a2 2 0 0 1 2-2h13"/>
+    </symbol>
+    <symbol id="i-film" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 5v14M17 5v14M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4"/>
+    </symbol>
+  </svg>
+
+  <canvas id="stars" aria-hidden="true"></canvas>
+  <div class="bg-grid" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <button id="side-toggle" class="side-toggle" title="目录" aria-label="Toggle sidebar">☰</button>
+    <div class="brand">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260818c" alt="">
+      <span class="brand-name" data-i18n="app.name">NiliX</span>
+      <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
+    </div>
+    <nav class="nav">
+      <a href="#/" class="nav-link" data-route="graph">
+        <svg class="ic" aria-hidden="true"><use href="#i-graph"/></svg><span data-i18n="nav.graph">关系图谱</span>
+      </a>
+      <a href="#/overview" class="nav-link" data-route="overview">
+        <svg class="ic" aria-hidden="true"><use href="#i-grid"/></svg><span data-i18n="nav.overview">最新总览</span>
+      </a>
+      <a href="#/novel" class="nav-link" data-route="novel">
+        <svg class="ic" aria-hidden="true"><use href="#i-book"/></svg><span data-i18n="nav.novel">小说管理</span>
+      </a>
+      <a href="#/manju" class="nav-link" data-route="manju">
+        <svg class="ic" aria-hidden="true"><use href="#i-film"/></svg><span data-i18n="nav.manju">漫剧管理</span>
+      </a>
+      <a href="#/comfy" class="nav-link" data-route="comfy">
+        <svg class="ic" aria-hidden="true"><use href="#i-comfy"/></svg><span data-i18n="nav.comfy">ComfyUI</span>
+      </a>
+    </nav>
+    <div class="controls">
+      <div class="top-search">
+        <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+        <input id="top-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索…">
+      </div>
+      <button id="settings-btn" class="settings-btn" data-i18n-title="settings.title" title="设置" aria-label="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3.2"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <!-- 首页:关系图谱 -->
+    <section id="view-graph" class="view view-graph is-active">
+      <aside id="side" class="side-panel">
+        <div class="side-head">
+          <span class="side-head-t"><svg class="ic" aria-hidden="true"><use id="side-icon" href="#i-list"/></svg><span id="side-title" data-i18n="side.title.all">全部页面</span></span>
+          <span id="side-count" class="side-count"></span>
+        </div>
+        <div id="side-list" class="side-list"></div>
+      </aside>
+      <div class="graph-wrap">
+        <div id="graph" class="graph-canvas"></div>
+        <div class="graph-hud">
+          <div class="hud-title">
+            <span data-i18n="graph.title">知识关系图谱</span>
+            <small data-i18n="graph.hint">拖动节点浏览 · 滚轮缩放 · 悬停高亮 · 点击查看详情</small>
+            <small id="graph-live" class="live-tag"></small>
+          </div>
+          <!-- 分类导航条:居右展示,与左侧标题对称留白 -->
+          <div class="hud-right">
+            <div id="graph-legend" class="hud-legend"></div>
+          </div>
+        </div>
+        <div id="bottom-bar" class="bottom-bar hidden">
+          <span id="bb-dot" class="bb-dot"></span>
+          <div id="bb-title" class="bb-title"></div>
+          <div id="bb-meta" class="bb-meta"></div>
+        </div>
+      </div>
+      <button id="side-collapse" class="side-collapse" title="收起/展开侧栏" aria-label="Collapse sidebar"><span>«</span></button>
+    </section>
+
+    <!-- 二级页:最新总览 -->
+    <section id="view-overview" class="view view-overview">
+      <div class="ov-head">
+        <h1 data-i18n="nav.overview">最新总览</h1>
+        <p class="ov-sub" data-i18n="overview.sub">知识库全貌 · 分类浏览 · 最近更新</p>
+        <p id="ov-live" class="live-tag"></p>
+      </div>
+      <div id="stats" class="stats"></div>
+      <div class="ov-body">
+        <div class="ov-left">
+          <h2 class="ov-section-title"><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg><span data-i18n="overview.sections">按分类浏览</span></h2>
+          <div id="cat-groups" class="cat-groups"></div>
+        </div>
+        <aside class="ov-side">
+          <h2 class="ov-section-title"><svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg><span data-i18n="recent.title">最近更新</span></h2>
+          <div id="recent-list" class="recent-list"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- 二级页:Comfy UI(内嵌 Web UI) -->
+    <section id="view-comfy" class="view view-comfy">
+      <div class="hrs-head">
+        <div class="hrs-title">
+          <h1 data-i18n="comfy.title">ComfyUI</h1>
+          <p class="ov-sub" data-i18n="comfy.sub">AI 工作流 Web UI · 内嵌访问</p>
+        </div>
+        <div class="hrs-tools">
+          <span id="cfy-status" class="hrs-status"><span class="hrs-dot off"></span><span id="cfy-txt" data-i18n="comfy.checking">检测中…</span></span>
+          <button id="cfy-start" class="hrs-btn hidden" data-i18n="comfy.start">启动服务</button>
+          <button id="cfy-stop" class="hrs-btn hrs-btn-danger hidden" data-i18n="comfy.stop">停止服务</button>
+          <button id="cfy-open" class="hrs-btn hrs-btn-icon hidden" data-i18n-title="comfy.open" title="新窗口打开" aria-label="Open in new tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 4h6v6M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>
+            </svg>
+          </button>
+          <button id="cfy-log-btn" class="hrs-btn hrs-btn-icon" data-i18n-title="comfy.log" title="日志" aria-label="Logs">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/>
+              <path d="M8 9h8M8 13h8M8 17h5"/>
+            </svg>
+          </button>
+          <button id="cfy-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/>
+            </svg>
+          </button>
+          <p id="cfy-live" class="live-tag"></p>
+        </div>
+      </div>
+      <p id="cfy-err" class="hrs-err hidden"></p>
+      <div id="cfy-stage" class="hrs-stage">
+        <div id="cfy-offline" class="hrs-offline hidden">
+          <div class="hrs-off-ic"><svg class="ic" aria-hidden="true"><use href="#i-comfy"/></svg></div>
+          <div class="hrs-off-t" data-i18n="comfy.offlineTitle">ComfyUI 服务未运行</div>
+          <div class="hrs-off-s" data-i18n="comfy.offlineSub">启动后此处将完整内嵌 ComfyUI Web 界面（127.0.0.1:8190）</div>
+          <button id="cfy-start-big" class="hrs-btn hrs-btn-big" data-i18n="comfy.start">启动服务</button>
+        </div>
+        <div id="cfy-loading" class="hrs-loading hidden"><span class="hrs-loading-dot"></span><span data-i18n="comfy.loading">页面加载中…</span></div>
+        <iframe id="cfy-frame" class="hrs-frame" title="ComfyUI" src="about:blank" allow="clipboard-write"></iframe>
+      </div>
+      <div id="cfy-log-wrap" class="hrs-log-wrap hidden">
+        <pre id="cfy-log" class="hrs-log"></pre>
+      </div>
+    </section>
+
+    <!-- 二级页:小说管理(目录浏览) -->
+    <section id="view-novel" class="view view-dir">
+      <div class="hrs-head">
+        <div class="hrs-title">
+          <h1 data-i18n="novel.title">小说管理</h1>
+          <p class="ov-sub" data-i18n="novel.sub">作品目录浏览 · 章节与文件管理</p>
+        </div>
+        <div class="hrs-tools">
+          <span id="novel-path" class="dir-path">—</span>
+          <div class="hrs-search">
+            <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+            <input id="novel-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索书名…">
+          </div>
+          <button id="novel-up" class="hrs-btn hidden" data-i18n="dir.up">上一级</button>
+          <button id="novel-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <p id="novel-err" class="hrs-err hidden"></p>
+      <div id="novel-list" class="dir-list"></div>
+      <div id="novel-detail" class="dir-detail hidden"></div>
+    </section>
+
+    <!-- 二级页:漫剧管理(原生工作台 + 右侧成品列表收缩栏) -->
+    <section id="view-manju" class="view view-dir view-manju">
+      <div class="hrs-head">
+        <div class="hrs-title">
+          <h1 data-i18n="manju.title">漫剧管理</h1>
+          <p class="ov-sub">漫剧工作台 · 一站式管线 · 成品列表</p>
+        </div>
+        <div class="hrs-tools">
+          <span id="manju-status" class="hrs-status"><span class="hrs-dot off"></span><span id="manju-txt">空闲</span></span>
+          <button id="manju-guide" class="hrs-btn hrs-btn-icon" title="使用说明" aria-label="Guide">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+          </button>
+          <button id="manju-settings" class="hrs-btn hrs-btn-icon" title="设置" aria-label="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+          <button id="manju-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/></svg>
+          </button>
+        </div>
+      </div>
+      <p id="manju-err" class="hrs-err hidden"></p>
+
+      <div class="manju-body">
+        <button id="manju-left-toggle" class="manju-side-toggle-btn" title="收起/展开左侧栏">◂</button>
+        <!-- 左侧:成品列表(目录浏览) -->
+        <aside class="manju-side manju-side-left" id="manju-side-left">
+          <div class="manju-side-head">
+            <span class="manju-side-title">成品列表</span>
+            <input id="manju-search" class="manju-side-search" type="text" placeholder="搜索成品…" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="manju-side-nav">
+            <span id="manju-path" class="dir-path">—</span>
+            <button id="manju-up" class="hrs-btn hidden" data-i18n="dir.up">上一级</button>
+          </div>
+          <div id="manju-list" class="dir-list manju-list"></div>
+          <div id="manju-detail" class="dir-detail hidden"></div>
+        </aside>
+
+        <div class="manju-divider" id="manju-divider-left" title="拖动调整宽度"></div>
+
+        <div class="manju-main">
+
+          <!-- 左列：项目卡片（悬浮，贴合内容左侧） -->
+          <div class="manju-project-col">
+            <div class="manju-card manju-project-card">
+              <h3 class="manju-card-title">项目</h3>
+              <div class="manju-row">
+                <select id="manju-project" class="manju-select"><option value="">— 选择项目 —</option></select>
+                <button id="manju-create" class="hrs-btn">新建项目</button>
+              </div>
+              <div id="manju-chips" class="manju-chips"></div>
+            </div>
+          </div>
+
+          <!-- 右列：其余卡片 -->
+          <div class="manju-content-col">
+
+          <!-- 小说来源 -->
+          <div class="manju-card">
+            <h3 class="manju-card-title">小说来源</h3>
+            <div class="manju-row">
+              <input id="manju-novel" class="manju-input manju-wide" placeholder="小说文件路径（.md）" spellcheck="false">
+              <button id="manju-novel-paste" class="hrs-btn hrs-btn-primary hidden">粘贴文章</button>
+              <button id="manju-novel-pick" class="hrs-btn">选择文件</button>
+              <button id="manju-novel-detect" class="hrs-btn">识别章节</button>
+            </div>
+            <div id="manju-novel-meta" class="manju-meta"></div>
+          </div>
+
+          <!-- 渲染配置 -->
+          <div class="manju-card manju-render-card">
+            <div class="manju-card-head">
+              <h3 class="manju-card-title">渲染配置</h3>
+              <div class="manju-save-group">
+                <button id="manju-save-render" class="hrs-btn hrs-btn-primary">保存参数</button>
+                <button id="manju-char-manage" class="hrs-btn" title="抽卡 / 采纳角色定妆照">角色管理</button>
+                <button id="manju-config-manage" class="hrs-btn hidden" title="导入 / 导出渲染配置(已并入设置)">配置管理</button>
+                <button id="manju-config-reset" class="hrs-btn hidden" title="将渲染配置恢复到默认值">恢复默认</button>
+              </div>
+            </div>
+
+            <div class="manju-row">
+              <span class="manju-label">章节</span><input id="manju-chapters" class="manju-input manju-num" placeholder="1-3" spellcheck="false">
+              <button id="manju-wholebook" class="hrs-btn" title="覆盖全部章节，并按内容自动分段分集">全本</button>
+              <span class="manju-label">集号</span><input id="manju-episode" class="manju-input manju-num" placeholder="EP01" spellcheck="false">
+              <span class="manju-label">镜头(可选)</span><input id="manju-only" class="manju-input manju-num" placeholder="如 1,2" spellcheck="false">
+            </div>
+
+            <div class="manju-row">
+              <span class="manju-label">风格</span>
+              <div class="manju-seg" id="manju-style">
+                <button data-style="2.5d" class="hrs-btn">2.5D 动漫</button>
+                <button data-style="real" class="hrs-btn">写实</button>
+                <button data-style="3d" class="hrs-btn">3D CG</button>
+                <button data-style="anime" class="hrs-btn">二次元</button>
+                <button data-style="handdrawn" class="hrs-btn">手绘</button>
+                <button data-style="papercraft" class="hrs-btn">纸艺</button>
+                <button data-style="clay" class="hrs-btn">粘土</button>
+                <button data-style="ink" class="hrs-btn">水墨</button>
+              </div>
+            </div>
+
+            <div class="manju-row">
+              <span class="manju-label">自定义</span>
+              <input id="manju-style-custom" class="manju-input manju-wide" placeholder="英文风格描述，如 cyberpunk, pixel art, watercolor…（点「应用」生效）" spellcheck="false">
+              <button id="manju-style-apply" class="hrs-btn">应用</button>
+            </div>
+
+            <div class="manju-row">
+              <span class="manju-label">画幅</span>
+              <div class="manju-seg" id="manju-ratio">
+                <button data-ratio="21:9" class="hrs-btn">21:9</button>
+                <button data-ratio="16:9" class="hrs-btn">16:9</button>
+                <button data-ratio="4:3" class="hrs-btn">4:3</button>
+                <button data-ratio="1:1" class="hrs-btn">1:1</button>
+                <button data-ratio="3:4" class="hrs-btn">3:4</button>
+                <button data-ratio="9:16" class="hrs-btn">9:16</button>
+              </div>
+              <span class="manju-label">宽</span><input id="manju-width" class="manju-input manju-num" type="number" min="128" max="2048">
+              <span class="manju-label">高</span><input id="manju-height" class="manju-input manju-num" type="number" min="128" max="2048">
+              <span class="manju-label">帧率</span><input id="manju-fps" class="manju-input manju-num" type="number" min="8" max="60">
+            </div>
+
+            <div class="manju-row">
+              <span class="manju-label">采样</span>
+              <span class="manju-label">步数</span><input id="manju-steps" class="manju-input manju-num" type="number" min="1" max="60">
+              <span class="manju-label">Turbo步</span><input id="manju-turbo" class="manju-input manju-num" type="number" min="1" max="30">
+              <span class="manju-label">seed</span><input id="manju-seed" class="manju-input manju-num" type="number">
+              <span class="manju-label">时长</span>
+              <span class="manju-label">最短</span><input id="manju-minsec" class="manju-input manju-num" type="number" min="1" max="15">
+              <span class="manju-label">最长</span><input id="manju-maxsec" class="manju-input manju-num" type="number" min="1" max="15">
+            </div>
+
+            <div class="manju-row">
+              <span class="manju-label">ComfyUI</span>
+              <input id="manju-comfy-url" class="manju-input manju-wide" placeholder="http://127.0.0.1:8190" spellcheck="false">
+            </div>
+
+            <div class="manju-row">
+              <span class="manju-label">负面提示词</span>
+              <textarea id="manju-neg-prompt" class="manju-input manju-textarea" rows="2" spellcheck="false" placeholder="英文逗号分隔（角色图/场景图生成用，缺省用内置默认）"></textarea>
+            </div>
+
+            <button id="manju-adv-toggle" class="hrs-btn manju-adv-toggle">▸ 高级模型配置</button>
+            <div id="manju-adv" class="manju-adv hidden">
+              <div class="manju-sub-title manju-sub-center">H3 视频模型</div>
+              <div class="manju-grid">
+                <div class="manju-field"><label>unet_fl2va</label><select id="manju-unet-fl2va" class="manju-input" data-model="unet_fl2va"></select></div>
+                <div class="manju-field"><label>unet_ref2va</label><select id="manju-unet-ref2va" class="manju-input" data-model="unet_ref2va"></select></div>
+                <div class="manju-field"><label>clip</label><select id="manju-clip" class="manju-input" data-model="clip"></select></div>
+                <div class="manju-field"><label>vae_video</label><select id="manju-vae-video" class="manju-input" data-model="vae_video"></select></div>
+                <div class="manju-field"><label>vae_audio</label><select id="manju-vae-audio" class="manju-input" data-model="vae_audio"></select></div>
+              </div>
+              <div class="manju-sub-title manju-sub-center">Z-Image 场景模型</div>
+              <div class="manju-grid">
+                <div class="manju-field"><label>z_image_unet</label><select id="manju-zimage-unet" class="manju-input" data-model="z_image_unet"></select></div>
+                <div class="manju-field"><label>z_image_clip</label><select id="manju-zimage-clip" class="manju-input" data-model="z_image_clip"></select></div>
+                <div class="manju-field"><label>z_image_vae</label><select id="manju-zimage-vae" class="manju-input" data-model="z_image_vae"></select></div>
+              </div>
+              <div class="manju-sub-title manju-sub-center">Turbo LoRA</div>
+              <div class="manju-grid">
+                <div class="manju-field"><label>turbo_lora</label><select id="manju-turbo-lora" class="manju-input" data-model="turbo_lora"></select></div>
+              </div>
+              <div class="manju-sub-title manju-sub-center">人物一致性（角色 checkpoint，非写实风格定妆照用）</div>
+              <div class="manju-grid">
+                <div class="manju-field"><label>char_models.男</label><select id="manju-char-male" class="manju-input" data-model="char_male"></select></div>
+                <div class="manju-field"><label>char_models.女</label><select id="manju-char-female" class="manju-input" data-model="char_female"></select></div>
+                <div class="manju-field"><label>animagine_ckpt</label><select id="manju-animagine" class="manju-input" data-model="animagine"></select></div>
+              </div>
+              <div class="manju-sub-title manju-sub-center">内容审核（违禁词 / 违规画面打码）</div>
+              <div class="manju-field manju-field-block">
+                <label>违禁词（每行一个，对白/旁白命中将被替换为 □）</label>
+                <textarea id="manju-banned-words" class="manju-input manju-textarea" rows="3" spellcheck="false" placeholder="每行一个违禁词"></textarea>
+              </div>
+              <div class="manju-mosaic-row">
+                <label class="manju-check manju-mosaic-check"><input type="checkbox" id="manju-mosaic-enabled"> 违规画面打码（合成时整片像素化）</label>
+                <div class="manju-mosaic-size">
+                  <span class="manju-label">马赛克块大小</span>
+                  <input id="manju-mosaic-level" class="manju-input manju-num" type="number" min="2" max="64" spellcheck="false">
+                  <span class="manju-meta">2–64</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="manju-row" id="manju-render-msg-row">
+              <span id="manju-render-msg" class="manju-meta"></span>
+            </div>
+          </div>
+
+          <!-- 角色抽卡(已并入渲染配置的「角色管理」按钮，此处隐藏) -->
+          <div class="manju-card hidden">
+            <h3 class="manju-card-title manju-fold-title" id="manju-gacha-head" title="点击展开/收起角色抽卡">
+              角色抽卡
+              <button id="manju-gacha-fold" class="manju-side-fold-btn" type="button">▸</button>
+            </h3>
+            <div id="manju-gacha" class="manju-gacha-body hidden"></div>
+          </div>
+
+          <!-- 环境自检(条件显示) -->
+          <div id="manju-env-card" class="manju-card hidden">
+            <h3 class="manju-card-title">环境自检</h3>
+            <pre id="manju-env-out" class="manju-log"></pre>
+          </div>
+
+          </div><!-- /manju-content-col -->
+
+          <!-- 右列：执行管线（悬浮，贴合内容右侧，与项目卡片对称） -->
+          <div class="manju-pipeline-col">
+            <div class="manju-card manju-pipeline-card">
+              <h3 class="manju-card-title">执行管线</h3>
+              <div class="manju-row manju-stage-row">
+                <button id="manju-env" class="hrs-btn"><span class="mj-step-no">0</span>环境自检</button>
+              </div>
+              <div class="manju-row manju-stage-row">
+                <button class="hrs-btn" data-phase="plan"><span class="mj-step-no">1</span>方案</button>
+                <button class="hrs-btn" data-phase="assets"><span class="mj-step-no">2</span>资产</button>
+                <button class="hrs-btn" data-phase="encode"><span class="mj-step-no">3</span>编码</button>
+                <button class="hrs-btn" data-phase="render"><span class="mj-step-no">4</span>渲染</button>
+                <button class="hrs-btn" data-phase="qc"><span class="mj-step-no">5</span>质检</button>
+                <button class="hrs-btn" data-phase="assemble"><span class="mj-step-no">6</span>合成</button>
+              </div>
+              <div class="manju-stage-label">快速执行</div>
+              <div class="manju-row manju-stage-row">
+                <button id="manju-resume" class="hrs-btn hrs-btn-resume" title="从上次中断处一键续跑（幂等跳过已完成阶段）">▶ 续跑</button>
+                <button id="manju-stop" class="hrs-btn hrs-btn-danger" disabled>停止</button>
+              </div>
+              <div class="manju-row manju-stage-row">
+                <button class="hrs-btn hrs-btn-primary" data-phase="all">一条龙</button>
+              </div>
+              <div class="manju-row manju-stage-row">
+                <button id="manju-agent-run" class="hrs-btn hrs-btn-agent" title="智能体调度：剧本师复核 → 渲染 → 审片官逐镜判分 → 未达标自动修复重渲染(预算封顶) → 剩余例外推送微信待拍板">🤖 智能一条龙</button>
+              </div>
+            </div>
+          </div><!-- /manju-pipeline-col -->
+
+        </div><!-- /manju-main -->
+
+        <div class="manju-divider" id="manju-divider-right" title="拖动调整宽度"></div>
+
+        <!-- 右侧:运行状态 + 产物 -->
+        <aside class="manju-side manju-side-right" id="manju-side-right">
+          <div class="manju-side-head"><span class="manju-side-title">运行状态</span></div>
+          <div class="manju-side-body">
+            <div class="manju-row">
+              <span id="manju-badge" class="manju-badge manju-badge-idle">空闲</span>
+              <button id="manju-clear-log" class="hrs-btn manju-right">清空日志</button>
+            </div>
+            <div id="manju-progress-wrap" class="manju-progress-wrap" hidden>
+              <div class="manju-progress-label"><span id="manju-progress-text">…</span><span id="manju-progress-pct">0%</span></div>
+              <div class="manju-progress"><div id="manju-progress-bar" class="manju-progress-bar"></div></div>
+            </div>
+            <div id="manju-flow"></div>
+            <div id="manju-agent-panel" class="manju-agent-panel hidden"></div>
+            <pre id="manju-log" class="manju-log">(就绪)</pre>
+          </div>
+          <div class="manju-side-head manju-fold-head" id="manju-out-fold" title="点击折叠/展开产物">
+            <span class="manju-side-title">产物 · <span id="manju-outputs-ep">EP01</span></span>
+            <button id="manju-out-fold-btn" class="manju-side-fold-btn" title="折叠/展开产物" aria-label="折叠/展开产物">▾</button>
+          </div>
+          <div class="manju-side-body" id="manju-out-body">
+            <div id="manju-outputs"></div>
+          </div>
+        </aside>
+
+        <button id="manju-right-toggle" class="manju-side-toggle-btn" title="收起/展开右侧栏">▸</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- 详情面板 -->
+  <aside id="detail" class="detail-panel" aria-hidden="true">
+    <div class="detail-inner">
+      <button id="detail-close" class="detail-close" data-i18n-title="detail.close" title="Close" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+          <path d="M18 6 6 18M6 6l12 12"/>
+        </svg>
+      </button>
+      <div class="detail-head">
+        <h2 id="d-title" class="detail-title"></h2>
+        <div class="detail-meta" id="d-meta"></div>
+      </div>
+      <div class="detail-scroll">
+        <div id="d-content" class="detail-content markdown-body"></div>
+        <div class="detail-links-head">🔗 <span data-i18n="detail.links">相关链接</span></div>
+        <div id="d-links" class="detail-links"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 小说阅读器:宽弹窗(正文 + 右侧章节目录,可手动隐藏) -->
+  <div id="reader" class="reader" aria-hidden="true">
+    <div class="reader-inner">
+      <div class="reader-head">
+        <h3 id="reader-title" class="reader-title"></h3>
+        <div class="reader-tools">
+          <div class="reader-search" id="reader-search-wrap">
+            <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+            <input id="reader-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索本书内容…">
+            <div id="reader-search-pop" class="reader-search-pop" hidden></div>
+          </div>
+          <button id="reader-type-btn" class="reader-type-btn" title="排版" aria-label="Typography" aria-expanded="false">
+            <span class="type-aa">Aa</span><span id="reader-type-label" data-i18n="book.type">排版</span>
+          </button>
+          <button id="reader-toc-btn" class="reader-toc-btn" title="章节目录" aria-label="Toggle TOC">
+            <svg class="ic" aria-hidden="true"><use href="#i-list"/></svg>
+            <span id="reader-toc-label" data-i18n="book.toc">章节目录</span>
+          </button>
+          <button id="reader-script-btn" class="reader-toc-btn" title="漫剧制作（代入漫剧管理一条龙）" aria-label="Make Manju">
+            <svg class="ic" aria-hidden="true"><use href="#i-film"/></svg>
+            <span data-i18n="book.script">生成剧本</span>
+          </button>
+          <button id="reader-close" class="detail-close" title="关闭" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <!-- 排版调节:字号 / 行距 弹出面板 -->
+        <div id="reader-type-pop" class="reader-type-pop" aria-hidden="true">
+          <div class="type-row">
+            <span class="type-row-label" data-i18n="book.fontSize">字号</span>
+            <button class="type-step" id="type-fs-minus" aria-label="Decrease">−</button>
+            <span class="type-val" id="type-fs-val">16px</span>
+            <button class="type-step" id="type-fs-plus" aria-label="Increase">+</button>
+          </div>
+          <div class="type-row">
+            <span class="type-row-label" data-i18n="book.lineHeight">行距</span>
+            <button class="type-step" id="type-lh-minus" aria-label="Decrease">−</button>
+            <span class="type-val" id="type-lh-val">2.0</span>
+            <button class="type-step" id="type-lh-plus" aria-label="Increase">+</button>
+          </div>
+          <button id="type-reset" class="type-reset" data-i18n="book.typeReset">恢复默认</button>
+        </div>
+      </div>
+      <div class="reader-body">
+        <div class="reader-main">
+          <div id="reader-content" class="reader-scroll markdown-body"></div>
+          <div id="reader-script" class="reader-scroll reader-script hidden"></div>
+          <div id="reader-nav" class="reader-nav"></div>
+        </div>
+        <aside id="reader-toc" class="reader-toc" aria-hidden="false"></aside>
+      </div>
+    </div>
+  </div>
+
+  <!-- 漫剧媒体弹窗:点项目封面展示图片/视频/配音 -->
+  <div id="media-modal" class="media-modal" aria-hidden="true">
+    <div class="media-inner">
+      <div class="reader-head">
+        <h3 id="media-title" class="reader-title"></h3>
+        <button id="media-close" class="detail-close" title="关闭" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+            <path d="M18 6 6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div id="media-content" class="media-scroll"></div>
+    </div>
+  </div>
+
+  <!-- 漫剧工作台通用弹窗:新建项目 / 使用说明 / 文件选择 -->
+  <div id="manju-modal" class="manju-modal hidden" aria-hidden="true">
+    <div class="manju-modal-panel">
+      <div class="manju-modal-head">
+        <h3 id="manju-modal-title" class="manju-modal-title"></h3>
+        <button id="manju-modal-close" class="manju-modal-close" title="关闭" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div id="manju-modal-body" class="manju-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- 设置弹窗:语言 + 主题配色 -->
+  <div id="settings-modal" class="settings-modal" aria-hidden="true">
+    <div class="settings-dialog" role="dialog" aria-modal="true">
+      <div class="settings-head">
+        <h3 data-i18n="settings.title">设置</h3>
+        <button id="settings-close" class="settings-close" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+            <path d="M18 6 6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-group">
+          <div class="settings-label"><span class="sl-emoji">🌐</span><span data-i18n="settings.language">语言 / Language</span></div>
+          <div class="lang-switch">
+            <button class="lang-btn" data-lang="zh">中文</button>
+            <button class="lang-btn" data-lang="en">English</button>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-label"><span class="sl-emoji">🎨</span><span data-i18n="settings.theme">主题配色</span></div>
+          <div class="theme-switch">
+            <button class="theme-opt" data-theme="nebula"   style="--dot:#38bdf8"><i class="theme-dot"></i><span data-i18n="theme.nebula">深空蓝</span></button>
+            <button class="theme-opt" data-theme="quantum"  style="--dot:#a78bfa"><i class="theme-dot"></i><span data-i18n="theme.quantum">量子紫</span></button>
+            <button class="theme-opt" data-theme="aurora"   style="--dot:#2dd4bf"><i class="theme-dot"></i><span data-i18n="theme.aurora">极光青</span></button>
+            <button class="theme-opt" data-theme="starlight" style="--dot:#2563eb"><i class="theme-dot"></i><span data-i18n="theme.starlight">未来白</span></button>
+            <button class="theme-opt" data-theme="deepseek" style="--dot:#4d6bfe"><i class="theme-dot"></i><span data-i18n="theme.deepseek">DeepSeek 亮蓝</span></button>
+            <button class="theme-opt" data-theme="harness"  style="--dot:#6799fe"><i class="theme-dot"></i><span data-i18n="theme.harness">Harness 深空</span></button>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-label"><span class="sl-emoji">✨</span><span data-i18n="settings.style">界面风格</span></div>
+          <div class="style-switch">
+            <button class="style-opt is-active" data-style="default"      data-i18n="style.default">默认</button>
+            <button class="style-opt" data-style="glass-fluid" data-i18n="style.glass-fluid">玻璃流体</button>
+            <button class="style-opt" data-style="frosted"      data-i18n="style.frosted">玻璃磨砂</button>
+            <button class="style-opt" data-style="brushed"      data-i18n="style.brushed">金属哑光</button>
+            <button class="style-opt" data-style="polished"     data-i18n="style.polished">金属高光</button>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-label"><span class="sl-emoji">📊</span><span data-i18n="settings.overview">最新总览</span></div>
+          <div class="settings-row">
+            <span class="settings-row-label" data-i18n="settings.recentCount">最近更新条数</span>
+            <input type="number" id="set-recent-count" class="settings-input" min="0" max="999" step="1">
+            <span class="settings-hint" data-i18n="settings.recentCountHint">0 = 全部</span>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label" data-i18n="settings.catLimit">每分类页数上限</span>
+            <input type="number" id="set-cat-limit" class="settings-input" min="0" max="100" step="1">
+            <span class="settings-hint" data-i18n="settings.catLimitHint">0 = 全部</span>
+          </div>
+          <div class="settings-row settings-row-top">
+            <span class="settings-row-label" data-i18n="settings.statCards">统计卡指标</span>
+            <div class="settings-toggles">
+              <label class="toggle"><input type="checkbox" data-stat="pages"><span class="tk"></span><span data-i18n="stats.pages">知识页</span></label>
+              <label class="toggle"><input type="checkbox" data-stat="categories"><span class="tk"></span><span data-i18n="stats.categories">分类</span></label>
+              <label class="toggle"><input type="checkbox" data-stat="links"><span class="tk"></span><span data-i18n="stats.links">双向链接</span></label>
+              <label class="toggle"><input type="checkbox" data-stat="words"><span class="tk"></span><span data-i18n="stats.words">总字数</span></label>
+              <label class="toggle"><input type="checkbox" data-stat="avgWords"><span class="tk"></span><span data-i18n="stats.avgWords">平均字数</span></label>
+              <label class="toggle"><input type="checkbox" data-stat="lastUpdate"><span class="tk"></span><span data-i18n="stats.lastUpdate">最后更新</span></label>
+              <label class="toggle"><input type="checkbox" data-stat="topCat"><span class="tk"></span><span data-i18n="stats.topCat">最多页分类</span></label>
+            </div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-label"><span class="sl-emoji">📚</span><span data-i18n="settings.manager">管理页</span></div>
+          <div class="settings-row">
+            <span class="settings-row-label" data-i18n="settings.showNovel">小说管理页</span>
+            <label class="toggle"><input type="checkbox" id="set-show-novel"><span class="tk"></span></label>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label" data-i18n="settings.novelDir">小说目录</span>
+            <div class="dir-picker">
+              <input type="text" id="set-novel-dir" class="settings-input settings-input-flex" readonly spellcheck="false" placeholder="C:\Mi\Ai\WorkBench\novel">
+              <button id="set-novel-pick" class="hrs-btn" data-i18n="dir.pick">选择目录</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label" data-i18n="settings.showManju">漫剧管理页</span>
+            <label class="toggle"><input type="checkbox" id="set-show-manju"><span class="tk"></span></label>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label" data-i18n="settings.manjuDir">漫剧目录</span>
+            <div class="dir-picker">
+              <input type="text" id="set-manju-dir" class="settings-input settings-input-flex" readonly spellcheck="false" placeholder="C:\Mi\Ai\WorkBench\manju">
+              <button id="set-manju-pick" class="hrs-btn" data-i18n="dir.pick">选择目录</button>
+            </div>
+          </div>
+        </div>
+        <!-- 剧本模型(LLM):已隐藏——小说转剧本能力并入漫剧管理(DeepSeek Key/视觉模型均在漫剧设置·智能体调度里配置);
+             DOM 保留避免 app.js loadLLMSettings 空引用,后端 /api/settings llm 不动 -->
+        <div class="settings-group" hidden>
+          <div class="settings-label"><span class="sl-emoji">🎬</span><span data-i18n="settings.llm">剧本模型（LLM）</span></div>
+          <div class="settings-row">
+            <span class="settings-row-label" data-i18n="settings.llmKey">API Key</span>
+            <input type="password" id="set-llm-key" class="settings-input settings-input-flex" spellcheck="false" placeholder="sk-...">
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label" data-i18n="settings.llmBase">Base URL</span>
+            <input type="text" id="set-llm-base" class="settings-input settings-input-flex" spellcheck="false" placeholder="https://api.deepseek.com">
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label" data-i18n="settings.llmModel">模型名</span>
+            <input type="text" id="set-llm-model" class="settings-input settings-input-flex" spellcheck="false" list="llm-models" placeholder="deepseek-v4-flash">
+            <datalist id="llm-models">
+              <option value="deepseek-v4-flash"></option>
+              <option value="deepseek-v4-pro"></option>
+            </datalist>
+          </div>
+          <div class="settings-row settings-row-top">
+            <button id="set-llm-save" class="hrs-btn hrs-btn-primary" data-i18n="settings.save">保存</button>
+            <span id="set-llm-msg" class="settings-hint"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/vendor/echarts.min.js?v=20260818c"></script>
+  <script src="/js/i18n.js?v=20260818c"></script>
+  <script src="/js/markdown.js?v=20260818c"></script>
+  <script src="/js/app.js?v=20260818c"></script>
+  <script src="/js/graph.js?v=20260818c"></script>
+  <script src="/js/overview.js?v=20260818c"></script>
+  <script src="/js/comfy.js?v=20260818c"></script>
+  <script src="/js/dirview.js?v=20260818c"></script>
+  <script src="/js/manju.js?v=20260818c"></script>
+</body>
+</html>

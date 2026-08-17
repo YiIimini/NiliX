@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小说转视频 · 生产流水线</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1d212b;
+    --border: #2a2f3a;
+    --text: #e6e9ef;
+    --muted: #8b93a7;
+    --accent: #ff6c37;
+    --accent-2: #4da3ff;
+    --ok: #3ddc84;
+    --err: #ff5c5c;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 24px 64px; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 22px; margin: 0; font-weight: 650; letter-spacing: .3px; }
+  header h1 span { color: var(--accent); }
+  .tabs { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 3px; }
+  .tab { border: none; background: transparent; color: var(--muted); padding: 7px 20px; border-radius: 7px; cursor: pointer; font-size: 14px; font-weight: 600; transition: .15s; }
+  .tab.active { background: var(--accent); color: #fff; }
+  .btn {
+    border: none; border-radius: 9px; padding: 9px 18px; font-size: 14px;
+    cursor: pointer; font-weight: 600; transition: opacity .15s, transform .05s;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  .btn:hover:not(:disabled) { opacity: .88; }
+  .btn-row { display: flex; gap: 10px; margin-top: 16px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 22px 24px; margin-bottom: 18px;
+  }
+  .card h2 { margin: 0 0 18px; font-size: 16px; font-weight: 650; }
+  .card h3 { margin: 22px 0 10px; font-size: 14px; font-weight: 650; color: var(--muted); }
+  .card h2 .dot { color: var(--accent-2); margin-right: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px 22px; }
+  .grid .full { grid-column: 1 / -1; }
+  label.field { display: block; }
+  label.field .lbl { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+  input[type=text], input[type=number], input[type=password], select, textarea {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 9px 12px; font-size: 14px; outline: none;
+  }
+  textarea { resize: vertical; font-family: inherit; line-height: 1.6; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent-2); }
+  input::placeholder, textarea::placeholder { color: #565e70; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  details { margin-top: 14px; border-top: 1px dashed var(--border); padding-top: 14px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
+  #status { margin: 0 0 18px; padding: 0; }
+  .banner { border-radius: 10px; padding: 12px 16px; font-size: 14px; display: none; }
+  .banner.show { display: block; }
+  .banner.ok { background: rgba(61,220,132,.12); color: var(--ok); border: 1px solid rgba(61,220,132,.3); }
+  .banner.err { background: rgba(255,92,92,.12); color: var(--err); border: 1px solid rgba(255,92,92,.3); }
+  .test-row { display: flex; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+  .test-chip { border-radius: 8px; padding: 7px 12px; font-size: 13px; border: 1px solid var(--border); background: var(--panel-2); }
+  .test-chip .tag { font-weight: 600; margin-right: 6px; }
+  .test-chip.ok { border-color: rgba(61,220,132,.4); }
+  .test-chip.ok .tag { color: var(--ok); }
+  .test-chip.err { border-color: rgba(255,92,92,.4); }
+  .test-chip.err .tag { color: var(--err); }
+  .test-chip .msg { color: var(--muted); word-break: break-all; }
+  .char-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .char-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px; }
+  .char-card .name { font-weight: 650; }
+  .char-card .role { color: var(--accent-2); font-size: 12px; margin: 2px 0 6px; }
+  .char-card .desc { color: var(--muted); font-size: 13px; }
+  .shot-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .shot-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .shot-id { font-weight: 700; color: var(--accent); }
+  .shot-dur { color: var(--muted); font-size: 13px; }
+  .shot-hook { background: rgba(77,163,255,.15); color: var(--accent-2); border-radius: 6px; padding: 2px 8px; font-size: 12px; }
+  .shot-cont { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+  .shot-desc { font-size: 14px; margin-bottom: 4px; }
+  pre.prompt { white-space: pre-wrap; word-break: break-word; background: #0a0c10; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12.5px; color: #c7cdd9; margin: 8px 0 0; }
+  @media (max-width: 640px) { .grid, .char-grid { grid-template-columns: 1fr; } header { flex-direction: column; align-items: flex-start; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>小说转视频 <span>· 生产流水线</span></h1>
+    <nav class="tabs">
+      <button class="tab active" data-tab="script">剧本</button>
+      <button class="tab" data-tab="settings">设置</button>
+    </nav>
+  </header>
+
+  <div id="status"></div>
+
+  <!-- 剧本页 -->
+  <section id="tab-script">
+    <div class="card">
+      <h2><span class="dot">●</span>小说 → 视频脚本</h2>
+      <div class="grid">
+        <label class="field full">
+          <span class="lbl">视觉风格</span>
+          <select id="script-style"></select>
+        </label>
+        <label class="field full">
+          <span class="lbl">小说章节文本</span>
+          <textarea id="script-novel" rows="11" placeholder="粘贴小说章节内容（建议 1-3 章 / 2000-8000 字）…"></textarea>
+        </label>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btnGenerate">生成剧本</button>
+      </div>
+    </div>
+    <div id="script-result"></div>
+  </section>
+
+  <!-- 设置页 -->
+  <section id="tab-settings" style="display:none">
+    <div class="card">
+      <h2><span class="dot">●</span>大模型（剧本生成）</h2>
+      <div class="grid">
+        <label class="field full">
+          <span class="lbl">API Key</span>
+          <input type="password" data-field="llm.api_key" data-type="string" placeholder="sk-...">
+          <div class="hint">已保存的 key 以掩码显示，留空/保持掩码即不修改。</div>
+        </label>
+        <label class="field">
+          <span class="lbl">Base URL</span>
+          <input type="text" data-field="llm.base_url" data-type="string" placeholder="https://api.deepseek.com">
+        </label>
+        <label class="field">
+          <span class="lbl">模型名</span>
+          <input type="text" data-field="llm.model" data-type="string" list="llm-models" placeholder="deepseek-v4-flash">
+          <datalist id="llm-models">
+            <option value="deepseek-v4-flash"></option>
+            <option value="deepseek-v4-pro"></option>
+          </datalist>
+        </label>
+        <label class="field"><span class="lbl">Max Tokens</span><input type="number" data-field="llm.max_tokens" data-type="int"></label>
+        <label class="field"><span class="lbl">Temperature</span><input type="number" step="0.1" data-field="llm.temperature" data-type="float"></label>
+        <label class="field"><span class="lbl">请求超时（秒）</span><input type="number" data-field="llm.request_timeout" data-type="int"></label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="dot">●</span>渲染（ComfyUI / H3）</h2>
+      <div class="grid">
+        <label class="field full">
+          <span class="lbl">ComfyUI 地址</span>
+          <input type="text" data-field="render.comfy_url" data-type="string" placeholder="http://127.0.0.1:8190">
+        </label>
+        <label class="field"><span class="lbl">宽</span><input type="number" data-field="render.width" data-type="int"></label>
+        <label class="field"><span class="lbl">高</span><input type="number" data-field="render.height" data-type="int"></label>
+        <label class="field"><span class="lbl">帧率 FPS</span><input type="number" data-field="render.fps" data-type="int"></label>
+        <label class="field"><span class="lbl">步数 Steps</span><input type="number" data-field="render.steps" data-type="int"></label>
+        <label class="field"><span class="lbl">Turbo 步数</span><input type="number" data-field="render.turbo_steps" data-type="int"></label>
+        <label class="field"><span class="lbl">最短镜头（秒）</span><input type="number" data-field="render.min_shot_seconds" data-type="int"></label>
+        <label class="field"><span class="lbl">最长镜头（秒）</span><input type="number" data-field="render.max_shot_seconds" data-type="int"></label>
+        <label class="field"><span class="lbl">种子 Seed</span><input type="number" data-field="render.seed" data-type="int"></label>
+      </div>
+      <details>
+        <summary>高级模型配置</summary>
+        <div class="grid" style="margin-top:16px">
+          <label class="field"><span class="lbl">FL2VA（首尾帧）</span><input type="text" data-field="render.unet_fl2va" data-type="string"></label>
+          <label class="field"><span class="lbl">Ref2VA（参考）</span><input type="text" data-field="render.unet_ref2va" data-type="string"></label>
+          <label class="field"><span class="lbl">文本编码器</span><input type="text" data-field="render.clip" data-type="string"></label>
+          <label class="field"><span class="lbl">视频 VAE</span><input type="text" data-field="render.vae_video" data-type="string"></label>
+          <label class="field"><span class="lbl">音频 VAE</span><input type="text" data-field="render.vae_audio" data-type="string"></label>
+          <label class="field"><span class="lbl">Turbo LoRA</span><input type="text" data-field="render.turbo_lora" data-type="string"></label>
+          <label class="field"><span class="lbl">Z-Image UNet</span><input type="text" data-field="render.z_image_unet" data-type="string"></label>
+          <label class="field"><span class="lbl">Z-Image CLIP</span><input type="text" data-field="render.z_image_clip" data-type="string"></label>
+          <label class="field"><span class="lbl">Z-Image VAE</span><input type="text" data-field="render.z_image_vae" data-type="string"></label>
+          <label class="field"><span class="lbl">女性角色模型</span><input type="text" data-field="render.char_models.女" data-type="string"></label>
+          <label class="field"><span class="lbl">男性角色模型</span><input type="text" data-field="render.char_models.男" data-type="string"></label>
+        </div>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2><span class="dot">●</span>目录</h2>
+      <div class="grid">
+        <label class="field">
+          <span class="lbl">ComfyUI 输入目录</span>
+          <input type="text" data-field="paths.comfy_input" data-type="string">
+        </label>
+        <label class="field">
+          <span class="lbl">ComfyUI 输出目录</span>
+          <input type="text" data-field="paths.comfy_output" data-type="string">
+        </label>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-ghost" id="btnTest">测试连通</button>
+      <button class="btn btn-primary" id="btnSave">保存设置</button>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+function getField(obj, path) {
+  return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+}
+function setField(obj, path, val) {
+  const keys = path.split('.');
+  let o = obj;
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (o[keys[i]] == null) o[keys[i]] = {};
+    o = o[keys[i]];
+  }
+  o[keys[keys.length - 1]] = val;
+}
+function fill(cfg) {
+  $$('[data-field]').forEach(el => {
+    const v = getField(cfg, el.dataset.field);
+    if (v !== undefined && v !== null) el.value = v;
+  });
+}
+function collect() {
+  const obj = {};
+  $$('[data-field]').forEach(el => {
+    let v = el.value;
+    if (el.dataset.type === 'int') v = parseInt(v, 10) || 0;
+    else if (el.dataset.type === 'float') v = parseFloat(v) || 0;
+    setField(obj, el.dataset.field, v);
+  });
+  return obj;
+}
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function banner(msg, kind) {
+  $('#status').innerHTML = `<div class="banner show ${kind}">${msg}</div>`;
+}
+
+// 标签切换
+function switchTab(tab) {
+  $$('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
+  $('#tab-script').style.display = tab === 'script' ? 'block' : 'none';
+  $('#tab-settings').style.display = tab === 'settings' ? 'block' : 'none';
+}
+$$('.tab').forEach(t => t.addEventListener('click', () => {
+  switchTab(t.dataset.tab);
+}));
+// hash 路由：托盘菜单打开 #settings 等直接切到对应标签
+function applyHash() {
+  const h = (location.hash || '').replace('#', '');
+  if (['script', 'settings'].includes(h)) switchTab(h);
+}
+window.addEventListener('hashchange', applyHash);
+applyHash();
+
+// 设置
+function bannerTest(res) {
+  const chip = (ok, tag, msg) => `<div class="test-chip ${ok ? 'ok' : 'err'}"><span class="tag">${tag}</span><span class="msg">${msg}</span></div>`;
+  $('#status').innerHTML =
+    `<div class="banner show ${res.llm.ok && res.comfyui.ok ? 'ok' : 'err'}">连通测试结果</div>
+     <div class="test-row">${chip(res.llm.ok, 'LLM', res.llm.message)}${chip(res.comfyui.ok, 'ComfyUI', res.comfyui.message)}</div>`;
+}
+async function loadSettings() {
+  const r = await fetch('/api/settings');
+  const d = await r.json();
+  fill(d.settings);
+}
+$('#btnSave').addEventListener('click', async () => {
+  const body = collect();
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    banner(r.ok ? '已保存' : ('保存失败：' + (d.error || r.status)), r.ok ? 'ok' : 'err');
+  } catch (e) { banner('保存失败：' + e, 'err'); }
+});
+$('#btnTest').addEventListener('click', async () => {
+  banner('测试中…', 'ok');
+  try {
+    const r = await fetch('/api/settings/test', { method: 'POST' });
+    bannerTest(await r.json());
+  } catch (e) { banner('测试失败：' + e, 'err'); }
+});
+
+// 剧本生成
+async function loadStyles() {
+  const r = await fetch('/api/script/styles');
+  const d = await r.json();
+  const sel = $('#script-style');
+  (d.styles || []).forEach(s => {
+    const o = document.createElement('option');
+    o.value = s; o.textContent = s;
+    sel.appendChild(o);
+  });
+}
+$('#btnGenerate').addEventListener('click', async () => {
+  const novel = $('#script-novel').value.trim();
+  const style = $('#script-style').value;
+  if (!novel) { banner('请先粘贴小说内容', 'err'); return; }
+  banner('生成中（约 30-120 秒）…', 'ok');
+  $('#btnGenerate').disabled = true;
+  try {
+    const r = await fetch('/api/script/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ novel, style })
+    });
+    const d = await r.json();
+    if (r.ok) { renderScript(d); banner('生成完成', 'ok'); }
+    else { banner('生成失败：' + (d.error || r.status), 'err'); }
+  } catch (e) { banner('生成失败：' + e, 'err'); }
+  finally { $('#btnGenerate').disabled = false; }
+});
+
+function renderScript(s) {
+  const chars = (s.characters || []).map(c =>
+    `<div class="char-card"><div class="name">${esc(c.name)}</div><div class="role">${esc(c.role || '')}</div><div class="desc">${esc(c.description || '')}</div></div>`).join('');
+  const scenes = (s.scenes || []).map(c =>
+    `<div class="char-card"><div class="name">${esc(c.name)}</div><div class="desc">${esc(c.description || '')}</div></div>`).join('');
+  const shots = (s.shots || []).map(sh => `
+    <div class="shot-card">
+      <div class="shot-head"><span class="shot-id">${esc(sh.id)}</span><span class="shot-dur">${sh.duration_sec}s</span><span class="shot-hook">${esc(sh.hook || '')}</span></div>
+      ${sh.continuity ? `<div class="shot-cont">${esc(sh.continuity)}</div>` : ''}
+      <div class="shot-desc">${esc(sh.description || '')}</div>
+      ${sh.h3_prompt ? `<details><summary>H3 提示词</summary><pre class="prompt">${esc(sh.h3_prompt)}</pre></details>` : ''}
+    </div>`).join('');
+  currentScript = s;
+  $('#script-result').innerHTML = `
+    <div class="card">
+      <h2>📺 ${esc(s.title || '未命名')} <span style="color:var(--muted);font-size:13px;margin-left:8px">${esc(s.style || '')}</span></h2>
+      ${chars ? `<h3>角色卡</h3><div class="char-grid">${chars}</div>` : ''}
+      ${scenes ? `<h3>场景卡</h3><div class="char-grid">${scenes}</div>` : ''}
+      ${shots ? `<h3>镜头表（${s.shots.length} 镜）</h3>${shots}` : ''}
+      ${shots ? `<div class="btn-row"><button class="btn btn-primary" id="btnRender">渲染全部镜头</button></div><div id="render-status"></div>` : ''}
+    </div>`;
+  const b = document.getElementById('btnRender');
+  if (b) b.addEventListener('click', startRender);
+}
+
+let currentScript = null;
+
+async function startRender() {
+  if (!currentScript) return;
+  banner('提交渲染…', 'ok');
+  const btn = document.getElementById('btnRender');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch('/api/render', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ script: currentScript, seed: 42 })
+    });
+    const job = await r.json();
+    if (!r.ok) { banner('渲染提交失败：' + (job.error || r.status), 'err'); if (btn) btn.disabled = false; return; }
+    pollRender(job.id);
+  } catch (e) { banner('渲染提交失败：' + e, 'err'); if (btn) btn.disabled = false; }
+}
+
+async function pollRender(id) {
+  const st = document.getElementById('render-status');
+  try {
+    const r = await fetch('/api/render/jobs/' + id);
+    const job = await r.json();
+    if (job.status === 'completed') {
+      const fname = job.final_output ? job.final_output.split(/[\\/]/).pop() : '';
+      const qcHtml = job.qc ? `<div class="test-row">${job.qc.checks.map(c => `<div class="test-chip ${c.passed ? 'ok' : 'err'}"><span class="tag">${c.passed ? '✓' : '✗'} ${esc(c.name)}</span><span class="msg">${esc(c.message)}</span></div>`).join('')}</div>` : '';
+      if (st) st.innerHTML = `
+        <div class="banner show ok">渲染完成：${job.done}/${job.total} 镜头，已合成成片</div>
+        ${fname ? `<video controls style="width:100%;border-radius:10px;margin-top:12px" src="/clips/${fname}"></video>` : ''}
+        ${qcHtml}`;
+      banner('渲染完成', 'ok');
+      const btn = document.getElementById('btnRender');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    if (job.status === 'failed') {
+      if (st) st.innerHTML = `<div class="banner show err">渲染失败：${job.error}</div>`;
+      banner('渲染失败', 'err');
+      const btn = document.getElementById('btnRender');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    if (st) st.innerHTML = `<div class="banner show ok">渲染中：${job.done}/${job.total} 镜头（当前 ${job.current || '-'}）…</div>`;
+    setTimeout(() => pollRender(id), 5000);
+  } catch (e) { setTimeout(() => pollRender(id), 5000); }
+}
+
+// 主题配色同步：跟随主页面 kb-workbench 的主题（localStorage kbw-theme）
+const THEMES = {
+  'nebula':   { bg:'#070b14', panel:'#0e1524', panel2:'#141c2c', border:'#24324a', text:'#e6e9ef', muted:'#8b93a7', accent:'#38bdf8', accent2:'#22d3ee' },
+  'quantum':  { bg:'#0b0716', panel:'#141027', panel2:'#1a1530', border:'#2a2140', text:'#e6e9ef', muted:'#8b93a7', accent:'#a78bfa', accent2:'#c084fc' },
+  'aurora':   { bg:'#04120f', panel:'#082019', panel2:'#0c2a22', border:'#1a3a30', text:'#e6e9ef', muted:'#8b93a7', accent:'#2dd4bf', accent2:'#34d399' },
+  'starlight':{ bg:'#eef2f8', panel:'#ffffff', panel2:'#f1f5f9', border:'#e2e8f0', text:'#0f172a', muted:'#64748b', accent:'#2563eb', accent2:'#06b6d4' },
+  'deepseek': { bg:'#f9f8f8', panel:'#ffffff', panel2:'#f1f3f5', border:'#e5e7eb', text:'#1e232c', muted:'#5c6470', accent:'#4d6bfe', accent2:'#4176e6' },
+  'harness':  { bg:'#101113', panel:'#1f2126', panel2:'#26282c', border:'#383b41', text:'#e6e8ea', muted:'#81858c', accent:'#6799fe', accent2:'#4a8ac4' },
+};
+function syncTheme() {
+  const name = localStorage.getItem('kbw-theme') || 'nebula';
+  const t = THEMES[name] || THEMES.nebula;
+  const r = document.documentElement.style;
+  r.setProperty('--bg', t.bg);
+  r.setProperty('--panel', t.panel);
+  r.setProperty('--panel-2', t.panel2);
+  r.setProperty('--border', t.border);
+  r.setProperty('--text', t.text);
+  r.setProperty('--muted', t.muted);
+  r.setProperty('--accent', t.accent);
+  r.setProperty('--accent-2', t.accent2);
+}
+window.addEventListener('storage', (e) => { if (e.key === 'kbw-theme') syncTheme(); });
+syncTheme();
+
+loadStyles();
+loadSettings();
+</script>
+</body>
+</html>

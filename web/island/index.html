@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>SysMon</title>
+<link rel="stylesheet" href="css/app.css?v=20260818">
+</head>
+<body class="island-collapsed">
+  <div id="card" class="card">
+
+    <!-- 灵动岛收起态:顶部居中透明胶囊(悬停展开) -->
+    <div id="pill" class="pill" title="悬停展开">
+      <span class="pill-item" id="pi-cpu"><b>C</b><em id="pill-cpu" class="mono">--%</em></span>
+      <span class="pill-sep">|</span>
+      <span class="pill-item" id="pi-mem"><b>M</b><em id="pill-mem" class="mono">--%</em></span>
+      <span class="pill-sep">|</span>
+      <span class="pill-item" id="pi-gpu"><b>G</b><em id="pill-gpu" class="mono">--%</em></span>
+      <span class="pill-clock mono" id="pill-clock">--:--</span>
+      <div class="ambient top" title="实时"></div>
+      <div class="ambient-row bottom" title="实时">
+        <div class="ambient"></div>
+        <div class="ambient"></div>
+      </div>
+    </div>
+
+    <!-- 灵动岛展开态:完整监测面板(Harness 主题) -->
+    <div id="full" class="full">
+      <div class="ambient-row" title="实时">
+        <div class="ambient"></div>
+        <div class="ambient"></div>
+      </div>
+      <header id="dragbar" class="dragbar">
+        <img class="zmark zmark-img" src="icon.png" alt="NiliX">
+        <div class="btitle">实时状态<span class="btag">LIVE</span></div>
+        <span id="status-dot" class="status-dot" title="实时"></span>
+        <button id="settings-btn" class="theme-btn" title="设置">⚙</button>
+        <button id="btn-collapse" class="btn-close" title="收起">▾</button>
+        <button id="btn-close" class="btn-close" title="关闭">✕</button>
+      </header>
+
+      <!-- 设置面板:配色 / KB 显示 / 特效 -->
+      <div id="settings-panel" class="settings-panel hidden">
+        <div class="set-title">设 置</div>
+        <div class="set-row">
+          <span class="set-lbl">主题配色</span>
+          <div class="set-seg">
+            <button class="set-btn" data-theme="dark">深色</button>
+            <button class="set-btn" data-theme="light">白天</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <span class="set-lbl">KB 状态行</span>
+          <label class="set-switch"><input type="checkbox" id="set-kb"><span class="tk"></span></label>
+        </div>
+        <div class="set-row">
+          <span class="set-lbl">炫酷特效</span>
+          <label class="set-switch"><input type="checkbox" id="set-fx"><span class="tk"></span></label>
+        </div>
+      </div>
+
+      <div class="rows">
+        <div class="row">
+          <div class="lbl">CPU</div>
+          <div class="bar"><div class="fill" id="cpu-fill"></div></div>
+          <div class="val mono" id="cpu-val">--</div>
+          <div class="temp mono" id="cpu-temp"></div>
+        </div>
+        <div class="cores" id="cores"></div>
+
+        <div class="row">
+          <div class="lbl">RAM</div>
+          <div class="bar"><div class="fill" id="mem-fill"></div></div>
+          <div class="val mono" id="mem-val">--</div>
+          <div class="temp mono" id="mem-temp"></div>
+        </div>
+        <div class="sub mono" id="mem-sub"></div>
+
+        <div class="row">
+          <div class="lbl">GPU</div>
+          <div class="bar"><div class="fill" id="gpu-fill"></div></div>
+          <div class="val mono" id="gpu-val">--</div>
+          <div class="temp mono" id="gpu-temp"></div>
+        </div>
+        <div class="sub mono" id="gpu-mem"></div>
+
+        <div class="row">
+          <div class="lbl">SSD</div>
+          <div class="io">
+            <span class="mono r" id="ssd-r">⤓ --</span>
+            <span class="mono w" id="ssd-w">⤒ --</span>
+          </div>
+          <div class="sub mono cap" id="ssd-cap"></div>
+        </div>
+
+        <div class="row">
+          <div class="lbl">NET</div>
+          <div class="io">
+            <span class="mono r" id="net-d">↓ --</span>
+            <span class="mono w" id="net-u">↑ --</span>
+          </div>
+          <div class="sub mono cap" id="net-total"></div>
+        </div>
+
+        <!-- 分隔装饰条:区分系统指标区(上)与服务状态区(下) -->
+        <div class="divider"></div>
+
+        <div class="row" id="comfy-row">
+          <div class="lbl">CUI</div>
+          <div class="io">
+            <span id="comfy-dot" class="kb-dot"></span>
+            <span class="mono kb-txt" id="comfy-txt">检测中…</span>
+            <button id="comfy-start" class="kb-start hidden">启动</button>
+            <button id="comfy-stop" class="kb-start kb-stop hidden">停止</button>
+            <button id="comfy-open" class="kb-start hidden">访问</button>
+          </div>
+          <div class="sub mono cap" id="comfy-meta"></div>
+        </div>
+
+        <div class="row" id="kb-row">
+          <div class="lbl">K_B</div>
+          <div class="io">
+            <span id="kb-dot" class="kb-dot"></span>
+            <span class="mono kb-txt" id="kb-txt">检测中…</span>
+            <button id="kb-open" class="kb-start hidden">访问</button>
+          </div>
+          <div class="sub mono cap" id="kb-meta"></div>
+        </div>
+
+        <div class="row" id="zcode-row">
+          <div class="lbl">Z_C</div>
+          <div class="io">
+            <span id="zcode-dot" class="kb-dot"></span>
+            <span class="mono kb-txt" id="zcode-txt">检测中…</span>
+            <button id="zcode-start" class="kb-start hidden">启动</button>
+            <button id="zcode-stop" class="kb-start kb-stop hidden">停止</button>
+          </div>
+          <div class="sub mono cap" id="zcode-meta"></div>
+        </div>
+
+        <div class="row" id="bot-row">
+          <div class="lbl">BOT</div>
+          <div class="io">
+            <span id="bot-dot" class="kb-dot"></span>
+            <span class="mono kb-txt" id="bot-txt">检测中…</span>
+            <button id="bot-restart" class="kb-start hidden">重启</button>
+            <button id="bot-stop" class="kb-start kb-stop hidden">停止</button>
+          </div>
+          <div class="sub mono cap" id="bot-meta"></div>
+        </div>
+      </div>
+
+      <footer class="foot">
+        <span id="foot-uptime">运行 --</span>
+        <span id="foot-procs"></span>
+        <span id="foot-clock" class="clock ts">--</span>
+      </footer>
+      <div class="ambient bottom" title="实时"></div>
+    </div>
+
+  </div>
+  <script src="js/app.js?v=20260818"></script>
+</body>
+</html>

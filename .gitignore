@@ -1,0 +1,18 @@
+# 构建产物(用 build.bat 重新编译)
+NiliX.exe
+*.exe.old
+
+# 运行时数据与密钥(绝不入库)
+logs/
+.secret.key
+server/settings.json
+settings.json
+
+# 过期资源(仅保留 amd64)
+rsrc_windows_386.syso
+
+# 本地开发临时
+*.tmp
+*.bak
+.DS_Store
+__pycache__/

@@ -1,0 +1,128 @@
+/* ============ 主题系统:4 套未来科技感配色 ============ */
+:root {
+  --font-ui: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
+}
+
+/* 1. Nebula 深空蓝黑(默认) */
+html[data-theme="nebula"] {
+  --bg: #070b14;
+  --bg-grad-1: rgba(56, 189, 248, 0.10);
+  --bg-grad-2: rgba(34, 211, 238, 0.05);
+  --surface: #0e1524;
+  --surface-2: #131c30;
+  --panel: rgba(14, 21, 36, 0.82);
+  --panel-border: rgba(148, 183, 255, 0.16);
+  --text: #e6edf7;
+  --muted: #8b98ad;
+  --accent: #38bdf8;
+  --accent-2: #22d3ee;
+  --line: rgba(148, 183, 255, 0.14);
+  --glow: rgba(56, 189, 248, 0.45);
+  --chip-bg: rgba(56, 189, 248, 0.10);
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+
+/* 2. Quantum 量子紫 */
+html[data-theme="quantum"] {
+  --bg: #0b0716;
+  --bg-grad-1: rgba(167, 139, 250, 0.12);
+  --bg-grad-2: rgba(192, 132, 252, 0.06);
+  --surface: #141027;
+  --surface-2: #1a1430;
+  --panel: rgba(20, 16, 39, 0.84);
+  --panel-border: rgba(196, 170, 255, 0.18);
+  --text: #efe9ff;
+  --muted: #9d92c4;
+  --accent: #a78bfa;
+  --accent-2: #c084fc;
+  --line: rgba(196, 170, 255, 0.15);
+  --glow: rgba(167, 139, 250, 0.50);
+  --chip-bg: rgba(167, 139, 250, 0.12);
+  --shadow: 0 18px 50px rgba(20, 0, 40, 0.6);
+}
+
+/* 3. Aurora 科技青 */
+html[data-theme="aurora"] {
+  --bg: #04120f;
+  --bg-grad-1: rgba(45, 212, 191, 0.10);
+  --bg-grad-2: rgba(52, 211, 153, 0.05);
+  --surface: #082019;
+  --surface-2: #0c2a21;
+  --panel: rgba(8, 32, 25, 0.84);
+  --panel-border: rgba(94, 234, 212, 0.16);
+  --text: #e2faf3;
+  --muted: #7fb8a9;
+  --accent: #2dd4bf;
+  --accent-2: #34d399;
+  --line: rgba(94, 234, 212, 0.14);
+  --glow: rgba(45, 212, 191, 0.45);
+  --chip-bg: rgba(45, 212, 191, 0.10);
+  --shadow: 0 18px 50px rgba(0, 30, 24, 0.6);
+}
+
+/* 4. Starlight 未来白 */
+html[data-theme="starlight"] {
+  --bg: #eef2f8;
+  --bg-grad-1: rgba(37, 99, 235, 0.06);
+  --bg-grad-2: rgba(6, 182, 212, 0.05);
+  --surface: #ffffff;
+  --surface-2: #f3f6fc;
+  --panel: rgba(255, 255, 255, 0.90);
+  --panel-border: rgba(37, 99, 235, 0.14);
+  --text: #0f172a;
+  --muted: #64748b;
+  --accent: #2563eb;
+  --accent-2: #06b6d4;
+  --line: rgba(37, 99, 235, 0.12);
+  --glow: rgba(37, 99, 235, 0.35);
+  --chip-bg: rgba(37, 99, 235, 0.08);
+  --shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
+}
+
+/* 5. DeepSeek 亮蓝(官网配色:品牌蓝 #4d6bfe + 米白底) */
+html[data-theme="deepseek"] {
+  --bg: #f9f8f8;
+  --bg-grad-1: rgba(77, 107, 254, 0.07);
+  --bg-grad-2: rgba(115, 163, 210, 0.05);
+  --surface: #ffffff;
+  --surface-2: #f1f3f5;
+  --panel: rgba(255, 255, 255, 0.90);
+  --panel-border: rgba(35, 71, 146, 0.16);
+  --text: #1e232c;
+  --muted: #5c6470;
+  --accent: #4d6bfe;
+  --accent-2: #4176e6;
+  --line: rgba(77, 107, 254, 0.12);
+  --glow: rgba(77, 107, 254, 0.35);
+  --chip-bg: rgba(77, 107, 254, 0.08);
+  --shadow: 0 18px 45px rgba(30, 35, 44, 0.12);
+}
+
+/* 6. Harness 深空(Harness 子站:暗色 + 品牌蓝 #6799fe) */
+html[data-theme="harness"] {
+  --bg: #101113;
+  --bg-grad-1: rgba(103, 158, 254, 0.10);
+  --bg-grad-2: rgba(74, 138, 196, 0.05);
+  --surface: #1f2126;
+  --surface-2: #26282c;
+  --panel: rgba(31, 33, 38, 0.85);
+  --panel-border: rgba(230, 232, 234, 0.14);
+  --text: #e6e8ea;
+  --muted: #81858c;
+  --accent: #6799fe;
+  --accent-2: #4a8ac4;
+  --line: rgba(103, 158, 254, 0.16);
+  --glow: rgba(103, 158, 254, 0.45);
+  --chip-bg: rgba(103, 158, 254, 0.12);
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+
+/* 表单控件配色方案:让原生 <select> 下拉列表随主题深浅渲染(否则暗色主题下未选中项一片白) */
+html[data-theme="nebula"],
+html[data-theme="quantum"],
+html[data-theme="aurora"],
+html[data-theme="harness"] { color-scheme: dark; }
+
+html[data-theme="starlight"],
+html[data-theme="deepseek"] { color-scheme: light; }
