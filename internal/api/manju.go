@@ -27,11 +27,16 @@ import (
 const manjuRoot = `C:\Mi\Ai\WorkBench\manju`
 const manjuPipeline = manjuRoot + `\direct_pipeline`
 
-// manjuEngineDir NiliX 服务项目目录（漫剧默认 API Key 存这里，归属项目而非数据根目录）。
-const manjuEngineDir = manjuRoot + `\NiliX`
+// manjuEngineDir NiliX 服务项目目录 = exe 所在目录（随项目整体移动零成本，取不到时兜底 manju 根）。
+var manjuEngineDir = func() string {
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Dir(exe)
+	}
+	return manjuRoot + `\NiliX`
+}()
 
 // manjuSettingsFile 漫剧默认 DeepSeek API Key（存 NiliX 项目目录，不再放 manju/server）。
-const manjuSettingsFile = manjuEngineDir + `\server\settings.json`
+var manjuSettingsFile = filepath.Join(manjuEngineDir, "server", "settings.json")
 
 // manjuLegacySettingsFile 旧位置（kb-workbench 原版 manju/server/settings.json），仅用于迁移。
 const manjuLegacySettingsFile = manjuRoot + `\server\settings.json`
