@@ -3822,7 +3822,7 @@ select option { text-align: center; }
 @media (max-width: 640px) { #ai-avatar { width: 76px; height: 76px; } .ai-bubble { max-width: 180px; } }
 
 /* 关系图谱页:头部 + 图谱画布 + 图例(占满可视区) */
-.view-kb.is-active { display: flex; }
+.view-kb.is-active { display: flex; flex-direction: column; }
 
 /* 网页版爽文创作 */
 .nv-form { display: flex; flex-direction: column; gap: 10px; }
@@ -3842,7 +3842,6 @@ select option { text-align: center; }
 .nv-ch.done { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: var(--accent); color: var(--accent); font-weight: 700; }
 
 /* 关系图谱(Obsidian 式)视图 */
-.view-kb { display: flex; flex-direction: column; }
 .kb-graph { flex: 1; min-height: 420px; }
 .kb-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 10px 4px 0; }
 .kb-lg {
