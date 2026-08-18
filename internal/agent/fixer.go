@@ -19,8 +19,9 @@ const fixerSystem = `你是 MiniMax H3 提示词修复师。输入一份已有 H
 1. 保持原有段落结构(subject_definitions/summary/retention_analysis/detailed_description/overall_soundscape/non_diegetic_music 或三段式)与 <Subject>/<Picture> 标签体系不变。
 2. 台词 <d>[中文]原文</d> 与说话者 (Sx) 逐字保留,一个字都不改。
 3. 只针对审片反馈的问题做最小修改:如 visibility 低分→强化亮度护栏句(主体必须清晰可见、给明确光源);identity 低分→强化实体锁定句;action 低分→收紧动作描述使指令更明确;tech 低分→在末尾散文排除项中加对应正面约束(如 no distorted hands)。
-4. detailed_description 正文保持 300-500 词;H3 是 CFG-distilled 无负面词机制,排除项用正面散文表述(no text overlays, no watermark)。
-5. 亮度护栏句必须保留且不可削弱(Dark mood is fine, but the subject must remain clearly visible...)。
+4. 机械质检/台词核对结果(qc_flags)是硬性依据,按问题对症修复:近黑帧→增加明确光源与曝光描述(夜间也须给火把/月光/灯等实体光源);静音/无音轨→确认台词以 <d>[中文]原文</d> 带说话者 (Sx) 写入且无"no dialogue/mute"类表述;台词不符→核对台词逐字与分镜 dialogue 一致,不改写不翻译。
+5. detailed_description 正文保持 300-500 词;H3 是 CFG-distilled 无负面词机制,排除项用正面散文表述(no text overlays, no watermark)。
+6. 亮度护栏句必须保留且不可削弱(Dark mood is fine, but the subject must remain clearly visible...)。
 
 输出严格 JSON:{"h3_prompt": "修复后的完整提示词全文"}`
 
@@ -40,6 +41,7 @@ func FixPrompt(llm TextLLM, meta ShotMeta, oldPrompt string, jd *Judgment) (stri
 		},
 		"weak_dimensions":  weakNames,
 		"issues":           jd.Issues,
+		"qc_flags":         jd.QCFlags, // 机械质检/ASR 台词核对结果:针对性修复的直接依据
 		"suggestion":       jd.Suggestion,
 		"current_h3_prompt": oldPrompt,
 	})
