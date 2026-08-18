@@ -90,39 +90,69 @@ const KbView = {
     const hit = (p) => !ql || p.name.toLowerCase().includes(ql) || (p.desc || "").toLowerCase().includes(ql);
     const catHit = (c) => !this._catFilter || c.name === this._catFilter;
 
+    // ===== 径向布局(预计算坐标,layout:'none' 零物理开销 → 拖拽缩放零卡顿) =====
+    // README 居中 → 大类枢纽环列 → 页面绕各自枢纽成扇形簇(坐标由名字哈希决定,稳定不跳)
+    const SYMS = ["circle", "rect", "triangle", "diamond", "pin", "roundRect", "arrow", "star"];
+    const hash = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; };
     const nodes = [], links = [], legend = [];
     let total = 0;
-    for (const c of this._cats) {
+    const visCats = this._cats.filter((c) => {
       const all = [...c.root, ...c.subs.flatMap((s) => s.pages)];
-      if (!all.length || !catHit(c)) continue;
-      const matched = all.filter(hit);
+      return all.length && catHit(c);
+    });
+    const N = visCats.length || 1;
+    const R1 = 150 + N * 26;                       // 枢纽环半径
+    // 中心:README 索引节点
+    nodes.push({ id: "README", name: "README · 索引", kind: "page", category: "索引", x: 0, y: 0,
+      symbol: "circle", symbolSize: 58,
+      itemStyle: { color: App.catColor("索引") !== "#999" ? App.catColor("索引") : "#E8C268", borderColor: "#fff", borderWidth: 2, shadowBlur: 26, shadowColor: "rgba(232,194,104,.55)" },
+      label: { show: true, position: "bottom", distance: 8, color: "#E8C268", fontSize: 13, fontWeight: 800 } });
+    visCats.forEach((c, ci) => {
+      const ang = -Math.PI / 2 + ci * (Math.PI * 2 / N);
+      const hx = Math.cos(ang) * R1, hy = Math.sin(ang) * R1;
+      const matched = [...c.root, ...c.subs.flatMap((s) => s.pages)].filter(hit);
       const color = App.catColor(c.name);
-      if (matched.length || !ql) {
-        nodes.push({ id: "hub:" + c.name, name: "◈ " + c.name, kind: "hub", category: c.name,
-          symbolSize: Math.min(58, 26 + matched.length * 0.28), itemStyle: { color },
-          label: { show: true, color, fontSize: 12, fontWeight: 700 } });
-      }
-      for (const p of matched) {
+      const sym = SYMS[ci % SYMS.length];
+      // 枢纽
+      nodes.push({ id: "hub:" + c.name, name: "◈ " + c.name, kind: "hub", category: c.name, x: hx, y: hy,
+        symbol: "circle", symbolSize: Math.min(46, 24 + matched.length * 0.22),
+        itemStyle: { color, borderColor: color, borderWidth: 2, shadowBlur: 14, shadowColor: color + "" },
+        label: { show: true, color, fontSize: 12, fontWeight: 700, position: "top", distance: 6 } });
+      links.push({ source: "README", target: "hub:" + c.name,
+        lineStyle: { color, width: 2.2, opacity: 0.5, curveness: 0.04 } });
+      // 页面簇:绕枢纽扇形散布(哈希抖动,确定性)
+      const spread = (Math.PI * 2 / N) * 0.78;
+      matched.forEach((p2, k) => {
         total++;
-        nodes.push({ id: p.name, name: p.name, kind: "page", category: c.name,
-          symbolSize: 7 + Math.min(8, (p.desc || "").length / 22),
-          itemStyle: { color, opacity: 0.88 },
+        const h = hash(p2.name);
+        const t = matched.length === 1 ? 0.5 : k / (matched.length - 1);
+        const a = ang - spread / 2 + t * spread + ((h % 17) - 8) * 0.012;
+        const r = 70 + (h % 130) + Math.sqrt(k % 40) * 16;
+        nodes.push({ id: p2.name, name: p2.name, kind: "page", category: c.name,
+          x: hx + Math.cos(a) * r, y: hy + Math.sin(a) * r,
+          symbol: SYMS[h % SYMS.length], symbolSize: 6.5 + (h % 5) + Math.min(6, (p2.desc || "").length / 24),
+          itemStyle: { color, opacity: 0.9, borderColor: color, borderWidth: 0.6 },
           label: { show: false } });
-        links.push({ source: "hub:" + c.name, target: p.name,
-          lineStyle: { color, width: 1, opacity: 0.22, curveness: 0.08 } });
-      }
+        links.push({ source: "hub:" + c.name, target: p2.name,
+          lineStyle: { color, width: 1, opacity: 0.2, curveness: 0.05 } });
+      });
       legend.push({ name: c.name, color, n: matched.length, emoji: c.emoji || "" });
-    }
+    });
     this._chart.setOption({
       backgroundColor: "transparent",
       animation: false,
       tooltip: { show: false },
       series: [{
-        type: "graph", layout: "force", roam: true, draggable: true,
-        force: { repulsion: 130, edgeLength: [34, 110], gravity: 0.055, friction: 0.5, layoutAnimation: false },
+        type: "graph",
+        layout: "none",                 // 坐标已预算,交互零物理开销
+        roam: true,                     // 缩放/平移纯画布变换
+        draggable: true,
+        progressive: 260, progressiveThreshold: 520,  // 渐进渲染,大图不卡
+        hoverAnimation: false,
         edgeSymbol: ["none", "none"],
-        emphasis: { focus: "adjacency", label: { show: true, fontSize: 11 }, itemStyle: { shadowBlur: 14 } },
+        emphasis: { label: { show: true, fontSize: 11, color: "#fff" }, itemStyle: { shadowBlur: 12 } },
         label: { position: "right", distance: 4 },
+        lineStyle: { curveness: 0.05 },
         data: nodes, links,
       }],
     }, true);
