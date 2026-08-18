@@ -103,6 +103,29 @@ const KbView = {
     });
   },
 
+  /* 枢纽/图例点击:高亮该类全部节点(放大显名),再点取消——不重排不消失 */
+  toggleFocusCat(cat) {
+    const c = this._chart;
+    if (!c) return;
+    const un = () => {
+      if (!this._focusIdx) return;
+      this._focusIdx.forEach((i) => c.dispatchAction({ type: "unhighlight", seriesIndex: 0, dataIndex: i }));
+      this._focusIdx = null;
+    };
+    if (this._focusCat === cat) { un(); this._focusCat = null; }
+    else {
+      un();
+      this._focusCat = cat;
+      const s = c.getOption().series[0];
+      const idx = [];
+      s.data.forEach((n, i) => { if (n.kind === "page" && n.category === cat) idx.push(i); });
+      idx.forEach((i) => c.dispatchAction({ type: "highlight", seriesIndex: 0, dataIndex: i }));
+      this._focusIdx = idx;
+    }
+    document.querySelectorAll("#kb-legend .kb-lg").forEach((e2) =>
+      e2.classList.toggle("on", e2.dataset.cat === this._focusCat));
+  },
+
   /* 平滑适配:进入后逐帧把视野平滑过渡到全图可见(目标跟随布局收敛,无突跳);
      约 3.5s 或目标稳定后停止,把控制权交给用户 */
   smoothFit() {
@@ -277,13 +300,13 @@ const KbView = {
       this._chart.on("click", (p) => {
         const d = p.data || {};
         if (d.kind === "page") this.openPage(d.id);
-        else if (d.kind === "hub") { this._catFilter = this._catFilter === d.id ? null : d.id; this.render(document.getElementById("kb-search").value.trim()); }
+        else if (d.kind === "hub") this.toggleFocusCat(d.name.replace(/^◈\s*/, ""));
       });
       window.addEventListener("resize", () => this._chart && this._chart.resize());
     }
     const ql = (q || "").toLowerCase();
     const hit = (p) => !ql || p.name.toLowerCase().includes(ql) || (p.desc || "").toLowerCase().includes(ql);
-    const catHit = (c) => !this._catFilter || c.name === this._catFilter;
+
 
     // ===== 径向布局(预计算坐标,layout:'none' 零物理开销 → 拖拽缩放零卡顿) =====
     // README 居中 → 大类枢纽环列 → 页面绕各自枢纽成扇形簇(坐标由名字哈希决定,稳定不跳)
@@ -291,9 +314,10 @@ const KbView = {
     const hash = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; };
     const nodes = [], links = [], legend = [];
     let total = 0;
+    const focusCat = this._focusCat;
     const visCats = this._cats.filter((c) => {
       const all = [...c.root, ...c.subs.flatMap((s) => s.pages)];
-      return all.length && catHit(c);
+      return all.length && all.some(hit);          // 仅搜索过滤,枢纽点击不高亮之外的类也保留
     });
     const N = visCats.length || 1;
     const R1 = 150 + N * 24;                       // 枢纽环半径(紧凑,人情味)
@@ -328,7 +352,7 @@ const KbView = {
       // 枢纽
       nodes.push({ id: "hub:" + c.name, name: "◈ " + c.name, kind: "hub", category: c.name, x: hx, y: hy, fixed: central,
         symbol: "circle", symbolSize: Math.min(30, 13 + matched.length * 0.3),
-        itemStyle: { color, borderColor: "#fff", borderWidth: 1.2, shadowBlur: 10, shadowColor: color + "" },
+        itemStyle: { color, opacity: focusCat && c.name !== focusCat ? 0.08 : 1, borderColor: "#fff", borderWidth: 1.2, shadowBlur: 10, shadowColor: color + "" },
         label: { show: false } });
       links.push({ source: "README", target: "hub:" + c.name,
         lineStyle: { color: lineColor, width: 1, opacity: 0.36, curveness: 0.1 } });
@@ -346,10 +370,10 @@ const KbView = {
         nodes.push({ id: p2.name, name: p2.name, kind: "page", category: c.name,
           x: central ? px : undefined, y: central ? py : undefined,
           symbol: "circle", symbolSize: 3 + (h % 6),   // 删除前:大小按关联度小梯度
-          itemStyle: { color, opacity: 0.92, borderColor: color, borderWidth: 0.6 },
+          itemStyle: { color, opacity: focusCat && c.name !== focusCat ? 0.08 : 0.92, borderColor: color, borderWidth: 0.6 },
           label: { show: false } });
         links.push({ source: "hub:" + c.name, target: p2.name,
-          lineStyle: { color: lineColor, width: 1, opacity: 0.36, curveness: 0.1 } });
+          lineStyle: { color: lineColor, width: 1, opacity: focusCat && c.name !== focusCat ? 0.04 : 0.36, curveness: 0.1 } });
       });
       legend.push({ name: c.name, color, n: matched.length, emoji: c.emoji || "" });
     });
@@ -403,15 +427,12 @@ const KbView = {
       }],
     }, true);
     this.stopSpin();  // 删除前无公转
-    if (mode === "force") this.smoothFit();
+    if (mode === "force" && !this._fitDone) this.smoothFit();
     this.initMagnetic();
     document.getElementById("kb-legend").innerHTML = legend
       .map((l) => `<span class="kb-lg${this._catFilter === l.name ? " on" : ""}" data-cat="${l.name.replace(/"/g, "&quot;")}"><span class="gt-dot" style="background:${l.color}"></span>${l.emoji} ${l.name} <i>${l.n}</i></span>`).join("");
     document.querySelectorAll("#kb-legend .kb-lg").forEach((e2) =>
-      e2.addEventListener("click", () => {
-        this._catFilter = this._catFilter === e2.dataset.cat ? null : e2.dataset.cat;
-        this.render(document.getElementById("kb-search").value.trim());
-      })
+      e2.addEventListener("click", () => this.toggleFocusCat(e2.dataset.cat))
     );
   },
 
