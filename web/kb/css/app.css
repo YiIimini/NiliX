@@ -3805,8 +3805,8 @@ select option { text-align: center; }
   letter-spacing: 0.2px;
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
   /* 不规则云朵轮廓:顶部波浪弧 + 两侧起伏 + 居中尖尾 */
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 165'%3E%3Cpath d='M18,142 C10,122 12,102 26,94 C28,72 48,60 68,66 C76,46 100,38 116,46 C128,26 152,26 162,40 C184,32 204,46 206,64 C224,68 232,90 224,108 C230,124 226,140 212,144 L118,144 L128,164 L138,144 Z' fill='black'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 165'%3E%3Cpath d='M18,142 C10,122 12,102 26,94 C28,72 48,60 68,66 C76,46 100,38 116,46 C128,26 152,26 162,40 C184,32 204,46 206,64 C224,68 232,90 224,108 C230,124 226,140 212,144 L118,144 L128,164 L138,144 Z' fill='black'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 165'%3E%3Cpath d='M20,142 L20,104 a34,34 0 0 1 16,-58 a40,40 0 0 1 66,-14 a38,38 0 0 1 62,16 a34,34 0 0 1 56,22 a24,24 0 0 1 0,34 l-102,0 l12,20 l12,-20 z' fill='black'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 165'%3E%3Cpath d='M20,142 L20,104 a34,34 0 0 1 16,-58 a40,40 0 0 1 66,-14 a38,38 0 0 1 62,16 a34,34 0 0 1 56,22 a24,24 0 0 1 0,34 l-102,0 l12,20 l12,-20 z' fill='black'/%3E%3C/svg%3E");
   -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
   -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
   background:
