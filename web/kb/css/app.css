@@ -1821,11 +1821,7 @@ body.view-dir-active .top-search { display: none; }
   text-overflow: ellipsis;
 }
 .bk-bottom-bar {
-  position: absolute;
-  left: 0; right: 0; bottom: 0;
-  height: 5px;
-  background: linear-gradient(90deg, hsl(var(--hue) 85% 60%), transparent);
-  box-shadow: 0 0 10px hsl(var(--hue) 85% 60%);
+  display: none; /* 用户要求移除底部蓝色装饰条 */
 }
 /* 卡片右上角三点操作按钮(小说/漫剧共用;颜色随卡片随机色相) */
 .bk-more, .fm-more {
