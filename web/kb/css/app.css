@@ -4466,3 +4466,43 @@ select option { text-align: center; }
 .nv-issues div { padding: 2px 0; }
 .rv-ok { color: #4ade80; }
 .rv-low { color: #f87171; }
+
+/* 自定义风格区:纵向(TAG 标签行 + 输入行),TAG 与预设按钮同款高亮观感 */
+.manju-custom-box { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.manju-custom-line { display: flex; gap: 8px; align-items: center; flex: 1; min-width: 0; }
+.manju-custom-line .manju-input { flex: 1; min-width: 0; }
+.manju-custom-tags { display: none; }
+.manju-custom-tags.has-tags { display: flex; flex-wrap: wrap; gap: 10px 8px; /* 右上角 × 需要额外避让 */ }
+.style-tag {
+  position: relative;
+  display: inline-flex; align-items: center;
+  padding: 5px 14px;
+  font-size: 12.5px; line-height: 1.4; color: var(--text);
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--panel-border));
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 8%, transparent);
+  animation: styleTagPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  word-break: break-all;
+}
+@keyframes styleTagPop {
+  0% { transform: scale(0.7); opacity: 0; }
+  60% { transform: scale(1.06); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.style-tag-x {
+  position: absolute; top: -7px; right: -7px;
+  width: 16px; height: 16px;
+  display: flex; align-items: center; justify-content: center;
+  font-style: normal; font-size: 11px; line-height: 1;
+  color: var(--text);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--panel) 92%, #000);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--panel-border));
+  cursor: pointer; user-select: none;
+  transition: background 0.15s, color 0.15s, transform 0.12s;
+}
+.style-tag-x:hover {
+  background: #d25c4d; border-color: #d25c4d; color: #fff;
+  transform: scale(1.15);
+}

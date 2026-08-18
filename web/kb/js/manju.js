@@ -293,11 +293,12 @@
       });
       // 风格预览:官方示例 GIF(MiniMax H3 官方技能仓库素材,已本地化)
       $("manju-style-help").addEventListener("click", () => this.openStylePreview());
-      // 自定义风格:输入英文风格描述点「应用」,叠加到当前选中的预设风格(重复词自动过滤)
+      // 自定义风格:输入英文风格描述点「应用」,以 TAG 标签叠加展示在输入框上方(重复词自动过滤)
       $("manju-style-apply").addEventListener("click", () => {
         const v = $("manju-style-custom").value.trim();
         if (!v) { this.setErr("请先输入自定义风格描述"); return; }
         this.style = this.combineCustom(v);
+        $("manju-style-custom").value = ""; // 已变成标签,输入框清空待下一次输入
         this.renderStyle();
         this.saveDraft();
       });
@@ -1119,13 +1120,27 @@
       document.querySelectorAll("#manju-style button[data-style]").forEach((b) =>
         b.classList.toggle("on", keys.has(b.dataset.style))
       );
-      // 自定义风格:style 中非预设的部分回填自定义输入框(纯预设组合则清空)
-      const custom = $("manju-style-custom");
-      if (custom) {
+      // 自定义风格:style 中非预设部分渲染为 TAG 标签(输入框上方,点 × 删除)
+      const tags = $("manju-custom-tags");
+      if (tags) {
         const nonPreset = String(this.style || "").split("+").map((s) => s.trim())
           .filter((s) => s && STYLE_CN[s] === undefined);
-        custom.value = nonPreset.join("+");
+        tags.innerHTML = nonPreset.map((w) =>
+          `<span class="style-tag">${esc(w)}<i class="style-tag-x" data-word="${esc(w)}" title="删除该风格">×</i></span>`).join("");
+        tags.classList.toggle("has-tags", nonPreset.length > 0);
+        tags.querySelectorAll(".style-tag-x").forEach((x) =>
+          x.addEventListener("click", () => this.removeCustomWord(x.dataset.word))
+        );
       }
+    },
+
+    /* 删除一个自定义风格 TAG:从 style 组合中移除该词;删空且无预设时回退默认 2.5D */
+    removeCustomWord(word) {
+      const parts = String(this.style || "").split("+").map((s) => s.trim()).filter(Boolean);
+      const rest = parts.filter((p) => p !== word);
+      this.style = rest.length ? rest.join("+") : "2.5d";
+      this.renderStyle();
+      this.saveDraft();
     },
 
     renderRatio() {
