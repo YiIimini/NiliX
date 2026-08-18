@@ -660,12 +660,28 @@ const App = {
     if (!this.prefs || !this.prefs.aiOn) return;
     const b = document.getElementById("ai-bubble");
     if (!b || b.textContent === text) return;
-    b.textContent = text;
+    b.textContent = "";
     b.classList.remove("ai-pop");
     void b.offsetWidth; // 重触发动画
     b.classList.add("ai-pop");
     const m = document.getElementById("ai-mascot");
     if (m) m.classList.toggle("is-busy", mood === "busy");
+    // 打字机效果:逐字蹦出(短句即时,长句快速)
+    clearTimeout(this._mascotTypeT);
+    const step = Math.max(14, Math.min(34, Math.round(320 / text.length)));
+    let i = 0;
+    b.classList.add("typing");
+    const tick = () => {
+      i += 1;
+      b.textContent = text.slice(0, i);
+      if (i < text.length) {
+        this._mascotTypeT = setTimeout(tick, step);
+      } else {
+        b.textContent = text;
+        b.classList.remove("typing");
+      }
+    };
+    tick();
   },
 
   /* 当前路由:kb(关系图谱主页) / comfy / novel / manju */

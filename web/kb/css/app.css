@@ -4062,3 +4062,28 @@ select option { text-align: center; }
 .bk-status-blue { color: #3b82f6; }
 .bk-status-yellow { color: #f59e0b; }
 .bk-status-red { color: #ef4444; }
+
+/* AI 助手气泡 v3:更立体玻璃 + 打字光标 */
+.ai-bubble {
+  background:
+    linear-gradient(165deg,
+      color-mix(in srgb, var(--panel) 86%, var(--accent) 14%) 0%,
+      color-mix(in srgb, var(--panel) 72%, transparent) 48%,
+      color-mix(in srgb, var(--accent) 16%, var(--panel) 58%) 100%);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--panel-border));
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.36),
+    0 3px 10px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent),
+    inset 0 -8px 20px color-mix(in srgb, var(--accent) 6%, transparent);
+}
+/* 打字光标:最后字符后的竖线呼吸 */
+.ai-bubble.typing::after {
+  content: "";
+  display: inline-block;
+  width: 1.5px; height: 11px; margin-left: 2px;
+  vertical-align: -1px;
+  background: var(--accent);
+  animation: aiCaret 0.7s steps(1) infinite;
+}
+@keyframes aiCaret { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
