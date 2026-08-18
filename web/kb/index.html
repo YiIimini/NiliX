@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=20260818au">
-<link rel="stylesheet" href="/css/themes.css?v=20260818au">
-<link rel="stylesheet" href="/css/materials.css?v=20260818au">
-<link rel="stylesheet" href="/css/app.css?v=20260818au">
+<link rel="icon" type="image/png" href="/icon.png?v=20260818ax">
+<link rel="stylesheet" href="/css/themes.css?v=20260818ax">
+<link rel="stylesheet" href="/css/materials.css?v=20260818ax">
+<link rel="stylesheet" href="/css/app.css?v=20260818ax">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -75,7 +75,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260818au" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260818ax" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -635,7 +635,7 @@
           </div>
           <div class="settings-row">
             <span class="settings-row-label">闲逛间隔</span>
-            <select id="set-ai-wander-int" class="settings-input settings-input-flex">
+            <select id="set-ai-wander-int" class="settings-input">
               <option value="6000">频繁(6s)</option>
               <option value="11000">较快(11s)</option>
               <option value="19000">适中(19s)</option>
@@ -645,7 +645,7 @@
           </div>
           <div class="settings-row">
             <span class="settings-row-label">冒泡频率</span>
-            <select id="set-ai-freq" class="settings-input settings-input-flex">
+            <select id="set-ai-freq" class="settings-input">
               <option value="12000">勤快(12s)</option>
               <option value="22000">适中(22s)</option>
               <option value="45000">安静(45s)</option>
@@ -653,7 +653,7 @@
           </div>
           <div class="settings-row">
             <span class="settings-row-label">体型</span>
-            <select id="set-ai-size" class="settings-input settings-input-flex">
+            <select id="set-ai-size" class="settings-input">
               <option value="76">小</option>
               <option value="104">中(默认)</option>
               <option value="132">大</option>
@@ -665,7 +665,7 @@
           <div class="settings-label"><span class="sl-emoji">🕸</span>关系图谱</div>
           <div class="settings-row">
             <span class="settings-row-label">组织模式</span>
-            <select id="set-kb-layout" class="settings-input settings-input-flex">
+            <select id="set-kb-layout" class="settings-input">
               <option value="force">星系(Obsidian 物理模拟)</option>
               <option value="radial">径向(README 中心辐射)</option>
               <option value="ring">环形(分类环列)</option>
@@ -688,7 +688,7 @@
           </div>
           <div class="settings-row">
             <span class="settings-row-label">节点形状</span>
-            <select id="set-kb-shape" class="settings-input settings-input-flex">
+            <select id="set-kb-shape" class="settings-input">
               <option value="mixed">混合(每节点不同)</option>
               <option value="circle">统一圆形</option>
               <option value="rect">方形</option>
@@ -697,7 +697,7 @@
           </div>
           <div class="settings-row">
             <span class="settings-row-label">连线弧度</span>
-            <select id="set-kb-curve" class="settings-input settings-input-flex">
+            <select id="set-kb-curve" class="settings-input">
               <option value="0">直线</option>
               <option value="0.05">微弧(默认)</option>
               <option value="0.15">大弧</option>
@@ -705,7 +705,7 @@
           </div>
           <div class="settings-row">
             <span class="settings-row-label">连线透明度</span>
-            <select id="set-kb-lineop" class="settings-input settings-input-flex">
+            <select id="set-kb-lineop" class="settings-input">
               <option value="0.12">隐约</option>
               <option value="0.2">默认</option>
               <option value="0.38">清晰</option>
@@ -718,7 +718,7 @@
           </div>
           <div class="settings-row">
             <span class="settings-row-label">常显标签数</span>
-            <select id="set-kb-labels" class="settings-input settings-input-flex">
+            <select id="set-kb-labels" class="settings-input">
               <option value="0">仅枢纽</option>
               <option value="80">枢纽+80 页</option>
               <option value="9999">全部页名</option>
@@ -731,15 +731,15 @@
           <div class="settings-label"><span class="sl-emoji">🎬</span><span data-i18n="settings.llm">剧本模型（LLM）</span></div>
           <div class="settings-row">
             <span class="settings-row-label" data-i18n="settings.llmKey">API Key</span>
-            <input type="password" id="set-llm-key" class="settings-input settings-input-flex" spellcheck="false" placeholder="sk-...">
+            <input type="password" id="set-llm-key" class="settings-input" spellcheck="false" placeholder="sk-...">
           </div>
           <div class="settings-row">
             <span class="settings-row-label" data-i18n="settings.llmBase">Base URL</span>
-            <input type="text" id="set-llm-base" class="settings-input settings-input-flex" spellcheck="false" placeholder="https://api.deepseek.com">
+            <input type="text" id="set-llm-base" class="settings-input" spellcheck="false" placeholder="https://api.deepseek.com">
           </div>
           <div class="settings-row">
             <span class="settings-row-label" data-i18n="settings.llmModel">模型名</span>
-            <input type="text" id="set-llm-model" class="settings-input settings-input-flex" spellcheck="false" list="llm-models" placeholder="deepseek-v4-flash">
+            <input type="text" id="set-llm-model" class="settings-input" spellcheck="false" list="llm-models" placeholder="deepseek-v4-flash">
             <datalist id="llm-models">
               <option value="deepseek-v4-flash"></option>
               <option value="deepseek-v4-pro"></option>
@@ -753,13 +753,13 @@
       </div>
     </div>
   </div>
-  <script src="/js/i18n.js?v=20260818au"></script>
-  <script src="/js/markdown.js?v=20260818au"></script>
-  <script src="/js/app.js?v=20260818au"></script>
-  <script src="/js/comfy.js?v=20260818au"></script>
+  <script src="/js/i18n.js?v=20260818ax"></script>
+  <script src="/js/markdown.js?v=20260818ax"></script>
+  <script src="/js/app.js?v=20260818ax"></script>
+  <script src="/js/comfy.js?v=20260818ax"></script>
   <script src="/vendor/echarts.min.js"></script>
-  <script src="/js/kbview.js?v=20260818au"></script>
-  <script src="/js/dirview.js?v=20260818au"></script>
-  <script src="/js/manju.js?v=20260818au"></script>
+  <script src="/js/kbview.js?v=20260818ax"></script>
+  <script src="/js/dirview.js?v=20260818ax"></script>
+  <script src="/js/manju.js?v=20260818ax"></script>
 </body>
 </html>

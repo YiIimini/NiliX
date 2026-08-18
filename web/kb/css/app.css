@@ -2322,7 +2322,7 @@ body.view-dir-active .top-search { display: none; }
 }
 .settings-modal.is-open { opacity: 1; pointer-events: auto; }
 .settings-dialog {
-  width: min(860px, 94vw);
+  width: min(760px, 94vw);
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 18px;
@@ -2361,16 +2361,9 @@ body.view-dir-active .top-search { display: none; }
 .settings-body {
   padding: 22px 26px 28px;
   max-height: 76vh; overflow-y: auto;
-  display: grid; grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  align-items: stretch;                 /* 同排卡片等高 */
+  display: flex; flex-direction: column;   /* 单列规律:一组一行,从上到下 */
+  gap: 14px;
 }
-/* 主题配色(2)/关系图谱(6) 跨整行,其余两列依次排布 */
-.settings-group:nth-child(2),
-.settings-group:nth-child(6) { grid-column: 1 / -1; }
-/* 跨行大卡与两列卡之间分层:顶部渐变条标识 */
-.settings-group:nth-child(2) { border-top: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); }
-.settings-group:nth-child(6) { border-top: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); }
 .settings-group {
   padding: 16px 18px;
   border: 1px solid var(--panel-border);
@@ -2387,18 +2380,18 @@ body.view-dir-active .top-search { display: none; }
 .sl-emoji { margin-right: 7px; font-size: 13px; }
 /* 最新总览展示设置:行 / 数字输入 / 开关 */
 .settings-row {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 12px;
   padding: 8px 0;
 }
 .settings-row-top { align-items: flex-start; }
 .settings-row-label {
   font-size: 12.5px; color: var(--text); letter-spacing: 1px;
   flex-shrink: 0;
-  width: 100px; text-align: right; padding-right: 2px; /* 统一列宽右对齐,基线齐 */
+  width: 112px; text-align: right; padding-right: 4px; /* 规律:全组 label 同宽右对齐 */
 }
 .settings-hint { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
 .settings-input {
-  width: 76px;
+  width: 240px;
   padding: 6px 10px;
   font-family: var(--font-mono); font-size: 12.5px;
   color: var(--text);
@@ -3509,7 +3502,7 @@ pre, code { border-radius: 6px; }
 .side-panel .side-head { padding: 18px 16px 14px; }
 
 /* 设置弹窗：长文本输入(API Key/Base URL/模型名/目录)弹性撑满 */
-.settings-input-flex { flex: 1; min-width: 0; width: auto !important; }
+.settings-input-flex { flex: 1; min-width: 0; width: auto !important; max-width: 420px; }
 
 /* 剧本模型保存状态提示：徽章化 */
 .llm-msg {
@@ -4062,3 +4055,26 @@ select option { text-align: center; }
 }
 .nv-tip:hover { box-shadow: 0 0 8px var(--glow); }
 .nv-actions.nv-center { justify-content: center; }
+
+/* ===== 设置弹窗:卡片内部元素规律化 ===== */
+/* 下拉与输入统一宽度,不参差 */
+.settings-group select.settings-input,
+.settings-group select.settings-input:not(.settings-input-flex) { width: 240px; }
+/* 目录行:输入弹性 + 按钮,按钮不挤 */
+.dir-picker { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.dir-picker .hrs-btn { flex: none; }
+/* 滑杆行:滑杆撑满中间,数值右对齐固定 */
+.settings-row:has(> .settings-range) { display: flex; align-items: center; gap: 12px; }
+.settings-row:has(> .settings-range) .settings-range { flex: 1; min-width: 0; }
+.settings-row:has(> .settings-range) .settings-hint {
+  flex: none; width: 44px; text-align: right; font-variant-numeric: tabular-nums;
+}
+/* 开关行:label + 开关 + 说明,三列统一(说明灰小字,不贴开关) */
+.settings-row:has(> .toggle) { gap: 12px; }
+.settings-row:has(> .toggle) .toggle { flex: none; }
+.settings-row:has(> .toggle) .settings-hint { margin-left: 4px; flex: none; }
+/* 主题色块:3×2 网格整齐 */
+.theme-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+/* 风格按钮:5 个一行均分 */
+.style-switch { display: flex; gap: 8px; }
+.style-switch .style-opt { flex: 1; }
