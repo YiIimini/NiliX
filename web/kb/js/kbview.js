@@ -52,6 +52,53 @@ const KbView = {
     if (anchor) this.openPage(anchor);
   },
 
+  /* 全图适配:force 布局收敛期间轮询取布局坐标,包围盒稳定后缩小到全部可见(只做一次) */
+  _fitTry: 0,
+  scheduleFit() {
+    if (this._fitDone) return;
+    this._fitTry = 0;
+    this._lastFitZ = 0;
+    const tick = () => {
+      this._fitTry++;
+      if (this._fitTry > 12) return;               // 最多 6s,不打扰用户
+      const stable = this.fitAllTry();
+      if (!stable) setTimeout(tick, 500);
+    };
+    setTimeout(tick, 300);
+  },
+  fitAllTry() {
+    const c = this._chart;
+    if (!c) return true;
+    const series = c.getModel().getSeriesByIndex(0);
+    const data = series && series.getData ? series.getData() : null;
+    if (!data) return false;
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, n = 0;
+    for (let i = 0; i < data.count(); i++) {
+      const lay = data.getItemLayout(i);            // graph 布局 = [x, y] 像素(图坐标系)
+      if (!lay || lay.length < 2 || isNaN(lay[0])) continue;
+      let px;
+      try { px = c.convertToPixel({ seriesIndex: 0 }, lay); } catch (e) { continue; }
+      n++;
+      x0 = Math.min(x0, px[0]); y0 = Math.min(y0, px[1]);
+      x1 = Math.max(x1, px[0]); y1 = Math.max(y1, px[1]);
+    }
+    if (n < 5) return false;
+    const el = document.getElementById("kb-graph");
+    const w = (el && el.clientWidth) || 1200, h = (el && el.clientHeight) || 700;
+    const cur = c.getOption().series[0].zoom || 1;      // 当前缩放(convertToPixel 坐标含它)
+    const ratio = Math.min(w / Math.max(60, x1 - x0), h / Math.max(60, y1 - y0)) * 0.78;   // 余量留足,容忍布局微扩
+    const z = Math.max(0.05, Math.min(1.6, cur * ratio)); // 相对当前缩放修正
+    // 布局还在展开(坐标剧变)时不稳定,等 ratio 收敛
+    if (Math.abs(ratio - this._lastFitZ) > 0.03 && this._fitTry < 6) {
+      this._lastFitZ = ratio;
+      return false;
+    }
+    this._fitDone = true;
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    c.setOption({ series: [{ zoom: z, center: [cx / w * 100 + "%", cy / h * 100 + "%"] }] }, { silent: true });
+    return true;
+  },
+
   /* 初始适配:按坐标包络盒算 zoom,仅布局模式变化或首次时重置(不打扰用户缩放) */
   _fitZoomFor(mode, nodes) {
     if (mode === "force") return 1;
@@ -165,6 +212,7 @@ const KbView = {
     if (!el || !this._cats.length) return;
     if (!this._chart) {
       this._chart = echarts.init(el);
+
       this._chart.on("click", (p) => {
         const d = p.data || {};
         if (d.kind === "page") this.openPage(d.id);
@@ -287,13 +335,14 @@ const KbView = {
         select: { label: { show: true, fontSize: 12, fontWeight: 700 }, itemStyle: { shadowBlur: 14 } },
         // 初始全图视野:按节点包络盒适配缩放(进入即看到全部节点);用户缩放后不重置
         center: ["50%", "50%"],
-        zoom: this._fitZoomFor(mode, nodes),
+        zoom: mode === "force" ? 0.6 : this._fitZoomFor(mode, nodes),   // force: 先给个中远景,收敛后 fitAll
         label: { position: "right", distance: 4 },
         lineStyle: { curveness: 0.05 },
         data: nodes, links,
       }],
     }, true);
     this.stopSpin();  // 删除前无公转
+    if (mode === "force") this.scheduleFit();
     document.getElementById("kb-legend").innerHTML = legend
       .map((l) => `<span class="kb-lg${this._catFilter === l.name ? " on" : ""}" data-cat="${l.name.replace(/"/g, "&quot;")}"><span class="gt-dot" style="background:${l.color}"></span>${l.emoji} ${l.name} <i>${l.n}</i></span>`).join("");
     document.querySelectorAll("#kb-legend .kb-lg").forEach((e2) =>
