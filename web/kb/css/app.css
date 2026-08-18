@@ -3991,3 +3991,18 @@ select option { text-align: center; }
 .manju-list .shelf-head { padding-top: 0; }
 .manju-list .shelf-head::before,
 .manju-list .shelf-head::after { display: none; }
+
+/* 小说/ComfyUI 页头参考漫剧管理:细分隔线 + 渐变标题 */
+#view-novel .hrs-head,
+.view-comfy .hrs-head {
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+#view-novel .hrs-head h1,
+.view-comfy .hrs-head h1 {
+  background: linear-gradient(100deg, var(--text) 20%, var(--accent) 60%, var(--accent-2) 95%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
