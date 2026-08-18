@@ -1376,7 +1376,6 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 				continue
 			}
 		}
-		cacheName := ctx.shotCacheName(s)
 		// 流水线预编码:当前镜渲染等待期间,后台预提交下一镜的 Qwen3-VL 编码
 		// (GPU 渲染与文本编码可并行,镜头间空窗从「编码+渲染」串行缩短为约一帧渲染时长)
 		var preErr error
@@ -1392,55 +1391,10 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 				}()
 			}
 		}
-		if err := ctx.ensureEncoded(s, cacheName, lg); err != nil {
+		if err := ctx.renderSingleShot(s, idxOf[s.ID], lg); err != nil {
 			preWg.Wait()
-			return fmt.Errorf("镜头 %d 预编码失败: %w", s.ID, err)
+			return err
 		}
-		idx := idxOf[s.ID]
-		chained := idx > 1 && fileExists(h3ContextLatentPath(ctx.comfyOutput, idx-1))
-		wf := h3RenderWorkflow(ctx.R, ctx.seed, ctx.w, ctx.h, h3Length(s.Duration, ctx.fps),
-			ctx.steps, cacheName, len(s.Characters) > 0, chained, idx-1, idx)
-		pid, err := ctx.comfy.submit(wf)
-		if err != nil {
-			preWg.Wait()
-			return fmt.Errorf("镜头 %d 提交失败: %w", s.ID, err)
-		}
-		lg.logf("  渲染提交 " + pid[:8] + "...")
-		t0 := time.Now()
-		if err := ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second); err != nil {
-			// 中断(网页取消/重启 ComfyUI)自动重试一次
-			if strings.Contains(err.Error(), "interrupt") || strings.Contains(err.Error(), "中断") {
-				lg.logf("  ⚠️ 渲染被中断,5 秒后自动重试...")
-				time.Sleep(5 * time.Second)
-				if lg.stopped() {
-					preWg.Wait()
-					return fmt.Errorf("已停止")
-				}
-				pid, err = ctx.comfy.submit(wf)
-				if err != nil {
-					preWg.Wait()
-					return fmt.Errorf("镜头 %d 重试提交失败: %w", s.ID, err)
-				}
-				if err = ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second); err != nil {
-					preWg.Wait()
-					return fmt.Errorf("镜头 %d 渲染失败(重试后): %w", s.ID, err)
-				}
-			} else {
-				preWg.Wait()
-				return fmt.Errorf("镜头 %d 渲染失败: %w", s.ID, err)
-			}
-		}
-		entry := ctx.comfy.history(pid)
-		rel := comfyOutputVideo(entry)
-		if rel == "" {
-			preWg.Wait()
-			return fmt.Errorf("镜头 %d 任务完成但未找到视频输出", s.ID)
-		}
-		if err := copyFile(filepath.Join(ctx.comfyOutput, rel), dst); err != nil {
-			preWg.Wait()
-			return fmt.Errorf("镜头 %d 复制视频失败: %w", s.ID, err)
-		}
-		lg.logf(fmt.Sprintf("  ✅ 镜头 %d 完成（%.1f 分）-> %s", s.ID, time.Since(t0).Minutes(), dst))
 		// 等预编码收尾(通常渲染期间早已完成);失败在下一镜自己的 ensureEncoded 处暴露
 		preWg.Wait()
 		if preErr != nil {
@@ -1448,6 +1402,55 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 		}
 	}
 	lg.logf("🎉 渲染完成 -> " + clipsEp)
+	return nil
+}
+
+// renderSingleShot 渲染单个镜头(编码→提交→等待→取回;中断自动重试一次)。
+// stageRender 与 Agent 流水线(单镜渲完即审)共用。
+func (ctx *manjuCtx) renderSingleShot(s manjuShot, idx int, lg *manjuLogger) error {
+	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
+	dst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
+	cacheName := ctx.shotCacheName(s)
+	if err := ctx.ensureEncoded(s, cacheName, lg); err != nil {
+		return fmt.Errorf("镜头 %d 预编码失败: %w", s.ID, err)
+	}
+	chained := idx > 1 && fileExists(h3ContextLatentPath(ctx.comfyOutput, idx-1))
+	wf := h3RenderWorkflow(ctx.R, ctx.seed, ctx.w, ctx.h, h3Length(s.Duration, ctx.fps),
+		ctx.steps, cacheName, len(s.Characters) > 0, chained, idx-1, idx)
+	pid, err := ctx.comfy.submit(wf)
+	if err != nil {
+		return fmt.Errorf("镜头 %d 提交失败: %w", s.ID, err)
+	}
+	lg.logf("  渲染提交 " + pid[:8] + "...")
+	t0 := time.Now()
+	if err := ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second); err != nil {
+		// 中断(网页取消/重启 ComfyUI)自动重试一次
+		if strings.Contains(err.Error(), "interrupt") || strings.Contains(err.Error(), "中断") {
+			lg.logf("  ⚠️ 渲染被中断,5 秒后自动重试...")
+			time.Sleep(5 * time.Second)
+			if lg.stopped() {
+				return fmt.Errorf("已停止")
+			}
+			pid, err = ctx.comfy.submit(wf)
+			if err != nil {
+				return fmt.Errorf("镜头 %d 重试提交失败: %w", s.ID, err)
+			}
+			if err = ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second); err != nil {
+				return fmt.Errorf("镜头 %d 渲染失败(重试后): %w", s.ID, err)
+			}
+		} else {
+			return fmt.Errorf("镜头 %d 渲染失败: %w", s.ID, err)
+		}
+	}
+	entry := ctx.comfy.history(pid)
+	rel := comfyOutputVideo(entry)
+	if rel == "" {
+		return fmt.Errorf("镜头 %d 任务完成但未找到视频输出", s.ID)
+	}
+	if err := copyFile(filepath.Join(ctx.comfyOutput, rel), dst); err != nil {
+		return fmt.Errorf("镜头 %d 复制视频失败: %w", s.ID, err)
+	}
+	lg.logf(fmt.Sprintf("  ✅ 镜头 %d 完成（%.1f 分）-> %s", s.ID, time.Since(t0).Minutes(), dst))
 	return nil
 }
 

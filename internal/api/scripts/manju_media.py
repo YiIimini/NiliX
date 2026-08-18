@@ -66,6 +66,19 @@ def cmd_qc(args):
     if not files:
         print("❌ 目录无 mp4: " + args.dir)
         sys.exit(1)
+    # --shots 单镜过滤(Agent 流水线逐镜审片只检当前镜头,如 "3" 或 "1,3";自动兼容 03.mp4 补零名)
+    if args.shots:
+        wanted = set()
+        for x in args.shots.split(","):
+            x = x.strip()
+            if x:
+                wanted.add(x)
+                if x.isdigit():
+                    wanted.add(x.zfill(2))
+        files = [f for f in files if f.rsplit(".", 1)[0] in wanted or f in wanted]
+        if not files:
+            print("❌ --shots 未命中任何镜头")
+            sys.exit(1)
     print(f"质检 {len(files)} 个镜头（近黑帧阈值 {args.threshold}）")
     bad = []
     report = {"shots": {}}
@@ -771,6 +784,7 @@ def main():
     q.add_argument("--dir", required=True)
     q.add_argument("--threshold", type=float, default=0.5)
     q.add_argument("--json", default="")
+    q.add_argument("--shots", default="", help="只质检指定镜头(如 3 或 1,3;空=全部)")
     fr = sub.add_parser("frames")
     fr.add_argument("--video", required=True)
     fr.add_argument("--out-dir", required=True)

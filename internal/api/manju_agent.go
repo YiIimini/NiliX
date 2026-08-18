@@ -312,9 +312,11 @@ func manjuAgentPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
 		case "encode":
 			err = stageEncode(ctx, lg)
 		case "render":
-			err = stageRender(ctx, lg)
+			// Agent 全权流水线:单镜渲完即审片,不合格当场修提示词排队重渲(预算内),
+			// 渲染+审片+返工在 render 阶段一体完成;qc 阶段只剩统一收尾核对
+			err = agentRenderPipeline(ctx, lg, acfg)
 		case "qc":
-			err = agentJudgeAndRework(ctx, lg, acfg)
+			err = agentJudgeRemaining(ctx, lg, acfg)
 		case "assemble":
 			err = stageAssemble(ctx, lg)
 		}
@@ -603,10 +605,15 @@ func (ctx *manjuCtx) runMediaOut(args ...string) (string, error) {
 }
 
 // runQCJSON 机械质检并返回问题镜头报告 {镜头ID: flags}
-func (ctx *manjuCtx) runQCJSON(lg *manjuLogger, clipsEp string) (map[int][]string, error) {
+// runQCJSON 机械质检并返回问题镜头报告 {镜头ID: flags};onlyShots 非空时只检指定镜(如 "3"/"1,3")
+func (ctx *manjuCtx) runQCJSON(lg *manjuLogger, clipsEp, onlyShots string) (map[int][]string, error) {
 	jsonPath := filepath.Join(os.TempDir(), fmt.Sprintf("manju_qc_%d.json", time.Now().UnixNano()))
 	defer os.Remove(jsonPath)
-	if _, err := ctx.runMediaOut("qc", "--dir", clipsEp, "--json", jsonPath); err != nil {
+	args := []string{"qc", "--dir", clipsEp, "--json", jsonPath}
+	if onlyShots != "" {
+		args = append(args, "--shots", onlyShots)
+	}
+	if _, err := ctx.runMediaOut(args...); err != nil {
 		// 质检脚本自身失败(如目录空):不影响判分流程,视为无机械问题
 		lg.logf("  ⚠️ 机械质检异常(忽略,继续审片): " + err.Error())
 		return map[int][]string{}, nil
@@ -865,6 +872,246 @@ func (ctx *manjuCtx) updateShotPrompt(s manjuShot, newPrompt string) error {
 	return nil
 }
 
+// ---- Agent 全权流水线:单镜渲染 → 即时审片 → 不合格修复提示词排队重渲 → 统一收尾 ----
+
+// agentRenderPipeline 智能一条龙 render 阶段主体(替代整段渲完再统一审):
+// 逐镜「渲染→机械质检+ASR 台词核对+视觉判分」;不合格镜头当场由修复师改写 H3 提示词,
+// 删产物进重渲队列(每镜预算 acfg.MaxRetries 轮);预算耗尽升级待人拍板;全部通过后
+// 由 qc 阶段收尾汇总、assemble 统一合成成片。
+func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) error {
+	plan, shots, err := ctx.ensurePlanAndPrompts(lg)
+	if err != nil {
+		return err
+	}
+	selected := ctx.selectedShots(shots)
+	if len(selected) == 0 {
+		lg.logf("  ⏭ 没有需要处理的镜头")
+		return nil
+	}
+	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
+	if err := os.MkdirAll(clipsEp, 0755); err != nil {
+		return err
+	}
+	idxOf := map[int]int{}
+	for i, s := range shots {
+		idxOf[s.ID] = i + 1
+	}
+	lg.logf(fmt.Sprintf("🤖 Agent 流水线启动: %d 镜 · 单镜渲完即审(质检+ASR+判分) · 不合格修复提示词排队重渲(预算 %d 轮)",
+		len(selected), acfg.MaxRetries))
+
+	queue := selected
+	passed := 0
+	escCount := 0
+	for len(queue) > 0 && !lg.stopped() {
+		var redo []manjuShot
+		for _, s := range queue {
+			if lg.stopped() {
+				return fmt.Errorf("已停止")
+			}
+			dst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
+			if fileExists(dst) {
+				lg.logf(fmt.Sprintf("♻️ 镜头 %d 已有产物,直接进入审片", s.ID))
+			} else {
+				if err := ctx.renderSingleShot(s, idxOf[s.ID], lg); err != nil {
+					return err
+				}
+			}
+			// 即时审片:机械质检 + ASR 台词核对 + 视觉判分(结论落 agent_state)
+			lg.logf(fmt.Sprintf("🤖 审片官接管镜头 %d ...", s.ID))
+			failed := agentJudgeOneShot(ctx, lg, acfg, plan, s)
+			if len(failed) == 0 {
+				passed++
+				continue
+			}
+			// 失败处置:无视觉模型或预算耗尽 → 升级;否则修复师改提示词排队重渲
+			jd := loadAgentStateShot(ctx.project, s.ID)
+			if !acfg.VisionReady() {
+				reason := strings.Join(append(jd.QCFlags, "机械质检/台词未过(未配置视觉模型,不判分)"), ";")
+				escalateShot(ctx, lg, s.ID, jd.Score, reason, acfg)
+				escCount++
+				continue
+			}
+			if jd.Retries >= acfg.MaxRetries {
+				reason := strings.Join(jd.Issues, ";")
+				if reason == "" {
+					reason = strings.Join(jd.QCFlags, ";")
+				}
+				if reason == "" {
+					reason = fmt.Sprintf("判分 %.0f 未达 %.0f(重渲 %d 轮耗尽)", jd.Score, acfg.PassScore, jd.Retries)
+				}
+				escalateShot(ctx, lg, s.ID, jd.Score, reason, acfg)
+				lg.logf(fmt.Sprintf("🚨 镜头 %d 预算耗尽,升级待人拍板", s.ID))
+				escCount++
+				continue
+			}
+			// 修复师:按审片意见改写 H3 提示词 → 删旧产物排队重渲
+			charMap, sceneMap := planCharSceneMaps(plan)
+			np, ferr := agent.FixPrompt(manjuAgentLLM{ctx.llm}, shotMetaFromPlan(s, charMap, sceneMap, manjuStyleDesc(ctx.style).asset), s.H3Prompt, jd)
+			if ferr == nil {
+				if uerr := ctx.updateShotPrompt(s, np); uerr == nil {
+					s.H3Prompt = np
+					lg.logf(fmt.Sprintf("  ✏️ 镜头 %d 提示词已按审片意见修复(%d 字)", s.ID, len([]rune(np))))
+				} else {
+					lg.logf("  ⚠️ 镜头 " + strconv.Itoa(s.ID) + " 提示词回写失败(按原提示词重渲): " + uerr.Error())
+				}
+			} else {
+				lg.logf("  ⚠️ 镜头 " + strconv.Itoa(s.ID) + " 修复师失败(按原提示词重渲染): " + truncate(ferr.Error(), 120))
+			}
+			ctx.clearShotArtifacts(s)
+			bumpAgentRetries(ctx.project, s.ID)
+			redo = append(redo, s)
+			lg.logf(fmt.Sprintf("  🔁 镜头 %d 排队重渲(第 %d/%d 轮)", s.ID, jd.Retries+1, acfg.MaxRetries))
+		}
+		queue = redo
+	}
+	if lg.stopped() {
+		return fmt.Errorf("已停止")
+	}
+	if escCount > 0 {
+		lg.logf(fmt.Sprintf("⚠️ %d 个镜头升级待拍板(工作台「审片报告」可重试/忽略),成片继续合成", escCount))
+	} else {
+		lg.logf(fmt.Sprintf("🎉 审片全部通过:%d 镜(含返工通过)", passed))
+	}
+	return nil
+}
+
+// agentJudgeOneShot 单镜即时审片:质检(--shots 单镜) + ASR(--shots 单镜) + 视觉判分,
+// 结论/返工计数落 agent_state;返回失败镜头 ID 列表(空=通过)。
+func agentJudgeOneShot(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config, plan map[string]any, s manjuShot) []int {
+	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
+	qcBad, _ := ctx.runQCJSON(lg, clipsEp, strconv.Itoa(s.ID))
+	planPath := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
+	if asrBad := ctx.runASRCheck(lg, clipsEp, []manjuShot{s}, planPath); len(asrBad) > 0 {
+		if qcBad == nil {
+			qcBad = asrBad
+		} else {
+			for id, flags := range asrBad {
+				qcBad[id] = append(qcBad[id], flags...)
+			}
+		}
+	}
+	return ctx.judgeShots(lg, acfg, plan, []manjuShot{s}, qcBad)
+}
+
+// agentJudgeRemaining qc 阶段收尾:补审漏网镜头(中断续跑等场景)+ 学习记忆汇总。
+func agentJudgeRemaining(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) error {
+	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
+	if entries, err := os.ReadDir(clipsEp); err != nil || len(entries) == 0 {
+		lg.logf("  ⏭ 该集无镜头可审片，跳过")
+		return nil
+	}
+	plan, shots, err := ctx.ensurePlanAndPrompts(lg)
+	if err != nil {
+		return err
+	}
+	selected := ctx.selectedShots(shots)
+	// 补审:有产物但无判分记录的镜头(流水线被中断后续跑)
+	st := loadAgentState(ctx.project)
+	var missed []manjuShot
+	for _, s := range selected {
+		if !fileExists(filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))) {
+			continue
+		}
+		if st.Shots[strconv.Itoa(s.ID)] == nil {
+			missed = append(missed, s)
+		}
+	}
+	if st.Episode != ctx.episode {
+		// 换集:翻页(审片状态由流水线重写,此处只兜底)
+		st.Episode = ctx.episode
+	}
+	if len(missed) > 0 {
+		lg.logf(fmt.Sprintf("🤖 补审 %d 个漏审镜头(中断续跑)", len(missed)))
+		qcBad, _ := ctx.runQCJSON(lg, clipsEp, "")
+		planPath := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
+		if asrBad := ctx.runASRCheck(lg, clipsEp, missed, planPath); len(asrBad) > 0 {
+			for id, flags := range asrBad {
+				qcBad[id] = append(qcBad[id], flags...)
+			}
+		}
+		failed := ctx.judgeShots(lg, acfg, plan, missed, qcBad)
+		if len(failed) > 0 && acfg.VisionReady() {
+			// 补审未过的镜头走一轮定点修复重渲(与流水线同规则)
+			var redo []manjuShot
+			for _, s := range missed {
+				for _, id := range failed {
+					if s.ID == id {
+						redo = append(redo, s)
+					}
+				}
+			}
+			for _, s := range redo {
+				jd := loadAgentStateShot(ctx.project, s.ID)
+				charMap, sceneMap := planCharSceneMaps(plan)
+				if np, ferr := agent.FixPrompt(manjuAgentLLM{ctx.llm}, shotMetaFromPlan(s, charMap, sceneMap, manjuStyleDesc(ctx.style).asset), s.H3Prompt, jd); ferr == nil {
+					if uerr := ctx.updateShotPrompt(s, np); uerr == nil {
+						s.H3Prompt = np
+					}
+				}
+				ctx.clearShotArtifacts(s)
+				bumpAgentRetries(ctx.project, s.ID)
+				if err := ctx.renderSingleShot(s, 0, lg); err != nil {
+					lg.logf("  ⚠️ 补审重渲失败: " + err.Error())
+					continue
+				}
+				ctx.judgeShots(lg, acfg, plan, []manjuShot{s}, nil)
+			}
+		}
+	}
+	return agentSummarizeJudging(ctx, lg)
+}
+
+// agentSummarizeJudging 学习记忆汇总:返工轮数/审片均分趋势/高频问题统计(落 agent_state)
+func agentSummarizeJudging(ctx *manjuCtx, lg *manjuLogger) error {
+	manjuAgentMu.Lock()
+	defer manjuAgentMu.Unlock()
+	stm := loadAgentStateLocked(ctx.project)
+	total, cnt := 0.0, 0
+	for _, j := range stm.Shots {
+		if j.Score > 0 {
+			total += j.Score
+			cnt++
+		}
+		stm.Memory.ReworkCount += j.Retries // 本集各镜返工轮数累计
+		for _, is := range j.Issues {
+			is = strings.TrimSpace(is)
+			if is != "" {
+				stm.Memory.IssueStats[is]++
+			}
+		}
+	}
+	if cnt > 0 {
+		stm.Memory.ScoreTrend = append(stm.Memory.ScoreTrend, manjuScorePoint{
+			Episode: ctx.episode, Score: total / float64(cnt), Count: cnt, At: time.Now().Unix()})
+		if len(stm.Memory.ScoreTrend) > 30 {
+			stm.Memory.ScoreTrend = stm.Memory.ScoreTrend[len(stm.Memory.ScoreTrend)-30:]
+		}
+		stm.Memory.JudgedShots += cnt
+	}
+	// IssueStats 防膨胀:只保留 top 60
+	if len(stm.Memory.IssueStats) > 60 {
+		type kv struct{ k string; v int }
+		var arr []kv
+		for k, v := range stm.Memory.IssueStats {
+			arr = append(arr, kv{k, v})
+		}
+		sort.Slice(arr, func(i, j int) bool { return arr[i].v > arr[j].v })
+		nw := map[string]int{}
+		for i, it := range arr {
+			if i >= 60 {
+				break
+			}
+			nw[it.k] = it.v
+		}
+		stm.Memory.IssueStats = nw
+	}
+	saveAgentStateLocked(ctx.project, stm)
+	if cnt > 0 {
+		lg.logf(fmt.Sprintf("🧠 本集审片汇总:%d 镜 · 均分 %.0f(学习档案已更新)", cnt, total/float64(cnt)))
+	}
+	return nil
+}
+
 // agentJudgeAndRework 智能模式 qc 阶段主体:机械质检 → 审片 → 返工闭环 → 升级。
 // 永不因个别镜头失败中断整集(例外升级给人,成片继续合成)。
 func agentJudgeAndRework(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) error {
@@ -882,7 +1129,7 @@ func agentJudgeAndRework(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 		lg.logf("  ⏭ 没有需要处理的镜头")
 		return nil
 	}
-	qcBad, _ := ctx.runQCJSON(lg, clipsEp)
+	qcBad, _ := ctx.runQCJSON(lg, clipsEp, "")
 	// ASR 台词核对:有台词镜头本地转写比对(不符进失败集触发返工;不可用自动降级)
 	planPath := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
 	if asrBad := ctx.runASRCheck(lg, clipsEp, selected, planPath); len(asrBad) > 0 {
@@ -956,7 +1203,7 @@ func agentJudgeAndRework(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 				}
 			}
 		}
-		qcBad2, _ := ctx.runQCJSON(lg, clipsEp)
+		qcBad2, _ := ctx.runQCJSON(lg, clipsEp, "")
 		failed = ctx.judgeShots(lg, acfg, plan2, redoShots, qcBad2)
 	}
 
