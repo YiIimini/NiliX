@@ -3801,14 +3801,14 @@ select option { text-align: center; }
   position: relative;
   min-width: 120px; max-width: 240px;
   padding: 13px 20px 16px;
-  font-size: 12.5px; line-height: 1.6; color: #4a3038;
+  font-size: 12.5px; line-height: 1.6; color: #31445e;
   letter-spacing: 0.2px;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
   border-radius: 24px 24px 10px 24px;
   background:
     radial-gradient(120% 90% at 15% -15%, rgba(255, 255, 255, 0.95), transparent 55%),
-    radial-gradient(100% 130% at 100% 115%, rgba(255, 210, 226, 0.8), transparent 60%),
-    linear-gradient(165deg, #fff9fb 0%, #ffeef4 50%, #ffdce9 100%);
+    radial-gradient(100% 130% at 100% 115%, rgba(190, 214, 248, 0.85), transparent 62%),
+    linear-gradient(165deg, #fdfeff 0%, #f2f7ff 50%, #e4edfc 100%);   /* 冷暖白偏蓝 */
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.65);
 }
 /* 顶部左凸起(云朵感) + 居中尖尾(伪元素不受 textContent 清空影响) */
@@ -3816,15 +3816,15 @@ select option { text-align: center; }
   content: "";
   position: absolute; top: -7px; left: 16px;
   width: 44px; height: 26px; border-radius: 50%;
-  background: linear-gradient(165deg, #fff9fb 0%, #ffeef4 80%);
-  box-shadow: inset 0 -3px 6px rgba(255, 200, 220, 0.5);
+  background: linear-gradient(165deg, #fdfeff 0%, #f2f7ff 80%);
+  box-shadow: inset 0 -3px 6px rgba(190, 214, 248, 0.5);
   pointer-events: none;
 }
 .ai-bubble::after {
   content: "";
   position: absolute; left: 50%; bottom: -9px; transform: translateX(-50%);
   width: 16px; height: 12px; clip-path: polygon(0 0, 100% 0, 50% 100%);
-  background: linear-gradient(180deg, #ffeef4 0%, #ffdce9 100%);
+  background: linear-gradient(180deg, #f2f7ff 0%, #e4edfc 100%);
   pointer-events: none;
 }
 /* 顶部弧形高光(玻璃折射感) */

@@ -474,13 +474,15 @@ const App = {
     };
     m.addEventListener("pointerup", up);
     m.addEventListener("pointercancel", up);
-    // 随机漫步调度(拖拽中不打扰;间隔由设置·AI助手·闲逛间隔决定)
+    // 随机漫步调度:小距离微步(当前位置附近 ±60~150px,像闲逛不是跑路)
     const wander = () => {
       if (!down && (!App.prefs || App.prefs.aiWander)) {
+        const r = m.getBoundingClientRect();
         const w = m.offsetWidth, h = m.offsetHeight;
-        const x = 40 + Math.random() * Math.max(60, innerWidth - w - 80);
-        const y = 80 + Math.random() * Math.max(60, innerHeight - h - 170);
-        this.mascotWalkTo(x, y);
+        const nx = r.left + (Math.random() * 180 - 90);   // 左右小挪
+        const ny = r.top + (Math.random() * 160 - 80);    // 上下小挪
+        m.style.left = Math.max(8, Math.min(innerWidth - w - 8, nx)) + "px";
+        m.style.top = Math.max(56, Math.min(innerHeight - h - 12, ny)) + "px";
       }
       clearTimeout(this._mwT);
       const base = (App.prefs && App.prefs.aiWanderInt) || 11000;
