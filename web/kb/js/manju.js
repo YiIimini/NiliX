@@ -1721,9 +1721,9 @@
         : "";
       this.openModal(`${cur.name || "预览"}（${i + 1}/${list.length}）`,
         `<div class="manju-img-preview">
+          ${arrows}
           <div class="manju-pv-stage">
             <img src="/api/fs/file?path=${encodeURIComponent(cur.path)}" alt="">
-            ${arrows}
             ${list.length > 1 ? `<span class="manju-pv-count">${i + 1} / ${list.length}</span>` : ""}
           </div>
         </div>`);

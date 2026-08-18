@@ -32,8 +32,7 @@ const App = {
         }
       }
     });
-    const mascot = document.getElementById("ai-mascot");
-    if (mascot) mascot.addEventListener("click", () => { location.hash = "#/manju"; });
+    this.mascotInit();
     this.mascotLoop();
     this.applyNavVisibility();
     this.route();
@@ -361,6 +360,57 @@ const App = {
   updateLive(elId) {
     const el = document.getElementById(elId);
     if (el) el.textContent = I18N.t("live.refreshed") + " " + new Date().toLocaleTimeString();
+  },
+
+  /* 助手交互:可随意拖拽;闲时每 9-16s 随机漫步(视口内);点击(未拖动)跳工作台 */
+  mascotInit() {
+    const m = document.getElementById("ai-mascot");
+    if (!m || m._init) return;
+    m._init = true;
+    const r = m.getBoundingClientRect();
+    m.style.right = "auto"; m.style.bottom = "auto";
+    m.style.left = Math.max(8, r.left) + "px";
+    m.style.top = Math.max(56, r.top) + "px";
+    m.style.transition = "left 1.15s cubic-bezier(.45,.05,.35,1), top 1.15s cubic-bezier(.45,.05,.35,1)";
+    m.style.cursor = "grab";
+    let sx = 0, sy = 0, ox = 0, oy = 0, moved = false, down = false;
+    m.addEventListener("pointerdown", (e) => {
+      down = true; moved = false; sx = e.clientX; sy = e.clientY;
+      const b = m.getBoundingClientRect(); ox = b.left; oy = b.top;
+      try { m.setPointerCapture(e.pointerId); } catch (err) {}
+      m.style.transition = "none"; m.style.cursor = "grabbing";
+      e.preventDefault();
+    });
+    m.addEventListener("pointermove", (e) => {
+      if (!down) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) + Math.abs(dy) > 6) moved = true;
+      if (moved) {
+        const w = m.offsetWidth, h = m.offsetHeight;
+        m.style.left = Math.min(innerWidth - w - 6, Math.max(6, ox + dx)) + "px";
+        m.style.top = Math.min(innerHeight - h - 6, Math.max(56, oy + dy)) + "px";
+      }
+    });
+    const up = () => {
+      if (!down) return;
+      down = false;
+      m.style.transition = ""; m.style.cursor = "grab";
+      if (!moved) location.hash = "#/manju";
+    };
+    m.addEventListener("pointerup", up);
+    m.addEventListener("pointercancel", up);
+    // 随机漫步:拖拽中不打扰;忙态(busy)漫步更勤快点
+    const wander = () => {
+      if (!down) {
+        const w = m.offsetWidth, h = m.offsetHeight;
+        const x = 40 + Math.random() * Math.max(60, innerWidth - w - 80);
+        const y = 80 + Math.random() * Math.max(60, innerHeight - h - 170);
+        m.style.left = x + "px"; m.style.top = y + "px";
+      }
+      clearTimeout(this._mwT);
+      this._mwT = setTimeout(wander, 9000 + Math.random() * 7000);
+    };
+    this._mwT = setTimeout(wander, 6000);
   },
 
   /* 助手状态汇总:一处逻辑,manju 页轮询与全局轮询共用 */

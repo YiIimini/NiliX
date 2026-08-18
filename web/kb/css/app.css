@@ -3044,7 +3044,7 @@ select.manju-input {
 .manju-vid-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; }
 
 /* 图片灯箱 / 视频播放器 */
-.manju-img-preview { display: flex; align-items: center; justify-content: center; padding: 6px 0; }
+.manju-img-preview { position: relative; display: flex; align-items: center; justify-content: center; padding: 6px 0; }
 .manju-img-preview img { max-width: 100%; max-height: 72vh; border-radius: 10px; object-fit: contain; display: block; }
 /* 预览翻页箭头:悬浮在图片两缘的玻璃圆钮,垂直居中(灯箱式) */
 .manju-pv-stage { position: relative; min-width: 0; display: flex; }
@@ -3061,8 +3061,9 @@ select.manju-input {
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
   transition: color 0.2s, border-color 0.2s, box-shadow 0.25s, background 0.25s, transform 0.2s, opacity 0.2s;
 }
-.manju-pv-arrow#mp-prev { left: 12px; }
-.manju-pv-arrow#mp-next { right: 12px; }
+/* 钉在弹窗左右两缘固定(上下居中),不随图片尺寸变化——按钮位置永远一致 */
+.manju-pv-arrow#mp-prev { left: 10px; }
+.manju-pv-arrow#mp-next { right: 10px; }
 .manju-pv-arrow:hover:not(:disabled) {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 22%, rgba(10, 12, 18, 0.55));
@@ -3854,3 +3855,6 @@ select option { text-align: center; }
 .kb-lg.on { color: var(--accent); border-color: var(--accent); box-shadow: 0 0 8px var(--glow); }
 .kb-lg i { font-style: normal; font-family: var(--font-mono); opacity: 0.7; }
 .gt-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+/* 助手可拖拽:触控禁默认手势,拖动中禁用过渡由 JS 控制 */
+#ai-mascot { touch-action: none; }
