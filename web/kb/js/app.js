@@ -1,4 +1,8 @@
 /* 应用外壳:路由 / 主题 / i18n / 星空背景 / 详情面板 */
+/* HTML 转义(全局独立,manju.js 的对象内同名函数不共享作用域) */
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
 const App = {
   theme: "nebula",
   style: "default",
@@ -9,6 +13,7 @@ const App = {
 
   loadPrefs() {
     const d = { aiOn: true, aiStatus: true, aiQuotes: true, aiWander: true, aiFreq: 22000, aiSize: 104, aiWanderInt: 11000,
+      aiChatHide: true, aiChatHideSec: 60, // 对话闲置自动收起:开关 + 秒数
       kbLayout: "force", kbShape: "mixed", kbCurve: 0.05, kbLineOp: 0.2, kbHoverLabel: true, kbLabels: 0,
       kbRepel: 260, kbDist: 100, kbGrav: 9 };
     let s = null;
@@ -31,6 +36,7 @@ const App = {
     chk("set-ai-quotes", P.aiQuotes); chk("set-ai-wander", P.aiWander);
     set("set-ai-freq", P.aiFreq); set("set-ai-size", P.aiSize);
     set("set-ai-wander-int", P.aiWanderInt);
+    chk("set-ai-chat-hide", P.aiChatHide); set("set-ai-chat-hide-sec", P.aiChatHideSec);
     const apply = () => {
       const m = document.getElementById("ai-mascot");
       if (m) {
@@ -50,12 +56,12 @@ const App = {
       }
       this.savePrefs();
     };
-    ["set-ai-on", "set-ai-status", "set-ai-quotes", "set-ai-wander"].forEach((id) =>
+    ["set-ai-on", "set-ai-status", "set-ai-quotes", "set-ai-wander", "set-ai-chat-hide"].forEach((id) =>
       el(id).addEventListener("change", (e) => {
-        const k = { "set-ai-on": "aiOn", "set-ai-status": "aiStatus", "set-ai-quotes": "aiQuotes", "set-ai-wander": "aiWander" }[id];
+        const k = { "set-ai-on": "aiOn", "set-ai-status": "aiStatus", "set-ai-quotes": "aiQuotes", "set-ai-wander": "aiWander", "set-ai-chat-hide": "aiChatHide" }[id];
         P[k] = e.target.checked; apply();
       }));
-    [["set-ai-freq", "aiFreq", parseInt], ["set-ai-size", "aiSize", parseInt], ["set-ai-wander-int", "aiWanderInt", parseInt]].forEach(([id, k, cast]) => {
+    [["set-ai-freq", "aiFreq", parseInt], ["set-ai-size", "aiSize", parseInt], ["set-ai-wander-int", "aiWanderInt", parseInt], ["set-ai-chat-hide-sec", "aiChatHideSec", parseInt]].forEach(([id, k, cast]) => {
       const e2 = el(id);
       if (e2) e2.addEventListener("change", () => { P[k] = cast(e2.value); apply(); });
     });
@@ -421,15 +427,17 @@ const App = {
     if (el) el.textContent = I18N.t("live.refreshed") + " " + new Date().toLocaleTimeString();
   },
 
-  /* 助手交互:可拖拽;一步步步行移动(不闪现);点击(未拖动)跳工作台 */
+  /* 助手交互:可拖拽;一步步步行移动(不闪现);默认停靠底部正中间;点击(未拖动)展开脚下输入框对话 */
   mascotInit() {
     const m = document.getElementById("ai-mascot");
     if (!m || m._init) return;
     m._init = true;
+    this.bindAiChat();
     const r = m.getBoundingClientRect();
     m.style.right = "auto"; m.style.bottom = "auto";
-    m.style.left = Math.max(8, r.left) + "px";
-    m.style.top = Math.max(56, r.top) + "px";
+    m.style.transform = "none"; // CSS 默认 translateX(-50%) 居中;转像素定位后不再偏移
+    m.style.left = Math.max(8, (innerWidth - r.width) / 2) + "px"; // 默认位置:底部正中间
+    m.style.top = Math.max(56, innerHeight - r.height - 18) + "px";
     m.style.cursor = "grab";
     let sx = 0, sy = 0, ox = 0, oy = 0, moved = false, down = false;
     m.addEventListener("pointerdown", (e) => {
@@ -454,7 +462,7 @@ const App = {
       if (!down) return;
       down = false;
       m.style.cursor = "grab";
-      if (!moved) location.hash = "#/manju";
+      if (!moved) this.toggleAiChat(); // 点击(未拖动)= 展开/收起对话输入框
     };
     m.addEventListener("pointerup", up);
     m.addEventListener("pointercancel", up);
@@ -483,6 +491,116 @@ const App = {
         if (q) this.mascotSay(q);
       }, 22000);
     }
+  },
+
+  /* 点击助手:由气泡展开/收起对话窗口;Esc 或闲置(设置可配)自动收起 */
+  toggleAiChat() {
+    const box = document.getElementById("ai-chat-box");
+    if (!box) return;
+    const open = box.classList.toggle("hidden") === false;
+    if (open) {
+      const inp = document.getElementById("ai-chat-input");
+      if (inp) inp.focus();
+    }
+    this.armAiChatIdle();
+  },
+
+  /* 闲置自动收起:无交互(输入/新回复)超过设定秒数自动隐藏;设置关闭则不隐藏 */
+  armAiChatIdle() {
+    clearTimeout(this._aiChatIdleT);
+    const P = this.prefs || {};
+    if (!P.aiChatHide) return;
+    const sec = Math.max(10, P.aiChatHideSec || 60) * 1000;
+    this._aiChatIdleT = setTimeout(() => {
+      const box = document.getElementById("ai-chat-box");
+      if (box && !box.classList.contains("hidden")) box.classList.add("hidden");
+    }, sec);
+  },
+
+  /* 输入框事件:Enter 发送(中文输入法选词回车不误发)、Esc 收起 */
+  bindAiChat() {
+    if (this._aiChatBound) return;
+    this._aiChatBound = true;
+    const send = () => {
+      const inp = document.getElementById("ai-chat-input");
+      if (!inp) return;
+      const v = inp.value.trim();
+      if (!v) return;
+      inp.value = "";
+      this.mascotChat(v);
+      this.armAiChatIdle();
+    };
+    const sb = document.getElementById("ai-chat-send");
+    if (sb) sb.addEventListener("click", send);
+    const inp = document.getElementById("ai-chat-input");
+    if (inp) inp.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter") send();
+    });
+    if (inp) inp.addEventListener("input", () => this.armAiChatIdle());
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      const box = document.getElementById("ai-chat-box");
+      if (box && !box.classList.contains("hidden")) box.classList.add("hidden");
+    });
+  },
+
+  /* 全局对话:调智能体聊天接口;回复显示在顶部回复横幅;action 在漫剧管理页委托其完整流程 */
+  mascotChat(text) {
+    this.aiReply("me", esc(text));
+    const wb = (typeof ManjuWorkbench !== "undefined") ? ManjuWorkbench : null;
+    const cfg = (wb && wb.project) || localStorage.getItem("manju-project") || "";
+    if (!cfg) {
+      this.aiReply("ag", "请先在<b>漫剧管理</b>页选择项目,我才能分析项目状态 🤖");
+      return;
+    }
+    const inManju = !!(wb && wb.project === cfg);
+    fetch("/api/manju/agent/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ config: cfg, text }),
+    }).then((r) => r.json()).then((d) => {
+      const reply = (d.reply || "…").split("\n").map(esc).join("<br>");
+      this.aiReply("ag", reply);
+      this.mascotSay(d.reply || "…");
+      if (d.action === "health") {
+        if (inManju) wb.openHealth();
+        else this.aiReply("ag", "👉 体检详情请到<b>漫剧管理</b>页查看(或点页面里的「🔍 项目体检」)");
+      } else if (d.action === "style") {
+        if (inManju && wb.styleAnalyze) {
+          this.aiReply("ag", "🤔 正在深度分析本章内容,推荐最匹配的渲染风格…");
+          wb.styleAnalyze().then((r2) => {
+            this.aiReply("ag", "✅ 风格已更新:<b>" + esc(wb.styleLabel(r2.old)) + "</b> → <b>" + esc(wb.styleLabel(r2.style)) + "</b>" + (r2.reason ? "(" + esc(r2.reason) + ")" : ""));
+          }).catch((e) => this.aiReply("ag", "❌ " + esc(e.message)));
+        } else {
+          this.aiReply("ag", "👉 风格分析需要项目上下文,请到<b>漫剧管理</b>页对我说「推荐风格」");
+        }
+      } else if (d.action === "fixall") {
+        if (inManju && wb.fixAllHealth) {
+          this.aiReply("ag", "🔧 正在自动处理可修复项…");
+          wb.fixAllHealth().then((fr) => {
+            this.aiReply("ag", fr.fixed.length ? "✅ 已修复:" + esc(fr.fixed.join("、")) : "ℹ️ 没有可自动修复的项");
+          }).catch((e) => this.aiReply("ag", "❌ " + esc(e.message)));
+        } else {
+          this.aiReply("ag", "👉 一键修复需要项目上下文,请到<b>漫剧管理</b>页对我说「修复」");
+        }
+      }
+    }).catch((e) => { this.aiReply("ag", "❌ " + esc(e.message)); });
+  },
+
+  /* 气泡对话框:追加一条问答(你/🤖),保留最近 10 条;新回复重置闲置计时 */
+  aiReply(who, html) {
+    const box = document.getElementById("ai-chat-box");
+    if (!box) return;
+    box.classList.remove("hidden");
+    const log = document.getElementById("ai-chat-log");
+    const item = document.createElement("div");
+    item.className = "ai-c-item " + who;
+    item.innerHTML = '<span class="ai-c-who">' + (who === "me" ? "你" : "🤖") + '</span><span class="ai-c-txt">' + html + "</span>";
+    log.appendChild(item);
+    while (log.children.length > 10) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+    this.armAiChatIdle();
   },
 
   /* 一步步步行:每 45ms 挪一小步(≈10px),朝目标走,不闪现 */
@@ -564,16 +682,11 @@ const App = {
     if (ctx) this.mascotSay(ctx[Math.floor(Math.random() * ctx.length)]);
     // 设置里关了闲逛移动 → 只在原地冒泡,不乱跑
     if (!this.prefs.aiWander) return;
-    // 就近停靠:走短距离(漫剧页右侧有悬浮栏,固定左下;其余页按当前位置选近侧底角)
+    // 默认停靠:底部正中间(用户可拖拽离开)
     const w = m.offsetWidth, h = m.offsetHeight;
-    const cur = m.getBoundingClientRect();
-    let tx, ty = innerHeight - h - 60 - Math.random() * 80;
-    if (route === "manju") {
-      tx = 60 + Math.random() * 120;
-    } else {
-      tx = cur.left < innerWidth / 2 ? 10 + Math.random() * 80 : innerWidth - w - 10 - Math.random() * 80;
-    }
-    this.mascotWalkTo(Math.max(10, tx), Math.max(60, ty));
+    const tx = Math.max(10, (innerWidth - w) / 2);
+    const ty = Math.max(60, innerHeight - h - 18);
+    this.mascotWalkTo(tx, ty);
   },
 
   /* 助手状态汇总:一处逻辑,manju 页轮询与全局轮询共用 */

@@ -436,10 +436,19 @@
     </section>
   </main>
 
-  <!-- 悬浮 AI 小助手:对话云朵实时播报 Agent/管线状态 -->
-  <div id="ai-mascot" title="AI 助手 · 点击前往漫剧工作台">
+  <!-- 悬浮 AI 小助手:对话云朵实时播报 Agent/管线状态;点击由气泡展开对话框对话 -->
+  <div id="ai-mascot" title="AI 助手 · 点击与我对话">
     <div id="ai-bubble" class="ai-bubble">AI 助手待命中 ✨</div>
     <img id="ai-avatar" src="/assets/anim01.webp" alt="AI 助手" draggable="false">
+  </div>
+
+  <!-- AI 对话窗口:由气泡展开(内容+输入一体);未对话闲置自动收起(设置可配) -->
+  <div id="ai-chat-box" class="hidden">
+    <div id="ai-chat-log"></div>
+    <div id="ai-chat-in">
+      <input id="ai-chat-input" placeholder="对智能体说…(体检 / 推荐风格 / 总结 / 修复)" spellcheck="false" autocomplete="off">
+      <button id="ai-chat-send" class="hrs-btn hrs-btn-primary">➤</button>
+    </div>
   </div>
 
   <!-- 小说阅读器:宽弹窗(正文 + 右侧章节目录,可手动隐藏) -->
@@ -637,6 +646,20 @@
               <option value="76">小</option>
               <option value="104">中(默认)</option>
               <option value="132">大</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">对话闲置隐藏</span>
+            <label class="toggle"><input type="checkbox" id="set-ai-chat-hide"><span class="tk"></span></label>
+            <span class="settings-hint">对话框无交互自动收起</span>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">闲置时长</span>
+            <select id="set-ai-chat-hide-sec" class="settings-input">
+              <option value="30">30 秒</option>
+              <option value="60">1 分钟</option>
+              <option value="120">2 分钟</option>
+              <option value="300">5 分钟</option>
             </select>
           </div>
         </div>
