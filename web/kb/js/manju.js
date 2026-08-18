@@ -1103,14 +1103,20 @@
       this.saveDraft();
     },
 
-    /* 自定义风格叠加到当前预设:预设在前、自定义词在后;与预设重复(大小写不敏感,含中文名)及自定义词内部重复均自动过滤 */
+    /* 自定义风格「应用」= 累加:新输入词追加到当前风格(预设+旧自定义 TAG)之后,
+    重复词自动过滤(大小写不敏感/含中文名);输入预设 key 或中文名(如 水墨)归一为
+    预设 key(对应按钮点亮);删除词走 TAG 右上角 × */
     combineCustom(v) {
-      const keys = this.styleKeys();
-      const parts = [...keys];
+      const parts = String(this.style || "").split("+").map((s) => s.trim()).filter(Boolean);
       const seen = new Set(parts.flatMap((k) => [k.toLowerCase(), (STYLE_CN[k] || "").toLowerCase()]).filter(Boolean));
       String(v).split(/[,+]+/).map((s) => s.trim()).filter(Boolean).forEach((s) => {
-        const lower = s.toLowerCase();
-        if (!seen.has(lower)) { seen.add(lower); parts.push(s); }
+        let norm = s;
+        const low = s.toLowerCase(), flat = low.replace(/\s+/g, "");
+        for (const [k, label] of STYLE_PRESETS) {
+          if (low === k || flat === String(label).replace(/\s+/g, "")) { norm = k; break; }
+        }
+        const key = norm.toLowerCase();
+        if (!seen.has(key)) { seen.add(key); parts.push(norm); }
       });
       return parts.join("+");
     },
