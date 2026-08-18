@@ -306,6 +306,28 @@ func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs [
 	return wf
 }
 
+// turboLoRASpec 不同 Turbo LoRA 的最优参数(按文件名识别,数据驱动可扩展):
+// 采样器/强度/推荐步数不兼容会明显劣化画质甚至出废片,换 LoRA 无需改代码。
+type turboLoRASpec struct {
+	Strength  float64
+	Sampler   string
+	Scheduler string
+	Steps     int
+	FL2VOnly  bool // FL2V 专用蒸馏版(Kijai LightX2V):R2V 镜头不挂,自动回退全步数
+}
+
+func turboLoRASpecOf(name string) turboLoRASpec {
+	n := strings.ToLower(name)
+	if strings.Contains(n, "lightx2v") || strings.Contains(n, "kijai") {
+		// Kijai LightX2V 4 步蒸馏版(HuggingFace Kijai/MiniMax-H3_comfy,ComfyUI 原生适配):
+		// 强度 0.75 + 采样器 sa_solver + 4 步(er_sde 亦可);音频质量比其它 4 步方案好。
+		// 注意:该版为 FL2V 蒸馏,R2V(角色镜头)不兼容——h3RenderWorkflow 会对 R2V 自动摘除
+		return turboLoRASpec{Strength: 0.75, Sampler: "sa_solver", Scheduler: "simple", Steps: 4, FL2VOnly: true}
+	}
+	// larryvrh 系 4step EMA 等旧默认(FL2V/R2V 通用)
+	return turboLoRASpec{Strength: 0.8, Sampler: "res_multistep", Scheduler: "simple", Steps: 8}
+}
+
 // h3RenderWorkflow 采样渲染工作流:CondLoad 加载条件缓存(跳过重复 Qwen3-VL 编码)
 // + EmptyMiniMaxH3LatentAV 空 AV latent + Turbo LoRA + 可选 MotionContext 接缝。
 // 有角色用 ref2va 模型,空镜用 fl2va;接缝时 LoadLatent(prevIdx) → MotionContext → Trim,
@@ -317,8 +339,27 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 		unetName = str(R["unet_fl2va"])
 	}
 	model := wfAdd(wf, "UNETLoader", map[string]any{"unet_name": unetName, "weight_dtype": "default"})
-	if lora := str(R["turbo_lora"]); lora != "" {
-		model = wfAdd(wf, "LoraLoaderModelOnly", map[string]any{"model": refOf(model), "lora_name": lora, "strength_model": 0.8})
+	// Turbo LoRA 选择与参数自动适配:
+	// - R2V(角色镜)优先 turbo_lora_r2v(未配置沿用 turbo_lora);
+	//   若解析到 FL2V 专用蒸馏版(Kijai LightX2V)则 R2V 自动摘除并回退全步数,防不兼容劣化
+	// - FL2V(空镜)用 turbo_lora;强度/采样器按 LoRA 类型参数表
+	loraName := str(R["turbo_lora"])
+	if hasChar {
+		if r2v := str(R["turbo_lora_r2v"]); r2v != "" {
+			loraName = r2v
+		}
+	}
+	spec := turboLoRASpecOf(loraName)
+	if hasChar && spec.FL2VOnly && str(R["turbo_lora_r2v"]) == "" {
+		// FL2V 专用 LoRA 不挂 R2V:LoRA/采样器/步数全部回退默认,保证角色镜质量
+		loraName = ""
+		spec = turboLoRASpecOf("")
+		if n, ok := manjuToInt(R["steps"]); ok && n > 0 {
+			steps = n
+		}
+	}
+	if loraName != "" {
+		model = wfAdd(wf, "LoraLoaderModelOnly", map[string]any{"model": refOf(model), "lora_name": loraName, "strength_model": spec.Strength})
 	}
 	vae := wfAdd(wf, "VAELoader", map[string]any{"vae_name": str(R["vae_video"])})
 	audioVae := wfAdd(wf, "VAELoader", map[string]any{"vae_name": str(R["vae_audio"])})
@@ -342,8 +383,9 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 
 	guider := wfAdd(wf, "BasicGuider", map[string]any{"model": refOf(model), "conditioning": refOf(condID)})
 	noise := wfAdd(wf, "RandomNoise", map[string]any{"noise_seed": seed})
-	sampler := wfAdd(wf, "KSamplerSelect", map[string]any{"sampler_name": "res_multistep"})
-	sched := wfAdd(wf, "BasicScheduler", map[string]any{"model": refOf(model), "scheduler": "simple", "steps": steps, "denoise": 1.0})
+	// 采样器随 Turbo LoRA 类型:Kijai LightX2V 4步版必须 sa_solver(er_sde 亦可),旧 larryvrh 系用 res_multistep
+	sampler := wfAdd(wf, "KSamplerSelect", map[string]any{"sampler_name": spec.Sampler})
+	sched := wfAdd(wf, "BasicScheduler", map[string]any{"model": refOf(model), "scheduler": spec.Scheduler, "steps": steps, "denoise": 1.0})
 	samp := wfAdd(wf, "SamplerCustomAdvanced", map[string]any{
 		"noise": refOf(noise), "guider": refOf(guider), "sampler": refOf(sampler),
 		"sigmas": refOf(sched), "latent_image": refOf(latentID),

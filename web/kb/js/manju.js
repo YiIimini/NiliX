@@ -988,7 +988,7 @@
       return ["manju-width", "manju-height", "manju-fps", "manju-steps", "manju-turbo", "manju-seed",
         "manju-minsec", "manju-maxsec", "manju-comfy-url", "manju-neg-prompt", "manju-unet-fl2va", "manju-unet-ref2va",
         "manju-clip", "manju-vae-video", "manju-vae-audio", "manju-zimage-unet", "manju-zimage-clip",
-        "manju-zimage-vae", "manju-turbo-lora", "manju-char-male", "manju-char-female", "manju-animagine",
+        "manju-zimage-vae", "manju-turbo-lora", "manju-turbo-lora-r2v", "manju-char-male", "manju-char-female", "manju-animagine",
         "manju-banned-words", "manju-mosaic-level"];
     },
     draftKey() { return "render-" + (this.project || ""); },
@@ -1040,6 +1040,7 @@
       set("manju-zimage-clip", R.z_image_clip);
       set("manju-zimage-vae", R.z_image_vae);
       set("manju-turbo-lora", R.turbo_lora);
+      set("manju-turbo-lora-r2v", R.turbo_lora_r2v);
       const cm = R.char_models || {};
       set("manju-char-male", cm["男"]);
       set("manju-char-female", cm["女"]);
@@ -1227,6 +1228,7 @@
       set("manju-zimage-clip", R.z_image_clip);
       set("manju-zimage-vae", R.z_image_vae);
       set("manju-turbo-lora", R.turbo_lora);
+      set("manju-turbo-lora-r2v", R.turbo_lora_r2v);
       const cm = R.char_models || {};
       set("manju-char-male", cm["男"]);
       set("manju-char-female", cm["女"]);
@@ -1314,7 +1316,7 @@
         comfy_url: "manju-comfy-url", neg_prompt: "manju-neg-prompt", unet_fl2va: "manju-unet-fl2va", unet_ref2va: "manju-unet-ref2va",
         clip: "manju-clip", vae_video: "manju-vae-video", vae_audio: "manju-vae-audio",
         z_image_unet: "manju-zimage-unet", z_image_clip: "manju-zimage-clip", z_image_vae: "manju-zimage-vae",
-        turbo_lora: "manju-turbo-lora",
+        turbo_lora: "manju-turbo-lora", turbo_lora_r2v: "manju-turbo-lora-r2v",
         chapters: "manju-chapters", episode: "manju-episode", shots: "manju-only",
       };
       return $(m[k]).value.trim();

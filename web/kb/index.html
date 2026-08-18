@@ -330,9 +330,10 @@
                 <div class="manju-field"><label>z_image_clip</label><select id="manju-zimage-clip" class="manju-input" data-model="z_image_clip"></select></div>
                 <div class="manju-field"><label>z_image_vae</label><select id="manju-zimage-vae" class="manju-input" data-model="z_image_vae"></select></div>
               </div>
-              <div class="manju-sub-title manju-sub-center">Turbo LoRA</div>
+              <div class="manju-sub-title manju-sub-center">Turbo LoRA（加速蒸馏;Kijai LightX2V 4步版自动按 0.75 强度/sa_solver/4 步适配,且只作用于空镜——R2V 角色镜可用 turbo_lora_r2v 单独指定）</div>
               <div class="manju-grid">
                 <div class="manju-field"><label>turbo_lora</label><select id="manju-turbo-lora" class="manju-input" data-model="turbo_lora"></select></div>
+                <div class="manju-field"><label>turbo_lora_r2v</label><select id="manju-turbo-lora-r2v" class="manju-input" data-model="turbo_lora_r2v" title="角色镜头(R2V)专用加速 LoRA;留空沿用 turbo_lora,FL2V 专用版会被自动摘除回退全步数"></select></div>
               </div>
               <div class="manju-sub-title manju-sub-center">人物一致性（角色 checkpoint，非写实风格定妆照用）</div>
               <div class="manju-grid">

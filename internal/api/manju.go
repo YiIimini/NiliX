@@ -84,7 +84,7 @@ var manjuRenderIntFields = map[string]manjuIntField{
 // manjuRenderStrFields 渲染参数字符串字段(模型名/地址 + 运行参数)
 var manjuRenderStrFields = []string{
 	"comfy_url", "neg_prompt", "unet_fl2va", "unet_ref2va", "clip", "vae_video", "vae_audio",
-	"z_image_unet", "z_image_clip", "z_image_vae", "turbo_lora", "animagine_ckpt",
+	"z_image_unet", "z_image_clip", "z_image_vae", "turbo_lora", "turbo_lora_r2v", "animagine_ckpt",
 	"chapters", "episode", "shots",
 }
 
@@ -854,7 +854,8 @@ var manjuModelDirs = map[string][]string{
 	"vae_video":    {"vae"},
 	"vae_audio":    {"vae"},
 	"z_image_vae":  {"vae"},
-	"turbo_lora":   {"loras"},
+	"turbo_lora":      {"loras"},
+	"turbo_lora_r2v":  {"loras"},
 	"char_male":    {"checkpoints"},
 	"char_female":  {"checkpoints"},
 	"animagine":    {"checkpoints"},

@@ -66,8 +66,16 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 	// 6. 渲染参数
 	steps, _ := manjuToInt(R["steps"])
 	turbo, _ := manjuToInt(R["turbo_steps"])
-	if s := str(R["turbo_lora"]); s != "" && steps > 0 && turbo > 0 && steps > turbo {
-		items = append(items, manjuHealthItem{Key: "render_steps", Label: "采样步数", Status: "warn", Detail: fmt.Sprintf("已配 Turbo LoRA(%s) 但步数=%d,建议 %d 步(约2.9倍提速)", s, steps, turbo), Fixable: true, FixHint: fmt.Sprintf("一键改为 %d 步", turbo)})
+	if s := str(R["turbo_lora"]); s != "" {
+		spec := turboLoRASpecOf(s)
+		if turbo <= 0 {
+			turbo = spec.Steps // 未配置 turbo_steps:展示 LoRA 参数表推荐步数
+		}
+		if steps > 0 && turbo > 0 && steps > turbo {
+			items = append(items, manjuHealthItem{Key: "render_steps", Label: "采样步数", Status: "warn", Detail: fmt.Sprintf("已配 Turbo LoRA(%s,强度%.2f/%s) 但步数=%d,建议 %d 步(约%.1f倍提速)", s, spec.Strength, spec.Sampler, steps, turbo, float64(steps)/float64(turbo)), Fixable: true, FixHint: fmt.Sprintf("一键改为 %d 步", turbo)})
+		} else {
+			items = append(items, ok("render_steps", fmt.Sprintf("steps=%d turbo=%d(LoRA: %.2f/%s)", steps, turbo, spec.Strength, spec.Sampler)))
+		}
 	} else {
 		items = append(items, ok("render_steps", fmt.Sprintf("steps=%d turbo=%d", steps, turbo)))
 	}
@@ -174,8 +182,15 @@ func manjuApplyHealthFix(configPath, key string) (bool, error) {
 	}
 	switch key {
 	case "render_steps":
+		want := turboLoRASpecOf(str(R["turbo_lora"])).Steps
 		if t, ok := manjuToInt(R["turbo_steps"]); ok && t > 0 {
-			R["steps"] = t
+			want = t // 用户显式配置的 turbo_steps 优先
+		}
+		if want > 0 {
+			R["steps"] = want
+			if _, ok := R["turbo_steps"]; !ok {
+				R["turbo_steps"] = want // 顺手落盘推荐值,后续展示/判断一致
+			}
 		} else {
 			return false, nil
 		}

@@ -148,10 +148,11 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 		ctx.steps = n
 	}
 	if str(R["turbo_lora"]) != "" {
+		// Turbo 步数:用户显式配置优先,缺省按 LoRA 类型参数表(旧系 8 步,Kijai 4 步版 4 步)
 		if n, ok := manjuToInt(R["turbo_steps"]); ok && n > 0 {
 			ctx.steps = n
 		} else {
-			ctx.steps = 8
+			ctx.steps = turboLoRASpecOf(str(R["turbo_lora"])).Steps
 		}
 	}
 	return ctx, nil
