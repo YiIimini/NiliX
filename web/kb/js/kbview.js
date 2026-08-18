@@ -79,7 +79,7 @@ const KbView = {
         const series = c.getModel().getSeriesByIndex(0);
         const data = series && series.getData ? series.getData() : null;
         if (!data) return;
-        const TH = 64;                     // 靠近阈值(px)
+        const TH = 24;                     // 超级近才触发迎合(节点贴脸放大)
         let best = -1, bestD = TH;
         for (let i = 0; i < data.count(); i++) {
           const lay = data.getItemLayout(i);
@@ -103,29 +103,48 @@ const KbView = {
     });
   },
 
-  /* 全图适配:force 布局收敛期间轮询取布局坐标,包围盒稳定后缩小到全部可见(只做一次) */
-  _fitTry: 0,
-  scheduleFit() {
-    if (this._fitDone) return;
-    this._fitTry = 0;
-    this._lastFitZ = 0;
-    const tick = () => {
-      this._fitTry++;
-      if (this._fitTry > 12) return;               // 最多 6s,不打扰用户
-      const stable = this.fitAllTry();
-      if (!stable) setTimeout(tick, 500);
-    };
-    setTimeout(tick, 300);
-  },
-  fitAllTry() {
+  /* 平滑适配:进入后逐帧把视野平滑过渡到全图可见(目标跟随布局收敛,无突跳);
+     约 3.5s 或目标稳定后停止,把控制权交给用户 */
+  smoothFit() {
+    if (this._fitTimer) return;
     const c = this._chart;
-    if (!c) return true;
+    if (!c) return;
+    let stable = 0;
+    let lastT = null;
+    this._fitTimer = setInterval(() => {
+      const s = c.getOption().series[0];
+      const cur = s.zoom || 1;
+      const curC = s.center || ["50%", "50%"];
+      const t = this.fitTarget(cur);
+      if (!t) return;
+      if (lastT && Math.abs(t.z - lastT) < 0.003) stable++;
+      else stable = 0;
+      lastT = t.z;
+      // 逐帧插值(每帧向目标靠 14%),平滑缩小不跳变
+      const nz = cur + (t.z - cur) * 0.14;
+      const cx = parseFloat(curC[0]) + (t.cx - parseFloat(curC[0])) * 0.14;
+      const cy = parseFloat(curC[1]) + (t.cy - parseFloat(curC[1])) * 0.14;
+      c.setOption({ series: [{ zoom: nz, center: [cx + "%", cy + "%"] }] }, { silent: true });
+      if (stable >= 6 || this._fitMs > 3800) {   // 目标稳定或超时 → 停止
+        clearInterval(this._fitTimer);
+        this._fitTimer = null;
+        this._fitMs = 0;
+      } else {
+        this._fitMs = (this._fitMs || 0) + 60;
+      }
+    }, 60);
+  },
+
+  /* 当前全图目标:从布局结果取包围盒,返回应达到的 zoom/center(百分比) */
+  fitTarget(curZoom) {
+    const c = this._chart;
+    if (!c) return null;
     const series = c.getModel().getSeriesByIndex(0);
     const data = series && series.getData ? series.getData() : null;
-    if (!data) return false;
+    if (!data) return null;
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, n = 0;
     for (let i = 0; i < data.count(); i++) {
-      const lay = data.getItemLayout(i);            // graph 布局 = [x, y] 像素(图坐标系)
+      const lay = data.getItemLayout(i);            // graph 布局 = [x, y] 像素
       if (!lay || lay.length < 2 || isNaN(lay[0])) continue;
       let px;
       try { px = c.convertToPixel({ seriesIndex: 0 }, lay); } catch (e) { continue; }
@@ -133,24 +152,15 @@ const KbView = {
       x0 = Math.min(x0, px[0]); y0 = Math.min(y0, px[1]);
       x1 = Math.max(x1, px[0]); y1 = Math.max(y1, px[1]);
     }
-    if (n < 5) return false;
+    if (n < 5) return null;
     const el = document.getElementById("kb-graph");
     const w = (el && el.clientWidth) || 1200, h = (el && el.clientHeight) || 700;
-    const cur = c.getOption().series[0].zoom || 1;      // 当前缩放(convertToPixel 坐标含它)
-    const ratio = Math.min(w / Math.max(60, x1 - x0), h / Math.max(60, y1 - y0)) * 0.78;   // 余量留足,容忍布局微扩
-    const z = Math.max(0.05, Math.min(1.6, cur * ratio)); // 相对当前缩放修正
-    // 布局还在展开(坐标剧变)时不稳定,等 ratio 收敛
-    if (Math.abs(ratio - this._lastFitZ) > 0.03 && this._fitTry < 6) {
-      this._lastFitZ = ratio;
-      return false;
-    }
-    this._fitDone = true;
-    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-    c.setOption({ series: [{ zoom: z, center: [cx / w * 100 + "%", cy / h * 100 + "%"] }] }, { silent: true });
-    return true;
+    const ratio = Math.min(w / Math.max(60, x1 - x0), h / Math.max(60, y1 - y0)) * 0.8;
+    return { z: Math.max(0.05, Math.min(1.6, (curZoom || 1) * ratio)),
+      cx: ((x0 + x1) / 2) / w * 100, cy: ((y0 + y1) / 2) / h * 100 };
   },
 
-  /* 初始适配:按坐标包络盒算 zoom,仅布局模式变化或首次时重置(不打扰用户缩放) */
+  /* 初始适配:按坐标包络盒算 zoom,仅布局模式变化或首次时重置(不打扰用户缩放) */  /* 初始适配:按坐标包络盒算 zoom,仅布局模式变化或首次时重置(不打扰用户缩放) */
   _fitZoomFor(mode, nodes) {
     if (mode === "force") return 1;
     if (this._fitMode === mode && this._fitZoom) return this._fitZoom;
@@ -393,7 +403,7 @@ const KbView = {
       }],
     }, true);
     this.stopSpin();  // 删除前无公转
-    if (mode === "force") this.scheduleFit();
+    if (mode === "force") this.smoothFit();
     this.initMagnetic();
     document.getElementById("kb-legend").innerHTML = legend
       .map((l) => `<span class="kb-lg${this._catFilter === l.name ? " on" : ""}" data-cat="${l.name.replace(/"/g, "&quot;")}"><span class="gt-dot" style="background:${l.color}"></span>${l.emoji} ${l.name} <i>${l.n}</i></span>`).join("");
