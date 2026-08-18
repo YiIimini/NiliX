@@ -22,8 +22,9 @@ const KbView = {
     // 锚点:#/kb/页面名 → 渲染后直接开详情
     const anchor = decodeURIComponent((location.hash.split("/")[2] || "").trim());
     if (!this._md) {
-      const box = document.getElementById("kb-cats");
-      box.innerHTML = `<div class="dir-loading">索引加载中…</div>`;
+      const box = document.getElementById("kb-graph");
+      if (box) box.innerHTML = "";
+      document.getElementById("kb-legend").innerHTML = "<span class='nv-status'>索引加载中…</span>";
       try {
         const r = await fetch("/api/page?id=README", { cache: "no-store" });
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -31,7 +32,7 @@ const KbView = {
         this._md = p.markdown || "";
         this.parse();
       } catch (e) {
-        box.innerHTML = `<div class="dir-empty">📭 索引加载失败: ${e.message}</div>`;
+        document.getElementById("kb-legend").innerHTML = "<span class='nv-status'>📭 索引加载失败: " + e.message + "</span>";
         return;
       }
     }
@@ -42,12 +43,15 @@ const KbView = {
   /* 解析 README 结构:## emoji 大类(N 页) / #### 子类(n) / - [[页]] — 描述 */
   parse() {
     const cats = [];
+    const seenPage = {}; // 全局同名去重(索引冗余防崩)
     let cur = null, sub = null;
     for (const line of this._md.split("\n")) {
-      const mh = line.match(/^## ([^ (（]+)[ (（]?/);
+      const mh = line.match(/^## (.+?)\s*[((（]/);
       if (mh && /页/.test(line)) {
-        cur = { emoji: "", name: mh[1].replace(/^[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]+\s*/u, ""), raw: mh[1], subs: [], root: [] };
-        cur.emoji = (mh[1].match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u) || [""])[0];
+        const emojiM = mh[1].match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u);
+        const name = mh[1].replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "").trim();
+        if (!name) continue;
+        cur = { emoji: emojiM ? emojiM[0] : "📁", name, raw: mh[1], subs: [], root: [] };
         cats.push(cur); sub = null;
         continue;
       }
@@ -59,40 +63,79 @@ const KbView = {
       }
       const im = line.match(/^-\s+\[\[([^\]]+)\]\]\s*(?:[—-]\s*(.*))?/);
       if (im && cur) {
-        const page = { name: im[1].trim(), desc: (im[2] || "").trim() };
+        const name = im[1].trim();
+        if (seenPage[name]) continue; // README 重复列名 → ECharts 重复节点会崩,只保留首个
+        seenPage[name] = 1;
+        const page = { name, desc: (im[2] || "").trim() };
         (sub ? sub.pages : cur.root).push(page);
       }
     }
     this._cats = cats;
   },
 
+  /* Obsidian 式力导向图:节点=页面,枢纽=大类(同色星座),边=归属;点节点开详情(锚点),点枢纽下钻该类 */
   render(q) {
-    const box = document.getElementById("kb-cats");
+    const el = document.getElementById("kb-graph");
+    if (!el || !this._cats.length) return;
+    if (!this._chart) {
+      this._chart = echarts.init(el);
+      this._chart.on("click", (p) => {
+        const d = p.data || {};
+        if (d.kind === "page") this.openPage(d.id);
+        else if (d.kind === "hub") { this._catFilter = this._catFilter === d.id ? null : d.id; this.render(document.getElementById("kb-search").value.trim()); }
+      });
+      window.addEventListener("resize", () => this._chart && this._chart.resize());
+    }
     const ql = (q || "").toLowerCase();
     const hit = (p) => !ql || p.name.toLowerCase().includes(ql) || (p.desc || "").toLowerCase().includes(ql);
-    let html = "";
+    const catHit = (c) => !this._catFilter || c.name === this._catFilter;
+
+    const nodes = [], links = [], legend = [];
     let total = 0;
     for (const c of this._cats) {
-      const subs = c.subs.map((s) => ({ ...s, pages: s.pages.filter(hit) })).filter((s) => s.pages.length);
-      const root = c.root.filter(hit);
-      const n = root.length + subs.reduce((a, s) => a + s.pages.length, 0);
-      if (!n) continue;
-      total += n;
-      html += `<div class="kb-cat" data-cat="${c.name.replace(/"/g, "&quot;")}">
-        <div class="kb-cat-head"><span class="kb-cat-emoji">${c.emoji || "📁"}</span><span class="kb-cat-name">${c.name}</span><span class="kb-cat-count">${n} 页</span></div>
-        <div class="kb-cat-body">`;
-      const chip = (p) => `<span class="kb-page" data-page="${p.name.replace(/"/g, "&quot;")}" title="${(p.desc || p.name).replace(/"/g, "&quot;")}">${p.name}</span>`;
-      html += root.map(chip).join("");
-      for (const s of subs) {
-        html += `<div class="kb-sub"><div class="kb-sub-name">${s.name} <i>${s.pages.length}</i></div><div class="kb-sub-pages">${s.pages.map(chip).join("")}</div></div>`;
+      const all = [...c.root, ...c.subs.flatMap((s) => s.pages)];
+      if (!all.length || !catHit(c)) continue;
+      const matched = all.filter(hit);
+      const color = App.catColor(c.name);
+      if (matched.length || !ql) {
+        nodes.push({ id: "hub:" + c.name, name: "◈ " + c.name, kind: "hub", category: c.name,
+          symbolSize: Math.min(58, 26 + matched.length * 0.28), itemStyle: { color },
+          label: { show: true, color, fontSize: 12, fontWeight: 700 } });
       }
-      html += `</div></div>`;
+      for (const p of matched) {
+        total++;
+        nodes.push({ id: p.name, name: p.name, kind: "page", category: c.name,
+          symbolSize: 7 + Math.min(8, (p.desc || "").length / 22),
+          itemStyle: { color, opacity: 0.88 },
+          label: { show: false } });
+        links.push({ source: "hub:" + c.name, target: p.name,
+          lineStyle: { color, width: 1, opacity: 0.22, curveness: 0.08 } });
+      }
+      legend.push({ name: c.name, color, n: matched.length, emoji: c.emoji || "" });
     }
-    box.innerHTML = html || `<div class="dir-empty">${q ? "🔍 没有匹配「" + q + "」的知识页" : "📭 索引为空"}</div>`;
-    document.querySelector("#view-kb .ov-sub").textContent = `共 ${total} 页${q ? " 匹配" : ""} · 单文件索引 · 锚点直达`;
-    box.querySelectorAll(".kb-page").forEach((el) =>
-      el.addEventListener("click", () => this.openPage(el.dataset.page))
+    this._chart.setOption({
+      backgroundColor: "transparent",
+      animation: false,
+      tooltip: { show: false },
+      series: [{
+        type: "graph", layout: "force", roam: true, draggable: true,
+        force: { repulsion: 130, edgeLength: [34, 110], gravity: 0.055, friction: 0.5, layoutAnimation: false },
+        edgeSymbol: ["none", "none"],
+        emphasis: { focus: "adjacency", label: { show: true, fontSize: 11 }, itemStyle: { shadowBlur: 14 } },
+        label: { position: "right", distance: 4 },
+        data: nodes, links,
+      }],
+    }, true);
+    document.getElementById("kb-legend").innerHTML = legend
+      .map((l) => `<span class="kb-lg${this._catFilter === l.name ? " on" : ""}" data-cat="${l.name.replace(/"/g, "&quot;")}"><span class="gt-dot" style="background:${l.color}"></span>${l.emoji} ${l.name} <i>${l.n}</i></span>`).join("");
+    document.querySelectorAll("#kb-legend .kb-lg").forEach((e2) =>
+      e2.addEventListener("click", () => {
+        this._catFilter = this._catFilter === e2.dataset.cat ? null : e2.dataset.cat;
+        this.render(document.getElementById("kb-search").value.trim());
+      })
     );
+    document.querySelector("#view-kb .ov-sub").textContent =
+      `${total} 个节点 · ${legend.length} 个大类星座 · 单文件索引 · 点击节点看详情`;
   },
 
   /* 详情:按需拉单页;hash 锚点同步(#/kb/<页名>),返回清锚点 */

@@ -568,7 +568,7 @@ class DirView {
           </div>
           <div id="nv-chapters" class="nv-chapters"></div>
         </div>
-      </div>`, true);
+      </div>`);
     $("nv-start").addEventListener("click", () => this.nvCreate());
     $("nv-next").addEventListener("click", () => this.nvChapter(false));
     $("nv-auto").addEventListener("click", () => this.nvChapter(true));

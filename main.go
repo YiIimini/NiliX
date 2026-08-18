@@ -131,7 +131,7 @@ func onReady(url string) func() {
 		systray.SetIcon(iconICO)
 		systray.SetTitle("NiliX")
 		systray.SetTooltip("NiliX")
-		mHome := systray.AddMenuItem("打开工作台", "打开 NiliX 工作台(漫剧管理)")
+		mHome := systray.AddMenuItem("打开主页", "打开 NiliX 关系图谱主页")
 		mNovel := systray.AddMenuItem("小说管理", "打开小说管理")
 		mManju := systray.AddMenuItem("漫剧管理", "打开漫剧管理页")
 		mComfy := systray.AddMenuItem("ComfyUI", "打开 ComfyUI 页面")
@@ -142,7 +142,7 @@ func onReady(url string) func() {
 			for {
 				select {
 				case <-mHome.ClickedCh:
-					openBrowser(url + "#/manju")
+					openBrowser(url)
 				case <-mNovel.ClickedCh:
 					openBrowser(url + "#/novel")
 				case <-mManju.ClickedCh:

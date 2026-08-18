@@ -87,7 +87,7 @@
         <svg class="ic" aria-hidden="true"><use href="#i-film"/></svg><span data-i18n="nav.manju">漫剧管理</span>
       </a>
       <a href="#/kb" class="nav-link" data-route="kb">
-        <svg class="ic" aria-hidden="true"><use href="#i-grid"/></svg><span data-i18n="nav.kb">知识库</span>
+        <svg class="ic" aria-hidden="true"><use href="#i-grid"/></svg><span data-i18n="nav.kb">关系图谱</span>
       </a>
       <a href="#/comfy" class="nav-link" data-route="comfy">
         <svg class="ic" aria-hidden="true"><use href="#i-comfy"/></svg><span data-i18n="nav.comfy">ComfyUI</span>
@@ -104,12 +104,12 @@
   </header>
 
   <main class="stage">
-    <!-- 知识库:轻量索引页(仅读 README.md 单文件 + 锚点访问) -->
+    <!-- 关系图谱:仅读 README.md 单文件构建 Obsidian 式节点图 + 锚点访问 -->
     <section id="view-kb" class="view view-kb">
       <div class="hrs-head">
         <div class="hrs-title">
-          <h1>知识库</h1>
-          <p class="ov-sub">单文件索引加载 · 锚点直达 · 分类浏览</p>
+          <h1>关系图谱</h1>
+          <p class="ov-sub">单文件索引加载 · 节点相连 · 锚点直达</p>
         </div>
         <div class="hrs-tools">
           <div class="hrs-search" id="kb-search-wrap">
@@ -120,7 +120,8 @@
         </div>
       </div>
       <p id="kb-err" class="hrs-err hidden"></p>
-      <div id="kb-cats" class="kb-cats"></div>
+      <div id="kb-graph" class="kb-graph"></div>
+      <div id="kb-legend" class="kb-legend"></div>
     </section>
 
     <!-- 二级页:Comfy UI(内嵌 Web UI) -->
@@ -653,6 +654,7 @@
   <script src="/js/markdown.js?v=20260818i"></script>
   <script src="/js/app.js?v=20260818i"></script>
   <script src="/js/comfy.js?v=20260818i"></script>
+  <script src="/vendor/echarts.min.js"></script>
   <script src="/js/kbview.js?v=20260818i"></script>
   <script src="/js/dirview.js?v=20260818i"></script>
   <script src="/js/manju.js?v=20260818i"></script>

@@ -34,6 +34,7 @@ const App = {
     });
     const mascot = document.getElementById("ai-mascot");
     if (mascot) mascot.addEventListener("click", () => { location.hash = "#/manju"; });
+    this.mascotLoop();
     this.applyNavVisibility();
     this.route();
   },
@@ -362,7 +363,40 @@ const App = {
     if (el) el.textContent = I18N.t("live.refreshed") + " " + new Date().toLocaleTimeString();
   },
 
-  /* 悬浮 AI 小助手:云朵播报(manju 轮询驱动);点击跳工作台 */
+  /* 助手状态汇总:一处逻辑,manju 页轮询与全局轮询共用 */
+  mascotStatus(s) {
+    const a = s.agent || {};
+    const bits = [];
+    if (s.running) {
+      const st = s.stage || "处理中";
+      const n = s.shotTotal ? " (" + s.shotCur + "/" + s.shotTotal + ")" : "";
+      const t = s.elapsedSec ? " · " + (s.elapsedSec >= 60 ? Math.floor(s.elapsedSec / 60) + "分" + (s.elapsedSec % 60) + "秒" : s.elapsedSec + "秒") : "";
+      bits.push(st + n + t);
+    }
+    if (a.planReview && a.planReview.score) bits.push("剧本复核 " + a.planReview.score + " 分");
+    if (a.shots) {
+      const bad = Object.values(a.shots).filter((x) => x && x.score != null && x.score < (a.passScore || 75)).length;
+      if (bad) bits.push("审片 " + bad + " 镜待返工");
+    }
+    if (a.escalationCount) bits.push("⚠ " + a.escalationCount + " 镜升级待拍板");
+    this.mascotSay(bits.length ? bits.join(" · ") : (s.done ? "上一轮已完成 ✅ 随时开工" : "AI 助手待命中 ✨"), s.running ? "busy" : "");
+  },
+  /* 全局轻轮询:任意页面云朵都实时(漫剧页由其自身 2s 轮询驱动,跳过免重复) */
+  mascotLoop() {
+    if (this._mascotTimer) return;
+    this._mascotTimer = setInterval(async () => {
+      try {
+        if (this.currentRoute() === "manju") return;
+        const cfg = localStorage.getItem("manju-project") || "";
+        if (!cfg) { this.mascotSay("AI 助手待命中 ✨"); return; }
+        const r = await fetch("/api/manju/status?config=" + encodeURIComponent(cfg), { cache: "no-store" });
+        if (!r.ok) return;
+        this.mascotStatus(await r.json());
+      } catch (e) { /* 静默 */ }
+    }, 3500);
+  },
+
+  /* 悬浮 AI 小助手:云朵播报;点击跳工作台 */
   mascotSay(text, mood) {
     const b = document.getElementById("ai-bubble");
     if (!b || b.textContent === text) return;
@@ -374,13 +408,13 @@ const App = {
     if (m) m.classList.toggle("is-busy", mood === "busy");
   },
 
-  /* 当前路由:comfy / novel / manju(默认工作台) */
+  /* 当前路由:kb(关系图谱主页) / comfy / novel / manju */
   currentRoute() {
-    const hash = location.hash || "#/manju";
-    if (hash.startsWith("#/kb")) return "kb";
+    const hash = location.hash || "#/kb";
     if (hash.startsWith("#/comfy")) return "comfy";
     if (hash.startsWith("#/novel")) return "novel";
-    return "manju";
+    if (hash.startsWith("#/manju")) return "manju";
+    return "kb";
   },
 
   route() {

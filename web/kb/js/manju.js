@@ -1278,24 +1278,9 @@
       }).catch(() => {});
     },
 
-    /* 悬浮助手云朵:由状态汇总一句话(运行阶段/审片/升级) */
+    /* 悬浮助手云朵:汇总逻辑统一在 App.mascotStatus */
     reportMascot(s) {
-      if (typeof App === "undefined" || !App.mascotSay) return;
-      const a = this.agent || {};
-      const bits = [];
-      if (s.running) {
-        const st = s.stage || "处理中";
-        bits.push(st + (s.shotTotal ? ` (${s.shotCur}/${s.shotTotal})` : "") + " · " + fmtTime(s.elapsedSec));
-      }
-      if (a.planReview && a.planReview.score) bits.push("剧本复核 " + a.planReview.score + " 分");
-      if (a.shots) {
-        const js = Object.values(a.shots);
-        const bad = js.filter((x) => x && x.score != null && x.score < (a.passScore || 75)).length;
-        if (bad) bits.push("审片 " + bad + " 镜待返工");
-      }
-      if (a.escalationCount) bits.push("⚠ " + a.escalationCount + " 镜升级待拍板");
-      if (!bits.length) bits.push(s.done ? "上一轮已完成 ✅ 随时开工" : "AI 助手待命中 ✨");
-      App.mascotSay(bits.join(" · "), s.running ? "busy" : "");
+      if (typeof App !== "undefined" && App.mascotStatus) App.mascotStatus(s);
     },
     renderStatus() {
       const s = this.status;
