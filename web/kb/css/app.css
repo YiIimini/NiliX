@@ -4078,3 +4078,16 @@ select option { text-align: center; }
 /* 风格按钮:5 个一行均分 */
 .style-switch { display: flex; gap: 8px; }
 .style-switch .style-opt { flex: 1; }
+
+/* 书架封面信号灯(左上角) */
+.bk-lamp {
+  position: absolute; top: 8px; left: 8px; z-index: 3;
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.45);
+}
+.bk-lamp-green { background: #2ecc71; box-shadow: 0 0 8px rgba(46, 204, 113, 0.8); }
+.bk-lamp-blue { background: #3b82f6; box-shadow: 0 0 8px rgba(59, 130, 246, 0.8); animation: bkLampBlink 1.2s ease-in-out infinite; }
+.bk-lamp-yellow { background: #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.8); }
+.bk-lamp-red { background: #ef4444; box-shadow: 0 0 8px rgba(239, 68, 68, 0.8); }
+@keyframes bkLampBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
