@@ -3959,3 +3959,35 @@ select option { text-align: center; }
 
 /* 设置弹窗滑杆(图谱物理) */
 .settings-range { flex: 1; min-width: 0; accent-color: var(--accent); height: 22px; }
+
+/* 小说列表标题装饰条:渐变光条 + 发光圆点,一眼有质感 */
+.shelf-head {
+  position: relative;
+  padding-top: 12px;
+}
+.shelf-head::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 86px;
+  height: 3px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 25%, transparent));
+  box-shadow: 0 0 12px var(--glow);
+}
+.shelf-head::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: 86px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--glow);
+}
+/* 漫剧/右侧栏小尺寸书架不叠加(保留原样) */
+.manju-list .shelf-head { padding-top: 0; }
+.manju-list .shelf-head::before,
+.manju-list .shelf-head::after { display: none; }
