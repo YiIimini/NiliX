@@ -60,6 +60,49 @@ const KbView = {
     if (anchor) { this._expectHash = location.hash; this.openPage(anchor, true); }
   },
 
+  /* 磁吸迎合:鼠标靠近(不必命中)节点即放大——rAF 节流取最近节点 dispatch highlight,
+     复用 emphasis 放大样式;移开恢复;自动处理与自带 hover 的冲突 */
+  initMagnetic() {
+    const c = this._chart;
+    if (!c || this._magInit) return;
+    this._magInit = true;
+    this._magCur = -1;
+    const zr = c.getZr();
+    let rafId = null, lastPx = null;
+    const magnetic = (e) => {
+      const px = [e.offsetX, e.offsetY];
+      lastPx = px;
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        if (!lastPx) return;
+        const series = c.getModel().getSeriesByIndex(0);
+        const data = series && series.getData ? series.getData() : null;
+        if (!data) return;
+        const TH = 64;                     // 靠近阈值(px)
+        let best = -1, bestD = TH;
+        for (let i = 0; i < data.count(); i++) {
+          const lay = data.getItemLayout(i);
+          if (!lay || lay.length < 2 || isNaN(lay[0])) continue;
+          let s2;
+          try { s2 = c.convertToPixel({ seriesIndex: 0 }, lay); } catch (err) { continue; }
+          const d2 = Math.hypot(s2[0] - lastPx[0], s2[1] - lastPx[1]);
+          if (d2 < bestD) { bestD = d2; best = i; }
+        }
+        if (best !== this._magCur) {
+          if (this._magCur >= 0) c.dispatchAction({ type: "unhighlight", seriesIndex: 0, dataIndex: this._magCur });
+          if (best >= 0) c.dispatchAction({ type: "highlight", seriesIndex: 0, dataIndex: best });
+          this._magCur = best;
+        }
+        lastPx = null;
+      });
+    };
+    zr.on("mousemove", magnetic);
+    zr.on("mouseout", () => {
+      if (this._magCur >= 0) { c.dispatchAction({ type: "unhighlight", seriesIndex: 0, dataIndex: this._magCur }); this._magCur = -1; }
+    });
+  },
+
   /* 全图适配:force 布局收敛期间轮询取布局坐标,包围盒稳定后缩小到全部可见(只做一次) */
   _fitTry: 0,
   scheduleFit() {
@@ -338,7 +381,7 @@ const KbView = {
         progressive: 260, progressiveThreshold: 520,
         hoverAnimation: false,
         edgeSymbol: ["none", "none"],
-        emphasis: { focus: "adjacency", label: { show: true, fontSize: 11.5, color: "#fff", fontWeight: 600 },
+        emphasis: { focus: "adjacency", scale: 2.2, label: { show: true, fontSize: 11.5, color: "#fff", fontWeight: 600 },
           lineStyle: { width: 1.4, opacity: 0.85, color: accent } },
         select: { label: { show: true, fontSize: 12, fontWeight: 700 }, itemStyle: { shadowBlur: 14 } },
         // 初始全图视野:按节点包络盒适配缩放(进入即看到全部节点);用户缩放后不重置
@@ -351,6 +394,7 @@ const KbView = {
     }, true);
     this.stopSpin();  // 删除前无公转
     if (mode === "force") this.scheduleFit();
+    this.initMagnetic();
     document.getElementById("kb-legend").innerHTML = legend
       .map((l) => `<span class="kb-lg${this._catFilter === l.name ? " on" : ""}" data-cat="${l.name.replace(/"/g, "&quot;")}"><span class="gt-dot" style="background:${l.color}"></span>${l.emoji} ${l.name} <i>${l.n}</i></span>`).join("");
     document.querySelectorAll("#kb-legend .kb-lg").forEach((e2) =>
@@ -369,6 +413,7 @@ const KbView = {
     const esc = (s) => String(s == null ? "" : String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])));
     const wb = typeof ManjuWorkbench !== "undefined" ? ManjuWorkbench : null;
     if (!wb) return;
+    if (!wb._bound && wb.bind) wb.bind();   // 弹窗关闭/遮罩/Esc 依赖 bind 绑定;未进漫剧页时补绑
     wb.openModal(name, `<div class="dir-loading">加载中…</div>`, true);
     const target = "#/kb/" + encodeURIComponent(name);
     if (location.hash !== target) {
