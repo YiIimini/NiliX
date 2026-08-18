@@ -2322,7 +2322,7 @@ body.view-dir-active .top-search { display: none; }
 }
 .settings-modal.is-open { opacity: 1; pointer-events: auto; }
 .settings-dialog {
-  width: min(780px, 94vw);
+  width: min(860px, 94vw);
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 18px;
@@ -2359,17 +2359,20 @@ body.view-dir-active .top-search { display: none; }
 }
 /* 宽弹窗:主体单列一排排(每个分组一整行,字段行对齐),宽度充分利用 */
 .settings-body {
-  padding: 20px 24px 24px;
+  padding: 22px 26px 28px;
   max-height: 76vh; overflow-y: auto;
   display: grid; grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  align-items: start;
+  gap: 16px;
+  align-items: stretch;                 /* 同排卡片等高 */
 }
 /* 主题配色(2)/关系图谱(6) 跨整行,其余两列依次排布 */
 .settings-group:nth-child(2),
 .settings-group:nth-child(6) { grid-column: 1 / -1; }
+/* 跨行大卡与两列卡之间分层:顶部渐变条标识 */
+.settings-group:nth-child(2) { border-top: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); }
+.settings-group:nth-child(6) { border-top: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); }
 .settings-group {
-  padding: 14px 16px;
+  padding: 16px 18px;
   border: 1px solid var(--panel-border);
   border-radius: 12px;
   background: color-mix(in srgb, var(--surface) 45%, transparent);
@@ -2385,13 +2388,13 @@ body.view-dir-active .top-search { display: none; }
 /* 最新总览展示设置:行 / 数字输入 / 开关 */
 .settings-row {
   display: flex; align-items: center; gap: 10px;
-  padding: 7px 0;
+  padding: 8px 0;
 }
 .settings-row-top { align-items: flex-start; }
 .settings-row-label {
   font-size: 12.5px; color: var(--text); letter-spacing: 1px;
   flex-shrink: 0;
-  width: 92px; /* 两列布局下收窄,同组对齐 */
+  width: 100px; text-align: right; padding-right: 2px; /* 统一列宽右对齐,基线齐 */
 }
 .settings-hint { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
 .settings-input {
