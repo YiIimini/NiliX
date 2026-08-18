@@ -665,9 +665,15 @@
                 </div>
               </div>
               <div class="manju-set-status">审片八维度对齐 MiniMax H3 官方能力：主体/场景一致性(Ref2VA 参考保持)、动作/运镜符合(多模态指令遵循)、可见性(近黑防线)、技术质量(畸变/水印)、风格、口型对白。低分镜头由修复师改写 H3 提示词后自动定点重渲染（「🤖 智能一条龙」走全流程）。点「🤖 智能一条龙」会先询问是否让 Agent 深度分析小说内容并更新渲染风格（是=分析后更新；否=按当前配置直接跑）。</div>
+              ${(() => {
+                const g = ag.globalDefaults || {};
+                if (!g.visionModel && !g.hasVisionKey && !g.enabled) return "";
+                return `<div class="manju-set-status manju-set-global">🌐 全局默认（所有项目共用）：${g.visionModel ? esc(g.visionModel) : "未设模型"}${g.hasVisionKey ? " · Key 已存" : ""} · 及格 ${Math.round(g.passScore || 75)} · 返工 ${g.maxRetries == null ? 2 : g.maxRetries} 轮${g.enabled ? "" : " · 智能模式默认关"}。项目未单独配置时自动使用，点「另存为全局默认」可更新。</div>`;
+              })()}
               <div class="manju-set-actions">
                 <button id="manju-ag-save" class="hrs-btn hrs-btn-primary">保存智能体配置</button>
                 <button id="manju-ag-test" class="hrs-btn">测试视觉模型</button>
+                <button id="manju-ag-global" class="hrs-btn" title="当前表单另存为全局默认：所有项目未单独配置时自动使用（含视觉模型/及格线/返工轮数）">另存为全局默认</button>
                 <span id="manju-ag-msg" class="manju-meta manju-set-msg"></span>
               </div>
             </div>
@@ -743,6 +749,7 @@
       $("manju-apikey-apply").addEventListener("click", () => this.saveApiKey(true));
       $("manju-ag-save").addEventListener("click", () => this.saveAgentCfg());
       $("manju-ag-test").addEventListener("click", () => this.testVision());
+      $("manju-ag-global").addEventListener("click", () => this.saveAgentCfgGlobal());
       $("manju-ag-model").addEventListener("change", () => this.syncVisionForm());
       this.syncVisionForm();
       // 智能模式开关:切换即时保存(勾选后刷新不再回落)
@@ -844,6 +851,31 @@
         return post("/api/manju/agent/vision-test", { config: this.project });
       }).then((r) => {
         msg.textContent = r.ok ? "✅ 连通正常（" + (r.visionModel || "") + "）" : "❌ " + (r.error || "失败");
+      }).catch((e) => { msg.textContent = "❌ " + e.message; })
+        .finally(() => { btn.disabled = false; });
+    },
+    /* 当前表单另存为全局默认(settings.json agent 节):所有项目未单独配置时自动使用 */
+    saveAgentCfgGlobal() {
+      const msg = $("manju-ag-msg");
+      const btn = $("manju-ag-global");
+      const v = this.visionFormValues();
+      if (!v.model && !$("manju-ag-enabled").checked) { msg.textContent = "请先选择视觉模型或开启智能模式"; return; }
+      msg.textContent = "保存全局默认…";
+      btn.disabled = true;
+      post("/api/manju/agent/settings", {
+        config: this.project,
+        global: "true",
+        agent: {
+          enabled: $("manju-ag-enabled").checked,
+          vision_base_url: v.url,
+          vision_api_key: $("manju-ag-key").value.trim(),
+          vision_model: v.model,
+          pass_score: parseFloat($("manju-ag-pass").value) || 75,
+          max_retries: parseInt($("manju-ag-retries").value, 10),
+        },
+      }).then(() => {
+        msg.textContent = "✅ 已存为全局默认（所有项目共用）";
+        setTimeout(() => { msg.textContent = ""; }, 4000);
       }).catch((e) => { msg.textContent = "❌ " + e.message; })
         .finally(() => { btn.disabled = false; });
     },

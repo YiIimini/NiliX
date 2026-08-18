@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"nilix/internal/agent"
+	"nilix/internal/config"
 )
 
 // ---- manjuLLM 适配 agent.TextLLM(避免包循环依赖) ----
@@ -37,17 +38,51 @@ func (m manjuAgentLLM) ChatJSON(system, user string, temp float64) (map[string]a
 	return m.l.chatJSON(system, user, temp)
 }
 
-// ---- 配置(项目 config.json 的 agent 节) ----
+// ---- 配置(项目 config.json 的 agent 节 + 全局默认两级) ----
 
+// manjuGlobalAgent 全局默认智能体配置(settings.json 的 agent 节),main 注入;
+// 项目 config.json 的 agent 节只覆盖非空字段,视觉模型配一次全局即可全项目生效。
+var manjuGlobalAgent = agent.DefaultConfig()
+
+// manjuSettingsStore 全局 settings.json 的读写入口(main 注入,「另存为全局默认」用)
+var manjuSettingsStore *config.Store
+
+// SetGlobalAgentCfg 由 main/保存设置后调用,刷新全局默认(settings.json agent 节 → agent.Config)
+func SetGlobalAgentCfg(cfg *config.Settings) {
+	a := agent.DefaultConfig()
+	if cfg != nil && cfg.Agent != nil {
+		a.Enabled = cfg.Agent.Enabled
+		a.VisionBaseURL = cfg.Agent.VisionBaseURL
+		a.VisionAPIKey = cfg.Agent.VisionAPIKey
+		a.VisionModel = cfg.Agent.VisionModel
+		if cfg.Agent.PassScore > 0 {
+			a.PassScore = cfg.Agent.PassScore
+		}
+		a.MaxRetries = cfg.Agent.MaxRetries
+		a.Normalize()
+	}
+	manjuGlobalAgent = a
+}
+
+// SetManjuSettingsStore 注入全局设置读写(main 调用,供「另存为全局默认」写 settings.json)
+func SetManjuSettingsStore(st *config.Store) { manjuSettingsStore = st }
+
+// loadAgentCfg 读取生效的智能体配置:全局默认打底,项目 agent 节非空字段覆盖
 func loadAgentCfg(ctx *manjuCtx) agent.Config {
-	acfg := agent.DefaultConfig()
+	acfg := manjuGlobalAgent
 	if m, ok := ctx.cfg["agent"].(map[string]any); ok {
 		if b, ok := m["enabled"].(bool); ok {
 			acfg.Enabled = b
 		}
-		acfg.VisionBaseURL = str(m["vision_base_url"])
-		acfg.VisionAPIKey = str(m["vision_api_key"])
-		acfg.VisionModel = str(m["vision_model"])
+		if s := str(m["vision_base_url"]); s != "" {
+			acfg.VisionBaseURL = s
+		}
+		if s := str(m["vision_api_key"]); s != "" {
+			acfg.VisionAPIKey = s
+		}
+		if s := str(m["vision_model"]); s != "" {
+			acfg.VisionModel = s
+		}
 		if v, ok := manjuToFloat(m["pass_score"]); ok && v > 0 {
 			acfg.PassScore = v
 		}
@@ -1134,62 +1169,108 @@ func registerAgentRoutes(mux *http.ServeMux) {
 			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 			return
 		}
-		res := agentStatusSummary(configPath)
-		if ctx, err := newManjuCtx(configPath, "", "", "", ""); err == nil {
-			acfg := loadAgentCfg(ctx)
-			masked := ""
-			if len(acfg.VisionAPIKey) > 9 {
-				masked = acfg.VisionAPIKey[:5] + "…" + acfg.VisionAPIKey[len(acfg.VisionAPIKey)-4:]
-			}
-			res["hasVisionKey"] = acfg.VisionAPIKey != ""
-			res["visionKeyMasked"] = masked
-			res["visionBaseUrl"] = acfg.VisionBaseURL
-			res["agentEnabled"] = acfg.Enabled
-		}
-		writeJSON(w, http.StatusOK, res)
-	})
-
-	// 保存智能体配置(写入项目 config.json 的 agent 节,留空字段沿用旧值)
-	mux.HandleFunc("POST /api/manju/agent/settings", func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		configPath := str(body["config"])
-		if configPath == "" {
-			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
-			return
-		}
-		cfg, err := readManjuConfig(configPath)
-		if err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
-			return
-		}
-		A, _ := cfg["agent"].(map[string]any)
-		if A == nil {
-			A = map[string]any{}
-		}
-		if m, ok := body["agent"].(map[string]any); ok {
-			if b, ok := m["enabled"].(bool); ok {
-				A["enabled"] = b
-			}
-			for _, k := range []string{"vision_base_url", "vision_api_key", "vision_model"} {
-				if v := strings.TrimSpace(str(m[k])); v != "" {
-					A[k] = v
+			res := agentStatusSummary(configPath)
+			if ctx, err := newManjuCtx(configPath, "", "", "", ""); err == nil {
+				acfg := loadAgentCfg(ctx)
+				masked := ""
+				if len(acfg.VisionAPIKey) > 9 {
+					masked = acfg.VisionAPIKey[:5] + "…" + acfg.VisionAPIKey[len(acfg.VisionAPIKey)-4:]
+				}
+				res["hasVisionKey"] = acfg.VisionAPIKey != ""
+				res["visionKeyMasked"] = masked
+				res["visionBaseUrl"] = acfg.VisionBaseURL
+				res["agentEnabled"] = acfg.Enabled
+				// 全局默认(settings.json agent 节):前端展示"项目未配置时使用全局默认"
+				res["globalDefaults"] = map[string]any{
+					"enabled": manjuGlobalAgent.Enabled, "visionModel": manjuGlobalAgent.VisionModel,
+					"visionBaseUrl": manjuGlobalAgent.VisionBaseURL,
+					"passScore":     manjuGlobalAgent.PassScore, "maxRetries": manjuGlobalAgent.MaxRetries,
+					"hasVisionKey": manjuGlobalAgent.VisionAPIKey != "",
 				}
 			}
-			if v, ok := manjuToFloat(m["pass_score"]); ok && v > 0 && v <= 100 {
-				A["pass_score"] = v
-			}
-			if n, ok := manjuToInt(m["max_retries"]); ok && n >= 0 && n <= 4 {
-				A["max_retries"] = n
-			}
-		}
-		cfg["agent"] = A
-		if err := writeManjuConfig(configPath, cfg); err != nil {
-			http.Error(w, `{"error":"保存失败: `+err.Error()+`"}`, http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+			writeJSON(w, http.StatusOK, res)
 	})
+
+		// 保存智能体配置:默认写入项目 config.json 的 agent 节;global=true 时另存为全局默认
+		// (settings.json agent 节,所有项目共用,项目未配置时生效)
+		mux.HandleFunc("POST /api/manju/agent/settings", func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			configPath := str(body["config"])
+			if configPath == "" {
+				http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+				return
+			}
+			m, _ := body["agent"].(map[string]any)
+			cfg, err := readManjuConfig(configPath)
+			if err != nil {
+				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+				return
+			}
+			A, _ := cfg["agent"].(map[string]any)
+			if A == nil {
+				A = map[string]any{}
+			}
+			if m != nil {
+				if b, ok := m["enabled"].(bool); ok {
+					A["enabled"] = b
+				}
+				for _, k := range []string{"vision_base_url", "vision_api_key", "vision_model"} {
+					if v := strings.TrimSpace(str(m[k])); v != "" {
+						A[k] = v
+					}
+				}
+				if v, ok := manjuToFloat(m["pass_score"]); ok && v > 0 && v <= 100 {
+					A["pass_score"] = v
+				}
+				if n, ok := manjuToInt(m["max_retries"]); ok && n >= 0 && n <= 4 {
+					A["max_retries"] = n
+				}
+			}
+			if str(body["global"]) == "true" {
+				// 另存为全局默认:写 settings.json 的 agent 节(Key 加密存储),并刷新内存默认
+				if manjuSettingsStore == nil {
+					http.Error(w, `{"error":"全局设置存储不可用"}`, http.StatusInternalServerError)
+					return
+				}
+				g, err := manjuSettingsStore.Load()
+				if err != nil {
+					http.Error(w, `{"error":"读取全局设置失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+					return
+				}
+				ga := &config.AgentSettings{
+					Enabled:       A["enabled"] == true,
+					VisionBaseURL: str(A["vision_base_url"]),
+					VisionModel:   str(A["vision_model"]),
+				}
+				if v, ok := manjuToFloat(A["pass_score"]); ok && v > 0 {
+					ga.PassScore = v
+				}
+				if n, ok := manjuToInt(A["max_retries"]); ok {
+					ga.MaxRetries = n
+				}
+				// Key:项目已填则同步为全局默认;否则保留全局旧值(避免空值清掉已存的默认 Key)
+				if k := strings.TrimSpace(str(m["vision_api_key"])); k != "" {
+					ga.VisionAPIKey = k
+				} else if g.Agent != nil {
+					ga.VisionAPIKey = g.Agent.VisionAPIKey
+				}
+				g.Agent = ga
+				if err := manjuSettingsStore.Save(g); err != nil {
+					http.Error(w, `{"error":"保存全局默认失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+					return
+				}
+				SetGlobalAgentCfg(g)
+				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "global": true})
+				return
+			}
+			cfg["agent"] = A
+			if err := writeManjuConfig(configPath, cfg); err != nil {
+				http.Error(w, `{"error":"保存失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		})
 
 	// 手动重审一个镜头(同步返回结论)
 	mux.HandleFunc("POST /api/manju/agent/judge", func(w http.ResponseWriter, r *http.Request) {

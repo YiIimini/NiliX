@@ -86,6 +86,9 @@ func main() {
 	}
 	// ComfyUI 启动参数单一数据源:settings.json → HUD 卡片 / Comfy 页面 / 实际启动命令共用。
 	api.SetComfyParams(cfg.Render.ComfyURL, cfg.Paths.ComfyInput, cfg.Paths.ComfyOutput)
+	// 智能体全局默认(settings.json agent 节 → 全项目共用)与全局设置读写入口。
+	api.SetGlobalAgentCfg(cfg)
+	api.SetManjuSettingsStore(store)
 
 	// 渲染任务管理器（ComfyUI 客户端 + 本地产物目录）。
 	outDir := "clips"

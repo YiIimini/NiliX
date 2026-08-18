@@ -152,6 +152,8 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	// (否则 start 用新参数、stop/probe 用旧参数,自相矛盾)
 	SetComfyParams(in.Render.ComfyURL, in.Paths.ComfyInput, in.Paths.ComfyOutput)
 	s.renderMgr.SetComfyURL(in.Render.ComfyURL)
+	// 全局智能体默认同步(settings 表单不带 agent 字段时保留旧值,指针+omitempty 已保证)
+	SetGlobalAgentCfg(&in)
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

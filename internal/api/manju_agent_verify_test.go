@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"nilix/internal/agent"
+	"nilix/internal/config"
 )
 
 const verifyProj = "zz_agent_verify"
@@ -348,6 +349,72 @@ func TestAgentStyleAnalyzeValidation(t *testing.T) {
 	w2, _ := doReq(t, "POST", "/api/manju/agent/style", map[string]any{"config": cfgPath2, "chapters": "1"})
 	if w2.Code != 400 || !strings.Contains(w2.Body.String(), "内容太少") {
 		t.Errorf("内容太少: HTTP %d %s", w2.Code, w2.Body.String())
+	}
+}
+
+func TestAgentGlobalDefaults(t *testing.T) {
+	// 全局默认:settings.json agent 节 → 全项目共用;项目未配置时生效,项目配置覆盖
+	store := config.NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	SetManjuSettingsStore(store)
+	SetGlobalAgentCfg(config.Default())
+	defer SetManjuSettingsStore(nil)
+
+	// 另存为全局默认(global=true)
+	_, cfgPath := verifyConfig(t, "")
+	w, out := doReq(t, "POST", "/api/manju/agent/settings", map[string]any{
+		"config": cfgPath, "global": "true",
+		"agent": map[string]any{"enabled": true, "vision_model": "glm-4.6v-flash",
+			"vision_api_key": "sk-global-test", "pass_score": 80, "max_retries": 3},
+	})
+	if w.Code != 200 || !out["ok"].(bool) {
+		t.Fatalf("global save HTTP %d %s", w.Code, w.Body.String())
+	}
+	// settings.json 已写入且 Key 加密
+	g, err := store.Load()
+	if err != nil {
+		t.Fatalf("settings load: %v", err)
+	}
+	if g.Agent == nil || g.Agent.VisionModel != "glm-4.6v-flash" {
+		t.Fatalf("global agent = %+v", g.Agent)
+	}
+	if g.Agent.VisionAPIKey != "sk-global-test" {
+		t.Fatalf("Key 应解密为明文, got %q", g.Agent.VisionAPIKey)
+	}
+	// 项目未配置 agent 节 → 全局默认生效
+	ctx, err := newManjuCtx(cfgPath, "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acfg := loadAgentCfg(ctx)
+	if acfg.VisionModel != "glm-4.6v-flash" || !acfg.Enabled || acfg.PassScore != 80 || acfg.MaxRetries != 3 {
+		t.Errorf("全局默认未生效: %+v", acfg)
+	}
+	if acfg.VisionAPIKey != "sk-global-test" {
+		t.Errorf("全局 Key 未生效: %q", acfg.VisionAPIKey)
+	}
+	// 项目配置覆盖全局
+	var cfg map[string]any
+	b, _ := os.ReadFile(cfgPath)
+	_ = json.Unmarshal(b, &cfg)
+	cfg["agent"] = map[string]any{"vision_model": "qwen-vl-max", "vision_api_key": "sk-proj"}
+	b, _ = json.MarshalIndent(cfg, "", "  ")
+	_ = os.WriteFile(cfgPath, b, 0644)
+	ctx2, _ := newManjuCtx(cfgPath, "", "", "", "")
+	acfg2 := loadAgentCfg(ctx2)
+	if acfg2.VisionModel != "qwen-vl-max" || acfg2.VisionAPIKey != "sk-proj" {
+		t.Errorf("项目覆盖失败: %+v", acfg2)
+	}
+	if acfg2.PassScore != 80 {
+		t.Errorf("未覆盖字段应沿用全局默认, passScore=%v", acfg2.PassScore)
+	}
+	// GET 接口带全局默认展示
+	w2, out2 := doReq(t, "GET", "/api/manju/agent?config="+cfgPath, nil)
+	if w2.Code != 200 {
+		t.Fatalf("agent status HTTP %d", w2.Code)
+	}
+	gd, _ := out2["globalDefaults"].(map[string]any)
+	if gd == nil || str(gd["visionModel"]) != "glm-4.6v-flash" {
+		t.Errorf("globalDefaults = %+v", gd)
 	}
 }
 

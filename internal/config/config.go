@@ -18,9 +18,22 @@ const encPrefix = "enc:"
 
 // Settings 是服务全局设置，结构与既有的漫剧 config.json 对齐。
 type Settings struct {
-	LLM    LLMSettings    `json:"llm"`
-	Render RenderSettings `json:"render"`
-	Paths  PathSettings   `json:"paths"`
+	LLM    LLMSettings     `json:"llm"`
+	Render RenderSettings  `json:"render"`
+	Paths  PathSettings    `json:"paths"`
+	// Agent 智能体全局默认配置(视觉模型/判分参数):项目 config.json 的 agent 节可覆盖。
+	// 指针+omitempty:前端顶栏设置表单不带此字段时不会被零值清空。
+	Agent *AgentSettings `json:"agent,omitempty"`
+}
+
+// AgentSettings 智能体全局默认(视觉模型地址/Key/模型/及格线/返工轮数)。
+type AgentSettings struct {
+	Enabled       bool    `json:"enabled,omitempty"`
+	VisionBaseURL string  `json:"vision_base_url,omitempty"`
+	VisionAPIKey  string  `json:"vision_api_key,omitempty"`
+	VisionModel   string  `json:"vision_model,omitempty"`
+	PassScore     float64 `json:"pass_score,omitempty"`
+	MaxRetries    int     `json:"max_retries,omitempty"`
 }
 
 // LLMSettings 剧本引擎所用的大模型（OpenAI 兼容接口，当前为 DeepSeek）。
@@ -126,22 +139,37 @@ func (s *Store) Load() (*Settings, error) {
 			return nil, err
 		}
 	}
+	// 解密失败(主密钥丢失/损坏/被清理工具删除):备份原文件、重建密钥、以空 key 启动,
+	// 避免整个服务起不来;用户重填 Key 即恢复,其余设置保留,原文件在 settings.json.bak
 	if err := openAPIKey(key, &cfg.LLM); err != nil {
-		// 解密失败(主密钥丢失/损坏/被清理工具删除):备份原文件、重建密钥、以空 key 启动,
-		// 避免整个服务起不来;用户重填 Key 即恢复,其余设置保留,原文件在 settings.json.bak
-		if rb, rerr := os.ReadFile(s.Path); rerr == nil {
-			_ = os.WriteFile(s.Path+".bak", rb, 0600)
+		return nil, s.recoverKey(cfg, err)
+	}
+	if cfg.Agent != nil {
+		if err := openStr(key, &cfg.Agent.VisionAPIKey); err != nil {
+			return nil, s.recoverKey(cfg, err)
 		}
-		_ = os.Remove(s.keyPath)
-		_ = os.Remove(s.Path)
-		k, kerr := s.loadOrCreateKey()
-		if kerr != nil {
-			return nil, fmt.Errorf("重建加密密钥失败: %w", kerr)
-		}
-		s.key = k
-		cfg.LLM.APIKey = ""
 	}
 	return cfg, nil
+}
+
+// recoverKey 主密钥失效自愈:备份原文件、重建密钥、以空 key 配置返回
+func (s *Store) recoverKey(cfg *Settings, cause error) error {
+	if rb, rerr := os.ReadFile(s.Path); rerr == nil {
+		_ = os.WriteFile(s.Path+".bak", rb, 0600)
+	}
+	_ = os.Remove(s.keyPath)
+	_ = os.Remove(s.Path)
+	k, kerr := s.loadOrCreateKey()
+	if kerr != nil {
+		return fmt.Errorf("重建加密密钥失败: %w", kerr)
+	}
+	s.key = k
+	cfg.LLM.APIKey = ""
+	if cfg.Agent != nil {
+		cfg.Agent.VisionAPIKey = ""
+	}
+	_ = cause
+	return nil
 }
 
 // Save 加密 API key 后写回文件。
@@ -157,6 +185,14 @@ func (s *Store) Save(cfg *Settings) error {
 	cp := *cfg
 	if err := sealAPIKey(key, &cp.LLM); err != nil {
 		return err
+	}
+	if cp.Agent != nil {
+		// 深拷贝:加密写的是副本,调用方持有的 Agent 保持明文(浅拷贝会连带改坏调用方数据)
+		ag := *cfg.Agent
+		cp.Agent = &ag
+		if err := sealStr(key, &cp.Agent.VisionAPIKey); err != nil {
+			return err
+		}
 	}
 	b, err := json.MarshalIndent(&cp, "", "  ")
 	if err != nil {
@@ -180,28 +216,38 @@ func (s *Store) loadOrCreateKey() ([]byte, error) {
 	return key, nil
 }
 
-func sealAPIKey(key []byte, llm *LLMSettings) error {
-	if llm.APIKey == "" || strings.HasPrefix(llm.APIKey, encPrefix) {
+// sealStr 通用加密单个字符串字段(空串/已加密跳过),LLM Key 与视觉模型 Key 共用
+func sealStr(key []byte, s *string) error {
+	if *s == "" || strings.HasPrefix(*s, encPrefix) {
 		return nil
 	}
-	ct, err := encrypt(key, []byte(llm.APIKey))
+	ct, err := encrypt(key, []byte(*s))
 	if err != nil {
 		return err
 	}
-	llm.APIKey = encPrefix + ct
+	*s = encPrefix + ct
 	return nil
 }
 
-func openAPIKey(key []byte, llm *LLMSettings) error {
-	if !strings.HasPrefix(llm.APIKey, encPrefix) {
-		return nil // 明文（旧格式），保持原样，下次保存时迁移加密
+// openStr 通用解密单个字符串字段(明文旧格式保持原样,下次保存时迁移加密)
+func openStr(key []byte, s *string) error {
+	if !strings.HasPrefix(*s, encPrefix) {
+		return nil
 	}
-	pt, err := decrypt(key, llm.APIKey[len(encPrefix):])
+	pt, err := decrypt(key, (*s)[len(encPrefix):])
 	if err != nil {
-		return errors.New("解密 API key 失败：主密钥可能已变更")
+		return err
 	}
-	llm.APIKey = pt
+	*s = pt
 	return nil
+}
+
+func sealAPIKey(key []byte, llm *LLMSettings) error {
+	return sealStr(key, &llm.APIKey)
+}
+
+func openAPIKey(key []byte, llm *LLMSettings) error {
+	return openStr(key, &llm.APIKey)
 }
 
 func encrypt(key, plaintext []byte) (string, error) {
