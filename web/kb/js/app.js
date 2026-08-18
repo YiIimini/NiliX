@@ -538,6 +538,15 @@ const App = {
       if (e.key === "Enter") send();
     });
     if (inp) inp.addEventListener("input", () => this.armAiChatIdle());
+    // 快捷指令(体检/风格/总结/修复):点击即发送(对话框打开状态)
+    document.querySelectorAll("#ai-chat-quick [data-qchat]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const box = document.getElementById("ai-chat-box");
+        if (box && box.classList.contains("hidden")) this.toggleAiChat();
+        this.mascotChat(b.dataset.qchat);
+        this.armAiChatIdle();
+      })
+    );
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       const box = document.getElementById("ai-chat-box");

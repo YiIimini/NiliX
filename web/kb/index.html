@@ -419,7 +419,6 @@
               <div class="manju-progress"><div id="manju-progress-bar" class="manju-progress-bar"></div></div>
             </div>
             <div id="manju-flow"></div>
-            <div id="manju-agent-panel" class="manju-agent-panel hidden"></div>
             <pre id="manju-log" class="manju-log">(就绪)</pre>
           </div>
           <div class="manju-side-head manju-fold-head" id="manju-out-fold" title="点击折叠/展开产物">
@@ -443,9 +442,17 @@
     <img id="ai-avatar" src="/assets/anim01.webp" alt="AI 助手" draggable="false">
   </div>
 
-  <!-- AI 对话窗口:由气泡展开(内容+输入一体);未对话闲置自动收起(设置可配) -->
+  <!-- AI 对话窗口:由气泡展开(内容+输入一体);上半为 Agent 审片/档案状态卡(迁自右栏),下半聊天;
+       未对话闲置自动收起(设置可配) -->
   <div id="ai-chat-box" class="hidden">
+    <div id="ai-ag-panel"></div>
     <div id="ai-chat-log"></div>
+    <div id="ai-chat-quick">
+      <button class="hrs-btn" data-qchat="体检">🔍 体检</button>
+      <button class="hrs-btn" data-qchat="推荐风格">🎨 风格</button>
+      <button class="hrs-btn" data-qchat="总结">🧠 总结</button>
+      <button class="hrs-btn" data-qchat="修复">🔧 修复</button>
+    </div>
     <div id="ai-chat-in">
       <input id="ai-chat-input" placeholder="问我任何问题,或下指令:体检 / 推荐风格 / 总结 / 修复…" spellcheck="false" autocomplete="off">
       <button id="ai-chat-send" class="hrs-btn hrs-btn-primary">➤</button>

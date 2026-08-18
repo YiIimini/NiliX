@@ -1445,54 +1445,7 @@
       });
     },
 
-    /* ---- Agent 对话(自然语言指令) ---- */
-    renderChatLog() {
-      const log = $("mj-ag-chat-log");
-      if (!log) return;
-      log.innerHTML = (this._chatLog || []).map((m) =>
-        `<div class="mj-chat-bubble ${m.who}"><span class="mj-c-who">${m.who === "me" ? "你" : "🤖"}</span> ${m.html}</div>`).join("");
-      log.scrollTop = log.scrollHeight;
-    },
-    agentChat(text) {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
-      if (!text.trim()) return;
-      this._chatLog = this._chatLog || [];
-      const say = (html, who) => { this._chatLog.push({ html, who }); this.renderChatLog(); };
-      say(esc(text), "me");
-      post("/api/manju/agent/chat", { config: this.project, text }).then((r) => {
-        say(r.reply ? r.reply.split("\n").map((l) => esc(l)).join("<br>") : "…", "ag");
-        if (r.action === "health") this.openHealth();
-        else if (r.action === "style") {
-          // 风格分析已由后端执行完(上方 reply 即结果);刷新表单与风格按钮
-          this.loadProject();
-        } else if (r.action === "fixall") {
-          // 修复已由后端执行完(上方 reply 即结果);刷新体检与表单
-          this.loadHealth(false);
-          this.loadProject();
-        }
-      }).catch((e) => say("❌ " + esc(e.message), "ag"));
-    },
-    bindChat() {
-      const send = () => {
-        const inp = $("mj-ag-chat-input");
-        if (!inp) return;
-        const v = inp.value.trim();
-        if (!v) return;
-        inp.value = "";
-        this.agentChat(v);
-      };
-      const sb = $("mj-ag-chat-send");
-      if (sb) sb.addEventListener("click", send);
-      const inp = $("mj-ag-chat-input");
-      if (inp) inp.addEventListener("keydown", (e) => {
-        // 中文输入法选词回车(isComposing)不发送,避免把半截拼音/候选发出去
-        if (e.isComposing || e.keyCode === 229) return;
-        if (e.key === "Enter") send();
-      });
-      document.querySelectorAll("#manju-agent-panel [data-chat]").forEach((b) =>
-        b.addEventListener("click", () => { const inp2 = $("mj-ag-chat-input"); if (inp2) inp2.value = b.dataset.chat; this.agentChat(b.dataset.chat); })
-      );
-    },
+    /* ---- Agent 对话:已迁至底部 AI 助手气泡对话框(App.mascotChat/aiReply) ---- */
 
     /* ---- 智能体:审片报告面板 + 升级处理 ---- */
     resolveEsc(shot, action) {
@@ -1507,7 +1460,7 @@
       if (!this.project) return;
       if (!this.agent || !this.agent.visionModel) { this.setErr("未配置视觉模型(设置 → 智能体)"); return; }
       if (this.status.running) { this.setErr("任务运行中，结束后再重审"); return; }
-      const panel = $("manju-agent-panel");
+      const panel = $("ai-ag-panel");
       if (panel) panel.dataset.busy = String(shot);
       post("/api/manju/agent/judge", {
         config: this.project, episode: this.episode, shot,
@@ -1544,26 +1497,9 @@
     },
 
     renderAgent() {
-      const el = $("manju-agent-panel");
+      // Agent 状态卡(审片/档案/建议)渲染进底部 AI 助手对话框顶部;聊天走对话框输入区
+      const el = $("ai-ag-panel");
       if (!el) return;
-      // 静态区(对话/快捷指令)只在首次构造
-      if (!el.querySelector(".mj-ag-chat")) {
-        el.insertAdjacentHTML("beforeend", `
-          <div class="mj-ag-chat">
-            <div class="mj-ag-chat-log" id="mj-ag-chat-log"></div>
-            <div class="mj-ag-chat-in">
-              <input id="mj-ag-chat-input" placeholder="对智能体说…(体检 / 推荐风格 / 总结 / 修复)" spellcheck="false">
-              <button id="mj-ag-chat-send" class="hrs-btn hrs-btn-primary">➤</button>
-            </div>
-            <div class="mj-ag-chat-quick">
-              <button class="hrs-btn" data-chat="体检">🔍 体检</button>
-              <button class="hrs-btn" data-chat="推荐风格">🎨 风格</button>
-              <button class="hrs-btn" data-chat="总结">🧠 总结</button>
-              <button class="hrs-btn" data-chat="修复">🔧 修复</button>
-            </div>
-          </div>`);
-        this.bindChat();
-      }
       const ag = this.agent;
       const mem = (ag && ag.memory) || {};
       const lastErr = ag && ag.lastError;
@@ -1586,13 +1522,8 @@
         return;
       }
       el.classList.remove("hidden");
-      // 动态报告区(轮询重建,聊天区在面板里不受影响)
-      let body = $("mj-ag-body");
-      if (!body) {
-        body = document.createElement("div");
-        body.id = "mj-ag-body";
-        el.insertBefore(body, el.querySelector(".mj-ag-chat"));
-      }
+      // 状态卡主体(轮询重建,内容比对跳过——点击/滚动不丢)
+      const body = el;
       const shots = (ag && ag.shots) || [];
       const pass = shots.filter((s) => s.status === "pass" || s.status === "fixed").length;
       const failed = shots.filter((s) => s.status === "failed").length;

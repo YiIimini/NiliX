@@ -3791,8 +3791,8 @@ select option { text-align: center; }
 #ai-chat-box {
   position: fixed; left: 50%; bottom: 172px; z-index: 91;
   transform: translateX(-50%);
-  width: min(380px, calc(100vw - 32px));
-  max-height: 46vh;
+  width: min(400px, calc(100vw - 32px));
+  max-height: 64vh; /* 状态卡(≤30vh)+聊天记录+快捷行+输入,超出各自滚动 */
   display: flex; flex-direction: column;
   border-radius: 18px;
   border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--panel-border));
@@ -3803,6 +3803,21 @@ select option { text-align: center; }
   overflow: hidden;
 }
 #ai-chat-box.hidden { display: none; }
+/* Agent 状态卡区(审片/档案/建议,迁自右栏):对话框顶部,自身滚动 */
+#ai-ag-panel {
+  max-height: 30vh; overflow-y: auto;
+  padding: 10px 12px 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--panel-border) 70%, transparent);
+}
+#ai-ag-panel.hidden { display: none; }
+#ai-ag-panel .mj-ag-head { margin-bottom: 6px; }
+#ai-ag-panel .mj-ag-chip { cursor: pointer; }
+/* 快捷指令行 */
+#ai-chat-quick {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  padding: 8px 12px 0;
+}
+#ai-chat-quick .hrs-btn { padding: 3px 10px; font-size: 12px; }
 #ai-chat-log {
   flex: 1; overflow-y: auto; padding: 12px 14px 4px;
   display: flex; flex-direction: column; gap: 8px;
