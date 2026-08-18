@@ -36,8 +36,94 @@ const KbView = {
         return;
       }
     }
+    // 页面互链边:后端图谱接口有真实双链(2058 条),一次拉取缓存;没有时静默降级
+    if (!this._edges) {
+      try {
+        const r2 = await fetch("/api/graph", { cache: "no-store" });
+        if (r2.ok) {
+          const g = await r2.json();
+          this._edges = (g.links || []).filter((l) =>
+            l.source !== "README" && l.target !== "README" &&
+            !String(l.source).startsWith("cat:") && !String(l.target).startsWith("cat:"));
+        }
+      } catch (e2) { this._edges = []; }
+    }
     this.render(document.getElementById("kb-search").value.trim());
     if (anchor) this.openPage(anchor);
+  },
+
+  /* 初始适配:按坐标包络盒算 zoom,仅布局模式变化或首次时重置(不打扰用户缩放) */
+  _fitZoomFor(mode, nodes) {
+    if (mode === "force") return 1;
+    if (this._fitMode === mode && this._fitZoom) return this._fitZoom;
+    const el = document.getElementById("kb-graph");
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    nodes.forEach((n) => {
+      if (typeof n.x !== "number") return;
+      x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y);
+      x1 = Math.max(x1, n.x); y1 = Math.max(y1, n.y);
+    });
+    const w = (el && el.clientWidth) || 1200, h = (el && el.clientHeight) || 700;
+    const z = Math.min(w / Math.max(80, x1 - x0), h / Math.max(80, y1 - y0)) * 0.86;
+    this._fitMode = mode; this._fitZoom = Math.max(0.08, Math.min(1.4, z));
+    return this._fitZoom;
+  },
+
+  /* 行星公转:全节点绕中心缓慢旋转(layout:none 坐标系;悬停/拖拽暂停;离开本页停止) */
+  startSpin(nodes) {
+    this.stopSpin();
+    if (!nodes || !nodes.length) return;
+    this._spinNodes = nodes;
+    this._spinAng = this._spinAng || 0;
+    this._spinPause = 0;
+    if (this._chart) {
+      // 注意:echarts off() 返回 undefined,不可链式 on
+      const c = this._chart;
+      c.off("mouseover", this._spinHovIn);
+      c.off("mouseout", this._spinHovOut);
+      this._spinHovIn = () => { this._spinPause++; };
+      this._spinHovOut = () => { this._spinPause = Math.max(0, this._spinPause - 1); };
+      c.on("mouseover", this._spinHovIn);
+      c.on("mouseout", this._spinHovOut);
+      const zr = c.getZr();
+      if (zr) {
+        zr.off("dragstart", this._spinDgIn);
+        zr.off("dragend", this._spinDgOut);
+        this._spinDgIn = () => { this._spinPause++; };
+        this._spinDgOut = () => { this._spinPause = Math.max(0, this._spinPause - 1); };
+        zr.on("dragstart", this._spinDgIn);
+        zr.on("dragend", this._spinDgOut);
+      }
+    }
+    const step = () => {
+      const el = document.getElementById("kb-graph");
+      if (!this._spinNodes || !this._chart || !el || !document.getElementById("view-kb").classList.contains("is-active")) return; // 离开页面自动停
+      if (!this._spinPause) {
+        this._spinAng += 0.0013;                    // 缓慢公转
+        const cos = Math.cos(this._spinAng), sin = Math.sin(this._spinAng);
+        this._spinNodes.forEach((n) => {
+          if (typeof n.x !== "number") return;
+          const x = n.x, y = n.y;
+          n.x = x * cos - y * sin;
+          n.y = x * sin + y * cos;
+        });
+        this._chart.setOption({ series: [{ data: this._spinNodes }] }, { lazyUpdate: true, silent: true });
+      }
+      this._spinT = setTimeout(step, 55);           // ≈18fps,肉眼顺滑且省电
+    };
+    step();
+  },
+  stopSpin() {
+    clearTimeout(this._spinT);
+    this._spinNodes = null;
+  },
+
+  /* 分类专属固定色:黄金角 HSL 散布,饱和/亮度收敛在高级感区间,同分类永远同色(图例一一对应) */
+  catPalette(name) {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    const hue = Math.round(h % 360);
+    return "hsl(" + hue + ", 62%, 60%)";
   },
 
   /* 解析 README 结构:## emoji 大类(N 页) / #### 子类(n) / - [[页]] — 描述 */
@@ -101,7 +187,7 @@ const KbView = {
       return all.length && catHit(c);
     });
     const N = visCats.length || 1;
-    const R1 = 150 + N * 26;                       // 枢纽环半径
+    const R1 = 190 + N * 36;                       // 枢纽环半径(更外扩,天然分散)
     const P = (typeof App !== "undefined" && App.prefs) ? App.prefs : {};
     const mode = P.kbLayout || "radial";
     const shapeOf = (h) => {
@@ -118,19 +204,19 @@ const KbView = {
     // 中心:README 索引节点(force 模式不给坐标,物理模拟自然居中;radial/ring 固定原点)
     const central = mode !== "force";
     nodes.push({ id: "README", name: "README · 索引", kind: "page", category: "索引", x: 0, y: 0, fixed: central,
-      symbol: "circle", symbolSize: 58,
-      itemStyle: { color: App.catColor("索引") !== "#999" ? App.catColor("索引") : "#E8C268", borderColor: "#fff", borderWidth: 2, shadowBlur: 26, shadowColor: "rgba(232,194,104,.55)" },
+      symbol: "circle", symbolSize: 9,
+      itemStyle: { color: "#E8C268", borderColor: "#F5DFA0", borderWidth: 2.5, shadowBlur: 22, shadowColor: "rgba(232,194,104,.6)" },
       label: { show: true, position: "bottom", distance: 8, color: "#E8C268", fontSize: 13, fontWeight: 800 } });
     visCats.forEach((c, ci) => {
       const ang = -Math.PI / 2 + ci * (Math.PI * 2 / N);
       const hx = Math.cos(ang) * R1, hy = Math.sin(ang) * R1;
       const matched = [...c.root, ...c.subs.flatMap((s) => s.pages)].filter(hit);
-      const color = App.catColor(c.name);
+      const color = KbView.catPalette(c.name);
       const sym = SYMS[ci % SYMS.length];
       // 枢纽
       nodes.push({ id: "hub:" + c.name, name: "◈ " + c.name, kind: "hub", category: c.name, x: hx, y: hy, fixed: central,
-        symbol: "circle", symbolSize: Math.min(46, 24 + matched.length * 0.22),
-        itemStyle: { color, borderColor: color, borderWidth: 2, shadowBlur: 14, shadowColor: color + "" },
+        symbol: "circle", symbolSize: 9,
+        itemStyle: { color, borderColor: color, borderWidth: 2, shadowBlur: 12, shadowColor: color + "" },
         label: { show: true, color, fontSize: 12, fontWeight: 700, position: "top", distance: 6 } });
       links.push({ source: "README", target: "hub:" + c.name,
         lineStyle: { color, width: 2.2, opacity: Math.min(0.85, lineOp + 0.3), curveness: curve } });
@@ -141,20 +227,41 @@ const KbView = {
         const h = hash(p2.name);
         const t = matched.length === 1 ? 0.5 : k / (matched.length - 1);
         const a = ang - spread / 2 + t * spread + ((h % 17) - 8) * 0.012;
-        let r = 70 + (h % 130) + Math.sqrt(k % 40) * 16;
+        let r = 130 + (h % 250) + Math.sqrt(k % 70) * 15;   // 更大散布半径,自然分散不扎堆
         let px = hx + Math.cos(a) * r, py = hy + Math.sin(a) * r;
         if (mode === "ring") { px = Math.cos(ang) * (R1 + 180 + (h % 90)); py = Math.sin(ang) * (R1 + 180 + (h % 90)); }
         const showLabel = labelBudget > 0 && (h % 97) < Math.max(1, Math.round(labelBudget / 5.8));
         nodes.push({ id: p2.name, name: p2.name, kind: "page", category: c.name,
           x: central ? px : undefined, y: central ? py : undefined,
-          symbol: shapeOf(h), symbolSize: 6.5 + (h % 5) + Math.min(6, (p2.desc || "").length / 24),
-          itemStyle: { color, opacity: 0.9, borderColor: color, borderWidth: 0.6 },
+          symbol: shapeOf(h), symbolSize: 9,       // 统一尺寸,悬停放大(emphasis.scale)
+          itemStyle: { color, opacity: 0.92, borderColor: color, borderWidth: 0.6 },
           label: { show: showLabel, color, fontSize: 10 } });
         links.push({ source: "hub:" + c.name, target: p2.name,
           lineStyle: { color, width: 1, opacity: lineOp, curveness: curve } });
       });
       legend.push({ name: c.name, color, n: matched.length, emoji: c.emoji || "" });
     });
+    // 页面↔页面双链弧线:互链的节点跨簇相连(同一对去重);跨类弧线更弯更亮,类内更柔
+    if (this._edges && this._edges.length) {
+      const nodeCat = {};
+      nodes.forEach((n) => { if (n.kind === "page") nodeCat[n.id] = n.category; });
+      const seen = new Set();
+      for (const e of this._edges) {
+        const a = nodeCat[e.source], b = nodeCat[e.target];
+        if (!a || !b) continue;                     // 过滤后不存在的页
+        const key = e.source < e.target ? e.source + "\u0000" + e.target : e.target + "\u0000" + e.source;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const cross = a !== b;
+        const hue = KbView.catPalette(a);
+        links.push({
+          source: e.source, target: e.target,
+          lineStyle: { color: hue, width: cross ? 1.2 : 0.8,
+            opacity: cross ? Math.min(0.5, lineOp + 0.22) : lineOp * 0.9,
+            curveness: cross ? (curve + 0.18) : (curve + 0.08), type: "solid" },
+        });
+      }
+    }
     this._chart.setOption({
       backgroundColor: "transparent",
       animation: false,
@@ -174,14 +281,19 @@ const KbView = {
         progressive: 260, progressiveThreshold: 520,
         hoverAnimation: false,
         edgeSymbol: ["none", "none"],
-        emphasis: (P.kbHoverLabel !== false)
-          ? { label: { show: true, fontSize: 11, color: "#fff" }, itemStyle: { shadowBlur: 12 } }
-          : { label: { show: false } },
+        emphasis: Object.assign(
+          { scale: 2.4, itemStyle: { shadowBlur: 14 } },
+          (P.kbHoverLabel !== false) ? { label: { show: true, fontSize: 11.5, color: "#fff", fontWeight: 600 } } : { label: { show: false } }),
+        // 初始全图视野:按节点包络盒适配缩放(进入即看到全部节点);用户缩放后不重置
+        center: ["50%", "50%"],
+        zoom: this._fitZoomFor(mode, nodes),
         label: { position: "right", distance: 4 },
         lineStyle: { curveness: 0.05 },
         data: nodes, links,
       }],
     }, true);
+    if (mode !== "force") this.startSpin(nodes.slice());
+    else this.stopSpin();
     document.getElementById("kb-legend").innerHTML = legend
       .map((l) => `<span class="kb-lg${this._catFilter === l.name ? " on" : ""}" data-cat="${l.name.replace(/"/g, "&quot;")}"><span class="gt-dot" style="background:${l.color}"></span>${l.emoji} ${l.name} <i>${l.n}</i></span>`).join("");
     document.querySelectorAll("#kb-legend .kb-lg").forEach((e2) =>

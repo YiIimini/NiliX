@@ -609,18 +609,32 @@
               <div id="manju-apikey-status" class="manju-set-status">${keyStatus}</div>
 
               <div class="manju-set-sub">👁 视觉模型 · 审片官（未配置时仅机械质检，不判分不返工）</div>
+              ${(() => {
+                const presetHit = VISION_PRESETS.find((p) => p.id === (ag.visionModel || ""));
+                const isCustom = ag.visionModel && !presetHit;
+                return `
               <div class="manju-field-row">
-                <label>模型名</label>
-                <input id="manju-ag-model" class="manju-input manju-mono" value="${esc(ag.visionModel || "")}" placeholder="如 glm-4.6v-flash(智谱·免费) / qwen3-vl-plus" spellcheck="false">
+                <label>模型</label>
+                <select id="manju-ag-model" class="manju-input">
+                  <option value="" ${ag.visionModel ? "" : "selected"}>请选择视觉模型…</option>
+                  ${VISION_PRESETS.map((p) => `<option value="${p.id}" ${presetHit && presetHit.id === p.id ? "selected" : ""}>${p.label}</option>`).join("")}
+                  <option value="__custom__" ${isCustom ? "selected" : ""}>自定义…</option>
+                </select>
               </div>
-              <div class="manju-field-row">
+              <div class="manju-field-row" id="manju-ag-model-custom-row" ${isCustom ? "" : 'style="display:none"'}>
+                <label>模型 ID</label>
+                <input id="manju-ag-model-custom" class="manju-input manju-mono" value="${esc(isCustom ? ag.visionModel : "")}" placeholder="自定义模型 ID（OpenAI 兼容）" spellcheck="false">
+              </div>
+              <div class="manju-field-row" id="manju-ag-url-row" ${isCustom ? "" : 'style="display:none"'}>
                 <label>API 地址</label>
-                <input id="manju-ag-url" class="manju-input manju-mono" value="${esc(ag.visionBaseUrl || "")}" placeholder="OpenAI 兼容地址,如 https://open.bigmodel.cn/api/paas/v4(留空用 DeepSeek 地址)" spellcheck="false">
+                <input id="manju-ag-url" class="manju-input manju-mono" value="${esc(ag.visionBaseUrl || "")}" placeholder="OpenAI 兼容地址，如 https://open.bigmodel.cn/api/paas/v4" spellcheck="false">
               </div>
               <div class="manju-field-row">
                 <label>API Key</label>
-                <input id="manju-ag-key" class="manju-input manju-mono" type="password" placeholder="${ag.hasVisionKey ? "已保存(" + esc(ag.visionKeyMasked || "") + ")，留空沿用" : "留空共用上面的 DeepSeek Key"}" spellcheck="false" autocomplete="off">
+                <input id="manju-ag-key" class="manju-input manju-mono" type="password" placeholder="${ag.hasVisionKey ? "已保存(" + esc(ag.visionKeyMasked || "") + ")，留空沿用" : "粘贴所选模型对应平台的 API Key"}" spellcheck="false" autocomplete="off">
               </div>
+              <div class="manju-set-status" id="manju-ag-key-hint"></div>`;
+              })()}
               <div class="manju-set-row2">
                 <div class="manju-field-row">
                   <label>及格线</label><input id="manju-ag-pass" class="manju-input manju-num" type="number" min="40" max="100" value="${Math.round(ag.passScore || 75)}"><span class="manju-set-unit">分</span>
@@ -708,6 +722,8 @@
       $("manju-apikey-apply").addEventListener("click", () => this.saveApiKey(true));
       $("manju-ag-save").addEventListener("click", () => this.saveAgentCfg());
       $("manju-ag-test").addEventListener("click", () => this.testVision());
+      $("manju-ag-model").addEventListener("change", () => this.syncVisionForm());
+      this.syncVisionForm();
       // 智能模式开关:切换即时保存(勾选后刷新不再回落)
       $("manju-ag-enabled").addEventListener("change", () => {
         const msg = $("manju-ag-msg");
@@ -741,18 +757,39 @@
         if (applyToProject) this.loadProject();
       }).catch((e) => { st.textContent = "❌ " + e.message; });
     },
+    /* 视觉模型表单联动:预设自动带地址并提示 Key 去处,自定义时展开两行 */
+    syncVisionForm() {
+      const sel = $("manju-ag-model");
+      if (!sel) return;
+      const custom = sel.value === "__custom__";
+      const preset = VISION_PRESETS.find((p) => p.id === sel.value);
+      $("manju-ag-model-custom-row").style.display = custom ? "" : "none";
+      $("manju-ag-url-row").style.display = custom ? "" : "none";
+      $("manju-ag-key-hint").textContent = preset
+        ? "自动使用 " + preset.url + "｜" + preset.hint
+        : custom ? "自定义模式：填模型 ID、API 地址与对应 Key" : "选好模型后只填 API Key 即可，接口地址自动带出";
+    },
+    visionFormValues() {
+      const sel = $("manju-ag-model").value;
+      if (sel === "__custom__") {
+        return { model: $("manju-ag-model-custom").value.trim(), url: $("manju-ag-url").value.trim() };
+      }
+      const preset = VISION_PRESETS.find((p) => p.id === sel);
+      return { model: sel, url: preset ? preset.url : "" };
+    },
     /* 智能体配置保存(写入项目 config.json 的 agent 节;留空字段沿用旧值) */
     saveAgentCfg() {
       if (!this.project) return;
       const msg = $("manju-ag-msg");
       msg.textContent = "保存中…";
+      const v = this.visionFormValues();
       post("/api/manju/agent/settings", {
         config: this.project,
         agent: {
           enabled: $("manju-ag-enabled").checked,
-          vision_base_url: $("manju-ag-url").value.trim(),
+          vision_base_url: v.url,
           vision_api_key: $("manju-ag-key").value.trim(),
-          vision_model: $("manju-ag-model").value.trim(),
+          vision_model: v.model,
           pass_score: parseFloat($("manju-ag-pass").value) || 75,
           max_retries: parseInt($("manju-ag-retries").value, 10),
         },
@@ -766,8 +803,8 @@
     testVision() {
       if (!this.project) return;
       const msg = $("manju-ag-msg");
-      const model = $("manju-ag-model").value.trim();
-      if (!model) { msg.textContent = "请先填视觉模型名"; return; }
+      const model = this.visionFormValues().model;
+      if (!model) { msg.textContent = "请先选择视觉模型"; return; }
       msg.textContent = "测试中(先保存再测)…";
       this.saveAgentCfgQuiet().then(() => {
         msg.textContent = "测试中…";
@@ -777,13 +814,14 @@
       }).catch((e) => { msg.textContent = "❌ " + e.message; });
     },
     saveAgentCfgQuiet() {
+      const v = this.visionFormValues();
       return post("/api/manju/agent/settings", {
         config: this.project,
         agent: {
           enabled: $("manju-ag-enabled").checked,
-          vision_base_url: $("manju-ag-url").value.trim(),
+          vision_base_url: v.url,
           vision_api_key: $("manju-ag-key").value.trim(),
-          vision_model: $("manju-ag-model").value.trim(),
+          vision_model: v.model,
           pass_score: parseFloat($("manju-ag-pass").value) || 75,
           max_retries: parseInt($("manju-ag-retries").value, 10),
         },

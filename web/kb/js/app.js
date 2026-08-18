@@ -9,12 +9,12 @@ const App = {
 
   loadPrefs() {
     const d = { aiOn: true, aiStatus: true, aiQuotes: true, aiWander: true, aiFreq: 22000, aiSize: 104, aiWanderInt: 11000,
-      kbLayout: "force", kbShape: "mixed", kbCurve: 0.05, kbLineOp: 0.2, kbHoverLabel: true, kbLabels: 0,
+      kbLayout: "radial", kbShape: "mixed", kbCurve: 0.05, kbLineOp: 0.2, kbHoverLabel: true, kbLabels: 0,
       kbRepel: 200, kbDist: 120, kbGrav: 8 };
     let s = null;
     try { s = JSON.parse(localStorage.getItem("kbw-prefs") || "null"); } catch (e) {}
     this.prefs = Object.assign(d, s || {});
-    if (s && s.kbLayout === "radial" && s.kbRepel == null) this.prefs.kbLayout = "force"; // 旧配置迁移到新默认(星系)
+    if (s && (s.kbLayout === "force") && !s.kbSpin) { this.prefs.kbLayout = "radial"; this.prefs.kbSpin = 1; } // 公转版默认径向
     return this.prefs;
   },
   savePrefs() {
