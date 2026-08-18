@@ -446,6 +446,64 @@ func manjuNormalizeStyle(raw string) (string, string) {
 	return strings.Join(out, "+"), strings.Join(notes, "; ")
 }
 
+// manjuStyleAnalyzeRun 深度分析小说章节 → LLM 推荐渲染风格 → 写入 config.json + 记忆。
+// HTTP handler 与聊天「推荐风格」共用(聊天入口用 config 内的章节/集号缺省)。
+func manjuStyleAnalyzeRun(configPath, episode, chapters, novel string) (map[string]any, error) {
+	ctx, err := newManjuCtx(configPath, episode, chapters, "", novel)
+	if err != nil {
+		return nil, err
+	}
+	if ctx.llm == nil || ctx.llm.apiKey == "" {
+		return nil, fmt.Errorf("未配置 LLM(设置 → 智能体),无法深度分析")
+	}
+	text, err := ctx.chapterText()
+	if err != nil {
+		return nil, fmt.Errorf("读小说失败: %w", err)
+	}
+	if len([]rune(text)) < 200 {
+		return nil, fmt.Errorf("小说内容太少,无法深度分析")
+	}
+	old := str(ctx.cfg["style"])
+	sys := `你是漫剧(竖屏短剧)渲染风格分析师,根据小说章节内容判断最匹配的渲染风格。
+	【分析要点】题材类型(古装/现代/玄幻/科幻/都市/悬疑…)、叙事基调(热血/治愈/暗黑/甜宠…)、场景与美术特征、目标观众画风偏好。
+	【输出 JSON(严格)】{"style": "...", "reason": "..."}
+style 取值规则:
+	- 单个预设 key: 2.5d(2.5D动漫半写实) / real(写实真人电影) / 3d(3D CG) / anime(二次元) / handdrawn(手绘) / papercraft(纸艺) / clay(粘土) / ink(水墨)
+	- 或多个预设组合,用 + 连接(如 2.5d+ink,最多 3 个,语义冲突的组合不要)
+	- 或简短英文风格描述(≤6 个单词),如 cyberpunk / watercolor, light novel
+	reason: 不超过 100 字中文,说明题材/基调与所选风格的匹配理由。`
+	user := "当前渲染风格: " + old + "\n需渲染章节: " + ctx.chapters + " / 集 " + ctx.episode + "\n\n小说章节内容(节选):\n" + truncate(text, 12000)
+	out, err := ctx.llm.chatJSON(sys, user, 0.3)
+	if err != nil {
+		return nil, fmt.Errorf("深度分析失败: %w", err)
+	}
+	style, notes := manjuNormalizeStyle(str(out["style"]))
+	if style == "" {
+		return nil, fmt.Errorf("模型未给出有效风格,请重试")
+	}
+	reason := str(out["reason"])
+	if notes != "" {
+		if reason != "" {
+			reason += ";"
+		}
+		reason += notes
+	}
+	ctx.cfg["style"] = style
+	if err := writeManjuConfig(configPath, ctx.cfg); err != nil {
+		return nil, fmt.Errorf("写入渲染配置失败: %w", err)
+	}
+	// 学习记忆:记录风格选择(保留最近 10 次)
+	manjuAgentMu.Lock()
+	stc := loadAgentStateLocked(ctx.project)
+	stc.Memory.StyleChoices = append(stc.Memory.StyleChoices, manjuStyleChoice{At: time.Now().Unix(), Old: old, New: style, Reason: reason})
+	if len(stc.Memory.StyleChoices) > 10 {
+		stc.Memory.StyleChoices = stc.Memory.StyleChoices[len(stc.Memory.StyleChoices)-10:]
+	}
+	saveAgentStateLocked(ctx.project, stc)
+	manjuAgentMu.Unlock()
+	return map[string]any{"ok": true, "style": style, "old": old, "reason": reason}, nil
+}
+
 // manjuAgentStyleAnalyze 深度分析小说章节 → LLM 推荐渲染风格 → 写入 config.json(主要调整风格项)。
 // 返回旧/新风格与推荐理由,由前端决定是否继续走智能一条龙。
 func manjuAgentStyleAnalyze(w http.ResponseWriter, r *http.Request) {
@@ -459,66 +517,17 @@ func manjuAgentStyleAnalyze(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
 	}
-	ctx, err := newManjuCtx(configPath, str(body["episode"]), str(body["chapters"]), "", str(body["novel"]))
+	res, err := manjuStyleAnalyzeRun(configPath, str(body["episode"]), str(body["chapters"]), str(body["novel"]))
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
-		return
-	}
-	if ctx.llm == nil || ctx.llm.apiKey == "" {
-		http.Error(w, `{"error":"未配置 LLM(设置 → 智能体),无法深度分析"}`, http.StatusBadRequest)
-		return
-	}
-	text, err := ctx.chapterText()
-	if err != nil {
-		http.Error(w, `{"error":"读小说失败: `+err.Error()+`"}`, http.StatusBadRequest)
-		return
-	}
-	if len([]rune(text)) < 200 {
-		http.Error(w, `{"error":"小说内容太少,无法深度分析"}`, http.StatusBadRequest)
-		return
-	}
-	old := str(ctx.cfg["style"])
-	sys := `你是漫剧(竖屏短剧)渲染风格分析师,根据小说章节内容判断最匹配的渲染风格。
-【分析要点】题材类型(古装/现代/玄幻/科幻/都市/悬疑…)、叙事基调(热血/治愈/暗黑/甜宠…)、场景与美术特征、目标观众画风偏好。
-【输出 JSON(严格)】{"style": "...", "reason": "..."}
-style 取值规则:
-- 单个预设 key: 2.5d(2.5D动漫半写实) / real(写实真人电影) / 3d(3D CG) / anime(二次元) / handdrawn(手绘) / papercraft(纸艺) / clay(粘土) / ink(水墨)
-- 或多个预设组合,用 + 连接(如 2.5d+ink,最多 3 个,语义冲突的组合不要)
-- 或简短英文风格描述(≤6 个单词),如 cyberpunk / watercolor, light novel
-reason: 不超过 100 字中文,说明题材/基调与所选风格的匹配理由。`
-	user := "当前渲染风格: " + old + "\n需渲染章节: " + ctx.chapters + " / 集 " + ctx.episode + "\n\n小说章节内容(节选):\n" + truncate(text, 12000)
-	out, err := ctx.llm.chatJSON(sys, user, 0.3)
-	if err != nil {
-		http.Error(w, `{"error":"深度分析失败: `+err.Error()+`"}`, http.StatusInternalServerError)
-		return
-	}
-	style, notes := manjuNormalizeStyle(str(out["style"]))
-	if style == "" {
-		http.Error(w, `{"error":"模型未给出有效风格,请重试或选择「否」按当前配置运行"}`, http.StatusInternalServerError)
-		return
-	}
-	reason := str(out["reason"])
-	if notes != "" {
-		if reason != "" {
-			reason += ";"
+		code := http.StatusBadRequest
+		if strings.Contains(err.Error(), "深度分析失败") || strings.Contains(err.Error(), "未给出有效风格") ||
+			strings.Contains(err.Error(), "写入渲染配置失败") {
+			code = http.StatusInternalServerError
 		}
-		reason += notes
-	}
-	ctx.cfg["style"] = style
-	if err := writeManjuConfig(configPath, ctx.cfg); err != nil {
-		http.Error(w, `{"error":"写入渲染配置失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+		http.Error(w, `{"error":"`+err.Error()+`"}`, code)
 		return
 	}
-	// 学习记忆:记录风格选择(保留最近 10 次)
-	manjuAgentMu.Lock()
-	stc := loadAgentStateLocked(ctx.project)
-	stc.Memory.StyleChoices = append(stc.Memory.StyleChoices, manjuStyleChoice{At: time.Now().Unix(), Old: old, New: style, Reason: reason})
-	if len(stc.Memory.StyleChoices) > 10 {
-		stc.Memory.StyleChoices = stc.Memory.StyleChoices[len(stc.Memory.StyleChoices)-10:]
-	}
-	saveAgentStateLocked(ctx.project, stc)
-	manjuAgentMu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "style": style, "old": old, "reason": reason})
+	writeJSON(w, http.StatusOK, res)
 }
 
 // ---- 机械质检(JSON 报告) ----

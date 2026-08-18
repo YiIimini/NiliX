@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -159,6 +160,60 @@ func manjuHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": items, "summary": n})
 }
 
+// manjuApplyHealthFix 对 config 应用单项修复(返回是否实际改动);体检弹窗/聊天「修复」共用
+func manjuApplyHealthFix(configPath, key string) (bool, error) {
+	ctx, err := newManjuCtx(configPath, "", "", "", "")
+	if err != nil {
+		return false, err
+	}
+	cfg := ctx.cfg
+	R, _ := cfg["render"].(map[string]any)
+	if R == nil {
+		R = map[string]any{}
+		cfg["render"] = R
+	}
+	switch key {
+	case "render_steps":
+		if t, ok := manjuToInt(R["turbo_steps"]); ok && t > 0 {
+			R["steps"] = t
+		} else {
+			return false, nil
+		}
+	case "render_seed":
+		R["seed"] = 1688
+	case "render_fps":
+		R["fps"] = 24
+	case "render_dur":
+		R["min_shot_seconds"] = 4
+		R["max_shot_seconds"] = 12
+	default:
+		return false, fmt.Errorf("该检查项不可自动修复")
+	}
+	return true, writeManjuConfig(configPath, cfg)
+}
+
+// manjuFixAll 体检 + 自动修复全部可修复项(后端直接执行;聊天「修复」与前端 fixAllHealth 共用)
+func manjuFixAll(configPath string) (fixed []string, errs []string) {
+	ctx, err := newManjuCtx(configPath, "", "", "", "")
+	if err != nil {
+		return nil, []string{err.Error()}
+	}
+	for _, it := range manjuHealthCheck(ctx) {
+		if !it.Fixable || it.Status == "ok" {
+			continue
+		}
+		ok, err := manjuApplyHealthFix(configPath, it.Key)
+		if err != nil {
+			errs = append(errs, it.Label+": "+err.Error())
+			continue
+		}
+		if ok {
+			fixed = append(fixed, it.Label)
+		}
+	}
+	return fixed, errs
+}
+
 // manjuHealthFix 一键修复可修复的体检项(写回 config.json 后重跑体检)
 func manjuHealthFix(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
@@ -172,33 +227,12 @@ func manjuHealthFix(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config/key"}`, http.StatusBadRequest)
 		return
 	}
-	ctx, err := newManjuCtx(configPath, "", "", "", "")
+	applied, err := manjuApplyHealthFix(configPath, key)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 		return
 	}
-	cfg := ctx.cfg
-	R, _ := cfg["render"].(map[string]any)
-	switch key {
-	case "render_steps":
-		if t, ok := manjuToInt(R["turbo_steps"]); ok && t > 0 {
-			R["steps"] = t
-		}
-	case "render_seed":
-		R["seed"] = 1688
-	case "render_fps":
-		R["fps"] = 24
-	case "render_dur":
-		R["min_shot_seconds"] = 4
-		R["max_shot_seconds"] = 12
-	default:
-		http.Error(w, `{"error":"该检查项不可自动修复"}`, http.StatusBadRequest)
-		return
-	}
-	if err := writeManjuConfig(configPath, cfg); err != nil {
-		http.Error(w, `{"error":"写入配置失败: `+err.Error()+`"}`, http.StatusInternalServerError)
-		return
-	}
+	_ = applied
 	ctx2, err := newManjuCtx(configPath, "", "", "", "")
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
@@ -217,8 +251,11 @@ func containsAny(text string, keys ...string) bool {
 	return false
 }
 
-// manjuAgentChat 自然语言指令:关键词意图 → 动作(体检/推荐风格/审片报告/总结/修复);
-// 前端收到 action 后执行对应流程,reply 为智能体答复文案。
+// manjuAgentChat 智能对话:三层路由。
+// ①确定性指令(体检/风格/审片/总结/修复)直接触发动作;
+// ②未命中 → LLM 自由对话:注入项目实时上下文(风格/运行状态/审片摘要/记忆/最近错误),
+//   大模型以漫剧智能体人设回答任何问题,并可自主判断调用动作(输出 action 字段);
+// ③LLM 不可用(未配 Key/调用失败)→ 回退固定指令提示。
 func manjuAgentChat(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -231,17 +268,27 @@ func manjuAgentChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text := strings.ToLower(strings.TrimSpace(str(body["text"])))
+	rawText := strings.TrimSpace(str(body["text"]))
 	reply, action := "", ""
 	project := filepath.Base(filepath.Dir(configPath))
+
+	// ① 确定性指令路由(短语明确命中,不走 LLM,秒回)
+	routed := true
 	switch {
 	case text == "":
-		reply = "我是漫剧智能体 🤖,可以对我说:体检 / 推荐风格 / 审片报告 / 总结 / 修复"
+		reply = "我是漫剧智能体 🤖,可以对我说:体检 / 推荐风格 / 审片报告 / 总结 / 修复,也可以直接用自然语言问我任何问题(如「项目有什么问题」「画面太暗怎么调」)"
 	case containsAny(text, "体检", "检查", "健康", "诊断", "分析项目", "看看项目"):
 		action = "health"
 	case containsAny(text, "风格", "画风", "推荐风格"):
 		action = "style"
+		// 后端直接执行深度分析(用项目 config 内的章节/集号),任何入口说「推荐风格」都真分析
+		if res, serr := manjuStyleAnalyzeRun(configPath, "", "", ""); serr == nil {
+			reply = fmt.Sprintf("✅ 风格已更新:%s → %s(%s)",
+				styleLabelCN(str(res["old"])), styleLabelCN(str(res["style"])), truncate(str(res["reason"]), 60))
+		} else {
+			reply = "❌ 风格分析失败:" + truncate(serr.Error(), 100)
+		}
 	case containsAny(text, "审片", "判分", "分数", "报告", "得分"):
-		// 内联审片摘要
 		sum := agentStatusSummary(configPath)
 		shots := anyArr(sum["shots"])
 		pass, failed, esc := 0, 0, 0
@@ -263,13 +310,116 @@ func manjuAgentChat(w http.ResponseWriter, r *http.Request) {
 	case containsAny(text, "总结", "记忆", "学习", "统计", "回顾", "趋势", "档案", "经验"):
 		reply = manjuMemorySummary(project)
 	case containsAny(text, "修复", "处理问题", "修一下", "修了", "都修", "修问题", "优化", "完善", "升级", "调整配置", "调整一下"):
+		// 后端直接执行修复(不依赖前端实例方法),任何入口说「修复」都立竿见影
 		action = "fixall"
-	case containsAny(text, "你好", "hi", "hello", "在吗", "你是谁", "帮助", "help", "怎么用"):
-		reply = "我是漫剧智能体 🤖,负责帮你把小说变成成片。可以对我说:\n· 体检 / 分析项目 —— 全项体检 + 一键修复\n· 推荐风格 —— 深度分析小说,自动更新渲染风格\n· 审片报告 —— 查看逐镜判分\n· 总结 / 学习 —— 汇总高频问题与分数趋势\n· 修复 —— 自动处理可修复的配置问题"
+		fixed, errs := manjuFixAll(configPath)
+		switch {
+		case len(fixed) > 0:
+			reply = "🔧 已自动修复 " + strconv.Itoa(len(fixed)) + " 项:" + strings.Join(fixed, "、")
+			if len(errs) > 0 {
+				reply += ";另有 " + strconv.Itoa(len(errs)) + " 项失败(" + truncate(strings.Join(errs, ";"), 80) + ")"
+			}
+		case len(errs) > 0:
+			reply = "❌ 修复失败:" + truncate(strings.Join(errs, ";"), 120)
+		default:
+			reply = "ℹ️ 体检过一遍,当前没有可自动修复的项(步数/种子/帧率/时长均正常);其余异常项需要手动处理,对我说「体检」看详情"
+		}
 	default:
-		reply = "没听懂这句话 😅 可以试试:体检 / 推荐风格 / 审片报告 / 总结 / 修复"
+		routed = false
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply, "action": action})
+	if routed {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply, "action": action})
+		return
+	}
+
+	// ② LLM 自由对话:带项目实时上下文
+	ctx, err := newManjuCtx(configPath, "", "", "", "")
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true,
+			"reply": "项目配置读取失败:" + err.Error(), "action": ""})
+		return
+	}
+	if ctx.llm == nil || ctx.llm.apiKey == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true,
+			"reply": "我目前只支持固定指令:体检 / 推荐风格 / 审片报告 / 总结 / 修复。\n配置 DeepSeek Key(设置 → 智能体调度)后,我就能用自然语言回答任何问题、帮你分析项目。", "action": ""})
+		return
+	}
+	sys := manjuAgentChatSystem()
+	user := manjuAgentChatContext(ctx, configPath, project) + "\n\n【用户】" + rawText
+	out, lerr := ctx.llm.chatJSON(sys, user, 0.5)
+	if lerr == nil {
+		reply = str(out["reply"])
+		act := str(out["action"])
+		switch act { // 白名单:LLM 只能触发这几个动作
+		case "health", "style", "fixall":
+			action = act
+		}
+		if reply != "" {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply, "action": action})
+			return
+		}
+	}
+	// ③ 兜底
+	msg := "这个问题我一时答不上来 😅 固定指令随时可用:体检 / 推荐风格 / 审片报告 / 总结 / 修复"
+	if lerr != nil {
+		msg += "\n(自由对话调用模型失败:" + truncate(lerr.Error(), 80) + ")"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": msg, "action": ""})
+}
+
+// manjuAgentChatSystem 自由对话系统提示词:漫剧智能体人设 + 可调用动作说明
+func manjuAgentChatSystem() string {
+	return `你是 NiliX 漫剧工作台的智能体助手,帮用户把小说一键变成漫剧成片(管线:方案分镜 → 定妆照/场景图 → 预编码 → H3 渲染 → 质检+ASR 台词核对+审片判分 → 自动返工 → 合成)。
+根据给到的项目上下文,用中文简洁、口语化回答用户问题;不知道的事实直说,不编造。
+你可以在需要时调用动作,在 action 字段输出:
+- health:项目体检(诊断配置/模型/参数并给修复建议)——用户问「有没有问题/哪里要改」时用
+- style:深度分析小说并更新渲染风格——用户问「什么风格合适/帮我选风格」时用
+- fixall:自动修复可修复的配置问题——用户明确要你修时用
+不需要动作时 action 留空字符串。回答控制在 120 字内,可给具体建议(如参数怎么调、哪一步出问题)。
+输出严格 JSON:{"reply":"给用户的回答","action":""}`
+}
+
+// manjuAgentChatContext 组装项目实时上下文(风格/运行状态/审片/记忆/最近错误)
+func manjuAgentChatContext(ctx *manjuCtx, configPath, project string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "【项目上下文】\n项目: %s\n当前风格: %s\n", ctx.project, styleLabelCN(ctx.style))
+	if st := manjuStatusFor(configPath); st != nil {
+		if run, _ := st["running"].(bool); run {
+			fmt.Fprintf(&b, "运行状态: 运行中(%v)\n", st["stage"])
+		} else if rc, ok := st["rc"]; ok && rc != nil {
+			fmt.Fprintf(&b, "运行状态: 空闲(上次退出码 %v)\n", rc)
+		} else {
+			b.WriteString("运行状态: 空闲\n")
+		}
+	}
+	sum := agentStatusSummary(configPath)
+	if n := len(anyArr(sum["shots"])); n > 0 {
+		pass, failed := 0, 0
+		for _, s := range anyArr(sum["shots"]) {
+			if m, ok := s.(map[string]any); ok {
+				switch str(m["status"]) {
+				case "pass", "fixed", "accepted":
+					pass++
+				case "failed":
+					failed++
+				}
+			}
+		}
+		fmt.Fprintf(&b, "审片: %d 镜(%d 通过 / %d 未过), 待拍板 %d\n",
+			n, pass, failed, len(anyArr(sum["escalations"])))
+	} else {
+		b.WriteString("审片: 尚无记录\n")
+	}
+	if mem := manjuMemorySummary(project); !strings.Contains(mem, "没有学习记录") {
+		b.WriteString("记忆: " + strings.ReplaceAll(mem, "\n", "; ") + "\n")
+	}
+	if le, _ := sum["lastError"].(map[string]any); le != nil {
+		fmt.Fprintf(&b, "最近错误: 阶段 %s · %s\n", str(le["stage"]), str(le["diagnosis"]))
+	}
+	if str(ctx.novel) == "" {
+		b.WriteString("注意: 项目尚未配置小说正文\n")
+	}
+	return b.String()
 }
 
 // ---- 记忆学习汇总 ----

@@ -137,20 +137,41 @@ func TestAgentStyleLabelCN(t *testing.T) {
 }
 
 func TestAgentChatRoutes(t *testing.T) {
+	_, cfgPath := verifyConfig(t, "")
+	// 确定性指令:修复(后端直接执行,reply 必须带结果)
+	w, out := doReq(t, "POST", "/api/manju/agent/chat", map[string]any{"config": cfgPath, "text": "修复"})
+	if w.Code != 200 {
+		t.Fatalf("chat fix HTTP %d", w.Code)
+	}
+	if str(out["action"]) != "fixall" {
+		t.Errorf("action = %v", out["action"])
+	}
+	if !strings.Contains(str(out["reply"]), "已自动修复 4 项") {
+		t.Errorf("修复应直接执行并返回结果, got %q", str(out["reply"]))
+	}
+	// 修复后 config 已写回
+	var cfg map[string]any
+	b, _ := os.ReadFile(cfgPath)
+	_ = json.Unmarshal(b, &cfg)
+	R := cfg["render"].(map[string]any)
+	if n, _ := manjuToInt(R["fps"]); n != 24 {
+		t.Errorf("fps=%v, want 24", R["fps"])
+	}
+	// 再说修复:没有可修项,回复明确
+	_, out2 := doReq(t, "POST", "/api/manju/agent/chat", map[string]any{"config": cfgPath, "text": "把问题都修了"})
+	if !strings.Contains(str(out2["reply"]), "没有可自动修复") {
+		t.Errorf("二次修复应提示无项可修, got %q", str(out2["reply"]))
+	}
 	cases := []struct{ text, wantAction, wantContain string }{
 		{"帮我体检一下这个项目", "health", ""},
 		{"分析项目", "health", ""},
-		{"推荐风格吧", "style", ""},
-		{"看看什么画风合适", "style", ""},
+		{"看看什么画风合适", "style", "失败"}, // 无 LLM key 时代码里走 manjuStyleAnalyzeRun 报"未配置 LLM"
 		{"审片报告", "", "还没有审片记录"},
 		{"总结一下学习情况", "", "学习记录"},
 		{"记忆和趋势", "", "学习记录"},
-		{"把问题都修了", "fixall", ""},
-		{"优化调整升级一下", "fixall", ""},
-		{"你好你是谁", "", "漫剧智能体"},
-		{"天气怎么样", "", "没听懂"},
+		{"优化调整升级一下", "fixall", "没有可自动修复"},
+		{"你好你是谁", "", ""}, // 未知短语:无 Key → 回退固定指令提示
 	}
-	_, cfgPath := verifyConfig(t, "")
 	for _, c := range cases {
 		w, out := doReq(t, "POST", "/api/manju/agent/chat", map[string]any{"config": cfgPath, "text": c.text})
 		if w.Code != 200 {
@@ -163,6 +184,54 @@ func TestAgentChatRoutes(t *testing.T) {
 		if c.wantContain != "" && !strings.Contains(str(out["reply"]), c.wantContain) {
 			t.Errorf("chat(%q) reply 不含 %q: %q", c.text, c.wantContain, str(out["reply"]))
 		}
+	}
+	// 无 Key 自由对话回退:未配 Key 的项目问任意问题 → 提示配 Key(而非"没听懂")
+	_, out3 := doReq(t, "POST", "/api/manju/agent/chat", map[string]any{"config": cfgPath, "text": "画面太暗了怎么办"})
+	if !strings.Contains(str(out3["reply"]), "固定指令") || !strings.Contains(str(out3["reply"]), "DeepSeek") {
+		t.Errorf("无 Key 自由对话应提示配 Key: %q", str(out3["reply"]))
+	}
+}
+
+func TestAgentChatLLMFree(t *testing.T) {
+	// 自由对话:mock LLM 带上下文回答 + 可触发动作
+	var gotUser string
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var req struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.Unmarshal(b, &req)
+		for _, m := range req.Messages {
+			if m.Role == "user" {
+				gotUser = m.Content
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"reply\":\"画面暗可以把步数提到 20,并在提示词里强化光源描述\",\"action\":\"\"}"},"finish_reason":"stop"}]}`))
+	}))
+	defer llm.Close()
+	_, cfgPath := verifyConfig(t, "sk-chat")
+	var cfg map[string]any
+	b, _ := os.ReadFile(cfgPath)
+	_ = json.Unmarshal(b, &cfg)
+	L := cfg["llm"].(map[string]any)
+	L["base_url"] = strings.TrimSuffix(llm.URL, "/")
+	b, _ = json.MarshalIndent(cfg, "", "  ")
+	_ = os.WriteFile(cfgPath, b, 0644)
+	defer os.RemoveAll(filepath.Dir(manjuAgentStatePath(filepath.Base(filepath.Dir(cfgPath)))))
+
+	w, out := doReq(t, "POST", "/api/manju/agent/chat", map[string]any{"config": cfgPath, "text": "画面太暗了怎么办"})
+	if w.Code != 200 {
+		t.Fatalf("HTTP %d", w.Code)
+	}
+	if !strings.Contains(str(out["reply"]), "步数") {
+		t.Errorf("LLM 自由回答未透传: %q", str(out["reply"]))
+	}
+	if !strings.Contains(gotUser, "【项目上下文】") || !strings.Contains(gotUser, "画面太暗了怎么办") {
+		t.Errorf("上下文未注入, user=%q", truncate(gotUser, 80))
 	}
 }
 

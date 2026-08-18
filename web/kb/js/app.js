@@ -567,22 +567,13 @@ const App = {
         if (inManju) wb.openHealth();
         else this.aiReply("ag", "👉 体检详情请到<b>漫剧管理</b>页查看(或点页面里的「🔍 项目体检」)");
       } else if (d.action === "style") {
-        if (inManju && wb.styleAnalyze) {
-          this.aiReply("ag", "🤔 正在深度分析本章内容,推荐最匹配的渲染风格…");
-          wb.styleAnalyze().then((r2) => {
-            this.aiReply("ag", "✅ 风格已更新:<b>" + esc(wb.styleLabel(r2.old)) + "</b> → <b>" + esc(wb.styleLabel(r2.style)) + "</b>" + (r2.reason ? "(" + esc(r2.reason) + ")" : ""));
-          }).catch((e) => this.aiReply("ag", "❌ " + esc(e.message)));
-        } else {
-          this.aiReply("ag", "👉 风格分析需要项目上下文,请到<b>漫剧管理</b>页对我说「推荐风格」");
-        }
+        // 风格分析已由后端执行完(d.reply 带新旧风格与理由);刷新界面
+        if (inManju) wb.loadProject();
       } else if (d.action === "fixall") {
-        if (inManju && wb.fixAllHealth) {
-          this.aiReply("ag", "🔧 正在自动处理可修复项…");
-          wb.fixAllHealth().then((fr) => {
-            this.aiReply("ag", fr.fixed.length ? "✅ 已修复:" + esc(fr.fixed.join("、")) : "ℹ️ 没有可自动修复的项");
-          }).catch((e) => this.aiReply("ag", "❌ " + esc(e.message)));
-        } else {
-          this.aiReply("ag", "👉 一键修复需要项目上下文,请到<b>漫剧管理</b>页对我说「修复」");
+        // 修复已由后端直接执行完(d.reply 带结果);这里只刷新界面
+        if (inManju) {
+          wb.loadHealth(false);
+          wb.loadProject();
         }
       }
     }).catch((e) => { this.aiReply("ag", "❌ " + esc(e.message)); });

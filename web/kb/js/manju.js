@@ -1463,23 +1463,12 @@
         say(r.reply ? r.reply.split("\n").map((l) => esc(l)).join("<br>") : "…", "ag");
         if (r.action === "health") this.openHealth();
         else if (r.action === "style") {
-          const inp = $("mj-ag-chat-input");
-          if (inp) inp.disabled = true;
-          say("🤔 我在深度分析本章内容，推荐最匹配的渲染风格…", "ag");
-          this.styleAnalyze().then((r2) => {
-            say("✅ 风格已更新：<b>" + esc(this.styleLabel(r2.old)) + "</b> → <b>" + esc(this.styleLabel(r2.style)) + "</b>" + (r2.reason ? "（" + esc(r2.reason) + "）" : ""), "ag");
-            if (inp) inp.disabled = false;
-          }).catch((e) => {
-            say("❌ " + esc(e.message), "ag");
-            if (inp) inp.disabled = false;
-          });
+          // 风格分析已由后端执行完(上方 reply 即结果);刷新表单与风格按钮
+          this.loadProject();
         } else if (r.action === "fixall") {
-          say("🔧 正在自动处理可修复项…", "ag");
-          this.fixAllHealth().then((fr) => {
-            say(fr.fixed.length ? "✅ 已修复：" + esc(fr.fixed.join("、")) : "ℹ️ 没有可自动修复的项", "ag");
-            this.loadHealth(false);
-            this.loadProject();
-          }).catch((e) => say("❌ " + esc(e.message), "ag"));
+          // 修复已由后端执行完(上方 reply 即结果);刷新体检与表单
+          this.loadHealth(false);
+          this.loadProject();
         }
       }).catch((e) => say("❌ " + esc(e.message), "ag"));
     },
