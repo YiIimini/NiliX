@@ -21,6 +21,14 @@ const KbView = {
     }
     // 锚点:#/kb/页面名 → 渲染后直接开详情
     const anchor = decodeURIComponent((location.hash.split("/")[2] || "").trim());
+    // 已初始化:仅处理锚点弹窗(期望 hash 命中 = 自身 openPage 触发,不重渲染,避免 force 重排/循环)
+    if (this._md && this._chart) {
+      if (anchor && this._expectHash === location.hash) {
+        this._expectHash = null;
+        this.openPage(anchor, true);
+      }
+      return;
+    }
     if (!this._md) {
       const box = document.getElementById("kb-graph");
       if (box) box.innerHTML = "";
@@ -49,7 +57,7 @@ const KbView = {
       } catch (e2) { this._edges = []; }
     }
     this.render(document.getElementById("kb-search").value.trim());
-    if (anchor) this.openPage(anchor);
+    if (anchor) { this._expectHash = location.hash; this.openPage(anchor, true); }
   },
 
   /* 全图适配:force 布局收敛期间轮询取布局坐标,包围盒稳定后缩小到全部可见(只做一次) */
@@ -353,14 +361,20 @@ const KbView = {
     );
   },
 
-  /* 详情:按需拉单页;hash 锚点同步(#/kb/<页名>),返回清锚点 */
-  async openPage(name) {
+  /* 详情:按需拉单页;hash 锚点同步(#/kb/<页名>);防重入防循环 */
+  async openPage(name, viaHash) {
     name = decodeURIComponent(name);
+    if (this._openingPage) return;                 // 防连点/递归叠弹窗
+    this._openingPage = true;
     const esc = (s) => String(s == null ? "" : String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])));
     const wb = typeof ManjuWorkbench !== "undefined" ? ManjuWorkbench : null;
     if (!wb) return;
     wb.openModal(name, `<div class="dir-loading">加载中…</div>`, true);
-    location.hash = "#/kb/" + encodeURIComponent(name);
+    const target = "#/kb/" + encodeURIComponent(name);
+    if (location.hash !== target) {
+      this._expectHash = target;                    // 告诉 enter 这是本页自己的锚点,勿二次弹窗/重渲染
+      location.hash = target;
+    }
     try {
       const r = await fetch("/api/page?id=" + encodeURIComponent(name), { cache: "no-store" });
       if (!r.ok) throw new Error("页面不存在(索引可能过期,点右上角刷新)");
@@ -372,6 +386,8 @@ const KbView = {
          </div>`, true);
     } catch (e) {
       wb.openModal(name, `<div class="dir-empty">❌ ${esc(e.message)}</div>`, true);
+    } finally {
+      this._openingPage = false;
     }
   },
 };
