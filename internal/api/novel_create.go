@@ -12,10 +12,12 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"sync"
 	"strings"
 	"time"
 
 	"nilix/internal/backend"
+	"nilix/internal/config"
 )
 
 const novelRootDir = `C:\Mi\Ai\WorkBench\Novel`
@@ -153,7 +155,7 @@ chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d。`, req.Title, nvO
 		"chapters": len(plan.Chapters)})
 }
 
-// handleNovelChapter 逐章生成:读大纲对应条目+前章结尾,产出 ≥1280 字正文落盘(幂等,已存在直接返回)。
+// handleNovelChapter 逐章生成(幂等):读大纲条目+前章结尾,产出 ≥1280 字正文落盘。
 func (s *Server) handleNovelChapter(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Title string `json:"title"`
@@ -172,104 +174,12 @@ func (s *Server) handleNovelChapter(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "未配置 LLM API key")
 		return
 	}
-	proj := novelProjDir(req.Title)
-	b, err := os.ReadFile(filepath.Join(proj, "设定集", "设定集与大纲.md"))
+	res, err := writeNovelChapter(req.Title, req.No, cfg)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "先立项生成大纲")
+		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	outline := string(b)
-
-	// 已有该章(按 第NNN章 前缀)→ 幂等返回
-	if f, name := findChapter(proj, req.No); f != "" {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exists": true, "file": name})
-		return
-	}
-
-	// 大纲条目行
-	var entry string
-	for _, line := range strings.Split(outline, "\n") {
-		if strings.HasPrefix(line, fmt.Sprintf("- 第%03d章", req.No)) {
-			entry = strings.TrimPrefix(line, "- ")
-			break
-		}
-	}
-	if entry == "" {
-		writeErr(w, http.StatusBadRequest, fmt.Sprintf("大纲缺少第 %d 章", req.No))
-		return
-	}
-	// 前一章结尾(承接)
-	prevTail := "(本书第一章,直接开局)"
-	if req.No > 1 {
-		if pf, _ := findChapter(proj, req.No-1); pf != "" {
-			if pb, err := os.ReadFile(pf); err == nil {
-				t := strings.TrimSpace(string(pb))
-				if len(t) > 120 {
-					t = t[len(t)-120:]
-				}
-				prevTail = t
-			}
-		}
-	}
-
-	llm := backend.NewLLMClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model,
-		time.Duration(cfg.LLM.RequestTimeout)*time.Second)
-	sys := "你是爽文小说写手。要求:正文口语化短句、去AI味;场景/情绪具体;每章结尾留钩子;不要小标题、不要总结。只输出 JSON。"
-	usr := fmt.Sprintf(`小说《%s》设定与大纲如下(节选):
-%s
-
-本次写第 %d 章。大纲条目:%s
-上一章结尾(承接,不要复述):%s
-
-硬性要求:正文 ≥1280 字(2000 字左右最佳);推进大纲事件;至少一个爽点或冲突升级。
-严格输出 {"title":"章节名","content":"正文全文"} JSON。`, req.Title, clip(outline, 2400), req.No, entry, prevTail)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
-	defer cancel()
-	raw, err := llm.Chat(ctx, []backend.ChatMessage{
-		{Role: "system", Content: sys}, {Role: "user", Content: usr}}, 8000, 0.85)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "第"+strconv.Itoa(req.No)+"章生成失败: "+err.Error())
-		return
-	}
-	var ch struct {
-		Title   string `json:"title"`
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal([]byte(stripJSONFence(raw)), &ch); err != nil || len([]rune(ch.Content)) < 800 {
-		writeErr(w, http.StatusBadGateway, "第"+strconv.Itoa(req.No)+"章解析失败或字数不足,请重试")
-		return
-	}
-	chTitle := novelTitleSan.ReplaceAllString(ch.Title, "")
-	if chTitle == "" {
-		chTitle = fmt.Sprintf("第%03d章", req.No)
-	}
-	vol := (req.No + 6) / 7
-	// 卷名:从大纲卷结构取(卷X_卷名),缺省 卷NN
-	volName := fmt.Sprintf("卷%02d", vol)
-	for _, line := range strings.Split(outline, "\n") {
-		if strings.HasPrefix(line, "- 卷") {
-			var vno int
-			var vtitle string
-			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "- 卷"), "%d %s", &vno, &vtitle); err == nil && vno == vol {
-				volName = fmt.Sprintf("卷%02d_%s", vol, vtitle)
-				break
-			}
-		}
-	}
-	volDir := filepath.Join(proj, "正文", volName)
-	_ = os.MkdirAll(volDir, 0755)
-	name := fmt.Sprintf("第%03d章_%s.md", req.No, chTitle)
-	file := filepath.Join(volDir, name)
-	body := fmt.Sprintf("# 第%03d章 %s\n\n%s\n", req.No, chTitle, ch.Content)
-	if err := os.WriteFile(file, []byte(body), 0644); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	// 全本增量合并:全本/<书名>·全本.md(标题+目录+全文)
-	appendToFullBook(proj, req.Title, req.No, chTitle, ch.Content)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file": name,
-		"words": len([]rune(ch.Content)), "title": chTitle})
+	writeJSON(w, http.StatusOK, res)
 }
 
 // handleNovelProgress 查询某书已有章节(断点续写)。
@@ -411,4 +321,261 @@ func appendToFullBook(proj, title string, no int, chTitle, content string) {
 	// 追加本章正文
 	b = append(b, []byte(fmt.Sprintf("\n\n## 第%03d章 %s\n\n%s\n", no, chTitle, content))...)
 	_ = os.WriteFile(fp, b, 0644)
+}
+
+// ================= 后台自动续写(弹窗关闭仍在后台跑) =================
+type novelAutoTask struct {
+	Title   string `json:"title"`
+	Running bool   `json:"running"`
+	Current int    `json:"current"`
+	Total   int    `json:"total"`
+	Done    bool   `json:"done"`
+	stop    chan struct{}
+}
+
+var (
+	novelAutoMu   sync.Mutex
+	novelAutoTasks = map[string]*novelAutoTask{}
+)
+
+func novelAutoStatus(title string) map[string]any {
+	novelAutoMu.Lock()
+	defer novelAutoMu.Unlock()
+	t, ok := novelAutoTasks[title]
+	if !ok {
+		return map[string]any{"title": title, "running": false, "current": 0, "total": 0, "done": false}
+	}
+	return map[string]any{"title": t.Title, "running": t.Running, "current": t.Current, "total": t.Total, "done": t.Done}
+}
+
+// handleNovelAuto 启动后台自动续写(幂等:已运行直接返回)
+func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Title string `json:"title"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	req.Title = strings.TrimSpace(req.Title)
+	if req.Title == "" {
+		writeErr(w, http.StatusBadRequest, "missing title")
+		return
+	}
+	s.mu.RLock()
+	cfg := *s.cfg
+	s.mu.RUnlock()
+	if cfg.LLM.APIKey == "" {
+		writeErr(w, http.StatusBadRequest, "未配置 LLM API key")
+		return
+	}
+	novelAutoMu.Lock()
+	t, ok := novelAutoTasks[req.Title]
+	if ok && t.Running {
+		novelAutoMu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": true})
+		return
+	}
+	t = &novelAutoTask{Title: req.Title, Running: true, stop: make(chan struct{})}
+	novelAutoTasks[req.Title] = t
+	novelAutoMu.Unlock()
+	go func() {
+		defer func() {
+			novelAutoMu.Lock()
+			t.Running = false
+			novelAutoMu.Unlock()
+			_ = recover()
+		}()
+		for {
+			next := 0
+			novelAutoMu.Lock()
+			cur := t.Current
+			novelAutoMu.Unlock()
+			// 找下一未写章
+			for n := cur + 1; n <= 600; n++ {
+				if pf, _ := findChapter(novelProjDir(req.Title), n); pf == "" {
+					next = n
+					break
+				}
+			}
+			if next == 0 {
+				novelAutoMu.Lock()
+				t.Done = true
+				novelAutoMu.Unlock()
+				return
+			}
+			select {
+			case <-t.stop:
+				return
+			default:
+			}
+			res, err := writeNovelChapter(req.Title, next, cfg)
+			novelAutoMu.Lock()
+			if err == nil && !res["exists"].(bool) {
+				t.Current = next
+			}
+			novelAutoMu.Unlock()
+			if err != nil {
+				return // 失败停(可手动重启续写)
+			}
+			select {
+			case <-t.stop:
+				return
+			case <-time.After(2 * time.Second): // 限速,避免把 LLM 打爆
+			}
+		}
+	}()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": true})
+}
+
+// handleNovelAutoStop 停止后台续写
+func (s *Server) handleNovelAutoStop(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Title string `json:"title"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	novelAutoMu.Lock()
+	t, ok := novelAutoTasks[req.Title]
+	if ok && t.Running {
+		close(t.stop)
+		t.Running = false
+	}
+	novelAutoMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleNovelStatusAll 全量创作状态(书架信号灯:绿=全本完/蓝=续作中/黄=断点/红=未完成)
+func (s *Server) handleNovelStatusAll(w http.ResponseWriter, r *http.Request) {
+	out := map[string]any{}
+	entries, err := os.ReadDir(novelRootDir)
+	if err != nil {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	novelAutoMu.Lock()
+	defer novelAutoMu.Unlock()
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		title := e.Name()
+		proj := filepath.Join(novelRootDir, title)
+		chapters := 0
+		_ = filepath.Walk(filepath.Join(proj, "正文"), func(p string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() && strings.HasSuffix(info.Name(), ".md") {
+				chapters++
+			}
+			return nil
+		})
+		total := 0
+		if b, err := os.ReadFile(filepath.Join(proj, "设定集", "设定集与大纲.md")); err == nil {
+			m := regexp.MustCompile(`计划\s*(\d+)\s*章`).FindStringSubmatch(string(b))
+			if len(m) > 1 {
+				total, _ = strconv.Atoi(m[1])
+			}
+		}
+		running := false
+		if t, ok := novelAutoTasks[title]; ok && t.Running {
+			running = true
+		}
+		status := "none"
+		if total > 0 {
+			switch {
+			case running:
+				status = "blue" // 续作中
+			case chapters >= total:
+				status = "green" // 全本完
+			case chapters > 0:
+				status = "yellow" // 续作断点
+			default:
+				status = "red" // 未完成
+			}
+		}
+		out[title] = map[string]any{"chapters": chapters, "total": total, "running": running, "status": status}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// writeNovelChapter 写第 no 章(幂等:已存在返回 exists),供手动与后台自动续写共用
+func writeNovelChapter(title string, no int, cfg config.Settings) (map[string]any, error) {
+	proj := novelProjDir(title)
+	b, err := os.ReadFile(filepath.Join(proj, "设定集", "设定集与大纲.md"))
+	if err != nil {
+		return nil, fmt.Errorf("先立项生成大纲")
+	}
+	outline := string(b)
+	if f, _ := findChapter(proj, no); f != "" {
+		return map[string]any{"ok": true, "exists": true, "title": fmt.Sprintf("第%03d章", no)}, nil
+	}
+	var entry string
+	for _, line := range strings.Split(outline, "\n") {
+		if strings.HasPrefix(line, fmt.Sprintf("- 第%03d章", no)) {
+			entry = strings.TrimPrefix(line, "- ")
+			break
+		}
+	}
+	if entry == "" {
+		return nil, fmt.Errorf("大纲缺少第 %d 章", no)
+	}
+	prevTail := "(本书第一章,直接开局)"
+	if no > 1 {
+		if pf, _ := findChapter(proj, no-1); pf != "" {
+			if pb, err := os.ReadFile(pf); err == nil {
+				t := strings.TrimSpace(string(pb))
+				if len(t) > 120 {
+					t = t[len(t)-120:]
+				}
+				prevTail = t
+			}
+		}
+	}
+	llm := backend.NewLLMClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model,
+		time.Duration(cfg.LLM.RequestTimeout)*time.Second)
+	sys := "你是爽文小说写手。要求:正文口语化短句、去AI味;场景/情绪具体;每章结尾留钩子;不要小标题、不要总结。只输出 JSON。"
+	usr := fmt.Sprintf(`小说《%s》设定与大纲如下(节选):
+%s
+
+本次写第 %d 章。大纲条目:%s
+上一章结尾(承接,不要复述):%s
+
+硬性要求:正文 ≥1280 字(2000 字左右最佳);推进大纲事件;至少一个爽点或冲突升级。
+严格输出 {"title":"章节名","content":"正文全文"} JSON。`, title, clip(outline, 2400), no, entry, prevTail)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	raw, err := llm.Chat(ctx, []backend.ChatMessage{
+		{Role: "system", Content: sys}, {Role: "user", Content: usr}}, 8000, 0.85)
+	if err != nil {
+		return nil, fmt.Errorf("第%d章生成失败: %s", no, err.Error())
+	}
+	var ch struct {
+		Title   string `json:"title"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(stripJSONFence(raw)), &ch); err != nil || len([]rune(ch.Content)) < 800 {
+		return nil, fmt.Errorf("第%d章解析失败或字数不足,请重试", no)
+	}
+	chTitle := novelTitleSan.ReplaceAllString(ch.Title, "")
+	if chTitle == "" {
+		chTitle = fmt.Sprintf("第%03d章", no)
+	}
+	vol := (no + 6) / 7
+	volName := fmt.Sprintf("卷%02d", vol)
+	for _, line := range strings.Split(outline, "\n") {
+		if strings.HasPrefix(line, "- 卷") {
+			var vno int
+			var vtitle string
+			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "- 卷"), "%d %s", &vno, &vtitle); err == nil && vno == vol {
+				volName = fmt.Sprintf("卷%02d_%s", vol, vtitle)
+				break
+			}
+		}
+	}
+	volDir := filepath.Join(proj, "正文", volName)
+	_ = os.MkdirAll(volDir, 0755)
+	name := fmt.Sprintf("第%03d章_%s.md", no, chTitle)
+	file := filepath.Join(volDir, name)
+	body := fmt.Sprintf("# 第%03d章 %s\n\n%s\n", no, chTitle, ch.Content)
+	if err := os.WriteFile(file, []byte(body), 0644); err != nil {
+		return nil, err
+	}
+	appendToFullBook(proj, title, no, chTitle, ch.Content)
+	return map[string]any{"ok": true, "exists": false, "file": name,
+		"words": len([]rune(ch.Content)), "title": chTitle}, nil
 }

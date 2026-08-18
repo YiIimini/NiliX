@@ -214,6 +214,11 @@ class DirView {
     listEl.innerHTML = `
       <div class="shelf-head"><span class="shelf-count">小说列表（${this.root}）· ${this._projects.length} 部</span></div>
       <div class="bk-shelf">${this._projects.map((p, i) => this.bookCard(p, i)).join("")}</div>`;
+    // 封面信号灯:拉全量创作状态(绿=全本完/蓝=续作中/黄=断点/红=未完成)
+    fetch("/api/novel/status/all", { cache: "no-store" }).then((r) => r.json()).then((st) => {
+      this._novelStatus = st || {};
+      this.renderLamps();
+    }).catch(() => {});
     listEl.querySelectorAll(".bk-card").forEach((card, i) => {
       card.addEventListener("click", (e) => {
         e.stopPropagation(); // 防止"打开弹窗"的点击被 document 层当作外部点击而立刻关闭
@@ -227,6 +232,24 @@ class DirView {
       });
     });
     this.applyListFilter();
+  }
+
+  /* 封面信号灯:左上角状态点 */
+  renderLamps() {
+    const st = this._novelStatus || {};
+    document.querySelectorAll("#novel-list .bk-card").forEach((card) => {
+      const name = card.querySelector(".bk-cname");
+      if (!name) return;
+      const s = st[name.textContent];
+      if (!s || s.status === "none") return;
+      let old = card.querySelector(".bk-lamp");
+      if (old) old.remove();
+      const tip = { green: "全本完成", blue: "续作中(后台写作)", yellow: "续作断点", red: "未完成" }[s.status] || "";
+      const lamp = document.createElement("span");
+      lamp.className = "bk-lamp bk-lamp-" + s.status;
+      lamp.title = tip;
+      card.querySelector(".bk-front").appendChild(lamp);
+    });
   }
 
   /* 列表搜索:按卡片名称过滤书架/海报墙,刷新后保持过滤 */
@@ -614,7 +637,15 @@ class DirView {
     $("nv-start").addEventListener("click", () => this.nvCreate());
     $("nv-next").addEventListener("click", () => this.nvChapter(false));
     $("nv-auto").addEventListener("click", () => this.nvChapter(true));
-    $("nv-stop").addEventListener("click", () => { this._nvStop = true; });
+    $("nv-stop").addEventListener("click", () => {
+      this._nvStop = true;
+      this._nvPolling = false;
+      fetch("/api/novel/auto/stop", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: $("nv-title").value.trim() }) }).catch(() => {});
+      $("nv-auto").disabled = false;
+      $("nv-state").className = "nv-state";
+      $("nv-state").textContent = "⏸ 已停止(断点保留,可随时继续)";
+    });
     // 书名输入:防抖自检(存在创作中 → 续写模式)
     let ckT = null;
     $("nv-title").addEventListener("input", () => {
@@ -713,37 +744,57 @@ class DirView {
   }
   async nvChapter(auto) {
     if (!this._nvTitle) return;
-    this._nvStop = false;
-    do {
+    if (!auto) {
+      // 单章:前端直调
       const next = (() => { for (let n = 1; n <= (this._nvTotal || 56); n++) if (!this._nvDone || !this._nvDone.has(n)) return n; return 0; })();
-      if (!next) {
-        $("nv-progress").textContent = "🎉 全本完成!";
-        const st = $("nv-state"); if (st) { st.className = "nv-state ok"; st.textContent = "🎉 全本完成,关闭弹窗即可在书架阅读"; }
-        break;
-      }
-      this._nvCur = next;
+      if (!next) { $("nv-progress").textContent = "🎉 全本完成!"; return; }
       $("nv-progress").textContent = `第 ${next} 章写作中(约 30-60s)…`;
-      const st = $("nv-state");
-      if (st) { st.className = "nv-state busy"; st.textContent = "✍ 正在写第 " + next + " 章,AI 构思与码字中…"; }
-      if (typeof App !== "undefined" && App.mascotSay) App.mascotSay(`小说《${this._nvTitle}》第 ${next} 章写作中…`, "busy");
       try {
         const r = await fetch("/api/novel/chapter", { method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: this._nvTitle, no: next }) });
         const j = await r.json();
-        if (!r.ok) { $("nv-progress").textContent = "❌ 第" + next + "章: " + (j.error || r.status); break; }
-      } catch (e) {
-        $("nv-progress").textContent = "❌ " + e.message;
-        const st2 = $("nv-state"); if (st2) { st2.className = "nv-state err"; st2.textContent = "❌ " + e.message; }
-        break;
-      }
-      this._nvCur = 0;
+        if (!r.ok) { $("nv-progress").textContent = "❌ 第" + next + "章: " + (j.error || r.status); return; }
+      } catch (e) { $("nv-progress").textContent = "❌ " + e.message; return; }
       await this.nvRefresh();
-      if (this._nvDone && this._nvDone.size === this._nvTotal) {
-        const st3 = $("nv-state"); if (st3) { st3.className = "nv-state ok"; st3.textContent = "🎉 全本完成!关闭弹窗即可在书架阅读"; }
+      return;
+    }
+    // 自动连写:交给后端后台任务(弹窗关闭也继续),前端轮询进度
+    try {
+      await fetch("/api/novel/auto", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: this._nvTitle }) });
+    } catch (e) { $("nv-progress").textContent = "❌ 启动失败 " + e.message; return; }
+    $("nv-state").className = "nv-state busy";
+    $("nv-state").textContent = "⚡ 后台自动续写已启动,关闭弹窗也会继续写…";
+    $("nv-auto").disabled = true;
+    this._nvPolling = true;
+    this.nvPoll();
+  }
+  async nvPoll() {
+    if (!this._nvPolling || !this._nvTitle) return;
+    try {
+      const r = await fetch("/api/novel/auto/status?title=" + encodeURIComponent(this._nvTitle), { cache: "no-store" });
+      const j = await r.json();
+      if (j.running) {
+        $("nv-progress").textContent = `后台写作中… 已到第 ${j.current} 章`;
+        $("nv-state").textContent = "⚡ 后台自动续写中(第 " + j.current + " 章),关闭弹窗不影响…";
+      } else if (j.done) {
+        $("nv-progress").textContent = "🎉 全本完成!";
+        $("nv-state").className = "nv-state ok";
+        $("nv-state").textContent = "🎉 全本完成,关闭弹窗即可在书架阅读";
+        $("nv-auto").disabled = false;
+        this._nvPolling = false;
+        await this.nvRefresh();
+        this.render();
+        return;
+      } else {
+        $("nv-auto").disabled = false;
+        this._nvPolling = false;
+        await this.nvRefresh();
+        return;
       }
-      if (!auto || this._nvStop) break;
-    } while (true);
-    this.render();
+      await this.nvRefresh();
+    } catch (e) { /* 静默 */ }
+    setTimeout(() => this.nvPoll(), 4000);
   }
 
   /* ---- 全书搜索:标题命中优先,否则正文含关键词给上下文摘要,点击跳章 ---- */
