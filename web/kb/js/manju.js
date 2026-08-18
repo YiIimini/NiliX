@@ -2010,7 +2010,7 @@
         h += `<div class="manju-sec-body">`;
         h += `<div class="manju-vids">${vids.map((v) => {
           const isFinal = v === final;
-          return `<div class="manju-vid${isFinal ? " manju-vid-final" : ""}" data-video="${esc(v.path)}" data-name="${esc(v.name)}" title="播放 ${esc(v.name)}"><span class="manju-vid-play">▶</span><span class="manju-vid-name">${esc(v.name)}</span><span class="manju-meta">${isFinal ? "成片 · " : ""}${fmtSize(v.size)}</span></div>`;
+          return `<div class="manju-vid${isFinal ? " manju-vid-final" : ""}" data-video="${esc(v.path)}" data-name="${esc(v.name)}" title="播放 ${esc(v.name)}"><span class="manju-vid-play">▶</span><span class="manju-vid-name">${esc(v.name)}</span><span class="manju-meta">${isFinal ? "成片 · " : ""}${fmtSize(v.size)}</span><button class="manju-vid-menu" data-menu="${esc(v.path)}" data-ep="${esc(ep.episode || "")}" data-isfinal="${isFinal ? "1" : ""}" title="更多操作">⋮</button></div>`;
         }).join("")}</div>`;
         if (arts.length) h += `<div class="manju-meta" style="margin-top:6px">📋 ${arts.map(esc).join("、")}</div>`;
         h += `</div></div>`;
@@ -2047,6 +2047,46 @@
       $("manju-outputs").querySelectorAll(".manju-vid").forEach((el) =>
         el.addEventListener("click", () => this.previewVideo(el.dataset.video, el.dataset.name))
       );
+      // ⋮ 菜单:删除此文件 / 删除本集目录(阻止冒泡,不触发播放)
+      $("manju-outputs").querySelectorAll(".manju-vid-menu").forEach((btn) =>
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.openDeleteMenu(btn.dataset.menu, btn.dataset.ep, btn.dataset.isfinal === "1");
+        })
+      );
+    },
+
+    /* 产物删除确认弹窗:文件级(单 mp4)/ 集级(镜头目录+成片+预告片) */
+    openDeleteMenu(path, ep, isFinal) {
+      if (!this.project) { this.setErr("请先选择项目"); return; }
+      this.openModal("🗑 删除确认",
+        `<div class="manju-confirm">
+          <p class="mc-q">要删除哪个范围?</p>
+          <p class="mc-d">文件:${esc(path.split(/[\\/]/).pop() || "")}${isFinal ? "(成片)" : "(镜头)"}${ep ? "<br>集:${esc(ep)}" : ""}</p>
+          <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+            <button id="del-file" class="hrs-btn">删除此文件</button>
+            <button id="del-ep" class="hrs-btn hrs-btn-danger">删除本集全部</button>
+            <button id="del-cancel" class="hrs-btn">取消</button>
+          </div>
+        </div>`);
+      $("del-cancel").addEventListener("click", () => this.closeModal());
+      $("del-file").addEventListener("click", () => this.deleteOutput("file", path, ep));
+      $("del-ep").addEventListener("click", () => this.deleteOutput("episode", "", ep));
+    },
+
+    deleteOutput(scope, path, ep) {
+      const btns = [$("del-file"), $("del-ep")];
+      btns.forEach((b) => { if (b) b.disabled = true; });
+      post("/api/manju/output/delete", {
+        config: this.project, scope, path, episode: ep || this.episode,
+      }).then((r) => {
+        this.closeModal();
+        $("manju-log").textContent = "(🗑 已删除:" + (r.removed || []).join("、") + ")";
+        this.refreshOutputs();
+      }).catch((e) => {
+        btns.forEach((b) => { if (b) b.disabled = false; });
+        this.setErr(e.message);
+      });
     },
 
     /* 图片预览(灯箱,上一张/下一张 分列图片左右两侧,参考侧栏收起按钮风格) */

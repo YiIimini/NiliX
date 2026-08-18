@@ -1393,6 +1393,60 @@ func registerAgentRoutes(mux *http.ServeMux) {
 		manjuAgentReworkRun(w, configPath, episode, shotID)
 	})
 
+	// 产物删除:file=删单个文件(成片/镜头 mp4);episode=删整集目录(镜头目录+成片)。
+	// 安全护栏:目标必须位于该项目工作目录之内,拒绝删工作目录本身。
+	mux.HandleFunc("POST /api/manju/output/delete", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		configPath := str(body["config"])
+		scope := str(body["scope"])
+		if configPath == "" || (scope != "file" && scope != "episode") {
+			http.Error(w, `{"error":"missing config/scope(file|episode)"}`, http.StatusBadRequest)
+			return
+		}
+		ctx, err := newManjuCtx(configPath, str(body["episode"]), "", "", "")
+		if err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
+		wd := filepath.Clean(ctx.workdir)
+		removed := []string{}
+		if scope == "file" {
+			p := filepath.Clean(str(body["path"]))
+			if p == "" || !strings.HasPrefix(p, wd+string(filepath.Separator)) {
+				http.Error(w, `{"error":"路径不在项目工作目录内,拒绝删除"}`, http.StatusBadRequest)
+				return
+			}
+			if err := os.Remove(p); err != nil {
+				http.Error(w, `{"error":"删除失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+				return
+			}
+			removed = append(removed, filepath.Base(p))
+		} else {
+			ep := orDefault(ctx.episode, "EP01")
+			epDir := filepath.Join(ctx.clipsDir, ep)
+			if filepath.Clean(epDir) != wd {
+				if err := os.RemoveAll(epDir); err == nil {
+					removed = append(removed, epDir)
+				} else {
+					http.Error(w, `{"error":"删除集目录失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+					return
+				}
+			}
+			final := filepath.Join(ctx.workdir, ep+"_成片.mp4")
+			if fileExists(final) {
+				_ = os.Remove(final)
+				removed = append(removed, filepath.Base(final))
+			}
+			trailer := filepath.Join(ctx.workdir, ep+"_预告片.mp4")
+			if fileExists(trailer) {
+				_ = os.Remove(trailer)
+				removed = append(removed, filepath.Base(trailer))
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": removed})
+	})
+
 	// 预告片自动剪辑:审片分数选镜头(高分优先+剧本关键位),本地合成 30s 预告
 	mux.HandleFunc("POST /api/manju/trailer", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
