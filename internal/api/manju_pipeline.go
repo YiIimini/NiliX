@@ -1314,8 +1314,14 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 		lg.logf(fmt.Sprintf("[%d/%d] 镜头 %d: [%s] %s", i+1, len(selected), s.ID, s.Scene, s.Camera))
 		dst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
 		if fileExists(dst) {
-			lg.logf("  跳过（已存在）: " + dst)
-			continue
+			if fi, err := os.Stat(dst); err == nil && fi.Size() == 0 {
+				// 中断残留的 0 字节文件:跳过会让坏产物混进成片,QC 阶段才暴露,直接删除重渲
+				_ = os.Remove(dst)
+				lg.logf("  ⚠️ 发现 0 字节残留,删除重渲: " + dst)
+			} else {
+				lg.logf("  跳过（已存在）: " + dst)
+				continue
+			}
 		}
 		cacheName := ctx.shotCacheName(s.ID)
 		if err := ctx.ensureEncoded(s, cacheName, lg); err != nil {

@@ -21,24 +21,43 @@ def check_video(path, threshold=0.5):
     c = av.open(path)
     v = c.streams.video[0]
     a = list(c.streams.audio)
+    a0 = a[0] if a else None
     dur = float(round(v.duration * v.time_base, 2)) if v.duration else 0.0
     res = (v.width, v.height)
     samples, n = [], 0
-    for fr in c.decode(v):
-        if n % 6 == 0:
-            g = fr.to_ndarray(format="gray")
-            # 近黑判据:整帧平均亮度 < 20 才算接近全黑(亮度护栏防的是整帧黑屏);
-            # 用像素占比会把合法夜景(暗背景+火把/月光)误判为过暗
-            samples.append(float(g.mean() < 20))
-        n += 1
+    # 音频响度:采样前 40 个音频帧的归一化 RMS(静音=有音轨但无声音,TTS 失败的典型产物)
+    np = None
+    rms_sum, rms_n = 0.0, 0
+    # 视频+音频必须交错解码(PyAV 先解完视频再解音频会拿不到音频帧),单遍同时完成两项检测
+    streams = (v, a0) if a0 is not None else (v,)
+    for fr in c.decode(*streams):
+        if isinstance(fr, av.VideoFrame):
+            if n % 6 == 0:
+                g = fr.to_ndarray(format="gray")
+                # 近黑判据:整帧平均亮度 < 20 才算接近全黑(亮度护栏防的是整帧黑屏);
+                # 用像素占比会把合法夜景(暗背景+火把/月光)误判为过暗
+                samples.append(float(g.mean() < 20))
+            n += 1
+        elif rms_n < 40:
+            if np is None:
+                import numpy as _np
+                np = _np
+            arr = fr.to_ndarray()
+            mx = 1.0
+            if arr.dtype.kind in "iu":  # 音频可能是 s16(±32768),归一化到 [-1,1]
+                mx = float(np.iinfo(arr.dtype).max)
+            rms_sum += float(np.abs(arr).mean() / mx)
+            rms_n += 1
     c.close()
     # 结尾淡出带(提示词常带 fade out):丢弃最后 5% 采样,合法淡出不计入暗比
     if samples:
         cut = max(1, int(len(samples) * 0.05))
         samples = samples[:-cut]
+    audio_rms = rms_sum / max(rms_n, 1)
     return {
         "duration_s": dur, "resolution": res, "audio_streams": len(a),
         "dark_ratio": round(sum(samples) / max(len(samples), 1), 3), "decoded_frames": n,
+        "audio_rms": round(audio_rms, 4), "audio_frames": rms_n,
     }
 
 
@@ -57,6 +76,8 @@ def cmd_qc(args):
             flags = []
             if r["audio_streams"] == 0:
                 flags.append("无音轨")
+            elif r["audio_rms"] < 0.02:
+                flags.append(f"静音(rms {r['audio_rms']:.3f})")
             if r["dark_ratio"] > args.threshold:
                 flags.append(f"近黑帧{r['dark_ratio']*100:.0f}%")
             if r["decoded_frames"] == 0:
@@ -64,11 +85,11 @@ def cmd_qc(args):
             if r["duration_s"] < 0.5:
                 flags.append("时长过短")
             status = "OK" if not flags else "⚠️ " + ",".join(flags)
-            print(f"  {f:12s} {r['duration_s']:6.2f}s {r['resolution']} 音轨:{r['audio_streams']} 近黑:{r['dark_ratio']*100:3.0f}% {status}")
+            print(f"  {f:12s} {r['duration_s']:6.2f}s {r['resolution']} 音轨:{r['audio_streams']} 响度:{r['audio_rms']:.3f} 近黑:{r['dark_ratio']*100:3.0f}% {status}")
             report["shots"][f] = {
                 "ok": not flags, "flags": flags, "duration_s": r["duration_s"],
                 "dark_ratio": r["dark_ratio"], "audio_streams": r["audio_streams"],
-                "decoded_frames": r["decoded_frames"], "error": "",
+                "audio_rms": r["audio_rms"], "decoded_frames": r["decoded_frames"], "error": "",
             }
             if flags:
                 bad.append((f, flags))
@@ -86,13 +107,15 @@ def cmd_qc(args):
 
 
 def cmd_frames(args):
-    """均匀抽 N 帧存 JPEG(审片官视觉判分输入):两遍解码(先数帧再取帧),
-    缩到 width 宽(JPEG 体积友好,数据 URI 走 API)。末行输出 JSON {"frames": [...]}。"""
+    """均匀抽 N 帧存 JPEG(审片官视觉判分输入):先数帧数,再按时间点 seek 单帧取图,
+    缩到 width 宽(JPEG 体积友好,数据 URI 走 API)。末行输出 JSON {"frames": [...]}。
+    seek 到目标帧前 1s 解码向前,长镜头(60s+)比两遍全量解码快一个数量级。"""
     import av
     from PIL import Image
     n_target = max(1, min(args.count, 8))
     c = av.open(args.video)
     v = c.streams.video[0]
+    fps = float(v.average_rate) if v.average_rate else 24.0
     total = 0
     for _ in c.decode(v):
         total += 1
@@ -103,21 +126,34 @@ def cmd_frames(args):
     # 均匀取帧位置((i+0.5)/N 规避首尾黑场/淡入淡出)
     targets = {min(total - 1, int(total * (i + 0.5) / n_target)): i for i in range(n_target)}
     os.makedirs(args.out_dir, exist_ok=True)
+
+    def save(fr, i):
+        im = fr.to_image()
+        if args.width and im.width > args.width:
+            im = im.resize((args.width, int(im.height * args.width / im.width)), Image.LANCZOS)
+        p = os.path.join(args.out_dir, "f%d.jpg" % (i + 1))
+        im.save(p, "JPEG", quality=85)
+        out_paths.append(os.path.abspath(p))
+
     out_paths = []
-    idx = 0
     c = av.open(args.video)
     v = c.streams.video[0]
-    for fr in c.decode(v):
-        if idx in targets:
-            im = fr.to_image()
-            if args.width and im.width > args.width:
-                im = im.resize((args.width, int(im.height * args.width / im.width)), Image.LANCZOS)
-            p = os.path.join(args.out_dir, f"f{targets[idx] + 1}.jpg")
-            im.save(p, "JPEG", quality=85)
-            out_paths.append(os.path.abspath(p))
-        idx += 1
-        if idx > max(targets):
-            break
+    half = 0.5 / fps  # 半帧容差:取目标时刻±半帧内的最近帧
+    for idx, i in sorted(targets.items()):
+        t_sec = idx / fps
+        try:
+            c.seek(int(max(0, t_sec - 1.0) / v.time_base), stream=v)
+        except Exception:
+            c.seek(0)  # 个别封装不支持 seek:退回从头解码
+        last, saved = None, False
+        for fr in c.decode(v):
+            last = fr
+            if fr.pts is not None and fr.pts * v.time_base >= t_sec - half:
+                save(fr, i)
+                saved = True
+                break
+        if not saved and last is not None:
+            save(last, i)  # 兜底:未到目标时刻已 EOF,用最后一帧
     c.close()
     print(f"  🖼 抽帧 {len(out_paths)}/{n_target} → {args.out_dir}")
     print(json.dumps({"frames": out_paths}, ensure_ascii=False))
@@ -273,8 +309,22 @@ def _draw_subtitle(frame, text):
     return nf
 
 
+def _apply_gain(fr, gain, np):
+    """对重采样后的 fltp 音频帧整体增益(原地不可变,新建帧),增益 1.0 时原样返回"""
+    import av
+    if gain == 1.0:
+        return fr
+    arr = np.asarray(fr.to_ndarray()) * np.float32(gain)
+    nf = av.AudioFrame.from_ndarray(arr, format="fltp", layout="stereo")
+    nf.pts = fr.pts
+    nf.time_base = fr.time_base
+    nf.sample_rate = fr.sample_rate
+    return nf
+
+
 def cmd_assemble(args):
     import av
+    import numpy as np
     from fractions import Fraction
     files = sorted(f for f in os.listdir(args.clips_dir) if f.lower().endswith(".mp4"))
     if not files:
@@ -283,9 +333,40 @@ def cmd_assemble(args):
     out = args.out
     if os.path.exists(out):
         os.remove(out)
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    if os.path.dirname(out):
+        os.makedirs(os.path.dirname(out), exist_ok=True)
     fps = args.fps
     cues = _load_subtitle_cues(args.plan)
+    # 音量归一化:预扫各镜头音频峰值 → 全局增益(过轻整体放大、过响压限,成片音量一致)
+    # 只解音频流,速度快;峰值>0.95 提前收工(已近满幅无需再扫)
+    peak = 0.0
+    for name in files:
+        ip = av.open(os.path.join(args.clips_dir, name))
+        for fr in ip.decode(*ip.streams):
+            if isinstance(fr, av.AudioFrame):
+                arr = fr.to_ndarray()
+                mx = 1.0
+                if arr.dtype.kind in "iu":
+                    mx = float(np.iinfo(arr.dtype).max)
+                pk = float(np.abs(arr).max() / mx)
+                if pk > peak:
+                    peak = pk
+                if peak > 0.95:
+                    break
+        ip.close()
+        if peak > 0.95:
+            break
+    gain = 1.0
+    if peak <= 0.0:
+        peak = 1e-6
+    if peak < 0.02:
+        gain = 1.0  # 静音不放大(避免噪声放大,QC 会标记该镜头)
+    elif peak < 0.25:
+        gain = min(4.0, 0.7 / peak)
+    elif peak > 0.9:
+        gain = 0.85 / peak  # 近满幅压限,防爆音
+    if gain != 1.0:
+        print(f"  🔊 音量归一化: 峰值 {peak:.2f} → 增益 x{gain:.2f}")
     print(f"🎬 合成 {len(files)} 个镜头 → {out} (crf18, {fps}fps, mosaic={args.mosaic}, 字幕{'on' if cues else 'off'})")
 
     o = av.open(out, "w")
@@ -345,12 +426,14 @@ def cmd_assemble(args):
                 total_v += 1
             else:
                 for fr in _frame_list(resampler.resample(frame)):
+                    fr = _apply_gain(fr, gain, np)
                     fr.pts = None
                     for pkt in as_.encode(fr):
                         o.mux(pkt)
                     total_a += 1
         # 冲洗该剪辑的音频重采样缓冲,再进下一个
         for fr in _frame_list(resampler.resample(None)):
+            fr = _apply_gain(fr, gain, np)
             fr.pts = None
             for pkt in as_.encode(fr):
                 o.mux(pkt)

@@ -95,6 +95,18 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 	} else {
 		items = append(items, ok("agent", "视觉模型就绪"))
 	}
+	// 8. 审片状态/学习记忆(agent_state.json):损坏或缺失会拖累审片报告面板
+	stPath := manjuAgentStatePath(ctx.project)
+	if b, err := os.ReadFile(stPath); err == nil {
+		var st manjuAgentState
+		if json.Unmarshal(b, &st) != nil {
+			items = append(items, manjuHealthItem{Key: "agent_state", Label: "审片状态文件", Status: "bad", Detail: "agent_state.json 损坏", FixHint: "删除该文件后重跑智能一条龙(审片记忆将重置)"})
+		} else {
+			items = append(items, ok("agent_state", fmt.Sprintf("记忆 %d 次运行 / %d 镜判分 / %d 次返工", st.Memory.RunCount, st.Memory.JudgedShots, st.Memory.ReworkCount)))
+		}
+	} else {
+		items = append(items, manjuHealthItem{Key: "agent_state", Label: "审片状态文件", Status: "warn", Detail: "尚无审片记录", FixHint: "跑一次「智能一条龙」后自动生成"})
+	}
 	return items
 }
 
@@ -250,7 +262,7 @@ func manjuAgentChat(w http.ResponseWriter, r *http.Request) {
 		}
 	case containsAny(text, "总结", "记忆", "学习", "统计", "回顾", "趋势", "档案", "经验"):
 		reply = manjuMemorySummary(project)
-	case containsAny(text, "修复", "处理问题", "修一下", "修了", "都修", "修问题"):
+	case containsAny(text, "修复", "处理问题", "修一下", "修了", "都修", "修问题", "优化", "完善", "升级", "调整配置", "调整一下"):
 		action = "fixall"
 	case containsAny(text, "你好", "hi", "hello", "在吗", "你是谁", "帮助", "help", "怎么用"):
 		reply = "我是漫剧智能体 🤖,负责帮你把小说变成成片。可以对我说:\n· 体检 / 分析项目 —— 全项体检 + 一键修复\n· 推荐风格 —— 深度分析小说,自动更新渲染风格\n· 审片报告 —— 查看逐镜判分\n· 总结 / 学习 —— 汇总高频问题与分数趋势\n· 修复 —— 自动处理可修复的配置问题"
@@ -347,7 +359,8 @@ func manjuDiagnoseError(stage string, err error) (string, string) {
 		return "API Key 无效", "在 设置 → 智能体调度 重新填写 Key 并保存后重试"
 	case strings.Contains(e, "timeout") || strings.Contains(e, "timed out"):
 		return "请求超时", "网络波动或服务繁忙,稍后重试;反复超时可检查代理/网络"
-	case strings.Contains(e, "json") || strings.Contains(e, "parse") || strings.Contains(e, "unmarshal"):
+	case strings.Contains(e, "json") || strings.Contains(e, "parse") || strings.Contains(e, "unmarshal") ||
+		strings.Contains(e, "invalid character") || strings.Contains(e, "looking for beginning"):
 		return "LLM 输出异常", "模型输出非预期格式,自动重试一次;仍失败可降低 max_tokens 或换模型"
 	default:
 		return "未知错误", "点「环境自检」体检项目,或查看运行日志定位具体阶段"
