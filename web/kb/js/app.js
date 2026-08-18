@@ -660,28 +660,21 @@ const App = {
     if (!this.prefs || !this.prefs.aiOn) return;
     const b = document.getElementById("ai-bubble");
     if (!b || b.textContent === text) return;
-    b.textContent = "";
+    b.textContent = text;                       // 气泡:整句直接显示(纯视觉美化,不做打字机)
     b.classList.remove("ai-pop");
     void b.offsetWidth; // 重触发动画
     b.classList.add("ai-pop");
     const m = document.getElementById("ai-mascot");
     if (m) m.classList.toggle("is-busy", mood === "busy");
-    // 打字机效果:逐字蹦出(短句即时,长句快速)
-    clearTimeout(this._mascotTypeT);
-    const step = Math.max(14, Math.min(34, Math.round(320 / text.length)));
-    let i = 0;
-    b.classList.add("typing");
-    const tick = () => {
-      i += 1;
-      b.textContent = text.slice(0, i);
-      if (i < text.length) {
-        this._mascotTypeT = setTimeout(tick, step);
-      } else {
-        b.textContent = text;
-        b.classList.remove("typing");
-      }
-    };
-    tick();
+    // 角色说话动画:说话时蹦跳摇摆(像在跑/说),结束后归位
+    const av = document.getElementById("ai-avatar");
+    if (av) {
+      av.classList.remove("is-talking");
+      void av.offsetWidth;
+      av.classList.add("is-talking");
+      clearTimeout(this._mascotTalkT);
+      this._mascotTalkT = setTimeout(() => av.classList.remove("is-talking"), 1600);
+    }
   },
 
   /* 当前路由:kb(关系图谱主页) / comfy / novel / manju */
