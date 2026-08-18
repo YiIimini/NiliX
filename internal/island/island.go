@@ -5,6 +5,7 @@ package island
 import (
 	"math"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -157,9 +158,15 @@ func easeInOutCubic(t float64) float64 {
 	return 1 - math.Pow(-2*t+2, 3)/2
 }
 
+// islandAnimMu 动画互斥:连续悬停展开/收起时,后一个动画等前一个结束再启动,
+// 避免多个 goroutine 并发互写 islandCurW/H/R,窗口停在中间尺寸
+var islandAnimMu sync.Mutex
+
 func islandAnimate(hwnd uintptr, toW, toH, toR, steps int) {
-	fromW, fromH, fromR := islandCurW, islandCurH, islandCurR
 	go func() {
+		islandAnimMu.Lock()
+		defer islandAnimMu.Unlock()
+		fromW, fromH, fromR := islandCurW, islandCurH, islandCurR
 		for i := 1; i <= steps; i++ {
 			e := easeInOutCubic(float64(i) / float64(steps))
 			w := fromW + int(float64(toW-fromW)*e+0.5)

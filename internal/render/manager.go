@@ -42,6 +42,16 @@ func NewManager(comfy *backend.ComfyUIClient) *Manager {
 	return &Manager{jobs: make(map[string]*Job), comfy: comfy}
 }
 
+// SetComfyURL 设置变化后同步 ComfyUI 客户端地址(设置页保存时由 api 层调用)
+func (m *Manager) SetComfyURL(url string) {
+	if url == "" {
+		return
+	}
+	m.mu.Lock()
+	m.comfy = backend.NewComfyUIClient(url)
+	m.mu.Unlock()
+}
+
 // Submit 提交一部脚本的渲染任务并异步执行；每次提交用最新渲染配置。
 func (m *Manager) Submit(script *storyboard.Script, seed int, cfg config.Settings, outDir string) *Job {
 	job := &Job{

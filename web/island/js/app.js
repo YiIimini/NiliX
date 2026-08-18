@@ -155,15 +155,33 @@
     });
   }
 
+  /* 连续失败计数:服务端不可达时 HUD 明确显示离线,恢复后自动回到正常 */
+  let failCount = 0;
+  function markOffline() {
+    document.body.classList.add("offline");
+    const sd = $("status-dot");
+    if (sd) sd.className = "status-dot off";
+    const btag = document.querySelector(".btag");
+    if (btag) btag.textContent = "OFFLINE";
+  }
+
   async function tick() {
     let s;
     try {
       const r = await fetch("/api/stats", { cache: "no-store" });
-      if (!r.ok) return;
+      if (!r.ok) throw new Error("HTTP " + r.status);
       s = await r.json();
     } catch (e) {
+      failCount++;
+      if (failCount >= 3) markOffline();
       return;
     }
+    failCount = 0;
+    document.body.classList.remove("offline");
+    const sd = $("status-dot");
+    if (sd) sd.className = "status-dot";
+    const btag = document.querySelector(".btag");
+    if (btag) btag.textContent = "LIVE";
 
     // 负载等级驱动霓虹灯(低=白 / 中=黄 / 高=红快闪),边框/状态点警示跟随
     const g0 = s.gpu;

@@ -113,7 +113,7 @@ func main() {
 		actions := island.Actions{
 			StartComfy: api.ComfyStart,
 			StopComfy:  api.ComfyStop,
-			OpenComfy:  func() { openBrowser("http://127.0.0.1:8190") },
+			OpenComfy:  func() { openBrowser(api.ComfyURL()) },
 			OpenKB:     func() { openBrowser(url + "#/manju") },
 			StartZCode: startZCode,
 			StopZCode:  stopZCode,

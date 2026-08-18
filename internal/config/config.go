@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,7 +127,19 @@ func (s *Store) Load() (*Settings, error) {
 		}
 	}
 	if err := openAPIKey(key, &cfg.LLM); err != nil {
-		return nil, err
+		// 解密失败(主密钥丢失/损坏/被清理工具删除):备份原文件、重建密钥、以空 key 启动,
+		// 避免整个服务起不来;用户重填 Key 即恢复,其余设置保留,原文件在 settings.json.bak
+		if rb, rerr := os.ReadFile(s.Path); rerr == nil {
+			_ = os.WriteFile(s.Path+".bak", rb, 0600)
+		}
+		_ = os.Remove(s.keyPath)
+		_ = os.Remove(s.Path)
+		k, kerr := s.loadOrCreateKey()
+		if kerr != nil {
+			return nil, fmt.Errorf("重建加密密钥失败: %w", kerr)
+		}
+		s.key = k
+		cfg.LLM.APIKey = ""
 	}
 	return cfg, nil
 }

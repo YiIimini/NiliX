@@ -49,6 +49,9 @@ func SetComfyParams(url, inputDir, outputDir string) {
 	}
 }
 
+// ComfyURL 当前生效的 ComfyUI 地址(托盘/通知等零散入口共用,改设置即同步)
+func ComfyURL() string { return comfyParams.url }
+
 // ServiceStatus 服务状态（含进程、日志与启动参数信息）。
 type ServiceStatus struct {
 	Online  bool   `json:"online"`
@@ -190,7 +193,8 @@ func startComfy() error {
 }
 
 func stopComfy() error {
-	pid := findPortPID("8190")
+	// 用当前生效端口找进程(与启动一致;写死 8190 会导致改端口后停不掉真进程)
+	pid := findPortPID(currentPort())
 	if pid == 0 {
 		return errors.New("comfy not running")
 	}

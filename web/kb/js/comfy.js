@@ -90,10 +90,24 @@ const ComfyView = {
     el.scrollTop = el.scrollHeight;
   },
 
+  /* 服务不可达:状态行/指示灯明确离线(不再静默卡旧值) */
+  markUnreachable() {
+    if (this.starting || this.stopping) return; // 操作进行中不覆盖状态文案
+    const dot = document.querySelector("#view-comfy .hrs-dot");
+    const txt = document.getElementById("cfy-txt");
+    if (dot) dot.className = "hrs-dot off";
+    if (txt) txt.textContent = "服务不可达";
+    const live = document.getElementById("cfy-live");
+    if (live) live.textContent = I18N.t("live.refreshed") + " " + new Date().toLocaleTimeString() + " · 连接失败";
+  },
+
   /* 探测服务状态并刷新状态栏 / iframe / 离线占位 / 日志 */
   async renderStatus() {
     const d = await this.getStatus();
-    if (!d) return;
+    if (!d) {
+      this.markUnreachable();
+      return;
+    }
     const online = !!d.online;
     const becameOnline = online && !this.online;
     this.online = online;
@@ -162,7 +176,7 @@ const ComfyView = {
       this.setErr(I18N.t("comfy.errStart") + " " + (e.message || ""));
       return;
     }
-    // ComfyUI 启动较慢(导入节点/初始化),轮询直到 8190 可用(上限 60s)
+    // ComfyUI 启动较慢(导入节点/初始化),轮询直到可用(上限 60s)
     const t0 = Date.now();
     while (Date.now() - t0 < 60000) {
       await new Promise((res) => setTimeout(res, 2000));
@@ -170,6 +184,7 @@ const ComfyView = {
       if (this.online) break;
     }
     this.setButtonsState("start", false);
+    if (!this.online) this.setErr("启动超时(60s),请展开日志面板查看启动输出");
   },
 
   /* 停止服务,轮询确认离线 */
@@ -195,6 +210,7 @@ const ComfyView = {
       if (!this.online) break;
     }
     this.setButtonsState("stop", false);
+    if (this.online) this.setErr("停止超时(20s),请查看日志面板;必要时手动结束进程");
   },
 
   /* 实时轮询:10s 检测服务状态(仅 Comfy 页激活时) */

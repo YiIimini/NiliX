@@ -148,6 +148,11 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	s.cfg = &in
 	s.mu.Unlock()
 
+	// ComfyUI 启动参数单一数据源同步:改 comfy_url / input / output 立即生效
+	// (否则 start 用新参数、stop/probe 用旧参数,自相矛盾)
+	SetComfyParams(in.Render.ComfyURL, in.Paths.ComfyInput, in.Paths.ComfyOutput)
+	s.renderMgr.SetComfyURL(in.Render.ComfyURL)
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

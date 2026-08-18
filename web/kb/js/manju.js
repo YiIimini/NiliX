@@ -336,7 +336,13 @@
 
       // 章节/集号/镜头
       $("manju-chapters").addEventListener("input", (e) => { this.chapters = e.target.value; ls("chapters", this.chapters); });
-      $("manju-episode").addEventListener("input", (e) => { this.episode = e.target.value; ls("episode", this.episode); this.refreshOutputs(); });
+      // 集号防抖:打字 EP1→EP10 期间只发最后一次请求,避免旧集号响应后到覆盖新数据
+      let epTimer = null;
+      $("manju-episode").addEventListener("input", (e) => {
+        this.episode = e.target.value; ls("episode", this.episode);
+        clearTimeout(epTimer);
+        epTimer = setTimeout(() => this.refreshOutputs(), 300);
+      });
       $("manju-only").addEventListener("input", (e) => { this.only = e.target.value; ls("only", this.only); });
       $("manju-wholebook").addEventListener("click", () => { this.chapters = "1-999"; $("manju-chapters").value = this.chapters; ls("chapters", this.chapters); });
 
@@ -742,7 +748,11 @@
       // 智能模式开关:切换即时保存(勾选后刷新不再回落)
       $("manju-ag-enabled").addEventListener("change", () => {
         const msg = $("manju-ag-msg");
-        if (!this.project) { msg.textContent = "⚠️ 请先选择项目再切换智能模式"; return; }
+        if (!this.project) {
+          $("manju-ag-enabled").checked = !$("manju-ag-enabled").checked; // 无项目:回滚,避免"以为已保存"
+          msg.textContent = "⚠️ 请先选择项目再切换智能模式";
+          return;
+        }
         msg.textContent = "保存中…";
         this.saveAgentCfgQuiet().then(() => {
           msg.textContent = $("manju-ag-enabled").checked ? "✅ 智能模式已开启" : "✅ 智能模式已关闭";
@@ -765,12 +775,15 @@
       const key = $("manju-apikey").value.trim();
       if (!key) { st.textContent = "请先粘贴 API Key"; return; }
       st.textContent = "保存中…";
+      const btns = [$("manju-apikey-save"), $("manju-apikey-apply")];
+      btns.forEach((b) => { b.disabled = true; }); // 防连点重复提交
       const body = { apiKey: key };
       if (applyToProject) body.config = this.project;
       post("/api/manju/settings", body).then(() => {
         st.textContent = applyToProject ? "✅ 已保存为默认 Key 并写入当前项目" : "✅ 已保存为默认 Key";
         if (applyToProject) this.loadProject();
-      }).catch((e) => { st.textContent = "❌ " + e.message; });
+      }).catch((e) => { st.textContent = "❌ " + e.message; })
+        .finally(() => { btns.forEach((b) => { b.disabled = false; }); });
     },
     /* 视觉模型表单联动:预设自动带地址并提示 Key 去处,自定义时展开两行 */
     syncVisionForm() {
@@ -796,7 +809,9 @@
     saveAgentCfg() {
       if (!this.project) return;
       const msg = $("manju-ag-msg");
+      const btn = $("manju-ag-save");
       msg.textContent = "保存中…";
+      btn.disabled = true;
       const v = this.visionFormValues();
       post("/api/manju/agent/settings", {
         config: this.project,
@@ -812,21 +827,25 @@
         msg.textContent = "✅ 已保存";
         setTimeout(() => { msg.textContent = ""; }, 3000);
         this.poll();
-      }).catch((e) => { msg.textContent = "❌ " + e.message; });
+      }).catch((e) => { msg.textContent = "❌ " + e.message; })
+        .finally(() => { btn.disabled = false; });
     },
     /* 视觉模型连通测试(拿项目第一张定妆照问一句话) */
     testVision() {
       if (!this.project) return;
       const msg = $("manju-ag-msg");
+      const btn = $("manju-ag-test");
       const model = this.visionFormValues().model;
       if (!model) { msg.textContent = "请先选择视觉模型"; return; }
       msg.textContent = "测试中(先保存再测)…";
+      btn.disabled = true;
       this.saveAgentCfgQuiet().then(() => {
         msg.textContent = "测试中…";
         return post("/api/manju/agent/vision-test", { config: this.project });
       }).then((r) => {
         msg.textContent = r.ok ? "✅ 连通正常（" + (r.visionModel || "") + "）" : "❌ " + (r.error || "失败");
-      }).catch((e) => { msg.textContent = "❌ " + e.message; });
+      }).catch((e) => { msg.textContent = "❌ " + e.message; })
+        .finally(() => { btn.disabled = false; });
     },
     saveAgentCfgQuiet() {
       const v = this.visionFormValues();
@@ -844,17 +863,22 @@
     },
     saveNotify() {
       const msg = $("manju-notify-msg");
+      const btn = $("manju-notify-save");
       msg.textContent = "保存中…";
+      btn.disabled = true;
       const body = this.notifyForm();
       body.enabled = $("manju-notify-enabled").checked;
       post("/api/manju/notify", body).then(() => {
         msg.textContent = "✅ 通知配置已保存";
         setTimeout(() => { msg.textContent = ""; }, 3000);
-      }).catch((e) => { msg.textContent = "❌ " + e.message; });
+      }).catch((e) => { msg.textContent = "❌ " + e.message; })
+        .finally(() => { btn.disabled = false; });
     },
     testNotify() {
       const msg = $("manju-notify-msg");
+      const btn = $("manju-notify-test");
       msg.textContent = "发送测试…";
+      btn.disabled = true;
       // 先落盘当前配置,再触发测试推送(测试读取已保存配置)
       const body = this.notifyForm();
       body.enabled = true;
@@ -863,7 +887,8 @@
         .then(() => {
           msg.textContent = "✅ 测试通知已发送";
           setTimeout(() => { msg.textContent = ""; }, 3000);
-        }).catch((e) => { msg.textContent = "❌ " + e.message; });
+        }).catch((e) => { msg.textContent = "❌ " + e.message; })
+        .finally(() => { btn.disabled = false; });
     },
 
     loadProject() {
@@ -879,6 +904,8 @@
           this.detectNovel();
         }
         this.fillForm();
+        // fillForm 之后再拉模型列表:下拉 option 已就绪,回填不会因竞态丢失(首次 bind 已拉过一次)
+        this.loadModels();
         this.renderChips();
         this.refreshOutputs();
         // 体检预热:发现可修复项 → 右栏 Agent 面板出主动建议横幅(仅一次/会话)
@@ -1416,7 +1443,11 @@
       const sb = $("mj-ag-chat-send");
       if (sb) sb.addEventListener("click", send);
       const inp = $("mj-ag-chat-input");
-      if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+      if (inp) inp.addEventListener("keydown", (e) => {
+        // 中文输入法选词回车(isComposing)不发送,避免把半截拼音/候选发出去
+        if (e.isComposing || e.keyCode === 229) return;
+        if (e.key === "Enter") send();
+      });
       document.querySelectorAll("#manju-agent-panel [data-chat]").forEach((b) =>
         b.addEventListener("click", () => { const inp2 = $("mj-ag-chat-input"); if (inp2) inp2.value = b.dataset.chat; this.agentChat(b.dataset.chat); })
       );
@@ -1556,7 +1587,7 @@
           <span class="mj-tip-t">💡 体检发现 ${needFix.length} 项可优化: ${needFix.map((x) => esc(x.label)).join("、")}</span>
           <span class="mj-tip-acts"><button class="hrs-btn hrs-btn-primary" id="mj-tip-open">查看并修复</button><button class="hrs-btn" id="mj-tip-x">×</button></span>
         </div>` : "";
-      body.innerHTML = `
+      const html = `
         ${errCard}
         ${memCard}
         ${tipCard}
@@ -1569,6 +1600,10 @@
         <div class="mj-ag-chips">${chips}</div>
         ${escs.length ? `<div class="mj-ag-escs">${escCards}</div>` : ""}
         ${ag && !ag.visionModel ? `<div class="mj-ag-hint">⚙️ 设置 → 智能体：填写视觉模型后启用逐镜判分（未配置时仅机械质检与升级）</div>` : ""}`;
+      // 内容比对:无变化跳过重建(2s 轮询不再销毁按钮/重置滚动,点击事件不丢失)
+      if (body.dataset.lastHtml === html) return;
+      body.dataset.lastHtml = html;
+      body.innerHTML = html;
       body.querySelectorAll("[data-esc-retry]").forEach((b) => b.addEventListener("click", () => this.resolveEsc(parseInt(b.dataset.escRetry, 10), "retry")));
       body.querySelectorAll("[data-esc-ignore]").forEach((b) => b.addEventListener("click", () => this.resolveEsc(parseInt(b.dataset.escIgnore, 10), "ignore")));
       body.querySelectorAll(".mj-ag-chip").forEach((c) => c.addEventListener("click", () => this.rejudge(parseInt(c.dataset.shot, 10))));
@@ -1614,7 +1649,9 @@
         return;
       }
       const q = "?config=" + encodeURIComponent(this.project);
+      const reqProject = this.project; // 代次守卫:切项目后旧响应直接丢弃,防串项目
       get("/api/manju/status" + q).then((s) => {
+        if (reqProject !== this.project) return;
         this.status = s;
         this.agent = s.agent || null;
         this.renderStatus();
@@ -1728,7 +1765,10 @@
     refreshOutputs() {
       if (!this.project) return;
       // 产物按集区分:一次拉回全部集(人物/场景为全项目共享)
+      // 代次守卫:切项目/改集号后旧响应直接丢弃,防串数据
+      const reqProject = this.project, reqEp = this.episode;
       get("/api/manju/outputs?config=" + encodeURIComponent(this.project)).then((r) => {
+        if (reqProject !== this.project) return;
         this.outputs = r;
         this.renderOutputs();
         this.renderGacha();
@@ -1739,7 +1779,9 @@
     /* ---- 角色抽卡 ---- */
     loadPlan(cb) {
       if (!this.project) return;
+      const reqProject = this.project, reqEp = this.episode;
       get("/api/manju/plan?config=" + encodeURIComponent(this.project) + "&episode=" + encodeURIComponent(this.episode)).then((r) => {
+        if (reqProject !== this.project || reqEp !== this.episode) return;
         this.plan = r;
         if (cb) cb(); else this.renderGacha();
       }).catch(() => {});

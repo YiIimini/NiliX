@@ -307,6 +307,9 @@ body.high .ambient { --ambient-color: var(--danger); animation-name: ambientBrea
   margin-left: auto; /* 标题脱离文档流后,把它推到右上角 */
 }
 .status-dot.live { opacity: 1; animation: pulse 2s infinite; }
+/* 服务不可达:指示灯熄灭灰色,标题 LIVE → OFFLINE */
+.status-dot.off { background: #555; box-shadow: none; opacity: 0.5; animation: none; }
+body.offline .btag { color: #888; }
 body.high .status-dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
 /* 收起胶囊状态点跟随负载警示 */
 body.warn .pill-dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }

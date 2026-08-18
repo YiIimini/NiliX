@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,7 +23,13 @@ import (
 
 const novelRootDir = `C:\Mi\Ai\WorkBench\Novel`
 
-var novelTitleSan = regexp.MustCompile(`[\\/:*?"<>|]`)
+var (
+	novelTitleSan = regexp.MustCompile(`[\\/:*?"<>|]`)
+	// reChapterNo 正文文件名章号(如 第001章_标题.md);提为包级,避免续写循环里每文件重编译
+	reChapterNo = regexp.MustCompile(`第(\d{3})章`)
+	// reNovelPlan 设定集「计划 N 章」标注
+	reNovelPlan = regexp.MustCompile(`计划\s*(\d+)\s*章`)
+)
 
 func novelProjDir(title string) string {
 	return filepath.Join(novelRootDir, novelTitleSan.ReplaceAllString(strings.TrimSpace(title), ""))
@@ -150,7 +157,7 @@ chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d。`, req.Title, nvO
 	coverPrompt := fmt.Sprintf("epic novel cover art, %s %s, %s, cinematic lighting, highly detailed, dramatic composition, masterpiece, 4k", req.Title, nvOrDefault(req.Style, "热血爽文"), nvOrDefault(req.Genre, "玄幻逆袭"))
 	_ = os.MkdirAll(filepath.Join(proj, "封面"), 0755)
 	_ = os.WriteFile(filepath.Join(proj, "封面", "封面提示词.md"), []byte(coverPrompt), 0644)
-	go renderNovelCover(proj, coverPrompt)
+	go renderNovelCover(proj, coverPrompt, cfg)
 	saveNovelState(proj, novelState{Title: req.Title, Total: len(plan.Chapters), Current: 0})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dir": proj, "outline": sb.String(),
 		"chapters": len(plan.Chapters)})
@@ -175,7 +182,7 @@ func (s *Server) handleNovelChapter(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "未配置 LLM API key")
 		return
 	}
-	res, err := writeNovelChapter(req.Title, req.No, cfg)
+	res, err := writeNovelChapter(context.Background(), req.Title, req.No, cfg)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -200,7 +207,7 @@ func (s *Server) handleNovelProgress(w http.ResponseWriter, r *http.Request) {
 		if err != nil || info.IsDir() {
 			return nil
 		}
-		m := regexp.MustCompile(`第(\d{3})章`).FindStringSubmatch(info.Name())
+			m := reChapterNo.FindStringSubmatch(info.Name())
 		if m == nil {
 			return nil
 		}
@@ -389,19 +396,19 @@ func clip(s string, n int) string {
 
 func stripJSONFence(s string) string {
 	s = strings.TrimSpace(s)
+	// 剥 ```fence```(可带语言标记);未闭合时剥掉开头标记保留正文,不再误删尾部字符
 	if i := strings.Index(s, "```"); i >= 0 {
-		if j := strings.Index(s[i:], "\n"); j >= 0 {
-			s = s[i+j+1:]
-		}
-		if k := strings.LastIndex(s, "```"); k >= 0 {
-			s = s[:k]
+		if j := strings.Index(s[i+3:], "```"); j >= 0 {
+			s = s[i+3 : i+3+j]
+		} else {
+			s = s[:i] + s[i+3:]
 		}
 	}
-	if i := strings.Index(s, "{"); i > 0 {
-		s = s[i:]
-	}
-	if j := strings.LastIndex(s, "}"); j >= 0 {
-		s = s[:j+1]
+	// 只保留第一个 { 到最后一个 } 之间的 JSON 主体
+	if i := strings.Index(s, "{"); i >= 0 {
+		if j := strings.LastIndex(s, "}"); j > i {
+			s = s[i : j+1]
+		}
 	}
 	return strings.TrimSpace(s)
 }
@@ -415,29 +422,43 @@ func copySkillFile(from, to string) error {
 	return os.WriteFile(to, b, 0644)
 }
 
-// renderNovelCover 异步用 ComfyUI Z-Image 渲染小说封面(失败静默)
-func renderNovelCover(proj, prompt string) {
+// renderNovelCover 异步用 ComfyUI Z-Image 渲染小说封面(失败打日志,不静默)。
+// 地址/模型/输出目录全部取自 settings.json(与 Comfy 页面同一数据源),换配置即生效。
+func renderNovelCover(proj, prompt string, cfg config.Settings) {
 	defer func() { _ = recover() }()
-	c := newComfyClient("http://127.0.0.1:8190")
+	c := newComfyClient(cfg.Render.ComfyURL)
 	if _, err := c.online(); err != nil {
+		log.Printf("封面渲染跳过(ComfyUI 离线 %s): %v", cfg.Render.ComfyURL, err)
 		return
 	}
 	neg := "lowres, bad anatomy, text, watermark, logo, deformed, blurry"
-	wf := wfZImage(prompt, "z_image_turbo_bf16.safetensors", "qwen_3_4b.safetensors", "ae.safetensors", 90321177, 768, 1024, "novel_cover", neg)
+	seed := cfg.Render.Seed
+	if seed == 0 {
+		seed = 1688
+	}
+	wf := wfZImage(prompt, cfg.Render.ZImageUnet, cfg.Render.ZImageClip, cfg.Render.ZImageVae, seed, 768, 1024, "novel_cover", neg)
 	pid, err := c.submit(wf)
 	if err != nil {
+		log.Printf("封面渲染提交失败: %v", err)
 		return
 	}
 	if err := c.wait(pid, 180*time.Second, 2*time.Second); err != nil {
+		log.Printf("封面渲染失败: %v", err)
 		return
 	}
 	entry := c.history(pid)
 	if img := comfyOutputImage(entry); img != "" {
-		out := filepath.Join(comfyRoot, "output", filepath.Base(img))
+		// 产物目录=配置的 ComfyOutput(经 NiliX 启动的 ComfyUI 用 --output-directory 指向这里)
+		out := filepath.Join(cfg.Paths.ComfyOutput, filepath.Base(img))
 		if data, err := os.ReadFile(out); err == nil {
 			_ = os.MkdirAll(filepath.Join(proj, "封面"), 0755)
 			_ = os.WriteFile(filepath.Join(proj, "封面", "封面.png"), data, 0644)
+			log.Printf("✅ 封面已生成: %s", filepath.Join(proj, "封面", "封面.png"))
+		} else {
+			log.Printf("封面产物读取失败 %s: %v", out, err)
 		}
+	} else {
+		log.Printf("封面任务完成但未找到图片输出")
 	}
 }
 
@@ -474,17 +495,20 @@ type novelAutoTask struct {
 	Total   int    `json:"total"`
 	Done    bool   `json:"done"`
 	stop    chan struct{}
+	ctx     context.Context    // 停止续写时 cancel:中断在途 LLM 调用,不再烧 token
+	cancel  context.CancelFunc
 }
 
 var (
-	novelAutoMu   sync.Mutex
-	novelAutoTasks = map[string]*novelAutoTask{}
+	novelAutoMu    sync.Mutex
+	novelAutoTasks = map[string]*novelAutoTask{} // key=项目目录名(与书架/statusAll 一致)
 )
 
 func novelAutoStatus(title string) map[string]any {
+	dirKey := filepath.Base(novelProjDir(title))
 	novelAutoMu.Lock()
 	defer novelAutoMu.Unlock()
-	t, ok := novelAutoTasks[title]
+	t, ok := novelAutoTasks[dirKey]
 	if !ok {
 		return map[string]any{"title": title, "running": false, "current": 0, "total": 0, "done": false}
 	}
@@ -509,15 +533,17 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "未配置 LLM API key")
 		return
 	}
+	dirKey := filepath.Base(novelProjDir(req.Title))
 	novelAutoMu.Lock()
-	t, ok := novelAutoTasks[req.Title]
+	t, ok := novelAutoTasks[dirKey]
 	if ok && t.Running {
 		novelAutoMu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": true})
 		return
 	}
-	t = &novelAutoTask{Title: req.Title, Running: true, stop: make(chan struct{})}
-	novelAutoTasks[req.Title] = t
+	ctx, cancel := context.WithCancel(context.Background())
+	t = &novelAutoTask{Title: req.Title, Running: true, stop: make(chan struct{}), ctx: ctx, cancel: cancel}
+	novelAutoTasks[dirKey] = t
 	novelAutoMu.Unlock()
 	go func() {
 		defer func() {
@@ -526,14 +552,27 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 			novelAutoMu.Unlock()
 			_ = recover()
 		}()
+		proj := novelProjDir(req.Title)
 		for {
 			next := 0
 			novelAutoMu.Lock()
 			cur := t.Current
 			novelAutoMu.Unlock()
-			// 找下一未写章
+			// 找下一未写章:一次目录扫描建章号集合(原来每章最多 600 次全树 Walk,书越厚越慢)
+			have := map[int]bool{}
+			_ = filepath.Walk(proj, func(p string, info os.FileInfo, err error) error {
+				if err != nil || info.IsDir() {
+					return nil
+				}
+				if m := reChapterNo.FindStringSubmatch(info.Name()); m != nil {
+					if n, e := strconv.Atoi(m[1]); e == nil {
+						have[n] = true
+					}
+				}
+				return nil
+			})
 			for n := cur + 1; n <= 600; n++ {
-				if pf, _ := findChapter(novelProjDir(req.Title), n); pf == "" {
+				if !have[n] {
 					next = n
 					break
 				}
@@ -549,7 +588,7 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 				return
 			default:
 			}
-			res, err := writeNovelChapter(req.Title, next, cfg)
+			res, err := writeNovelChapter(t.ctx, req.Title, next, cfg)
 			novelAutoMu.Lock()
 			if err == nil && !res["exists"].(bool) {
 				t.Current = next
@@ -568,17 +607,19 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": true})
 }
 
-// handleNovelAutoStop 停止后台续写
+// handleNovelAutoStop 停止后台续写:取消在途 LLM 调用(不再烧 token),并等 goroutine 退出
 func (s *Server) handleNovelAutoStop(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Title string `json:"title"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
+	dirKey := filepath.Base(novelProjDir(req.Title))
 	novelAutoMu.Lock()
-	t, ok := novelAutoTasks[req.Title]
+	t, ok := novelAutoTasks[dirKey]
 	if ok && t.Running {
-		close(t.stop)
 		t.Running = false
+		t.cancel() // 中断在途 LLM 调用
+		close(t.stop)
 	}
 	novelAutoMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -609,8 +650,7 @@ func (s *Server) handleNovelStatusAll(w http.ResponseWriter, r *http.Request) {
 		})
 		total := 0
 		if b, err := os.ReadFile(filepath.Join(proj, "设定集", "设定集与大纲.md")); err == nil {
-			m := regexp.MustCompile(`计划\s*(\d+)\s*章`).FindStringSubmatch(string(b))
-			if len(m) > 1 {
+			if m := reNovelPlan.FindStringSubmatch(string(b)); len(m) > 1 {
 				total, _ = strconv.Atoi(m[1])
 			}
 		}
@@ -692,8 +732,9 @@ func touchNovelState(proj, title string, no int) {
 	saveNovelState(proj, st)
 }
 
-// writeNovelChapter 写第 no 章(幂等:已存在返回 exists),供手动与后台自动续写共用
-func writeNovelChapter(title string, no int, cfg config.Settings) (map[string]any, error) {
+// writeNovelChapter 写第 no 章(幂等:已存在返回 exists),供手动与后台自动续写共用。
+// ctx 传入调用方上下文:自动续写停止时 cancel,在途 LLM 调用立即中断,不再烧 token/落盘。
+func writeNovelChapter(ctx context.Context, title string, no int, cfg config.Settings) (map[string]any, error) {
 	proj := novelProjDir(title)
 	b, err := os.ReadFile(filepath.Join(proj, "设定集", "设定集与大纲.md"))
 	if err != nil {
@@ -718,8 +759,10 @@ func writeNovelChapter(title string, no int, cfg config.Settings) (map[string]an
 		if pf, _ := findChapter(proj, no-1); pf != "" {
 			if pb, err := os.ReadFile(pf); err == nil {
 				t := strings.TrimSpace(string(pb))
-				if len(t) > 120 {
-					t = t[len(t)-120:]
+				// rune 截断(字节截断会从汉字中间切断,发给 LLM 的是乱码)
+				tr := []rune(t)
+				if len(tr) > 120 {
+					t = string(tr[len(tr)-120:])
 				}
 				prevTail = t
 			}
@@ -736,7 +779,7 @@ func writeNovelChapter(title string, no int, cfg config.Settings) (map[string]an
 
 硬性要求:正文 ≥1280 字(2000 字左右最佳);推进大纲事件;至少一个爽点或冲突升级。
 严格输出 {"title":"章节名","content":"正文全文"} JSON。`, title, clip(outline, 2400), no, entry, prevTail)
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Minute)
 	defer cancel()
 	raw, err := llm.Chat(ctx, []backend.ChatMessage{
 		{Role: "system", Content: sys}, {Role: "user", Content: usr}}, 8000, 0.85)
@@ -747,8 +790,9 @@ func writeNovelChapter(title string, no int, cfg config.Settings) (map[string]an
 		Title   string `json:"title"`
 		Content string `json:"content"`
 	}
-	if err := json.Unmarshal([]byte(stripJSONFence(raw)), &ch); err != nil || len([]rune(ch.Content)) < 800 {
-		return nil, fmt.Errorf("第%d章解析失败或字数不足,请重试", no)
+	// 字数校验与硬性要求一致(≥1280 字);低于要求按失败处理,避免残章混进正文
+	if err := json.Unmarshal([]byte(stripJSONFence(raw)), &ch); err != nil || len([]rune(ch.Content)) < 1280 {
+		return nil, fmt.Errorf("第%d章解析失败或字数不足(需≥1280字),请重试", no)
 	}
 	chTitle := novelTitleSan.ReplaceAllString(ch.Title, "")
 	if chTitle == "" {
