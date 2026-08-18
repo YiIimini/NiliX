@@ -3811,7 +3811,7 @@ select option { text-align: center; }
     linear-gradient(165deg, #fff9fb 0%, #ffeef4 50%, #ffdce9 100%);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.65);
 }
-/* 顶部两个圆凸起(云朵感) */
+/* 顶部左凸起(云朵感) + 居中尖尾(伪元素不受 textContent 清空影响) */
 .ai-bubble::before {
   content: "";
   position: absolute; top: -7px; left: 16px;
@@ -3821,15 +3821,6 @@ select option { text-align: center; }
   pointer-events: none;
 }
 .ai-bubble::after {
-  content: "";
-  position: absolute; top: -5px; left: 56px;
-  width: 30px; height: 20px; border-radius: 50%;
-  background: linear-gradient(165deg, #fff9fb 0%, #ffeef4 85%);
-  box-shadow: inset 0 -3px 6px rgba(255, 200, 220, 0.45);
-  pointer-events: none;
-}
-/* 居中尖尾:底部中央小三角指向角色 */
-.ai-bubble .ai-tail {
   content: "";
   position: absolute; left: 50%; bottom: -9px; transform: translateX(-50%);
   width: 16px; height: 12px; clip-path: polygon(0 0, 100% 0, 50% 100%);
@@ -4094,31 +4085,6 @@ select option { text-align: center; }
 .bk-status-yellow { color: #f59e0b; }
 .bk-status-red { color: #ef4444; }
 
-/* AI 助手气泡 v3:更立体玻璃 + 打字光标 */
-.ai-bubble {
-  background:
-    linear-gradient(165deg,
-      color-mix(in srgb, var(--panel) 86%, var(--accent) 14%) 0%,
-      color-mix(in srgb, var(--panel) 72%, transparent) 48%,
-      color-mix(in srgb, var(--accent) 16%, var(--panel) 58%) 100%);
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--panel-border));
-  box-shadow:
-    0 16px 40px rgba(0, 0, 0, 0.36),
-    0 3px 10px rgba(0, 0, 0, 0.22),
-    inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent),
-    inset 0 -8px 20px color-mix(in srgb, var(--accent) 6%, transparent);
-}
-/* 打字光标:最后字符后的竖线呼吸 */
-.ai-bubble.typing::after {
-  content: "";
-  display: inline-block;
-  width: 1.5px; height: 11px; margin-left: 2px;
-  vertical-align: -1px;
-  background: var(--accent);
-  animation: aiCaret 0.7s steps(1) infinite;
-}
-@keyframes aiCaret { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
-
 /* 角色说话:蹦跳+摇摆(像在说话/兴奋跑动) */
 #ai-avatar.is-talking {
   animation: aiTalk 0.42s ease-in-out infinite alternate;
@@ -4129,24 +4095,4 @@ select option { text-align: center; }
 }
 #ai-mascot.is-busy #ai-avatar.is-talking {
   animation: aiTalk 0.3s ease-in-out infinite alternate, aiGlow 0.6s ease-in-out infinite;
-}
-/* 气泡 v4:更精致玻璃质感(用户要求纯视觉美化) */
-.ai-bubble {
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--panel-border));
-  background:
-    linear-gradient(155deg,
-      color-mix(in srgb, var(--panel) 82%, var(--accent) 18%) 0%,
-      color-mix(in srgb, var(--panel) 68%, transparent) 45%,
-      color-mix(in srgb, var(--accent) 22%, var(--panel) 55%) 100%);
-  box-shadow:
-    0 18px 44px rgba(0, 0, 0, 0.38),
-    0 4px 12px rgba(0, 0, 0, 0.24),
-    inset 0 1px 0 color-mix(in srgb, #fff 16%, transparent),
-    inset 0 -10px 24px color-mix(in srgb, var(--accent) 8%, transparent);
-  border-radius: 18px 18px 6px 18px;
-  padding: 11px 15px 12px;
-}
-.ai-bubble::after {
-  right: 15px; bottom: -6.5px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 26%, var(--panel) 70%), color-mix(in srgb, var(--accent) 12%, var(--panel) 80%));
 }
