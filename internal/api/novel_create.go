@@ -40,7 +40,7 @@ func (s *Server) handleNovelCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "请填书名")
 		return
 	}
-	if req.Chapters < 8 {
+	if req.Chapters < 52 { // 技能硬下限 ≥52(默认 56,8 卷×7 章)
 		req.Chapters = 56
 	}
 	if req.Chapters > 300 {
@@ -69,7 +69,7 @@ func (s *Server) handleNovelCreate(w http.ResponseWriter, r *http.Request) {
 题材:%s;风格:%s;总章数:%d(每 7 章一卷)。
 爽点主线固定:开局被欺负 → 中期反转 → 后期打脸 → 结局封神。
 严格输出 JSON:
-{"logline":"一句话故事","characters":[{"name":"","desc":"身份/性格/金手指,60字内"}],"world":"世界观与力量体系,150字内","volumes":[{"no":1,"title":"卷名"}],
+{"logline":"一句话故事","characters":[{"name":"","desc":"身份/性格/金手指,60字内","img_prompt":"写实电影级人物生图提示词,含外貌/服装/气质,60-100字,禁日漫风"}],"world":"世界观与力量体系,150字内,必含可量化等级表","volumes":[{"no":1,"title":"卷名"}],
 "chapters":[{"no":1,"title":"章节名","premise":"本章事件,50字内","conflict":"冲突与爽点,40字内"}]}
 chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d。`, req.Title, nvOrDefault(req.Genre, "玄幻逆袭"),
 		nvOrDefault(req.Style, "热血爽文"), req.Chapters, req.Chapters, (req.Chapters+6)/7)
@@ -85,8 +85,9 @@ chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d。`, req.Title, nvO
 	var plan struct {
 		Logline    string `json:"logline"`
 		Characters []struct {
-			Name string `json:"name"`
-			Desc string `json:"desc"`
+			Name      string `json:"name"`
+			Desc      string `json:"desc"`
+			ImgPrompt string `json:"img_prompt"`
 		} `json:"characters"`
 		World    string `json:"world"`
 		Volumes  []struct {
@@ -109,7 +110,15 @@ chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d。`, req.Title, nvO
 	fmt.Fprintf(&sb, "# %s —— 设定集与大纲\n\n> 题材:%s | 风格:%s | 计划 %d 章(7章/卷)\n\n## 一句话故事\n%s\n\n## 世界观\n%s\n\n## 人物\n",
 		req.Title, nvOrDefault(req.Genre, "玄幻逆袭"), nvOrDefault(req.Style, "热血爽文"), len(plan.Chapters), plan.Logline, plan.World)
 	for _, c := range plan.Characters {
-		fmt.Fprintf(&sb, "- **%s**:%s\n", c.Name, c.Desc)
+		p := c.Desc
+		if c.ImgPrompt != "" {
+			p += " | 生图:" + c.ImgPrompt
+		}
+		fmt.Fprintf(&sb, "- **%s**:%s\n", c.Name, p)
+	}
+	sb.WriteString("\n## 卷结构\n")
+	for _, v := range plan.Volumes {
+		fmt.Fprintf(&sb, "- 卷%02d %s\n", v.No, v.Title)
 	}
 	sb.WriteString("\n## 逐章大纲\n")
 	for _, ch := range plan.Chapters {
@@ -123,6 +132,23 @@ chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d。`, req.Title, nvO
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 技能规范副本:创作指令卡 / 章节写作规范(模板存在则复制,缺失静默)
+	skillRef := `C:\Users\Administrator\.agents\skills\shuangwen-novel\references`
+	_ = copySkillFile(filepath.Join(skillRef, "创作指令卡-模板.md"), filepath.Join(proj, "设定集", "创作指令卡-AI版本.md"))
+	_ = copySkillFile(filepath.Join(skillRef, "章节写作规范.md"), filepath.Join(proj, "设定集", "章节写作规范.md"))
+	// 素材/人物生成提示词.md(全角色写实电影级提示词)
+	var mats strings.Builder
+	mats.WriteString("# 人物生成提示词(写实电影级 · 禁日漫风)\n\n")
+	for _, c := range plan.Characters {
+		fmt.Fprintf(&mats, "## %s\n%s\n\n", c.Name, nvOrDefault(c.ImgPrompt, c.Desc))
+	}
+	_ = os.MkdirAll(filepath.Join(proj, "素材"), 0755)
+	_ = os.WriteFile(filepath.Join(proj, "素材", "人物生成提示词.md"), []byte(mats.String()), 0644)
+	// 封面提示词.md + 异步 Z-Image 渲染封面.png
+	coverPrompt := fmt.Sprintf("epic novel cover art, %s %s, %s, cinematic lighting, highly detailed, dramatic composition, masterpiece, 4k", req.Title, nvOrDefault(req.Style, "热血爽文"), nvOrDefault(req.Genre, "玄幻逆袭"))
+	_ = os.MkdirAll(filepath.Join(proj, "封面"), 0755)
+	_ = os.WriteFile(filepath.Join(proj, "封面", "封面提示词.md"), []byte(coverPrompt), 0644)
+	go renderNovelCover(proj, coverPrompt)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dir": proj, "outline": sb.String(),
 		"chapters": len(plan.Chapters)})
 }
@@ -219,7 +245,19 @@ func (s *Server) handleNovelChapter(w http.ResponseWriter, r *http.Request) {
 		chTitle = fmt.Sprintf("第%03d章", req.No)
 	}
 	vol := (req.No + 6) / 7
-	volDir := filepath.Join(proj, "正文", fmt.Sprintf("卷%02d", vol))
+	// 卷名:从大纲卷结构取(卷X_卷名),缺省 卷NN
+	volName := fmt.Sprintf("卷%02d", vol)
+	for _, line := range strings.Split(outline, "\n") {
+		if strings.HasPrefix(line, "- 卷") {
+			var vno int
+			var vtitle string
+			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "- 卷"), "%d %s", &vno, &vtitle); err == nil && vno == vol {
+				volName = fmt.Sprintf("卷%02d_%s", vol, vtitle)
+				break
+			}
+		}
+	}
+	volDir := filepath.Join(proj, "正文", volName)
 	_ = os.MkdirAll(volDir, 0755)
 	name := fmt.Sprintf("第%03d章_%s.md", req.No, chTitle)
 	file := filepath.Join(volDir, name)
@@ -228,6 +266,8 @@ func (s *Server) handleNovelChapter(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 全本增量合并:全本/<书名>·全本.md(标题+目录+全文)
+	appendToFullBook(proj, req.Title, req.No, chTitle, ch.Content)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file": name,
 		"words": len([]rune(ch.Content)), "title": chTitle})
 }
@@ -311,4 +351,64 @@ func stripJSONFence(s string) string {
 		s = s[:j+1]
 	}
 	return strings.TrimSpace(s)
+}
+
+// copySkillFile 复制技能模板文件(不存在静默跳过)
+func copySkillFile(from, to string) error {
+	b, err := os.ReadFile(from)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(to, b, 0644)
+}
+
+// renderNovelCover 异步用 ComfyUI Z-Image 渲染小说封面(失败静默)
+func renderNovelCover(proj, prompt string) {
+	defer func() { _ = recover() }()
+	c := newComfyClient("http://127.0.0.1:8190")
+	if _, err := c.online(); err != nil {
+		return
+	}
+	neg := "lowres, bad anatomy, text, watermark, logo, deformed, blurry"
+	wf := wfZImage(prompt, "z_image_turbo_bf16.safetensors", "qwen_3_4b.safetensors", "ae.safetensors", 90321177, 768, 1024, "novel_cover", neg)
+	pid, err := c.submit(wf)
+	if err != nil {
+		return
+	}
+	if err := c.wait(pid, 180*time.Second, 2*time.Second); err != nil {
+		return
+	}
+	entry := c.history(pid)
+	if img := comfyOutputImage(entry); img != "" {
+		out := filepath.Join(comfyRoot, "output", filepath.Base(img))
+		if data, err := os.ReadFile(out); err == nil {
+			_ = os.MkdirAll(filepath.Join(proj, "封面"), 0755)
+			_ = os.WriteFile(filepath.Join(proj, "封面", "封面.png"), data, 0644)
+		}
+	}
+}
+
+// appendToFullBook 增量合并全本(标题+目录+全文),按章号追加
+func appendToFullBook(proj, title string, no int, chTitle, content string) {
+	fullDir := filepath.Join(proj, "全本")
+	_ = os.MkdirAll(fullDir, 0755)
+	fp := filepath.Join(fullDir, novelTitleSan.ReplaceAllString(title, "")+"·全本.md")
+	var b []byte
+	if old, err := os.ReadFile(fp); err == nil {
+		b = old
+	} else {
+		b = []byte(fmt.Sprintf("# %s(全本)\n\n> 爽文一条龙 · 每章 ≥1280 字\n\n", title))
+	}
+	// 目录占位:重建目录(收集已有章节)
+	dirLines := ""
+	_ = filepath.Walk(filepath.Join(proj, "正文"), func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
+			return nil
+		}
+		dirLines += "- " + strings.TrimSuffix(info.Name(), ".md") + "\n"
+		return nil
+	})
+	// 追加本章正文
+	b = append(b, []byte(fmt.Sprintf("\n\n## 第%03d章 %s\n\n%s\n", no, chTitle, content))...)
+	_ = os.WriteFile(fp, b, 0644)
 }
