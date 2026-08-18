@@ -258,6 +258,12 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
 	assetStyle := manjuAssetStyle(style)
 	s := `你是 MiniMax H3 视频生成模型的导演兼提示词专家。基于给定的小说章节，直接输出完整漫剧渲染方案。
 
+【内容纪律·最高优先】：分镜必须忠实还原小说原文，画面与小说对不上=废镜：
+- 台词/旁白必须逐字引用小说原文（原词原句原标点，禁止改写/扩写/翻译/编造）
+- 关键剧情事件（冲突/反转/打脸/名场面）必须有对应镜头，禁止跳事件、禁止张冠李戴
+- 角色外观/服装/道具逐字从原文提炼，禁止自行增删设定
+- 原文没有的台词和事件一律不许出现
+
 【输出 JSON（严格）】：
 {
   "episode_title": "集标题",
@@ -271,8 +277,8 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
       "shot_size": "特写/近景/中景/全景/远景",
       "camera": "运镜（类型+幅度+速度，如：缓慢推近）",
       "action": "画面动作描述",
-      "dialogue": "角色:台词（多句用换行分隔；无对白为空）",
-      "narration": "旁白（无则空；有台词时旁白留空避免重复）",
+      "dialogue": "角色:台词（逐字引用小说原文对白，禁止改写/扩写/编造；多句用换行分隔；无对白为空）",
+      "narration": "旁白（逐字引用原文旁白，禁止改写；无则空；有台词时旁白留空避免重复）",
       "duration": 5
     }
   ]

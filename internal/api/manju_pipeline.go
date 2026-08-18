@@ -9,7 +9,6 @@ import (
 	"crypto/md5"
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -705,6 +704,15 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 		reuse := planC == ctx.chapters                      // 范围一致
 		reuse = reuse || (legacy && !ctx.auto)              // 旧方案普通模式兼容复用
 		reuse = reuse || chapterRangeFullBook(ctx.chapters) // 全本请求:沿用该集既有方案
+		// 小说内容指纹:改过正文必须重新生成方案,否则渲染的还是旧剧情
+		// (「改了小说但视频对不上」的头号原因);旧方案无指纹记录则不强制,兼容老项目
+		fp := ctx.novelFingerprint()
+		planFp := str(plan["novel_fp"])
+		if reuse && fp != "" && planFp != "" && planFp != fp {
+			lg.logf("⚠️ 小说正文已修改(" + planFp + " → " + fp + ")，方案过期，重新生成并清空该集旧产物")
+			reuse = false
+			ctx.clearEpisodeArtifacts(lg)
+		}
 		if reuse {
 			ctx.writeCharactersJSON(plan)
 			lg.logf("♻️  复用方案: " + filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json"))
@@ -721,22 +729,27 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 	if cerr != nil {
 		return nil, cerr
 	}
-	lg.logf("📖 章节 " + ctx.chapters + "（" + strconv.Itoa(len([]rune(chapterText))) + " 字）")
+	runes := len([]rune(chapterText))
+	lg.logf("📖 章节 " + ctx.chapters + "（" + strconv.Itoa(runes) + " 字）")
+	if runes > 20000 {
+		// 超长静默截断会让超出部分的剧情根本没进方案,视频自然对不上——必须明示
+		lg.logf("  ⚠️ 内容 " + strconv.Itoa(runes) + " 字超出 20000 字上限,超出部分可能未被方案覆盖(建议缩小章节范围或分集)")
+	}
 	lg.logf("🤖 大模型直出 人物/场景/分镜...")
 	sys := manjuDirectSystem(ctx.cfg, ctx.style)
+	// 生成并校验:输出被截断/非 JSON/无镜头都视为无效,追加精简约束重试一次
 	plan, err = ctx.llm.chatJSON(sys, truncate(chapterText, 20000), 0.4)
-	if err != nil {
-		// 输出被截断(length)或返回非 JSON:追加精简约束重试一次
-		if errors.Is(err, errLLMTruncated) || strings.Contains(err.Error(), "LLM 输出非 JSON") {
-			lg.logf("  ⚠️ 方案生成输出过长(" + err.Error() + ")，追加精简约束重试一次...")
-			plan, err = ctx.llm.chatJSON(sys+manjuConciseSuffix, truncate(chapterText, 20000), 0.4)
-			if err != nil {
-				return nil, fmt.Errorf("方案生成失败(重试后): %w", err)
+	invalid := err != nil || len(anyArr(plan["shots"])) == 0
+	if invalid {
+		lg.logf("  ⚠️ 方案生成无效(输出过长/非 JSON/无镜头)，追加精简约束重试一次...")
+		plan, err = ctx.llm.chatJSON(sys+manjuConciseSuffix, truncate(chapterText, 20000), 0.4)
+		if err != nil || len(anyArr(plan["shots"])) == 0 {
+			if err == nil {
+				err = fmt.Errorf("方案生成后仍无镜头")
 			}
-			lg.logf("  ✅ 精简重试成功")
-		} else {
-			return nil, fmt.Errorf("方案生成失败: %w", err)
+			return nil, fmt.Errorf("方案生成失败(重试后): %w", err)
 		}
+		lg.logf("  ✅ 精简重试成功")
 	}
 	if err := ctx.writePlan(plan); err != nil {
 		return nil, err
@@ -747,6 +760,19 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 	shots, _ := planShots(plan)
 	lg.logf(fmt.Sprintf("  ✅ %d 角色 / %d 场景 / %d 镜头", chars, scenes, len(shots)))
 	return plan, nil
+}
+
+// novelFingerprint 小说正文指纹(大小+mtime):方案复用校验的依据,
+// 正文变化后旧方案视为过期,强制重新生成,保证视频内容与小说同步。
+func (ctx *manjuCtx) novelFingerprint() string {
+	if ctx.novel == "" {
+		return ""
+	}
+	st, err := os.Stat(ctx.novel)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d|%d", st.Size(), st.ModTime().Unix())
 }
 
 func anyArr(v any) []any {
@@ -868,6 +894,12 @@ func (ctx *manjuCtx) writePlan(plan map[string]any) error {
 	}
 	if str(plan["episode"]) == "" {
 		plan["episode"] = ctx.episode
+	}
+	// 记录小说正文指纹(复用校验依据:改过正文 → 方案过期强制重生成)
+	if str(plan["novel_fp"]) == "" {
+		if fp := ctx.novelFingerprint(); fp != "" {
+			plan["novel_fp"] = fp
+		}
 	}
 	data, _ := json.MarshalIndent(plan, "", "  ")
 	return os.WriteFile(filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json"), data, 0644)
