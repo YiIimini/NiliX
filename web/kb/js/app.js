@@ -8,11 +8,13 @@ const App = {
   prefs: null,
 
   loadPrefs() {
-    const d = { aiOn: true, aiStatus: true, aiQuotes: true, aiWander: true, aiFreq: 22000, aiSize: 104,
-      kbLayout: "radial", kbShape: "mixed", kbCurve: 0.05, kbLineOp: 0.2, kbHoverLabel: true, kbLabels: 0 };
+    const d = { aiOn: true, aiStatus: true, aiQuotes: true, aiWander: true, aiFreq: 22000, aiSize: 104, aiWanderInt: 11000,
+      kbLayout: "force", kbShape: "mixed", kbCurve: 0.05, kbLineOp: 0.2, kbHoverLabel: true, kbLabels: 0,
+      kbRepel: 200, kbDist: 120, kbGrav: 8 };
     let s = null;
     try { s = JSON.parse(localStorage.getItem("kbw-prefs") || "null"); } catch (e) {}
     this.prefs = Object.assign(d, s || {});
+    if (s && s.kbLayout === "radial" && s.kbRepel == null) this.prefs.kbLayout = "force"; // 旧配置迁移到新默认(星系)
     return this.prefs;
   },
   savePrefs() {
@@ -28,6 +30,15 @@ const App = {
     chk("set-ai-quotes", P.aiQuotes); chk("set-ai-wander", P.aiWander);
     set("set-ai-freq", P.aiFreq); set("set-ai-size", P.aiSize);
     set("set-kb-layout", P.kbLayout); set("set-kb-shape", P.kbShape);
+    set("set-ai-wander-int", P.aiWanderInt);
+    set("set-kb-repel", P.kbRepel); set("set-kb-dist", P.kbDist); set("set-kb-grav", P.kbGrav);
+    const syncRange = () => {
+      el("set-kb-repel-v").textContent = el("set-kb-repel").value;
+      el("set-kb-dist-v").textContent = el("set-kb-dist").value;
+      el("set-kb-grav-v").textContent = el("set-kb-grav").value;
+    };
+    syncRange();
+    ["set-kb-repel", "set-kb-dist", "set-kb-grav"].forEach((id) => el(id).addEventListener("input", syncRange));
     set("set-kb-curve", P.kbCurve); set("set-kb-lineop", P.kbLineOp);
     set("set-kb-labels", P.kbLabels); chk("set-kb-hover-label", P.kbHoverLabel);
     const apply = () => {
@@ -55,9 +66,10 @@ const App = {
         const k = { "set-ai-on": "aiOn", "set-ai-status": "aiStatus", "set-ai-quotes": "aiQuotes", "set-ai-wander": "aiWander", "set-kb-hover-label": "kbHoverLabel" }[id];
         P[k] = e.target.checked; apply();
       }));
-    [["set-ai-freq", "aiFreq", parseInt], ["set-ai-size", "aiSize", parseInt], ["set-ai-float", "aiFloat", parseFloat],
+    [["set-ai-freq", "aiFreq", parseInt], ["set-ai-size", "aiSize", parseInt], ["set-ai-wander-int", "aiWanderInt", parseInt],
      ["set-kb-layout", "kbLayout", String], ["set-kb-shape", "kbShape", String], ["set-kb-curve", "kbCurve", parseFloat],
-     ["set-kb-lineop", "kbLineOp", parseFloat], ["set-kb-labels", "kbLabels", parseInt]].forEach(([id, k, cast]) => {
+     ["set-kb-lineop", "kbLineOp", parseFloat], ["set-kb-labels", "kbLabels", parseInt],
+     ["set-kb-repel", "kbRepel", parseInt], ["set-kb-dist", "kbDist", parseInt], ["set-kb-grav", "kbGrav", parseInt]].forEach(([id, k, cast]) => {
       const e2 = el(id);
       if (e2) e2.addEventListener("change", () => { P[k] = cast(e2.value); apply(); });
     });
@@ -460,7 +472,7 @@ const App = {
     };
     m.addEventListener("pointerup", up);
     m.addEventListener("pointercancel", up);
-    // 随机漫步调度(拖拽中不打扰)
+    // 随机漫步调度(拖拽中不打扰;间隔由设置·AI助手·闲逛间隔决定)
     const wander = () => {
       if (!down && (!App.prefs || App.prefs.aiWander)) {
         const w = m.offsetWidth, h = m.offsetHeight;
@@ -469,7 +481,8 @@ const App = {
         this.mascotWalkTo(x, y);
       }
       clearTimeout(this._mwT);
-      this._mwT = setTimeout(wander, 11000 + Math.random() * 8000);
+      const base = (App.prefs && App.prefs.aiWanderInt) || 11000;
+      this._mwT = setTimeout(wander, base + Math.random() * base * 0.6);
     };
     this._mwT = setTimeout(wander, 5000);
     // 闲置名言轮播(忙态不打扰)

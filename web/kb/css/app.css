@@ -3901,3 +3901,6 @@ select option { text-align: center; }
 /* 助手步行态:轻微摇摆步感 */
 #ai-mascot.is-walking #ai-avatar { animation: aiFloat 0.9s ease-in-out infinite, aiWaddle 0.45s ease-in-out infinite; }
 @keyframes aiWaddle { 0%, 100% { rotate: -3deg; } 50% { rotate: 3deg; } }
+
+/* 设置弹窗滑杆(图谱物理) */
+.settings-range { flex: 1; min-width: 0; accent-color: var(--accent); height: 22px; }

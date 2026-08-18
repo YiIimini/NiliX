@@ -635,6 +635,16 @@
             <span class="settings-hint">闲时踱步换位</span>
           </div>
           <div class="settings-row">
+            <span class="settings-row-label">闲逛间隔</span>
+            <select id="set-ai-wander-int" class="settings-input settings-input-flex">
+              <option value="6000">频繁(6s)</option>
+              <option value="11000">较快(11s)</option>
+              <option value="19000">适中(19s)</option>
+              <option value="35000">悠哉(35s)</option>
+              <option value="60000">佛系(60s)</option>
+            </select>
+          </div>
+          <div class="settings-row">
             <span class="settings-row-label">冒泡频率</span>
             <select id="set-ai-freq" class="settings-input settings-input-flex">
               <option value="12000">勤快(12s)</option>
@@ -655,12 +665,27 @@
         <div class="settings-group">
           <div class="settings-label"><span class="sl-emoji">🕸</span>关系图谱</div>
           <div class="settings-row">
-            <span class="settings-row-label">布局方式</span>
+            <span class="settings-row-label">组织模式</span>
             <select id="set-kb-layout" class="settings-input settings-input-flex">
-              <option value="radial">径向星座(README 中心)</option>
-              <option value="force">力导向(物理模拟)</option>
+              <option value="force">星系(Obsidian 物理模拟)</option>
+              <option value="radial">径向(README 中心辐射)</option>
               <option value="ring">环形(分类环列)</option>
             </select>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">斥力</span>
+            <input type="range" id="set-kb-repel" min="30" max="420" step="10" class="settings-range">
+            <span class="settings-hint" id="set-kb-repel-v"></span>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">链距</span>
+            <input type="range" id="set-kb-dist" min="20" max="300" step="10" class="settings-range">
+            <span class="settings-hint" id="set-kb-dist-v"></span>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">中心引力</span>
+            <input type="range" id="set-kb-grav" min="0" max="30" step="1" class="settings-range">
+            <span class="settings-hint" id="set-kb-grav-v"></span>
           </div>
           <div class="settings-row">
             <span class="settings-row-label">节点形状</span>

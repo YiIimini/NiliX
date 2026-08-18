@@ -115,8 +115,9 @@ const KbView = {
     const lineOp = (P.kbLineOp != null ? P.kbLineOp : 0.2);
     // 常显标签:按哈希取前 kbLabels 个页面亮名(枢纽恒显)
     const labelBudget = P.kbLabels || 0;
-    // 中心:README 索引节点
-    nodes.push({ id: "README", name: "README · 索引", kind: "page", category: "索引", x: 0, y: 0,
+    // 中心:README 索引节点(force 模式不给坐标,物理模拟自然居中;radial/ring 固定原点)
+    const central = mode !== "force";
+    nodes.push({ id: "README", name: "README · 索引", kind: "page", category: "索引", x: 0, y: 0, fixed: central,
       symbol: "circle", symbolSize: 58,
       itemStyle: { color: App.catColor("索引") !== "#999" ? App.catColor("索引") : "#E8C268", borderColor: "#fff", borderWidth: 2, shadowBlur: 26, shadowColor: "rgba(232,194,104,.55)" },
       label: { show: true, position: "bottom", distance: 8, color: "#E8C268", fontSize: 13, fontWeight: 800 } });
@@ -127,7 +128,7 @@ const KbView = {
       const color = App.catColor(c.name);
       const sym = SYMS[ci % SYMS.length];
       // 枢纽
-      nodes.push({ id: "hub:" + c.name, name: "◈ " + c.name, kind: "hub", category: c.name, x: hx, y: hy,
+      nodes.push({ id: "hub:" + c.name, name: "◈ " + c.name, kind: "hub", category: c.name, x: hx, y: hy, fixed: central,
         symbol: "circle", symbolSize: Math.min(46, 24 + matched.length * 0.22),
         itemStyle: { color, borderColor: color, borderWidth: 2, shadowBlur: 14, shadowColor: color + "" },
         label: { show: true, color, fontSize: 12, fontWeight: 700, position: "top", distance: 6 } });
@@ -145,7 +146,7 @@ const KbView = {
         if (mode === "ring") { px = Math.cos(ang) * (R1 + 180 + (h % 90)); py = Math.sin(ang) * (R1 + 180 + (h % 90)); }
         const showLabel = labelBudget > 0 && (h % 97) < Math.max(1, Math.round(labelBudget / 5.8));
         nodes.push({ id: p2.name, name: p2.name, kind: "page", category: c.name,
-          x: px, y: py,
+          x: central ? px : undefined, y: central ? py : undefined,
           symbol: shapeOf(h), symbolSize: 6.5 + (h % 5) + Math.min(6, (p2.desc || "").length / 24),
           itemStyle: { color, opacity: 0.9, borderColor: color, borderWidth: 0.6 },
           label: { show: showLabel, color, fontSize: 10 } });
@@ -163,7 +164,13 @@ const KbView = {
         layout: mode === "force" ? "force" : "none",
         roam: true,
         draggable: true,
-        force: mode === "force" ? { repulsion: 150, edgeLength: [40, 120], gravity: 0.06, friction: 0.6, layoutAnimation: false } : undefined,
+        force: mode === "force" ? {
+          repulsion: (P.kbRepel != null ? P.kbRepel : 200),
+          edgeLength: [Math.round((P.kbDist != null ? P.kbDist : 120) * 0.55), (P.kbDist != null ? P.kbDist : 120) * 2.2],
+          gravity: 0.028 + (P.kbGrav != null ? P.kbGrav : 8) * 0.004,   // 中心引力滑杆映射 0.028~0.148
+          friction: 0.62,
+          layoutAnimation: true,          // Obsidian 灵魂:开场收敛动画
+        } : undefined,
         progressive: 260, progressiveThreshold: 520,
         hoverAnimation: false,
         edgeSymbol: ["none", "none"],

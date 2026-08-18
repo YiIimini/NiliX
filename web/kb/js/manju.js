@@ -3,6 +3,15 @@
   "use strict";
   const $ = (id) => document.getElementById(id);
 
+  /* 视觉模型预设:用户只选模型 + 填 Key,API 地址自动带出(自定义兜底) */
+  const VISION_PRESETS = [
+    { id: "glm-4.6v-flash", url: "https://open.bigmodel.cn/api/paas/v4", label: "智谱 glm-4.6v-flash（免费·推荐）", hint: "智谱 Key：open.bigmodel.cn 控制台 → API 密钥" },
+    { id: "glm-4v-flash", url: "https://open.bigmodel.cn/api/paas/v4", label: "智谱 glm-4v-flash（免费·备选）", hint: "智谱 Key：open.bigmodel.cn 控制台 → API 密钥" },
+    { id: "glm-4.6v", url: "https://open.bigmodel.cn/api/paas/v4", label: "智谱 glm-4.6v（付费旗舰）", hint: "智谱 Key：open.bigmodel.cn 控制台 → API 密钥" },
+    { id: "qwen-vl-max", url: "https://dashscope.aliyuncs.com/compatible-mode/v1", label: "通义 qwen-vl-max", hint: "阿里云百炼 Key：bailian.console.aliyun.com" },
+    { id: "qwen-vl-plus", url: "https://dashscope.aliyuncs.com/compatible-mode/v1", label: "通义 qwen-vl-plus", hint: "阿里云百炼 Key：bailian.console.aliyun.com" },
+  ];
+
   /* 画幅预设(官方 6 档) → 宽×高 */
   const RATIOS = {
     "21:9": [1344, 576],
