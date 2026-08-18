@@ -459,8 +459,8 @@ func (s *Server) handleNovelStatusAll(w http.ResponseWriter, r *http.Request) {
 	novelAutoMu.Lock()
 	defer novelAutoMu.Unlock()
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue // 跳过文件与隐藏杂物目录(.tools/.git 等)
 		}
 		title := e.Name()
 		proj := filepath.Join(novelRootDir, title)
@@ -483,6 +483,10 @@ func (s *Server) handleNovelStatusAll(w http.ResponseWriter, r *http.Request) {
 			running = true
 		}
 		status := "none"
+		if total == 0 && chapters > 0 {
+			// 旧书无"计划 N 章"标注:有正文默认视为已完成全本
+			total = chapters
+		}
 		if total > 0 {
 			switch {
 			case running:
