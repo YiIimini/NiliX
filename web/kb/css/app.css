@@ -3796,24 +3796,45 @@ select option { text-align: center; }
 #ai-mascot.is-busy #ai-avatar { animation: aiFloat 1.4s ease-in-out infinite, aiGlow 1.4s ease-in-out infinite; }
 @keyframes aiFloat { 0%, 100% { translate: 0 0; } 50% { translate: 0 -7px; } }
 @keyframes aiGlow { 0%, 100% { filter: drop-shadow(0 0 6px var(--glow)); } 50% { filter: drop-shadow(0 0 18px var(--glow)); } }
-/* AI 助手气泡 v6:云朵/棉花糖形状(mask 裁出云朵轮廓,底色主题渐变) */
+/* AI 助手气泡 v7:CSS 圆润棉花糖云朵(大圆角+顶部圆凸+居中尖尾,无 mask 变形) */
 .ai-bubble {
   position: relative;
-  min-width: 128px; max-width: 250px;         /* 大小随文本内容,短句不塌成条 */
-  padding: 14px 20px 18px;
-  font-size: 12.5px; line-height: 1.6; color: #4a3038;   /* 粉白底上用深暖色文字 */
+  min-width: 120px; max-width: 240px;
+  padding: 13px 20px 16px;
+  font-size: 12.5px; line-height: 1.6; color: #4a3038;
   letter-spacing: 0.2px;
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
-  /* 云朵轮廓:对称,尖尾正中央朝下 */
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 170'%3E%3Cpath d='M30,140 L30,112 a30,30 0 0 1 12,-52 a32,32 0 0 1 60,-14 a30,30 0 0 1 56,9 a32,32 0 0 1 52,21 a26,26 0 0 1 0,36 h-90 l10,22 l10,-22 h-100 z' fill='black'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 170'%3E%3Cpath d='M30,140 L30,112 a30,30 0 0 1 12,-52 a32,32 0 0 1 60,-14 a30,30 0 0 1 56,9 a32,32 0 0 1 52,21 a26,26 0 0 1 0,36 h-90 l10,22 l10,-22 h-100 z' fill='black'/%3E%3C/svg%3E");
-  -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
-  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  border-radius: 24px 24px 10px 24px;
   background:
-    radial-gradient(120% 90% at 15% -15%, rgba(255, 255, 255, 0.9), transparent 55%),
-    radial-gradient(100% 130% at 100% 115%, rgba(255, 214, 228, 0.75), transparent 60%),
-    linear-gradient(165deg, #fff9fb 0%, #ffeef4 48%, #ffdce9 100%);   /* 粉白渐变 */
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.35), 0 5px 14px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(255, 255, 255, 0.6);
+    radial-gradient(120% 90% at 15% -15%, rgba(255, 255, 255, 0.95), transparent 55%),
+    radial-gradient(100% 130% at 100% 115%, rgba(255, 210, 226, 0.8), transparent 60%),
+    linear-gradient(165deg, #fff9fb 0%, #ffeef4 50%, #ffdce9 100%);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.65);
+}
+/* 顶部两个圆凸起(云朵感) */
+.ai-bubble::before {
+  content: "";
+  position: absolute; top: -7px; left: 16px;
+  width: 44px; height: 26px; border-radius: 50%;
+  background: linear-gradient(165deg, #fff9fb 0%, #ffeef4 80%);
+  box-shadow: inset 0 -3px 6px rgba(255, 200, 220, 0.5);
+  pointer-events: none;
+}
+.ai-bubble::after {
+  content: "";
+  position: absolute; top: -5px; left: 56px;
+  width: 30px; height: 20px; border-radius: 50%;
+  background: linear-gradient(165deg, #fff9fb 0%, #ffeef4 85%);
+  box-shadow: inset 0 -3px 6px rgba(255, 200, 220, 0.45);
+  pointer-events: none;
+}
+/* 居中尖尾:底部中央小三角指向角色 */
+.ai-bubble .ai-tail {
+  content: "";
+  position: absolute; left: 50%; bottom: -9px; transform: translateX(-50%);
+  width: 16px; height: 12px; clip-path: polygon(0 0, 100% 0, 50% 100%);
+  background: linear-gradient(180deg, #ffeef4 0%, #ffdce9 100%);
+  pointer-events: none;
 }
 /* 顶部弧形高光(玻璃折射感) */
 .ai-bubble::before {
