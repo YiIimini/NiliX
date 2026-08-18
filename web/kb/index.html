@@ -612,6 +612,95 @@
             </div>
           </div>
         </div>
+
+        <div class="settings-group">
+          <div class="settings-label"><span class="sl-emoji">🤖</span>AI 助手</div>
+          <div class="settings-row">
+            <span class="settings-row-label">启用助手</span>
+            <label class="toggle"><input type="checkbox" id="set-ai-on"><span class="tk"></span></label>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">状态播报</span>
+            <label class="toggle"><input type="checkbox" id="set-ai-status"><span class="tk"></span></label>
+            <span class="settings-hint">管线/审片实时播报</span>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">闲置名言</span>
+            <label class="toggle"><input type="checkbox" id="set-ai-quotes"><span class="tk"></span></label>
+            <span class="settings-hint">典故·成语·名言轮播</span>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">闲逛移动</span>
+            <label class="toggle"><input type="checkbox" id="set-ai-wander"><span class="tk"></span></label>
+            <span class="settings-hint">闲时踱步换位</span>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">冒泡频率</span>
+            <select id="set-ai-freq" class="settings-input settings-input-flex">
+              <option value="12000">勤快(12s)</option>
+              <option value="22000">适中(22s)</option>
+              <option value="45000">安静(45s)</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">体型</span>
+            <select id="set-ai-size" class="settings-input settings-input-flex">
+              <option value="76">小</option>
+              <option value="104">中(默认)</option>
+              <option value="132">大</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <div class="settings-label"><span class="sl-emoji">🕸</span>关系图谱</div>
+          <div class="settings-row">
+            <span class="settings-row-label">布局方式</span>
+            <select id="set-kb-layout" class="settings-input settings-input-flex">
+              <option value="radial">径向星座(README 中心)</option>
+              <option value="force">力导向(物理模拟)</option>
+              <option value="ring">环形(分类环列)</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">节点形状</span>
+            <select id="set-kb-shape" class="settings-input settings-input-flex">
+              <option value="mixed">混合(每节点不同)</option>
+              <option value="circle">统一圆形</option>
+              <option value="rect">方形</option>
+              <option value="diamond">菱形</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">连线弧度</span>
+            <select id="set-kb-curve" class="settings-input settings-input-flex">
+              <option value="0">直线</option>
+              <option value="0.05">微弧(默认)</option>
+              <option value="0.15">大弧</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">连线透明度</span>
+            <select id="set-kb-lineop" class="settings-input settings-input-flex">
+              <option value="0.12">隐约</option>
+              <option value="0.2">默认</option>
+              <option value="0.38">清晰</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">悬停显示标签</span>
+            <label class="toggle"><input type="checkbox" id="set-kb-hover-label"><span class="tk"></span></label>
+            <span class="settings-hint">悬停时亮出节点名</span>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">常显标签数</span>
+            <select id="set-kb-labels" class="settings-input settings-input-flex">
+              <option value="0">仅枢纽</option>
+              <option value="80">枢纽+80 页</option>
+              <option value="9999">全部页名</option>
+            </select>
+          </div>
+        </div>
         <!-- 剧本模型(LLM):已隐藏——小说转剧本能力并入漫剧管理(DeepSeek Key/视觉模型均在漫剧设置·智能体调度里配置);
              DOM 保留避免 app.js loadLLMSettings 空引用,后端 /api/settings llm 不动 -->
         <div class="settings-group" hidden>

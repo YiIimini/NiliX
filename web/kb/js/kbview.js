@@ -102,6 +102,19 @@ const KbView = {
     });
     const N = visCats.length || 1;
     const R1 = 150 + N * 26;                       // 枢纽环半径
+    const P = (typeof App !== "undefined" && App.prefs) ? App.prefs : {};
+    const mode = P.kbLayout || "radial";
+    const shapeOf = (h) => {
+      const s = P.kbShape || "mixed";
+      if (s === "circle") return "circle";
+      if (s === "rect") return "rect";
+      if (s === "diamond") return "diamond";
+      return SYMS[h % SYMS.length];
+    };
+    const curve = (P.kbCurve != null ? P.kbCurve : 0.05);
+    const lineOp = (P.kbLineOp != null ? P.kbLineOp : 0.2);
+    // 常显标签:按哈希取前 kbLabels 个页面亮名(枢纽恒显)
+    const labelBudget = P.kbLabels || 0;
     // 中心:README 索引节点
     nodes.push({ id: "README", name: "README · 索引", kind: "page", category: "索引", x: 0, y: 0,
       symbol: "circle", symbolSize: 58,
@@ -119,7 +132,7 @@ const KbView = {
         itemStyle: { color, borderColor: color, borderWidth: 2, shadowBlur: 14, shadowColor: color + "" },
         label: { show: true, color, fontSize: 12, fontWeight: 700, position: "top", distance: 6 } });
       links.push({ source: "README", target: "hub:" + c.name,
-        lineStyle: { color, width: 2.2, opacity: 0.5, curveness: 0.04 } });
+        lineStyle: { color, width: 2.2, opacity: Math.min(0.85, lineOp + 0.3), curveness: curve } });
       // 页面簇:绕枢纽扇形散布(哈希抖动,确定性)
       const spread = (Math.PI * 2 / N) * 0.78;
       matched.forEach((p2, k) => {
@@ -127,14 +140,17 @@ const KbView = {
         const h = hash(p2.name);
         const t = matched.length === 1 ? 0.5 : k / (matched.length - 1);
         const a = ang - spread / 2 + t * spread + ((h % 17) - 8) * 0.012;
-        const r = 70 + (h % 130) + Math.sqrt(k % 40) * 16;
+        let r = 70 + (h % 130) + Math.sqrt(k % 40) * 16;
+        let px = hx + Math.cos(a) * r, py = hy + Math.sin(a) * r;
+        if (mode === "ring") { px = Math.cos(ang) * (R1 + 180 + (h % 90)); py = Math.sin(ang) * (R1 + 180 + (h % 90)); }
+        const showLabel = labelBudget > 0 && (h % 97) < Math.max(1, Math.round(labelBudget / 5.8));
         nodes.push({ id: p2.name, name: p2.name, kind: "page", category: c.name,
-          x: hx + Math.cos(a) * r, y: hy + Math.sin(a) * r,
-          symbol: SYMS[h % SYMS.length], symbolSize: 6.5 + (h % 5) + Math.min(6, (p2.desc || "").length / 24),
+          x: px, y: py,
+          symbol: shapeOf(h), symbolSize: 6.5 + (h % 5) + Math.min(6, (p2.desc || "").length / 24),
           itemStyle: { color, opacity: 0.9, borderColor: color, borderWidth: 0.6 },
-          label: { show: false } });
+          label: { show: showLabel, color, fontSize: 10 } });
         links.push({ source: "hub:" + c.name, target: p2.name,
-          lineStyle: { color, width: 1, opacity: 0.2, curveness: 0.05 } });
+          lineStyle: { color, width: 1, opacity: lineOp, curveness: curve } });
       });
       legend.push({ name: c.name, color, n: matched.length, emoji: c.emoji || "" });
     });
@@ -144,13 +160,16 @@ const KbView = {
       tooltip: { show: false },
       series: [{
         type: "graph",
-        layout: "none",                 // 坐标已预算,交互零物理开销
-        roam: true,                     // 缩放/平移纯画布变换
+        layout: mode === "force" ? "force" : "none",
+        roam: true,
         draggable: true,
-        progressive: 260, progressiveThreshold: 520,  // 渐进渲染,大图不卡
+        force: mode === "force" ? { repulsion: 150, edgeLength: [40, 120], gravity: 0.06, friction: 0.6, layoutAnimation: false } : undefined,
+        progressive: 260, progressiveThreshold: 520,
         hoverAnimation: false,
         edgeSymbol: ["none", "none"],
-        emphasis: { label: { show: true, fontSize: 11, color: "#fff" }, itemStyle: { shadowBlur: 12 } },
+        emphasis: (P.kbHoverLabel !== false)
+          ? { label: { show: true, fontSize: 11, color: "#fff" }, itemStyle: { shadowBlur: 12 } }
+          : { label: { show: false } },
         label: { position: "right", distance: 4 },
         lineStyle: { curveness: 0.05 },
         data: nodes, links,

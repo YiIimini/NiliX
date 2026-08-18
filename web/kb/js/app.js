@@ -5,6 +5,65 @@ const App = {
   pendingCat: null,
   pageCache: {},
 
+  prefs: null,
+
+  loadPrefs() {
+    const d = { aiOn: true, aiStatus: true, aiQuotes: true, aiWander: true, aiFreq: 22000, aiSize: 104,
+      kbLayout: "radial", kbShape: "mixed", kbCurve: 0.05, kbLineOp: 0.2, kbHoverLabel: true, kbLabels: 0 };
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem("kbw-prefs") || "null"); } catch (e) {}
+    this.prefs = Object.assign(d, s || {});
+    return this.prefs;
+  },
+  savePrefs() {
+    try { localStorage.setItem("kbw-prefs", JSON.stringify(this.prefs)); } catch (e) {}
+  },
+  /* 设置弹窗:回填 + 即时生效 */
+  bindPrefs() {
+    const P = this.prefs;
+    const el = (id) => document.getElementById(id);
+    const set = (id, v) => { el(id).value = String(v); };
+    const chk = (id, v) => { el(id).checked = !!v; };
+    chk("set-ai-on", P.aiOn); chk("set-ai-status", P.aiStatus);
+    chk("set-ai-quotes", P.aiQuotes); chk("set-ai-wander", P.aiWander);
+    set("set-ai-freq", P.aiFreq); set("set-ai-size", P.aiSize);
+    set("set-kb-layout", P.kbLayout); set("set-kb-shape", P.kbShape);
+    set("set-kb-curve", P.kbCurve); set("set-kb-lineop", P.kbLineOp);
+    set("set-kb-labels", P.kbLabels); chk("set-kb-hover-label", P.kbHoverLabel);
+    const apply = () => {
+      const m = document.getElementById("ai-mascot");
+      if (m) {
+        m.style.display = P.aiOn ? "" : "none";
+        const av = document.getElementById("ai-avatar");
+        av.style.width = av.style.height = P.aiSize + "px";
+      }
+      if (P.aiFreq !== this._mqFreq) {
+        this._mqFreq = P.aiFreq;
+        clearInterval(this._mqT);
+        const m2 = document.getElementById("ai-mascot");
+        this._mqT = setInterval(() => {
+          if (!m2 || !P.aiOn || m2.classList.contains("is-busy") || !P.aiQuotes) return;
+          const q = this.mascotQuote();
+          if (q) this.mascotSay(q);
+        }, P.aiFreq);
+      }
+      if (typeof KbView !== "undefined" && KbView._chart) KbView.render(document.getElementById("kb-search") ? document.getElementById("kb-search").value.trim() : "");
+      this.savePrefs();
+    };
+    ["set-ai-on", "set-ai-status", "set-ai-quotes", "set-ai-wander", "set-kb-hover-label"].forEach((id) =>
+      el(id).addEventListener("change", (e) => {
+        const k = { "set-ai-on": "aiOn", "set-ai-status": "aiStatus", "set-ai-quotes": "aiQuotes", "set-ai-wander": "aiWander", "set-kb-hover-label": "kbHoverLabel" }[id];
+        P[k] = e.target.checked; apply();
+      }));
+    [["set-ai-freq", "aiFreq", parseInt], ["set-ai-size", "aiSize", parseInt], ["set-ai-float", "aiFloat", parseFloat],
+     ["set-kb-layout", "kbLayout", String], ["set-kb-shape", "kbShape", String], ["set-kb-curve", "kbCurve", parseFloat],
+     ["set-kb-lineop", "kbLineOp", parseFloat], ["set-kb-labels", "kbLabels", parseInt]].forEach(([id, k, cast]) => {
+      const e2 = el(id);
+      if (e2) e2.addEventListener("change", () => { P[k] = cast(e2.value); apply(); });
+    });
+    apply();
+  },
+
   async init() {
     this.theme = localStorage.getItem("kbw-theme") || "nebula";
     this.applyTheme(this.theme, true);
@@ -32,6 +91,8 @@ const App = {
         }
       }
     });
+    this.loadPrefs();
+    this.bindPrefs();
     this.mascotInit();
     this.mascotLoop();
     this.applyNavVisibility();
@@ -401,7 +462,7 @@ const App = {
     m.addEventListener("pointercancel", up);
     // 随机漫步调度(拖拽中不打扰)
     const wander = () => {
-      if (!down) {
+      if (!down && (!App.prefs || App.prefs.aiWander)) {
         const w = m.offsetWidth, h = m.offsetHeight;
         const x = 40 + Math.random() * Math.max(60, innerWidth - w - 80);
         const y = 80 + Math.random() * Math.max(60, innerHeight - h - 170);
@@ -488,7 +549,7 @@ const App = {
   /* 分页面语境冒泡:切页时说一句应景的话并踱到该页合适角落 */
   mascotOnRoute(route) {
     const m = document.getElementById("ai-mascot");
-    if (!m || m.classList.contains("is-busy")) return;
+    if (!m || !this.prefs || !this.prefs.aiOn || m.classList.contains("is-busy")) return;
     const ctx = {
       kb: ["知识如星海,节点连成网。", "一图胜千言,节点之间藏着联系。", "点击节点,打开一篇知识页试试。"],
       novel: ["读书破万卷,下笔如有神。——杜甫", "好故事都藏在下一章里。", "书架又厚了一点,继续写?"],
@@ -505,6 +566,7 @@ const App = {
 
   /* 助手状态汇总:一处逻辑,manju 页轮询与全局轮询共用 */
   mascotStatus(s) {
+    if (!this.prefs || !this.prefs.aiStatus) return;
     const a = s.agent || {};
     const bits = [];
     if (s.running) {
@@ -538,6 +600,7 @@ const App = {
 
   /* 悬浮 AI 小助手:云朵播报;点击跳工作台 */
   mascotSay(text, mood) {
+    if (!this.prefs || !this.prefs.aiOn) return;
     const b = document.getElementById("ai-bubble");
     if (!b || b.textContent === text) return;
     b.textContent = text;
