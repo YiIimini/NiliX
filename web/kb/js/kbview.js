@@ -399,7 +399,27 @@ const KbView = {
     this._chart.setOption({
       backgroundColor: "transparent",
       animation: false,
-      tooltip: { show: false },
+      tooltip: {
+        show: true,
+        confine: true,
+        backgroundColor: "rgba(12, 16, 24, 0.92)",
+        borderColor: "rgba(255,255,255,0.14)",
+        borderWidth: 1,
+        textStyle: { color: "#E8EDF5", fontSize: 12 },
+        padding: [8, 12],
+        formatter: (p) => {
+          const d = p.data || {};
+          if (!d) return "";
+          const name = String(d.name || d.id || "");
+          if (d.kind === "hub") {
+            const n = d.symbolSize ? "" : "";
+            return "<b>" + name + "</b><br/><span style='opacity:.75'>大类 · " + (d.symbolSize || "") + " 页簇</span>";
+          }
+          if (d.id === "README") return "<b>README · 知识库索引</b><br/><span style='opacity:.75'>全库节点由它辐射,点击查看索引全文</span>";
+          const cat = d.category || "";
+          return "<b>" + name + "</b><br/><span style='opacity:.75'>" + cat + "</span>";
+        },
+      },
       series: [{
         type: "graph",
         layout: mode === "force" ? "force" : "none",

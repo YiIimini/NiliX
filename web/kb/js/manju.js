@@ -1802,6 +1802,7 @@
 
     /* ---- 弹窗 ---- */
     openModal(title, bodyHtml, wide) {
+      if (!this._bound) this.bind();   // 自愈:任何页面(未进漫剧页)调用弹窗都先绑定关闭/遮罩/Esc
       $("manju-modal-title").textContent = title;
       $("manju-modal-body").innerHTML = bodyHtml;
       const panel = document.querySelector("#manju-modal .manju-modal-panel");

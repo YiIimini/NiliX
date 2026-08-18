@@ -10,6 +10,10 @@ const numIn = (v, d, min, max) => {
 class DirView {
   constructor(key, opts) {
     this.key = key; // "novel" | "manju"
+    if (key === "novel") {
+      const saved = localStorage.getItem("kbw-novel-dir");
+      if (saved) opts.root = saved;   // 导航设置里的小说目录优先
+    }
     this.root = opts.root;
     this.id = opts.id;
     this.mode = opts.mode; // "book" | "film"
@@ -161,7 +165,7 @@ class DirView {
     errEl.classList.add("hidden");
     const dir = localStorage.getItem("kbw-" + this.key + "-dir") || this.root;
     this._lastDir = dir;
-    document.getElementById(this.id + "-path").textContent = dir;
+    // 路径显示已并入页头标题区(小说列表(路径)),此处不再写独立元素
     try {
       const api = this.mode === "book" ? "/api/fs/analyze" : "/api/fs/media";
       const r = await fetch(api + "?dir=" + encodeURIComponent(dir), { cache: "no-store" });
@@ -198,7 +202,7 @@ class DirView {
     // 每张卡片随机取色(卡片与按钮共用,详情弹窗沿用卡片色)
     this._projects.forEach((p) => (p._hue = this.cardHue()));
     listEl.innerHTML = `
-      <div class="shelf-head"><span class="shelf-count">${this._projects.length} ${I18N.t("nav.novel")}</span></div>
+      <div class="shelf-head"><span class="shelf-count">小说列表（${this.root}）· ${this._projects.length} 部</span></div>
       <div class="bk-shelf">${this._projects.map((p, i) => this.bookCard(p, i)).join("")}</div>`;
     listEl.querySelectorAll(".bk-card").forEach((card, i) => {
       card.addEventListener("click", (e) => {
