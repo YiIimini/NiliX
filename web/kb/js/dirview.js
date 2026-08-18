@@ -89,7 +89,9 @@ class DirView {
     menu.className = "card-menu";
     menu.setAttribute("aria-hidden", "true");
     menu.innerHTML = `<button class="cm-item cm-hide">${I18N.t("book.hide")}</button>` +
-      (this.mode === "book" ? `<button class="cm-item cm-continue">✍ 小说续作</button>` : "");
+      (this.mode === "book"
+        ? `<button class="cm-item cm-continue">✍ 小说续作</button><button class="cm-item cm-manju">🎬 漫剧制作</button>`
+        : "");
     menu.querySelector(".cm-hide").addEventListener("click", (e) => {
       e.stopPropagation();
       this.hideCurrent();
@@ -99,7 +101,14 @@ class DirView {
       e.stopPropagation();
       const name = this._menuName;
       this.closeCardMenu();
-      if (name) NovelView.openNovelCreate(name);   // 续作:预填书名并自检
+      if (name) NovelView.openNovelCreate(name, true);   // 续作:按 ID 锁定书名并读取存档
+    });
+    const mj = menu.querySelector(".cm-manju");
+    if (mj) mj.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const name = this._menuName;
+      this.closeCardMenu();
+      if (name) NovelView.openManjuFrom(name);           // 漫剧制作:与阅读器功能一致
     });
     document.body.appendChild(menu);
     this._menu = menu;
@@ -583,10 +592,11 @@ class DirView {
 
   /* ---- 网页版爽文创作:立项(大纲) → 逐章/自动连写,固化 shuangwen-novel 流程 ---- */
   _nvStop = false;
-  async openNovelCreate(initTitle) {
+  async openNovelCreate(initTitle, lockId) {
     const wb = typeof ManjuWorkbench !== "undefined" ? ManjuWorkbench : null;
     if (!wb) return;
     this._nvTitle = (initTitle || "").trim() || null;
+    this._nvLockId = !!lockId;
     wb.openModal("✍ 爽文小说创作", `
       <div class="nv-wrap">
         <div class="nv-hero">
@@ -654,7 +664,8 @@ class DirView {
     });
     if (this._nvTitle) {
       $("nv-title").value = this._nvTitle;
-      $("nv-status").textContent = "正在检测创作状态…";
+      if (this._nvLockId) { $("nv-title").readOnly = true; $("nv-title").title = "续作模式:已绑定小说 ID(" + this._nvTitle + ")"; }
+      $("nv-status").textContent = "正在读取创作存档…";
       await this.nvCheck();
     }
     this.nvRefresh();
@@ -671,11 +682,13 @@ class DirView {
         this._nvTitle = t;
         const nos = (j.chapters || []).map((c) => c.no);
         this._nvDone = new Set(nos);
-        this._nvTotal = Math.max(nos.length ? Math.max.apply(null, nos) : 8, 8);
+        const st = j.state || {};
+        this._nvTotal = (st.total && st.total > 0) ? st.total : Math.max(nos.length ? Math.max.apply(null, nos) : 8, 8);
+        const cur = st.current || nos.length || 0;
         $("nv-work").classList.remove("hidden");
-        $("nv-progress").textContent = `已写 ${nos.length} / ${this._nvTotal} 章`;
-        const st = $("nv-state");
-        if (st) { st.className = "nv-state ok"; st.textContent = `📖 检测到《${t}》创作中(${nos.length} 章已写),续写模式已就绪`; }
+        $("nv-progress").textContent = `已写 ${nos.length} / ${this._nvTotal} 章${st.updatedAt ? " · 存档 " + st.updatedAt : ""}`;
+        const stEl = $("nv-state");
+        if (stEl) { stEl.className = "nv-state ok"; stEl.textContent = `📖 按 ID 读取《${t}》创作存档(进行到第 ${cur} 章 / 共 ${this._nvTotal} 章),续写模式已就绪`; }
         this.nvRefresh();
       } else {
         $("nv-work").classList.add("hidden");
@@ -855,6 +868,15 @@ class DirView {
         if (r) this.loadChapter(r.f, toc.chapters.indexOf(r.f));
       })
     );
+  }
+
+  /* 封面菜单 → 漫剧制作:与阅读器「生成剧本」功能完全一致 */
+  openManjuFrom(name) {
+    const p = (this._projects || []).find((x) => x.name === name);
+    if (!p) return;
+    this._toc = { chapters: p.chapters || [], extras: p.extras || [] };
+    this._bookName = p.name;
+    this.makeManju();
   }
 
   /* ---- 漫剧制作:当前小说 → 漫剧管理一条龙(查重 → 重跑/续跑/创建) ---- */

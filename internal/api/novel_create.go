@@ -151,6 +151,7 @@ chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d。`, req.Title, nvO
 	_ = os.MkdirAll(filepath.Join(proj, "封面"), 0755)
 	_ = os.WriteFile(filepath.Join(proj, "封面", "封面提示词.md"), []byte(coverPrompt), 0644)
 	go renderNovelCover(proj, coverPrompt)
+	saveNovelState(proj, novelState{Title: req.Title, Total: len(plan.Chapters), Current: 0})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dir": proj, "outline": sb.String(),
 		"chapters": len(plan.Chapters)})
 }
@@ -212,7 +213,13 @@ func (s *Server) handleNovelProgress(w http.ResponseWriter, r *http.Request) {
 		_, e := os.Stat(filepath.Join(proj, "设定集", "设定集与大纲.md"))
 		return true, e == nil
 	}()
-	writeJSON(w, http.StatusOK, map[string]any{"dir": proj, "hasOutline": hasOutline, "chapters": items})
+	st := loadNovelState(proj)
+	if st.Total == 0 && len(items) > 0 {
+		// 旧项目无存档:按现有章节补一个
+		st.Total = len(items) + 7
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"dir": proj, "hasOutline": hasOutline, "chapters": items,
+		"state": st})
 }
 
 func findChapter(proj string, no int) (string, string) {
@@ -493,6 +500,44 @@ func (s *Server) handleNovelStatusAll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// ================= 创作状态存档(按小说 ID=目录名 持久化) =================
+type novelState struct {
+	Title     string `json:"title"`
+	Total     int    `json:"total"`
+	Current   int    `json:"current"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+func novelStateFile(proj string) string {
+	return filepath.Join(proj, "novel_state.json")
+}
+
+func loadNovelState(proj string) novelState {
+	var st novelState
+	if b, err := os.ReadFile(novelStateFile(proj)); err == nil {
+		_ = json.Unmarshal(b, &st)
+	}
+	return st
+}
+
+func saveNovelState(proj string, st novelState) {
+	st.UpdatedAt = time.Now().Format("2006-01-02 15:04")
+	b, _ := json.MarshalIndent(st, "", "  ")
+	_ = os.WriteFile(novelStateFile(proj), b, 0644)
+}
+
+func touchNovelState(proj, title string, no int) {
+	st := loadNovelState(proj)
+	st.Title = title
+	if no > st.Current {
+		st.Current = no
+	}
+	if st.Total == 0 {
+		st.Total = 56
+	}
+	saveNovelState(proj, st)
+}
+
 // writeNovelChapter 写第 no 章(幂等:已存在返回 exists),供手动与后台自动续写共用
 func writeNovelChapter(title string, no int, cfg config.Settings) (map[string]any, error) {
 	proj := novelProjDir(title)
@@ -576,6 +621,7 @@ func writeNovelChapter(title string, no int, cfg config.Settings) (map[string]an
 		return nil, err
 	}
 	appendToFullBook(proj, title, no, chTitle, ch.Content)
+	touchNovelState(proj, title, no)
 	return map[string]any{"ok": true, "exists": false, "file": name,
 		"words": len([]rune(ch.Content)), "title": chTitle}, nil
 }
