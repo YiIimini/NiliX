@@ -1,5 +1,7 @@
 /* 管理页平台模式:小说=书架平台(书封→宽弹窗阅读:正文+右侧章节栏,可手动隐藏)
                    漫剧=影音平台(海报→单个视频弹窗页:播放器+选集+素材按分类排列) */
+/* 本地 DOM 助手(manju.js 的 $ 是模块内 const,本文件作用域不可见——缺它创作弹窗按钮绑定会抛错) */
+const $ = (id) => document.getElementById(id);
 /* 阅读排版:字号/行距调节范围与默认值 */
 const FS_RANGE = { min: 13, max: 26, def: 16 };
 const LH_RANGE = { min: 1.3, max: 2.8, def: 2.0 };

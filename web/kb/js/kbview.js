@@ -457,13 +457,27 @@ const KbView = {
               dot(b) + "<b>" + String(b.name || b.id) + "</b> <span style='opacity:.65'>(" + String(b.category || "") + ")</span>";
           }
           const name = String(d.name || d.id || "");
-          if (d.kind === "hub") {
-            const n = d.symbolSize ? "" : "";
-            return "<b>" + name + "</b><br/><span style='opacity:.75'>大类 · " + (d.symbolSize || "") + " 页簇</span>";
+          // 邻域节点:与当前节点相连的(悬停高亮的那些),信息一并展示,点击可跳详情
+          let nbrs = [];
+          if (this._chart) {
+            const links = this._chart.getOption().series[0].links || [];
+            const ids = new Set();
+            links.forEach((l) => {
+              if (l.source === d.id) ids.add(l.target);
+              if (l.target === d.id) ids.add(l.source);
+            });
+            nbrs = [...ids].map((id2) => this._byId[id2]).filter(Boolean);
           }
-          if (d.id === "README") return "<b>README · 知识库索引</b><br/><span style='opacity:.75'>全库节点由它辐射,点击查看索引全文</span>";
+          const nbrHtml = nbrs.length
+            ? "<br/><span style='opacity:.7'>🔗 关联 " + nbrs.length + ":</span><br/>" +
+              nbrs.slice(0, 8).map((n2) =>
+                "<span class='tip-go' style='color:#7FB2FF;cursor:pointer' onclick=\"KbView.openPage('" + String(n2.id).replace(/'/g, "") + "',true)\">● " + String(n2.name || n2.id) + "</span>"
+              ).join("<br/>") + (nbrs.length > 8 ? "<br/><span style='opacity:.55'>…共 " + nbrs.length + " 个</span>" : "")
+            : "";
+          if (d.kind === "hub") return "<b>" + name + "</b><br/><span style='opacity:.75'>大类枢纽</span>" + nbrHtml;
+          if (d.id === "README") return "<b>README · 知识库索引</b><br/><span style='opacity:.75'>全库节点由它辐射</span>" + nbrHtml;
           const cat = d.category || "";
-          return "<b>" + name + "</b><br/><span style='opacity:.75'>" + cat + "</span>";
+          return "<b>" + name + "</b> <span style='opacity:.65'>(" + cat + ")</span>" + nbrHtml;
         },
       },
       series: [{
