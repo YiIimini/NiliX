@@ -103,6 +103,25 @@ const KbView = {
     });
   },
 
+  /* 弧线悬停:两端节点同时高亮放大(信息在 tooltip 双显) */
+  highlightEdgeEnds(link) {
+    const c = this._chart;
+    if (!c || !this._byId) return;
+    this.unhighlightEdgeEnds();
+    const a = this._byId[link.source], b = this._byId[link.target];
+    const idx = [];
+    if (a) { const i = c.getOption().series[0].data.findIndex((n) => n.id === link.source); if (i >= 0) idx.push(i); }
+    if (b) { const i = c.getOption().series[0].data.findIndex((n) => n.id === link.target); if (i >= 0) idx.push(i); }
+    idx.forEach((i) => c.dispatchAction({ type: "highlight", seriesIndex: 0, dataIndex: i }));
+    this._edgeHi = idx;
+  },
+  unhighlightEdgeEnds() {
+    const c = this._chart;
+    if (!c || !this._edgeHi || !this._edgeHi.length) return;
+    this._edgeHi.forEach((i) => c.dispatchAction({ type: "unhighlight", seriesIndex: 0, dataIndex: i }));
+    this._edgeHi = null;
+  },
+
   /* 枢纽/图例点击:高亮该类全部节点(放大显名),再点取消——不重排不消失 */
   toggleFocusCat(cat) {
     const c = this._chart;
@@ -238,7 +257,16 @@ const KbView = {
           n.x = x * cos - y * sin;
           n.y = x * sin + y * cos;
         });
-        this._chart.setOption({ series: [{ data: this._spinNodes }] }, { lazyUpdate: true, silent: true });
+        this._byId = {};
+    nodes.forEach((n) => { this._byId[n.id] = n; });
+    // 弧线悬停:两端节点高亮 + tooltip 展示两节点
+    this._chart.off("mouseover", this._edgeHovIn);
+    this._chart.off("mouseout", this._edgeHovOut);
+    this._edgeHovIn = (p) => { if (p && p.dataType === "edge") this.highlightEdgeEnds(p.data); };
+    this._edgeHovOut = (p) => { if (p && p.dataType === "edge") this.unhighlightEdgeEnds(); };
+    this._chart.on("mouseover", this._edgeHovIn);
+    this._chart.on("mouseout", this._edgeHovOut);
+    this._chart.setOption({ series: [{ data: this._spinNodes }] }, { lazyUpdate: true, silent: true });
       }
       this._spinT = setTimeout(step, 55);           // ≈18fps,肉眼顺滑且省电
     };
@@ -396,6 +424,15 @@ const KbView = {
         });
       }
     }
+    this._byId = {};
+    nodes.forEach((n) => { this._byId[n.id] = n; });
+    // 弧线悬停:两端节点高亮 + tooltip 展示两节点
+    this._chart.off("mouseover", this._edgeHovIn);
+    this._chart.off("mouseout", this._edgeHovOut);
+    this._edgeHovIn = (p) => { if (p && p.dataType === "edge") this.highlightEdgeEnds(p.data); };
+    this._edgeHovOut = (p) => { if (p && p.dataType === "edge") this.unhighlightEdgeEnds(); };
+    this._chart.on("mouseover", this._edgeHovIn);
+    this._chart.on("mouseout", this._edgeHovOut);
     this._chart.setOption({
       backgroundColor: "transparent",
       animation: false,
@@ -410,6 +447,15 @@ const KbView = {
         formatter: (p) => {
           const d = p.data || {};
           if (!d) return "";
+          if (p.dataType === "edge") {
+            const a = d && this._byId ? this._byId[d.source] : null;
+            const b = d && this._byId ? this._byId[d.target] : null;
+            if (!a || !b) return "";
+            const dot = (n) => "<span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:" + (App.catColor(n.category) || "#888") + ";margin-right:6px'></span>";
+            return "<b style='opacity:.8'>🔗 互链</b><br/>" +
+              dot(a) + "<b>" + String(a.name || a.id) + "</b> <span style='opacity:.65'>(" + String(a.category || "") + ")</span><br/>" +
+              dot(b) + "<b>" + String(b.name || b.id) + "</b> <span style='opacity:.65'>(" + String(b.category || "") + ")</span>";
+          }
           const name = String(d.name || d.id || "");
           if (d.kind === "hub") {
             const n = d.symbolSize ? "" : "";
