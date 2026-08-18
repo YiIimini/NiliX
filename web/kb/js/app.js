@@ -108,6 +108,7 @@ const App = {
     this.bindPrefs();
     this.mascotInit();
     this.mascotLoop();
+    this.initTips();
     this.applyNavVisibility();
     this.route();
   },
@@ -610,6 +611,48 @@ const App = {
         this.mascotStatus(await r.json());
       } catch (e) { /* 静默 */ }
     }, 3500);
+  },
+
+  /* 全站提示气泡:所有 title 属性 → 精致气泡(替换浏览器丑原生提示) */
+  initTips() {
+    if (this._tipsInit) return;
+    this._tipsInit = true;
+    let tip = null, timer = null, cur = null;
+    const show = (el, x, y) => {
+      if (tip) tip.remove();
+      tip = document.createElement("div");
+      tip.className = "tip-bubble";
+      tip.textContent = el.getAttribute("title") || el.dataset.tip || "";
+      document.body.appendChild(tip);
+      const r = tip.getBoundingClientRect();
+      let tx = x - r.width / 2, ty = y - r.height - 12;
+      tx = Math.max(8, Math.min(innerWidth - r.width - 8, tx));
+      if (ty < 8) ty = y + 16;                       // 贴顶时翻到下方
+      tip.style.left = tx + "px";
+      tip.style.top = ty + "px";
+      tip.classList.add("show");
+    };
+    document.addEventListener("mouseover", (e) => {
+      const el = e.target.closest("[title], [data-tip]");
+      if (!el) return;
+      cur = el;
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (cur === el) show(el, e.clientX, e.clientY); }, 350);
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (cur && tip) {
+        const r = tip.getBoundingClientRect();
+        tip.style.left = Math.max(8, Math.min(innerWidth - r.width - 8, e.clientX - r.width / 2)) + "px";
+        tip.style.top = (e.clientY - r.height - 12) + "px";
+      }
+    });
+    document.addEventListener("mouseout", (e) => {
+      if (e.target.closest("[title], [data-tip]") === cur) {
+        clearTimeout(timer);
+        cur = null;
+        if (tip) { tip.remove(); tip = null; }
+      }
+    });
   },
 
   /* 悬浮 AI 小助手:云朵播报;点击跳工作台 */

@@ -573,13 +573,13 @@ class DirView {
               <div class="nv-row"><label>题材</label><input id="nv-genre" class="manju-input" placeholder="玄幻逆袭(留空自动)" spellcheck="false"></div>
               <div class="nv-row"><label>风格</label><input id="nv-style" class="manju-input" placeholder="热血爽文(留空自动)" spellcheck="false"></div>
             </div>
-            <div class="nv-row"><label>章节数</label><input id="nv-count" class="manju-input manju-num" type="number" min="8" max="300" value="56"><span class="nv-hint">硬规范每章 ≥1280 字 · 7 章/卷</span></div>
+            <div class="nv-row"><label>章节数</label><input id="nv-count" class="manju-input manju-num" type="number" min="8" max="300" value="56"><span class="nv-tip" data-tip="硬规范:每章 ≥1280 字,每 7 章一卷">?</span></div>
           </div>
         </div>
 
         <div class="nv-sec">
           <div class="nv-sec-t">🚀 生成控制</div>
-          <div class="nv-actions">
+          <div class="nv-actions nv-center">
             <button id="nv-start" class="hrs-btn hrs-btn-primary">🚀 立项生成大纲</button>
             <span class="nv-status" id="nv-status"></span>
           </div>
@@ -606,9 +606,19 @@ class DirView {
     $("nv-stop").addEventListener("click", () => { this._nvStop = true; });
     this.nvRefresh();
   }
+  /* 书名留空自动:按题材/风格组合一个霸气书名 */
+  nvAutoTitle(genre, style) {
+    const a = ["逆天", "天命", "重生", "至尊", "万古", "苍穹", "混沌", "不灭", "镇世", "无双"];
+    const b = ["之路", "之巅", "逆袭录", "风云录", "封神传", "争锋记", "归途", "帝尊", "狂澜", "长歌"];
+    let h = 0;
+    const s = (genre || "") + (style || "");
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return a[h % a.length] + b[(h >> 3) % b.length];
+  }
   async nvCreate() {
-    const title = $("nv-title").value.trim();
-    if (!title) { $("nv-status").textContent = "请先填书名"; return; }
+    let title = $("nv-title").value.trim();
+    if (!title) title = this.nvAutoTitle($("nv-genre").value.trim(), $("nv-style").value.trim());
+    $("nv-title").value = title;
     this._nvTitle = title;
     $("nv-status").textContent = "大纲生成中(约 1-2 分钟,请勿关弹窗)…";
     $("nv-start").disabled = true;
