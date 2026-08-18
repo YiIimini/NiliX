@@ -94,6 +94,8 @@ const KbView = {
           if (best >= 0) c.dispatchAction({ type: "highlight", seriesIndex: 0, dataIndex: best });
           this._magCur = best;
         }
+        // 远离所有节点:兜底清除一切高亮(含 tooltip 遮挡导致未触发的内部 hover 邻域高亮),全部恢复初始亮度
+        if (best === -1) c.dispatchAction({ type: "unhighlight", seriesIndex: 0 });
         lastPx = null;
       });
     };

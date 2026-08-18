@@ -3804,20 +3804,43 @@ select option { text-align: center; }
 #ai-mascot.is-busy #ai-avatar { animation: aiFloat 1.4s ease-in-out infinite, aiGlow 1.4s ease-in-out infinite; }
 @keyframes aiFloat { 0%, 100% { translate: 0 0; } 50% { translate: 0 -7px; } }
 @keyframes aiGlow { 0%, 100% { filter: drop-shadow(0 0 6px var(--glow)); } 50% { filter: drop-shadow(0 0 18px var(--glow)); } }
+/* AI 助手气泡:毛玻璃渐变 + 精致尖尾 + 内高光 */
 .ai-bubble {
-  position: relative; max-width: 240px;
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  border: 1px solid var(--panel-border); border-radius: 14px 14px 4px 14px;
-  padding: 9px 13px; font-size: 12.5px; line-height: 1.55; color: var(--text);
-  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.3);
+  position: relative; max-width: 250px;
+  padding: 10px 14px 11px;
+  font-size: 12.5px; line-height: 1.62; color: var(--text);
+  letter-spacing: 0.2px;
+  border-radius: 16px 16px 6px 16px;
+  background: linear-gradient(160deg,
+    color-mix(in srgb, var(--panel) 88%, var(--accent) 10%),
+    color-mix(in srgb, var(--panel) 70%, transparent) 55%,
+    color-mix(in srgb, var(--accent) 14%, var(--panel) 60%));
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--panel-border));
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.34),
+    0 2px 8px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
 }
-.ai-bubble::after {
-  content: ""; position: absolute; right: 18px; bottom: -7px;
-  width: 14px; height: 14px; rotate: 45deg;
-  background: inherit; border-right: 1px solid var(--panel-border); border-bottom: 1px solid var(--panel-border);
+.ai-bubble::before {   /* 顶部内高光线,质感 */
+  content: ""; position: absolute; inset: 1px 10px auto 10px; height: 1px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, #fff 26%, transparent), transparent);
+  pointer-events: none;
 }
-.ai-bubble.ai-pop { animation: aiPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.ai-bubble::after {    /* 尖尾:渐变方块旋转,带描边 */
+  content: ""; position: absolute; right: 16px; bottom: -6.5px;
+  width: 13px; height: 13px; rotate: 45deg;
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel) 72%);
+  border-right: 1px solid color-mix(in srgb, var(--accent) 30%, var(--panel-border));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, var(--panel-border));
+  border-radius: 0 0 3px 0;
+}
+.ai-bubble.ai-pop { animation: aiPop 0.38s cubic-bezier(0.34, 1.56, 0.64, 1); }
+#ai-mascot.is-busy .ai-bubble {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--panel-border));
+  box-shadow: 0 14px 34px rgba(0,0,0,.34), 0 0 18px var(--glow), inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent);
+}
 @keyframes aiPop { 0% { transform: scale(0.85); opacity: 0.4; } 100% { transform: scale(1); opacity: 1; } }
 @media (max-width: 640px) { #ai-avatar { width: 76px; height: 76px; } .ai-bubble { max-width: 180px; } }
 
