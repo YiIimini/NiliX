@@ -362,7 +362,7 @@ const App = {
     if (el) el.textContent = I18N.t("live.refreshed") + " " + new Date().toLocaleTimeString();
   },
 
-  /* 助手交互:可随意拖拽;闲时每 9-16s 随机漫步(视口内);点击(未拖动)跳工作台 */
+  /* 助手交互:可拖拽;一步步步行移动(不闪现);点击(未拖动)跳工作台 */
   mascotInit() {
     const m = document.getElementById("ai-mascot");
     if (!m || m._init) return;
@@ -371,14 +371,14 @@ const App = {
     m.style.right = "auto"; m.style.bottom = "auto";
     m.style.left = Math.max(8, r.left) + "px";
     m.style.top = Math.max(56, r.top) + "px";
-    m.style.transition = "left 1.15s cubic-bezier(.45,.05,.35,1), top 1.15s cubic-bezier(.45,.05,.35,1)";
     m.style.cursor = "grab";
     let sx = 0, sy = 0, ox = 0, oy = 0, moved = false, down = false;
     m.addEventListener("pointerdown", (e) => {
       down = true; moved = false; sx = e.clientX; sy = e.clientY;
       const b = m.getBoundingClientRect(); ox = b.left; oy = b.top;
+      this.mascotStopWalk();
       try { m.setPointerCapture(e.pointerId); } catch (err) {}
-      m.style.transition = "none"; m.style.cursor = "grabbing";
+      m.style.cursor = "grabbing";
       e.preventDefault();
     });
     m.addEventListener("pointermove", (e) => {
@@ -394,23 +394,113 @@ const App = {
     const up = () => {
       if (!down) return;
       down = false;
-      m.style.transition = ""; m.style.cursor = "grab";
+      m.style.cursor = "grab";
       if (!moved) location.hash = "#/manju";
     };
     m.addEventListener("pointerup", up);
     m.addEventListener("pointercancel", up);
-    // 随机漫步:拖拽中不打扰;忙态(busy)漫步更勤快点
+    // 随机漫步调度(拖拽中不打扰)
     const wander = () => {
       if (!down) {
         const w = m.offsetWidth, h = m.offsetHeight;
         const x = 40 + Math.random() * Math.max(60, innerWidth - w - 80);
         const y = 80 + Math.random() * Math.max(60, innerHeight - h - 170);
-        m.style.left = x + "px"; m.style.top = y + "px";
+        this.mascotWalkTo(x, y);
       }
       clearTimeout(this._mwT);
-      this._mwT = setTimeout(wander, 9000 + Math.random() * 7000);
+      this._mwT = setTimeout(wander, 11000 + Math.random() * 8000);
     };
-    this._mwT = setTimeout(wander, 6000);
+    this._mwT = setTimeout(wander, 5000);
+    // 闲置名言轮播(忙态不打扰)
+    this._mqT = setInterval(() => {
+      if (!document.getElementById("ai-mascot") || document.getElementById("ai-mascot").classList.contains("is-busy")) return;
+      const q = this.mascotQuote();
+      if (q) this.mascotSay(q);
+    }, 22000);
+  },
+
+  /* 一步步步行:每 45ms 挪一小步(≈10px),朝目标走,不闪现 */
+  mascotWalkTo(x, y) {
+    const m = document.getElementById("ai-mascot");
+    if (!m) return;
+    this.mascotStopWalk();
+    m.classList.add("is-walking");
+    const step = () => {
+      const b = m.getBoundingClientRect();
+      const dx = x - b.left, dy = y - b.top;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 11) {
+        m.style.left = x + "px"; m.style.top = y + "px";
+        m.classList.remove("is-walking");
+        return;
+      }
+      const v = 10 / dist;
+      m.style.left = (b.left + dx * v) + "px";
+      m.style.top = (b.top + dy * v) + "px";
+      this._walkRaf = setTimeout(step, 45);
+    };
+    step();
+  },
+  mascotStopWalk() {
+    clearTimeout(this._walkRaf);
+    const m = document.getElementById("ai-mascot");
+    if (m) m.classList.remove("is-walking");
+  },
+
+  /* 闲置名言/典故/成语(轮播) */
+  mascotQuote() {
+    if (!this._quotes) {
+      this._quotes = [
+        "不积跬步,无以至千里。——《荀子》",
+        "路漫漫其修远兮,吾将上下而求索。——屈原",
+        "山重水复疑无路,柳暗花明又一村。——陆游",
+        "千里之行,始于足下。——《道德经》",
+        "博观而约取,厚积而薄发。——苏轼",
+        "宝剑锋从磨砺出,梅花香自苦寒来。",
+        "纸上得来终觉浅,绝知此事要躬行。——陆游",
+        "工欲善其事,必先利其器。——《论语》",
+        "操千曲而后晓声,观千剑而后识器。——刘勰",
+        "问渠那得清如许?为有源头活水来。——朱熹",
+        "不畏浮云遮望眼,自缘身在最高层。——王安石",
+        "长风破浪会有时,直挂云帆济沧海。——李白",
+        "三人行,必有我师焉。——《论语》",
+        "学而不思则罔,思而不学则殆。——《论语》",
+        "绳锯木断,水滴石穿。——《汉书》",
+        "它山之石,可以攻玉。——《诗经》",
+        "欲速则不达,见小利则大事不成。——《论语》",
+        "临渊羡鱼,不如退而结网。——《汉书》",
+        "业精于勤,荒于嬉;行成于思,毁于随。——韩愈",
+        "天下大事,必作于细。——《道德经》",
+        "成语一刻 · 温故知新:温习旧知识,可有新体会",
+        "成语一刻 · 集腋成裘:点滴积累,终成大器",
+        "典故一刻 · 破釜沉舟:项羽渡漳水,皆沉船,示必死决心",
+        "典故一刻 · 卧薪尝胆:勾践卧薪尝胆,十年生聚终灭吴",
+        "典故一刻 · 囊萤映雪:车胤囊萤、孙康映雪,家贫苦读",
+        "等待也是创作的一部分,灵感正在路上…",
+        "休息一下吧,眼睛看看远处,思路会更清晰。",
+      ];
+      this._qi = Math.floor(Math.random() * this._quotes.length);
+    }
+    this._qi = (this._qi + 1) % this._quotes.length;
+    return this._quotes[this._qi];
+  },
+
+  /* 分页面语境冒泡:切页时说一句应景的话并踱到该页合适角落 */
+  mascotOnRoute(route) {
+    const m = document.getElementById("ai-mascot");
+    if (!m || m.classList.contains("is-busy")) return;
+    const ctx = {
+      kb: ["知识如星海,节点连成网。", "一图胜千言,节点之间藏着联系。", "点击节点,打开一篇知识页试试。"],
+      novel: ["读书破万卷,下笔如有神。——杜甫", "好故事都藏在下一章里。", "书架又厚了一点,继续写?"],
+      manju: ["剧本、分镜、渲染,一步到位。", "审片官待命,随时开工一条龙。", "灵感 + 管线 = 成片。"],
+      comfy: ["算力即生产力,GPU 已就绪。", "工作流跑起来,创意落成片。"],
+    }[route];
+    if (ctx) this.mascotSay(ctx[Math.floor(Math.random() * ctx.length)]);
+    // 各页合适位置:漫剧(右侧有悬浮栏)靠左下,其余靠右下
+    const w = m.offsetWidth, h = m.offsetHeight;
+    const tx = route === "manju" ? 60 + Math.random() * 120 : innerWidth - w - 40 - Math.random() * 100;
+    const ty = innerHeight - h - 60 - Math.random() * 80;
+    this.mascotWalkTo(Math.max(10, tx), Math.max(60, ty));
   },
 
   /* 助手状态汇总:一处逻辑,manju 页轮询与全局轮询共用 */
@@ -490,6 +580,7 @@ const App = {
     }
     // 离开漫剧管理页时停止其轮询(iframe/状态常驻仅在本页需要)
     if (route !== "manju" && typeof ManjuWorkbench !== "undefined") ManjuWorkbench.leave();
+    this.mascotOnRoute(route);
   },
 
 

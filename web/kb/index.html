@@ -104,22 +104,13 @@
   </header>
 
   <main class="stage">
-    <!-- 关系图谱:仅读 README.md 单文件构建 Obsidian 式节点图 + 锚点访问 -->
+    <!-- 关系图谱:README 单文件 · 悬浮搜索 · 图例底部居中 -->
     <section id="view-kb" class="view view-kb">
-      <div class="hrs-head">
-        <div class="hrs-title">
-          <h1>关系图谱</h1>
-          <p class="ov-sub">单文件索引加载 · 节点相连 · 锚点直达</p>
-        </div>
-        <div class="hrs-tools">
-          <div class="hrs-search" id="kb-search-wrap">
-            <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
-            <input id="kb-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索知识页…">
-          </div>
-          <button id="kb-refresh" class="hrs-btn" title="重新加载索引">刷新</button>
-        </div>
+      <div class="kb-searchbar">
+        <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+        <input id="kb-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索知识节点…">
+        <button id="kb-refresh" class="kb-ic-btn" title="重载索引" aria-label="重载索引">⟳</button>
       </div>
-      <p id="kb-err" class="hrs-err hidden"></p>
       <div id="kb-graph" class="kb-graph"></div>
       <div id="kb-legend" class="kb-legend"></div>
     </section>

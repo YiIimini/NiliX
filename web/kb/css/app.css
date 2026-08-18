@@ -3857,3 +3857,47 @@ select option { text-align: center; }
 
 /* 助手可拖拽:触控禁默认手势,拖动中禁用过渡由 JS 控制 */
 #ai-mascot { touch-action: none; }
+
+/* 关系图谱页:悬浮搜索胶囊(顶部居中) + 图例底部居中玻璃条 */
+.kb-searchbar {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 6;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 8px 7px 14px; border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  border: 1px solid var(--panel-border);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.28);
+  transition: box-shadow 0.25s, border-color 0.25s;
+}
+.kb-searchbar:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow), 0 8px 26px rgba(0, 0, 0, 0.3); }
+.kb-searchbar .ic { width: 14px; height: 14px; color: var(--muted); flex: none; }
+.kb-searchbar input {
+  width: 250px; border: none; outline: none; background: transparent;
+  color: var(--text); font-size: 13px; letter-spacing: 0.5px;
+  transition: width 0.25s ease;
+}
+.kb-searchbar input:focus { width: 330px; }
+.kb-searchbar input::placeholder { color: var(--muted); }
+.kb-ic-btn {
+  flex: none; width: 28px; height: 28px; border-radius: 50%;
+  border: 1px solid var(--panel-border); background: transparent;
+  color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all 0.2s;
+}
+.kb-ic-btn:hover { color: var(--accent); border-color: var(--accent); transform: rotate(90deg); }
+/* 图例:底部居中,玻璃胶囊条 */
+.kb-legend {
+  justify-content: center; padding: 8px 14px 14px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 35%, transparent);
+}
+.kb-lg {
+  padding: 4px 12px; border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  border: 1px solid var(--panel-border);
+}
+
+/* 助手步行态:轻微摇摆步感 */
+#ai-mascot.is-walking #ai-avatar { animation: aiFloat 0.9s ease-in-out infinite, aiWaddle 0.45s ease-in-out infinite; }
+@keyframes aiWaddle { 0%, 100% { rotate: -3deg; } 50% { rotate: 3deg; } }

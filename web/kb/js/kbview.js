@@ -164,8 +164,6 @@ const KbView = {
         this.render(document.getElementById("kb-search").value.trim());
       })
     );
-    document.querySelector("#view-kb .ov-sub").textContent =
-      `${total} 个节点 · ${legend.length} 个大类星座 · 单文件索引 · 点击节点看详情`;
   },
 
   /* 详情:按需拉单页;hash 锚点同步(#/kb/<页名>),返回清锚点 */
