@@ -2322,7 +2322,7 @@ body.view-dir-active .top-search { display: none; }
 }
 .settings-modal.is-open { opacity: 1; pointer-events: auto; }
 .settings-dialog {
-  width: min(980px, 94vw);
+  width: min(780px, 94vw);
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 18px;
@@ -2360,12 +2360,16 @@ body.view-dir-active .top-search { display: none; }
 /* 宽弹窗:主体单列一排排(每个分组一整行,字段行对齐),宽度充分利用 */
 .settings-body {
   padding: 20px 24px 24px;
-  max-height: 74vh; overflow-y: auto;
-  display: flex; flex-direction: column;
+  max-height: 76vh; overflow-y: auto;
+  display: grid; grid-template-columns: 1fr 1fr;
   gap: 14px;
+  align-items: start;
 }
+/* 主题配色(2)/关系图谱(6) 跨整行,其余两列依次排布 */
+.settings-group:nth-child(2),
+.settings-group:nth-child(6) { grid-column: 1 / -1; }
 .settings-group {
-  padding: 16px 20px;
+  padding: 14px 16px;
   border: 1px solid var(--panel-border);
   border-radius: 12px;
   background: color-mix(in srgb, var(--surface) 45%, transparent);
@@ -2387,7 +2391,7 @@ body.view-dir-active .top-search { display: none; }
 .settings-row-label {
   font-size: 12.5px; color: var(--text); letter-spacing: 1px;
   flex-shrink: 0;
-  width: 120px; /* 同组字段行对齐 */
+  width: 92px; /* 两列布局下收窄,同组对齐 */
 }
 .settings-hint { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
 .settings-input {
