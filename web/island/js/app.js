@@ -308,7 +308,9 @@
     if (cf.online) {
       cfDot.className = "kb-dot on";
       cfTxt.textContent = "在线";
-      cfMeta.textContent = ":8190" + (cf.version ? " · v" + cf.version : "");
+      // 端口/地址以服务端启动参数为准(与 Comfy 页面同源,改 settings.json 即同步)
+      const cfPort = cf.startup && cf.startup.port ? ":" + cf.startup.port : ":8190";
+      cfMeta.textContent = cfPort + (cf.version ? " · v" + cf.version : "");
       cfStart.classList.add("hidden");
       cfStop.classList.remove("hidden");
       cfOpen.classList.remove("hidden");

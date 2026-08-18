@@ -14,14 +14,14 @@ import (
 
 // ---- Win32(user32.dll / gdi32.dll / kernel32.dll) ----
 var (
-	user32                = syscall.NewLazyDLL("user32.dll")
-	procSetWindowLongPtr  = user32.NewProc("SetWindowLongPtrW")
-	procGetWindowLongPtr  = user32.NewProc("GetWindowLongPtrW")
-	procSetWindowPos      = user32.NewProc("SetWindowPos")
-	procGetWindowRect     = user32.NewProc("GetWindowRect")
-	procGetSystemMetrics  = user32.NewProc("GetSystemMetrics")
-	procSetDpiAwareness   = user32.NewProc("SetProcessDpiAwarenessContext")
-	procGetDpiForWindow   = user32.NewProc("GetDpiForWindow")
+	user32               = syscall.NewLazyDLL("user32.dll")
+	procSetWindowLongPtr = user32.NewProc("SetWindowLongPtrW")
+	procGetWindowLongPtr = user32.NewProc("GetWindowLongPtrW")
+	procSetWindowPos     = user32.NewProc("SetWindowPos")
+	procGetWindowRect    = user32.NewProc("GetWindowRect")
+	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
+	procSetDpiAwareness  = user32.NewProc("SetProcessDpiAwarenessContext")
+	procGetDpiForWindow  = user32.NewProc("GetDpiForWindow")
 
 	gdi32                  = syscall.NewLazyDLL("gdi32.dll")
 	procCreateRoundRectRgn = gdi32.NewProc("CreateRoundRectRgn")
@@ -63,12 +63,12 @@ const (
 	gwlStyle   = -16
 	gwlExStyle = -20
 
-	wsCaption     = 0x00C00000
-	wsThickFrame  = 0x00040000
-	wsSysMenu     = 0x00080000
-	wsMinimizeBox = 0x00020000
-	wsMaximizeBox = 0x00010000
-	wsBorder      = 0x00800000
+	wsCaption      = 0x00C00000
+	wsThickFrame   = 0x00040000
+	wsSysMenu      = 0x00080000
+	wsMinimizeBox  = 0x00020000
+	wsMaximizeBox  = 0x00010000
+	wsBorder       = 0x00800000
 	wsExToolWindow = 0x00000080
 
 	smXVirtual  = 76
@@ -276,6 +276,15 @@ func Run(islandURL string, onClose func(), a Actions) error {
 	})
 
 	w.Navigate(islandURL)
+	// 白窗修复:不能创建即隐藏——WebView2 在隐藏父窗口下创建环境,完成回调会收到
+	// nil 环境指针导致进程崩溃(实测 panic)。改为窗口立即显示 + SetTransparent
+	// 就绪重试:控制器一创建(约首帧前)就应用透明背景,白底来不及显示。
+	go func() {
+		for i := 0; i < 120 && !w.TransparentOK(); i++ {
+			w.SetTransparent()
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
 	w.Dispatch(func() {
 		applyWindowStyle(uintptr(w.Window()))
 	})

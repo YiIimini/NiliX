@@ -516,6 +516,21 @@ func manjuProject(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// manjuStyleInfo 解析当前风格(预设/组合/自定义均可):返回注入各处的英文措辞,供前端「?」弹窗详细说明
+func manjuStyleInfo(w http.ResponseWriter, r *http.Request) {
+	style := strings.TrimSpace(r.URL.Query().Get("style"))
+	if style == "" {
+		style = "2.5d"
+	}
+	spec := manjuStyleDesc(style)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"style":   style,
+		"asset":   spec.asset,
+		"opening": spec.opening,
+		"shot1":   spec.shot1,
+	})
+}
+
 func manjuSaveRender(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -533,23 +548,12 @@ func manjuSaveRender(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 渲染风格(顶层 style,枚举:与 manjuStyles 预设一致,勿改回旧的 3 档)
+	// 渲染风格(顶层 style):单个预设 key / 多元素组合(预设+预设,以 + 分隔) / 自定义英文描述均可;
+	// 组合与自定义由 manjuStyleDesc 原样拼入提示词,不在此枚举硬编码
 	if v, ok := body["style"]; ok && manjuHas(v) {
 		s := str(v)
-		valid := false
-		for k := range manjuStyles {
-			if s == k {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			keys := make([]string, 0, len(manjuStyles))
-			for k := range manjuStyles {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			http.Error(w, `{"error":"style 必须是 `+strings.Join(keys, "/")+`"}`, http.StatusBadRequest)
+		if strings.TrimSpace(s) == "" {
+			http.Error(w, `{"error":"style 不能为空"}`, http.StatusBadRequest)
 			return
 		}
 		cfg["style"] = s
@@ -1571,6 +1575,7 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/manju/find", manjuFindByNovel)
 	mux.HandleFunc("GET /api/manju/project", manjuProject)
 	mux.HandleFunc("POST /api/manju/render", manjuSaveRender)
+	mux.HandleFunc("GET /api/manju/style", manjuStyleInfo)
 	mux.HandleFunc("POST /api/manju/create", manjuCreate)
 	mux.HandleFunc("GET /api/manju/settings", manjuSettingsGet)
 	mux.HandleFunc("POST /api/manju/settings", manjuSettingsPost)

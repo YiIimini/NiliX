@@ -218,8 +218,144 @@ func (s *Server) handleNovelProgress(w http.ResponseWriter, r *http.Request) {
 		// 旧项目无存档:按现有章节补一个
 		st.Total = len(items) + 7
 	}
+	// 创作档案:已审章节数 / 均分 / 高频问题
+	reviewSummary := map[string]any{"count": 0, "avg": 0.0, "topIssue": ""}
+	if len(st.Reviews) > 0 {
+		avg, n := 0.0, 0
+		issueCnt := map[string]int{}
+		for _, rv := range st.Reviews {
+			avg += rv.Score
+			n++
+			for _, is := range rv.Issues {
+				issueCnt[is]++
+			}
+		}
+		top, topN := "", 0
+		for k, v := range issueCnt {
+			if v > topN {
+				top, topN = k, v
+			}
+		}
+		reviewSummary["count"] = n
+		reviewSummary["avg"] = avg / float64(n)
+		reviewSummary["topIssue"] = top
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"dir": proj, "hasOutline": hasOutline, "chapters": items,
-		"state": st})
+		"state": st, "reviewSummary": reviewSummary})
+}
+
+// handleNovelAnalyze 立项前 AI 策划分析:题材定位/卖点/风格建议/开篇钩子/风险提醒。
+// 纯分析不改任何文件,前端展示分析卡,用户可「采用风格」后立项。
+func (s *Server) handleNovelAnalyze(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Genre string `json:"genre"`
+		Style string `json:"style"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	s.mu.RLock()
+	cfg := *s.cfg
+	s.mu.RUnlock()
+	if cfg.LLM.APIKey == "" {
+		writeErr(w, http.StatusBadRequest, "未配置 LLM API key(顶栏设置 → 剧本模型)")
+		return
+	}
+	llm := backend.NewLLMClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model,
+		time.Duration(cfg.LLM.RequestTimeout)*time.Second)
+	sys := "你是爆款网文策划分析师,只输出 JSON,不输出任何其它内容。"
+	usr := fmt.Sprintf(`为一部「%s」题材、「%s」风格的小说做立项策划分析(题材/风格可留空,由你按市场爆款来补)。
+严格输出 JSON:
+{"position":"题材定位与目标读者,80字内","selling":"核心卖点与爽点节奏策略,100字内","style_advice":"与题材最匹配的叙事风格建议,40字内(如:热血燃向/轻松搞笑/悬疑烧脑/治愈温情)","hook":"开篇第一章钩子建议,60字内","risk":"常见翻车点与规避,60字内"}`,
+		nvOrDefault(req.Genre, "玄幻逆袭"), nvOrDefault(req.Style, "热血爽文"))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	raw, err := llm.Chat(ctx, []backend.ChatMessage{
+		{Role: "system", Content: sys}, {Role: "user", Content: usr}}, 3000, 0.7)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "策划分析失败: "+err.Error())
+		return
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(stripJSONFence(raw)), &out); err != nil {
+		writeErr(w, http.StatusBadGateway, "策划分析解析失败,请重试")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "plan": out})
+}
+
+// handleNovelReview 章节审稿:8 维评分 + 问题清单 + 修改建议,结论写入创作档案(novel_state)。
+func (s *Server) handleNovelReview(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Title string `json:"title"`
+		No    int    `json:"no"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	req.Title = strings.TrimSpace(req.Title)
+	if req.Title == "" || req.No < 1 {
+		writeErr(w, http.StatusBadRequest, "参数缺失")
+		return
+	}
+	proj := novelProjDir(req.Title)
+	f, _ := findChapter(proj, req.No)
+	if f == "" {
+		writeErr(w, http.StatusBadRequest, "本章还没写,先生成章节再评章")
+		return
+	}
+	content, err := os.ReadFile(f)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "读章节失败: "+err.Error())
+		return
+	}
+	// 带上大纲该章条目作为评分上下文
+	outline := ""
+	if b, err := os.ReadFile(filepath.Join(proj, "设定集", "设定集与大纲.md")); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(line, fmt.Sprintf("- 第%03d章", req.No)) {
+				outline = strings.TrimPrefix(line, "- ")
+				break
+			}
+		}
+	}
+	s.mu.RLock()
+	cfg := *s.cfg
+	s.mu.RUnlock()
+	if cfg.LLM.APIKey == "" {
+		writeErr(w, http.StatusBadRequest, "未配置 LLM API key")
+		return
+	}
+	llm := backend.NewLLMClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model,
+		time.Duration(cfg.LLM.RequestTimeout)*time.Second)
+	sys := "你是资深网文审稿编辑,对章节按 8 个维度打分(每项 0-100),只输出 JSON,不输出其它内容。"
+	usr := fmt.Sprintf(`请审阅《%s》第%d章。
+大纲条目:%s
+正文(%d字):
+%s
+严格输出 JSON:
+{"dims":{"opening":开篇暴击,"conflict":冲突张力,"satisfy":爽点密度,"pace":节奏紧凑,"dialogue":台词质量,"hook":钩子设计,"shootable":可拍性,"consistency":一致性风险(越高=越偏离设定,扣分项)},"score":加权总分0-100(可拍性×1.5、一致性按(100-风险)×1.5、其余×1,求和后归一),保留1位小数,"issues":["具体到段落的问题,最多3条"],"suggestion":"修改建议,80字内"}`,
+		req.Title, req.No, nvOrDefault(outline, "无"), len([]rune(string(content))), clip(string(content), 6000))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	raw, err := llm.Chat(ctx, []backend.ChatMessage{
+		{Role: "system", Content: sys}, {Role: "user", Content: usr}}, 3000, 0.3)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "评章失败: "+err.Error())
+		return
+	}
+	var out struct {
+		Dims       map[string]float64 `json:"dims"`
+		Score      float64            `json:"score"`
+		Issues     []string           `json:"issues"`
+		Suggestion string             `json:"suggestion"`
+	}
+	if err := json.Unmarshal([]byte(stripJSONFence(raw)), &out); err != nil || len(out.Dims) == 0 {
+		writeErr(w, http.StatusBadGateway, "评章解析失败,请重试")
+		return
+	}
+	rv := novelChapterReview{Score: out.Score, Dims: out.Dims, Issues: out.Issues,
+		Suggestion: out.Suggestion, At: time.Now().Format("2006-01-02 15:04")}
+	st := loadNovelState(proj)
+	st.Reviews[req.No] = rv
+	saveNovelState(proj, st)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "review": rv})
 }
 
 func findChapter(proj string, no int) (string, string) {
@@ -505,11 +641,22 @@ func (s *Server) handleNovelStatusAll(w http.ResponseWriter, r *http.Request) {
 }
 
 // ================= 创作状态存档(按小说 ID=目录名 持久化) =================
+// novelChapterReview 单章审稿结论(8 维 + 加权总分 + 问题清单)
+type novelChapterReview struct {
+	Score      float64            `json:"score"`
+	Dims       map[string]float64 `json:"dims"`
+	Issues     []string           `json:"issues"`
+	Suggestion string             `json:"suggestion"`
+	At         string             `json:"at"`
+}
+
 type novelState struct {
-	Title     string `json:"title"`
-	Total     int    `json:"total"`
-	Current   int    `json:"current"`
-	UpdatedAt string `json:"updatedAt"`
+	Title        string                          `json:"title"`
+	Total        int                             `json:"total"`
+	Current      int                             `json:"current"`
+	UpdatedAt    string                          `json:"updatedAt"`
+	Reviews      map[int]novelChapterReview      `json:"reviews,omitempty"`      // 章节号 → 审稿结论(创作档案)
+	StyleChoices []map[string]string             `json:"styleChoices,omitempty"` // 策划分析采纳的风格记录
 }
 
 func novelStateFile(proj string) string {
@@ -520,6 +667,9 @@ func loadNovelState(proj string) novelState {
 	var st novelState
 	if b, err := os.ReadFile(novelStateFile(proj)); err == nil {
 		_ = json.Unmarshal(b, &st)
+	}
+	if st.Reviews == nil {
+		st.Reviews = map[int]novelChapterReview{}
 	}
 	return st
 }

@@ -56,6 +56,17 @@ type WebView interface {
 	// SetTransparent makes the WebView2 background transparent (alpha = 0).
 	SetTransparent()
 
+	// TransparentOK reports whether the transparent background is actually
+	// applied (WebView2 controller ready). Used for retry loops.
+	TransparentOK() bool
+
+	// Show shows the native window (interface compatibility; created visible).
+	Show()
+
+	// OnNavigationCompleted registers a callback fired when the page navigation
+	// completes (WebView2 event thread; do UI work via Dispatch).
+	OnNavigationCompleted(cb func())
+
 	// Navigate navigates webview to the given URL. URL may be a data URI, i.e.
 	// "data:text/text,<html>...</html>". It is often ok not to url-encode it
 	// properly, webview will re-encode it for you.

@@ -84,6 +84,8 @@ func main() {
 	if err := store.Save(cfg); err != nil {
 		log.Printf("迁移加密配置失败(忽略): %v", err)
 	}
+	// ComfyUI 启动参数单一数据源:settings.json → HUD 卡片 / Comfy 页面 / 实际启动命令共用。
+	api.SetComfyParams(cfg.Render.ComfyURL, cfg.Paths.ComfyInput, cfg.Paths.ComfyOutput)
 
 	// 渲染任务管理器（ComfyUI 客户端 + 本地产物目录）。
 	outDir := "clips"
@@ -112,7 +114,7 @@ func main() {
 			StartComfy: api.ComfyStart,
 			StopComfy:  api.ComfyStop,
 			OpenComfy:  func() { openBrowser("http://127.0.0.1:8190") },
-			OpenKB:     func() { openBrowser(url + "#/overview") },
+			OpenKB:     func() { openBrowser(url + "#/manju") },
 			StartZCode: startZCode,
 			StopZCode:  stopZCode,
 			StopBot:    stopBot,
@@ -131,7 +133,7 @@ func onReady(url string) func() {
 		systray.SetIcon(iconICO)
 		systray.SetTitle("NiliX")
 		systray.SetTooltip("NiliX")
-		mHome := systray.AddMenuItem("打开主页", "打开 NiliX 关系图谱主页")
+		mHome := systray.AddMenuItem("打开主页", "打开 NiliX 漫剧管理主页")
 		mNovel := systray.AddMenuItem("小说管理", "打开小说管理")
 		mManju := systray.AddMenuItem("漫剧管理", "打开漫剧管理页")
 		mComfy := systray.AddMenuItem("ComfyUI", "打开 ComfyUI 页面")

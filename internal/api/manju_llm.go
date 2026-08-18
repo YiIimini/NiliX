@@ -205,9 +205,45 @@ var manjuStyles = map[string]manjuStyleSpec{
 }
 
 // manjuStyleDesc 取风格措辞；预设外视为自定义风格，原样使用(用户直接输入英文风格描述)。
+// manjuStyleHas 组合风格(以 + 分隔的 token)是否包含某预设元素,精确匹配避免子串误判。
+func manjuStyleHas(style, key string) bool {
+	for _, p := range strings.Split(style, "+") {
+		if strings.TrimSpace(p) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// manjuStyleDesc 取风格措辞。
+// 单个预设 key 直接查表;组合(预设+预设 / 预设+自定义词,以 + 分隔)逐段解析:
+// 预设段取其 asset 核心措辞、自定义段原样保留,再拼成一句整体风格;其余视为自定义风格原样使用。
 func manjuStyleDesc(style string) manjuStyleSpec {
 	if s, ok := manjuStyles[style]; ok {
 		return s
+	}
+	parts := strings.Split(style, "+")
+	if len(parts) > 1 {
+		core := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if s, ok := manjuStyles[p]; ok {
+				core = append(core, s.asset)
+			} else {
+				core = append(core, p)
+			}
+		}
+		if len(core) > 0 {
+			joined := strings.Join(core, ", ")
+			return manjuStyleSpec{
+				asset:   joined,
+				opening: "The target video is in a " + joined + " style, cinematic realistic lighting",
+				shot1:   "[Shot 1] " + joined + " style, cinematic realistic lighting",
+			}
+		}
 	}
 	return manjuStyleSpec{asset: style, opening: style, shot1: style}
 }

@@ -30,18 +30,7 @@ const App = {
     chk("set-ai-on", P.aiOn); chk("set-ai-status", P.aiStatus);
     chk("set-ai-quotes", P.aiQuotes); chk("set-ai-wander", P.aiWander);
     set("set-ai-freq", P.aiFreq); set("set-ai-size", P.aiSize);
-    set("set-kb-layout", P.kbLayout); set("set-kb-shape", P.kbShape);
     set("set-ai-wander-int", P.aiWanderInt);
-    set("set-kb-repel", P.kbRepel); set("set-kb-dist", P.kbDist); set("set-kb-grav", P.kbGrav);
-    const syncRange = () => {
-      el("set-kb-repel-v").textContent = el("set-kb-repel").value;
-      el("set-kb-dist-v").textContent = el("set-kb-dist").value;
-      el("set-kb-grav-v").textContent = el("set-kb-grav").value;
-    };
-    syncRange();
-    ["set-kb-repel", "set-kb-dist", "set-kb-grav"].forEach((id) => el(id).addEventListener("input", syncRange));
-    set("set-kb-curve", P.kbCurve); set("set-kb-lineop", P.kbLineOp);
-    set("set-kb-labels", P.kbLabels); chk("set-kb-hover-label", P.kbHoverLabel);
     const apply = () => {
       const m = document.getElementById("ai-mascot");
       if (m) {
@@ -59,18 +48,14 @@ const App = {
           if (q) this.mascotSay(q);
         }, P.aiFreq);
       }
-      if (typeof KbView !== "undefined" && KbView._chart) KbView.render(document.getElementById("kb-search") ? document.getElementById("kb-search").value.trim() : "");
       this.savePrefs();
     };
-    ["set-ai-on", "set-ai-status", "set-ai-quotes", "set-ai-wander", "set-kb-hover-label"].forEach((id) =>
+    ["set-ai-on", "set-ai-status", "set-ai-quotes", "set-ai-wander"].forEach((id) =>
       el(id).addEventListener("change", (e) => {
-        const k = { "set-ai-on": "aiOn", "set-ai-status": "aiStatus", "set-ai-quotes": "aiQuotes", "set-ai-wander": "aiWander", "set-kb-hover-label": "kbHoverLabel" }[id];
+        const k = { "set-ai-on": "aiOn", "set-ai-status": "aiStatus", "set-ai-quotes": "aiQuotes", "set-ai-wander": "aiWander" }[id];
         P[k] = e.target.checked; apply();
       }));
-    [["set-ai-freq", "aiFreq", parseInt], ["set-ai-size", "aiSize", parseInt], ["set-ai-wander-int", "aiWanderInt", parseInt],
-     ["set-kb-layout", "kbLayout", String], ["set-kb-shape", "kbShape", String], ["set-kb-curve", "kbCurve", parseFloat],
-     ["set-kb-lineop", "kbLineOp", parseFloat], ["set-kb-labels", "kbLabels", parseInt],
-     ["set-kb-repel", "kbRepel", parseInt], ["set-kb-dist", "kbDist", parseInt], ["set-kb-grav", "kbGrav", parseInt]].forEach(([id, k, cast]) => {
+    [["set-ai-freq", "aiFreq", parseInt], ["set-ai-size", "aiSize", parseInt], ["set-ai-wander-int", "aiWanderInt", parseInt]].forEach(([id, k, cast]) => {
       const e2 = el(id);
       if (e2) e2.addEventListener("change", () => { P[k] = cast(e2.value); apply(); });
     });
@@ -87,11 +72,10 @@ const App = {
     this.initTooltip();
     this.initStars();
     window.addEventListener("hashchange", () => this.route());
-    // 语言切换后重渲染当前视图(侧栏/图例/管理页为动态内容)
+    // 语言切换后重渲染当前视图(侧栏/管理页为动态内容)
     document.addEventListener("i18n:changed", () => {
       const r = this.currentRoute();
-      if (r === "kb" && typeof KbView !== "undefined") KbView.enter();
-      else if (r === "comfy" && typeof ComfyView !== "undefined") ComfyView.renderStatus();
+      if (r === "comfy" && typeof ComfyView !== "undefined") ComfyView.renderStatus();
       else if (r === "novel" && typeof NovelView !== "undefined") NovelView.render();
       else if (r === "manju" && typeof ManjuView !== "undefined") ManjuView.render();
     });
@@ -476,7 +460,9 @@ const App = {
     m.addEventListener("pointercancel", up);
     // 随机漫步调度:小距离微步(当前位置附近 ±60~150px,像闲逛不是跑路)
     const wander = () => {
-      if (!down && (!App.prefs || App.prefs.aiWander)) {
+      // 切页踱步中 / 忙碌时先不闲逛,避免两条移动逻辑打架导致瞬移
+      const walking = m.classList.contains("is-walking") || m.classList.contains("is-busy");
+      if (!down && !walking && (!App.prefs || App.prefs.aiWander)) {
         const r = m.getBoundingClientRect();
         const w = m.offsetWidth, h = m.offsetHeight;
         const nx = r.left + (Math.random() * 180 - 90);   // 左右小挪
@@ -489,12 +475,14 @@ const App = {
       this._mwT = setTimeout(wander, base + Math.random() * base * 0.6);
     };
     this._mwT = setTimeout(wander, 5000);
-    // 闲置名言轮播(忙态不打扰)
-    this._mqT = setInterval(() => {
-      if (!document.getElementById("ai-mascot") || document.getElementById("ai-mascot").classList.contains("is-busy")) return;
-      const q = this.mascotQuote();
-      if (q) this.mascotSay(q);
-    }, 22000);
+    // 闲置名言轮播由设置面板(bindPrefs)按 aiFreq 建好,这里仅兜底(避免双定时器)
+    if (!this._mqT) {
+      this._mqT = setInterval(() => {
+        if (!document.getElementById("ai-mascot") || document.getElementById("ai-mascot").classList.contains("is-busy")) return;
+        const q = this.mascotQuote();
+        if (q) this.mascotSay(q);
+      }, 22000);
+    }
   },
 
   /* 一步步步行:每 45ms 挪一小步(≈10px),朝目标走,不闪现 */
@@ -574,10 +562,17 @@ const App = {
       comfy: ["算力即生产力,GPU 已就绪。", "工作流跑起来,创意落成片。"],
     }[route];
     if (ctx) this.mascotSay(ctx[Math.floor(Math.random() * ctx.length)]);
-    // 各页合适位置:漫剧(右侧有悬浮栏)靠左下,其余靠右下
+    // 设置里关了闲逛移动 → 只在原地冒泡,不乱跑
+    if (!this.prefs.aiWander) return;
+    // 就近停靠:走短距离(漫剧页右侧有悬浮栏,固定左下;其余页按当前位置选近侧底角)
     const w = m.offsetWidth, h = m.offsetHeight;
-    const tx = route === "manju" ? 60 + Math.random() * 120 : innerWidth - w - 40 - Math.random() * 100;
-    const ty = innerHeight - h - 60 - Math.random() * 80;
+    const cur = m.getBoundingClientRect();
+    let tx, ty = innerHeight - h - 60 - Math.random() * 80;
+    if (route === "manju") {
+      tx = 60 + Math.random() * 120;
+    } else {
+      tx = cur.left < innerWidth / 2 ? 10 + Math.random() * 80 : innerWidth - w - 10 - Math.random() * 80;
+    }
     this.mascotWalkTo(Math.max(10, tx), Math.max(60, ty));
   },
 
@@ -680,18 +675,16 @@ const App = {
     }
   },
 
-  /* 当前路由:kb(关系图谱主页) / comfy / novel / manju */
+  /* 当前路由:comfy / novel / manju(默认漫剧管理;关系图谱页已移除) */
   currentRoute() {
-    const hash = location.hash || "#/kb";
+    const hash = location.hash || "#/manju";
     if (hash.startsWith("#/comfy")) return "comfy";
     if (hash.startsWith("#/novel")) return "novel";
-    if (hash.startsWith("#/manju")) return "manju";
-    return "kb";
+    return "manju";
   },
 
   route() {
     const route = this.currentRoute();
-    document.getElementById("view-kb").classList.toggle("is-active", route === "kb");
     document.getElementById("view-comfy").classList.toggle("is-active", route === "comfy");
     document.getElementById("view-novel").classList.toggle("is-active", route === "novel");
     document.getElementById("view-manju").classList.toggle("is-active", route === "manju");
@@ -703,8 +696,7 @@ const App = {
     // 路由切换时关闭管理页遗留弹窗(宽阅读器/单视频弹窗)
     if (typeof NovelView !== "undefined") NovelView.closeReader();
     if (typeof ManjuView !== "undefined") ManjuView.closeFilmModal();
-    if (route === "kb" && typeof KbView !== "undefined") KbView.enter();
-    else if (route === "comfy") ComfyView.enter();
+    if (route === "comfy") ComfyView.enter();
     else if (route === "novel") NovelView.enter();
     else {
       ManjuView.enter();

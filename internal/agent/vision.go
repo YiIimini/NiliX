@@ -22,6 +22,8 @@ type VisionClient struct {
 	Model   string
 	Timeout time.Duration
 	client  *http.Client
+	// RetryMax 视觉调用最大重试次数(429/5xx/网络错误自动退避重试;0=不重试)
+	RetryMax int
 }
 
 // NewVisionClient 构造(超时缺省 180s:审片一次带多图,慢模型也要等得起)。
@@ -33,11 +35,12 @@ func NewVisionClient(baseURL, apiKey, model string, timeout time.Duration) *Visi
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	base = strings.TrimSuffix(base, "/chat/completions")
 	return &VisionClient{
-		BaseURL: base,
-		APIKey:  apiKey,
-		Model:   model,
-		Timeout: timeout,
-		client:  &http.Client{Timeout: timeout},
+		BaseURL:  base,
+		APIKey:   apiKey,
+		Model:    model,
+		Timeout:  timeout,
+		client:   &http.Client{Timeout: timeout},
+		RetryMax: 4,
 	}
 }
 
@@ -81,6 +84,28 @@ func (v *VisionClient) chatImage(system, user string, imagePaths []string, tempe
 		},
 		"stream": false,
 	}
+	var lastErr error
+	maxTry := v.RetryMax + 1
+	for attempt := 1; attempt <= maxTry; attempt++ {
+		if attempt > 1 {
+			// 指数退避:2s→4s→8s→16s;429/5xx/网络类错误均可重试
+			backoff := time.Duration(1<<uint(attempt-1)) * 2 * time.Second
+			time.Sleep(backoff)
+		}
+		out, err := v.doChatOnce(body)
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+		if !retryable(err) || attempt == maxTry {
+			break
+		}
+	}
+	return "", lastErr
+}
+
+// doChatOnce 单次视觉请求(无重试)
+func (v *VisionClient) doChatOnce(body map[string]any) (string, error) {
 	b, _ := json.Marshal(body)
 	req, err := http.NewRequest("POST", v.BaseURL+"/chat/completions", bytes.NewReader(b))
 	if err != nil {
@@ -112,6 +137,21 @@ func (v *VisionClient) chatImage(system, user string, imagePaths []string, tempe
 		return "", fmt.Errorf("视觉模型空响应")
 	}
 	return r.Choices[0].Message.Content, nil
+}
+
+// retryable 判断错误是否可重试:HTTP 429/5xx、网络错误、连接类错误可重试;
+// 4xx(除429)与解析类错误不可重试(重试无意义)。
+func retryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "HTTP 429") || strings.Contains(msg, "HTTP 5") ||
+		strings.Contains(msg, "请求失败") || strings.Contains(msg, "connection") ||
+		strings.Contains(msg, "EOF") || strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out") {
+		return true
+	}
+	return false
 }
 
 // ChatJSON 多模态请求 + 解析 JSON 对象(剥 ```json 围栏,取首个 { 到末个 })

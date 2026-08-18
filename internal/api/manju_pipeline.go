@@ -1010,9 +1010,9 @@ func (ctx *manjuCtx) characterCkpt(char map[string]any) string {
 	return "sd_xl_base_1.0.safetensors"
 }
 
-// portraitWF 定妆照工作流按风格分流:写实类用 Z-Image(真人级),其余风格用 SDXL checkpoint
+// portraitWF 定妆照工作流按风格分流:含写实元素用 Z-Image(真人级),其余用 SDXL checkpoint
 func (ctx *manjuCtx) portraitWF(prompt string, seed, w, h int, prefix string, char map[string]any) map[string]any {
-	if ctx.style == "real" {
+	if manjuStyleHas(ctx.style, "real") {
 		return wfZImage(prompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), seed, w, h, prefix, ctx.negPrompt())
 	}
 	return wfSDXL(prompt, ctx.characterCkpt(char), seed, w, h, prefix, ctx.negPrompt())

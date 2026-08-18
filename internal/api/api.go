@@ -64,6 +64,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/script/generate", s.handleGenerateScript)
 	// 网页版爽文小说创作(shuangwen-novel 技能流程固化)
 	mux.HandleFunc("POST /api/novel/create", s.handleNovelCreate)
+	mux.HandleFunc("POST /api/novel/analyze", s.handleNovelAnalyze)
+	mux.HandleFunc("POST /api/novel/review", s.handleNovelReview)
 	mux.HandleFunc("POST /api/novel/chapter", s.handleNovelChapter)
 	mux.HandleFunc("GET /api/novel/progress", s.handleNovelProgress)
 	mux.HandleFunc("POST /api/novel/auto", s.handleNovelAuto)
@@ -77,7 +79,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /clips/{file}", s.handleClipFile)
 	registerManjuRoutes(mux)
 	if s.islandFS != nil {
-		mux.Handle("/island/", http.StripPrefix("/island/", http.FileServer(http.FS(s.islandFS))))
+		mux.Handle("/island/", noCacheHTML(http.StripPrefix("/island/", http.FileServer(http.FS(s.islandFS)))))
 	}
 	mux.HandleFunc("/manage/", s.handleManage)
 	if s.kbFS != nil {
@@ -86,14 +88,12 @@ func (s *Server) Routes() http.Handler {
 	return mux
 }
 
-// noCacheHTML 给 HTML 入口加 no-cache:HTML 内的静态资源带 ?v= 版本号,
-// HTML 本身必须每次回源校验,否则浏览器缓存旧 HTML → 整站旧资源,出现"修了但看不到"。
+// noCacheHTML 全部本地静态资源 no-cache(回源校验,ETag 未变走 304):
+// 本地文件小、回源零成本,杜绝"改完代码但浏览器/WebView2 命中旧缓存,
+// 修了却看不到/旧 JS 报错"的经典问题。HTML 内 ?v= 版本号保留作双保险。
 func noCacheHTML(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := r.URL.Path
-		if p == "/" || strings.HasSuffix(p, ".html") {
-			w.Header().Set("Cache-Control", "no-cache, must-revalidate")
-		}
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 		next.ServeHTTP(w, r)
 	})
 }

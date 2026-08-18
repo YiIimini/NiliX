@@ -333,6 +333,9 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	)
 	setWindowContext(w.hwnd, w)
 
+	// 窗口立即显示。注意:不能创建即隐藏——WebView2 在隐藏父窗口下创建环境时
+	// 完成回调会收到 nil 环境指针导致进程崩溃(实测 panic)。
+	// 白闪问题改由 SetTransparent 就绪重试解决(见 island.Run)。
 	_, _, _ = w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)
 	_, _, _ = w32.User32UpdateWindow.Call(w.hwnd)
 	_, _, _ = w32.User32SetFocus.Call(w.hwnd)
@@ -342,6 +345,37 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	}
 	w.browser.Resize()
 	return true
+}
+
+// Show 显示窗口(接口兼容;创建即显示,一般无需调用)。
+func (w *webview) Show() {
+	_, _, _ = w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)
+	_, _, _ = w32.User32SetFocus.Call(w.hwnd)
+}
+
+// TransparentOK 透明背景是否已生效(WebView2 控制器就绪才可设置)。
+func (w *webview) TransparentOK() bool {
+	if chromium, ok := w.browser.(*edge.Chromium); ok {
+		if c := chromium.GetController(); c != nil {
+			return c.GetICoreWebView2Controller2() != nil
+		}
+	}
+	return false
+}
+
+// OnNavigationCompleted 注册页面导航完成回调(WebView2 事件线程触发,UI 操作请自行 Dispatch)。
+func (w *webview) OnNavigationCompleted(cb func()) {
+	if chromium, ok := w.browser.(*edge.Chromium); ok {
+		prev := chromium.NavigationCompletedCallback
+		chromium.NavigationCompletedCallback = func(sender *edge.ICoreWebView2, args *edge.ICoreWebView2NavigationCompletedEventArgs) {
+			if prev != nil {
+				prev(sender, args)
+			}
+			if cb != nil {
+				cb()
+			}
+		}
+	}
 }
 
 func (w *webview) Destroy() {

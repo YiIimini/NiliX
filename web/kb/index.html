@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=20260818bw">
-<link rel="stylesheet" href="/css/themes.css?v=20260818bw">
-<link rel="stylesheet" href="/css/materials.css?v=20260818bw">
-<link rel="stylesheet" href="/css/app.css?v=20260818bw">
+<link rel="icon" type="image/png" href="/icon.png?v=20260818b1">
+<link rel="stylesheet" href="/css/themes.css?v=20260818b1">
+<link rel="stylesheet" href="/css/materials.css?v=20260818b1">
+<link rel="stylesheet" href="/css/app.css?v=20260818b1">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -75,14 +75,11 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260818bw" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260818b1" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
     <nav class="nav">
-      <a href="#/kb" class="nav-link" data-route="kb">
-        <svg class="ic" aria-hidden="true"><use href="#i-grid"/></svg><span data-i18n="nav.kb">关系图谱</span>
-      </a>
       <a href="#/novel" class="nav-link" data-route="novel">
         <svg class="ic" aria-hidden="true"><use href="#i-book"/></svg><span data-i18n="nav.novel">小说管理</span>
       </a>
@@ -104,17 +101,6 @@
   </header>
 
   <main class="stage">
-    <!-- 关系图谱:README 单文件 · 悬浮搜索 · 图例底部居中 -->
-    <section id="view-kb" class="view view-kb">
-      <div class="kb-searchbar">
-        <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
-        <input id="kb-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索知识节点…">
-        <button id="kb-refresh" class="kb-ic-btn" title="重载索引" aria-label="重载索引">⟳</button>
-      </div>
-      <div id="kb-graph" class="kb-graph"></div>
-      <div id="kb-legend" class="kb-legend"></div>
-    </section>
-
     <!-- 二级页:Comfy UI(内嵌 Web UI) -->
     <section id="view-comfy" class="view view-comfy">
       <div class="hrs-head">
@@ -275,23 +261,16 @@
             </div>
 
             <div class="manju-row">
-              <span class="manju-label">风格</span>
-              <div class="manju-seg" id="manju-style">
-                <button data-style="2.5d" class="hrs-btn">2.5D 动漫</button>
-                <button data-style="real" class="hrs-btn">写实</button>
-                <button data-style="3d" class="hrs-btn">3D CG</button>
-                <button data-style="anime" class="hrs-btn">二次元</button>
-                <button data-style="handdrawn" class="hrs-btn">手绘</button>
-                <button data-style="papercraft" class="hrs-btn">纸艺</button>
-                <button data-style="clay" class="hrs-btn">粘土</button>
-                <button data-style="ink" class="hrs-btn">水墨</button>
+              <span class="manju-label" title="点击即选中/取消，可多选叠加组合多个预设风格">风格</span>
+              <div class="manju-seg" id="manju-style" title="点击即选中/取消，可多选叠加组合多个预设风格（组合风格会拼成一句提示词注入）">
+                <!-- 预设按钮由 JS 按 STYLE_PRESETS 单一数据源渲染(加预设只改一处) -->
                 <button id="manju-style-help" class="manju-style-help" title="预览各风格官方示例">?</button>
               </div>
             </div>
 
             <div class="manju-row">
               <span class="manju-label">自定义</span>
-              <input id="manju-style-custom" class="manju-input manju-wide" placeholder="英文风格描述，如 cyberpunk, pixel art, watercolor…（点「应用」生效）" spellcheck="false">
+              <input id="manju-style-custom" class="manju-input manju-wide" placeholder="英文风格描述，如 cyberpunk, pixel art, watercolor…（点「应用」叠加到当前预设，重复词自动过滤）" spellcheck="false">
               <button id="manju-style-apply" class="hrs-btn">应用</button>
             </div>
 
@@ -417,6 +396,7 @@
                 <button class="hrs-btn hrs-btn-primary" data-phase="all">一条龙</button>
               </div>
               <div class="manju-row manju-stage-row">
+                <button id="manju-health" class="hrs-btn" title="🤖 项目体检：配置/小说/LLM/ComfyUI/模型/渲染参数一键诊断，可修复项一键处理">🔍 项目体检</button>
                 <button id="manju-agent-run" class="hrs-btn hrs-btn-agent" title="智能体调度：剧本师复核 → 渲染 → 审片官逐镜判分 → 未达标自动修复重渲染(预算封顶) → 剩余例外推送微信待拍板">🤖 智能一条龙</button>
               </div>
             </div>
@@ -661,70 +641,6 @@
           </div>
         </div>
 
-        <div class="settings-group">
-          <div class="settings-label"><span class="sl-emoji">🕸</span>关系图谱</div>
-          <div class="settings-row">
-            <span class="settings-row-label">组织模式</span>
-            <select id="set-kb-layout" class="settings-input">
-              <option value="force">星系(Obsidian 物理模拟)</option>
-              <option value="radial">径向(README 中心辐射)</option>
-              <option value="ring">环形(分类环列)</option>
-            </select>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">斥力</span>
-            <input type="range" id="set-kb-repel" min="30" max="420" step="10" class="settings-range">
-            <span class="settings-hint" id="set-kb-repel-v"></span>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">链距</span>
-            <input type="range" id="set-kb-dist" min="20" max="300" step="10" class="settings-range">
-            <span class="settings-hint" id="set-kb-dist-v"></span>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">中心引力</span>
-            <input type="range" id="set-kb-grav" min="0" max="30" step="1" class="settings-range">
-            <span class="settings-hint" id="set-kb-grav-v"></span>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">节点形状</span>
-            <select id="set-kb-shape" class="settings-input">
-              <option value="mixed">混合(每节点不同)</option>
-              <option value="circle">统一圆形</option>
-              <option value="rect">方形</option>
-              <option value="diamond">菱形</option>
-            </select>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">连线弧度</span>
-            <select id="set-kb-curve" class="settings-input">
-              <option value="0">直线</option>
-              <option value="0.05">微弧(默认)</option>
-              <option value="0.15">大弧</option>
-            </select>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">连线透明度</span>
-            <select id="set-kb-lineop" class="settings-input">
-              <option value="0.12">隐约</option>
-              <option value="0.2">默认</option>
-              <option value="0.38">清晰</option>
-            </select>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">悬停显示标签</span>
-            <label class="toggle"><input type="checkbox" id="set-kb-hover-label"><span class="tk"></span></label>
-            <span class="settings-hint">悬停时亮出节点名</span>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">常显标签数</span>
-            <select id="set-kb-labels" class="settings-input">
-              <option value="0">仅枢纽</option>
-              <option value="80">枢纽+80 页</option>
-              <option value="9999">全部页名</option>
-            </select>
-          </div>
-        </div>
         <!-- 剧本模型(LLM):已隐藏——小说转剧本能力并入漫剧管理(DeepSeek Key/视觉模型均在漫剧设置·智能体调度里配置);
              DOM 保留避免 app.js loadLLMSettings 空引用,后端 /api/settings llm 不动 -->
         <div class="settings-group" hidden>
@@ -753,13 +669,11 @@
       </div>
     </div>
   </div>
-  <script src="/js/i18n.js?v=20260818bw"></script>
-  <script src="/js/markdown.js?v=20260818bw"></script>
-  <script src="/js/app.js?v=20260818bw"></script>
-  <script src="/js/comfy.js?v=20260818bw"></script>
-  <script src="/vendor/echarts.min.js"></script>
-  <script src="/js/kbview.js?v=20260818bw"></script>
-  <script src="/js/dirview.js?v=20260818bw"></script>
-  <script src="/js/manju.js?v=20260818bw"></script>
+  <script src="/js/i18n.js?v=20260818b1"></script>
+  <script src="/js/markdown.js?v=20260818b1"></script>
+  <script src="/js/app.js?v=20260818b1"></script>
+  <script src="/js/comfy.js?v=20260818b1"></script>
+  <script src="/js/dirview.js?v=20260818b1"></script>
+  <script src="/js/manju.js?v=20260818b1"></script>
 </body>
 </html>

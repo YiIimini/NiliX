@@ -1,0 +1,355 @@
+package api
+
+// 漫剧智能体 · 项目体检 / 一键修复 / 自然语言指令 / 记忆学习汇总。
+// 体检为纯本地检查(不调 LLM,秒回),发现的可修复项可一键写回 config.json。
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// manjuHealthItem 一条体检项
+type manjuHealthItem struct {
+	Key     string `json:"key"`
+	Label   string `json:"label"`
+	Status  string `json:"status"` // ok / warn / bad
+	Detail  string `json:"detail"`
+	Fixable bool   `json:"fixable"`
+	FixHint string `json:"fixHint,omitempty"`
+}
+
+// manjuHealthCheck 全项体检(本地、秒回、不调 LLM)
+func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
+	items := []manjuHealthItem{}
+	R := ctx.R
+	ok := func(label, detail string) manjuHealthItem { return manjuHealthItem{Key: label, Label: label, Status: "ok", Detail: detail} }
+	// 1. 渲染风格
+	if ctx.style == "" {
+		items = append(items, manjuHealthItem{Key: "style", Label: "渲染风格", Status: "warn", Detail: "未设置风格", FixHint: "在渲染配置里选预设或输自定义"})
+	} else {
+		items = append(items, ok("style", "风格: "+ctx.style))
+	}
+	// 2. 小说正文
+	if ctx.novel == "" {
+		items = append(items, manjuHealthItem{Key: "novel", Label: "小说正文", Status: "bad", Detail: "未设置小说文件", FixHint: "渲染配置 → 小说 里选正文"})
+	} else if !fileExists(ctx.novel) {
+		items = append(items, manjuHealthItem{Key: "novel", Label: "小说正文", Status: "bad", Detail: "文件不存在: " + ctx.novel, FixHint: "检查 config.json 的 paths.novel"})
+	} else if b, err := os.ReadFile(ctx.novel); err != nil || len([]rune(string(b))) < 200 {
+		items = append(items, manjuHealthItem{Key: "novel", Label: "小说正文", Status: "warn", Detail: "内容过少或读取失败", FixHint: "确认正文是完整小说文件"})
+	} else {
+		items = append(items, ok("novel", fmt.Sprintf("正文 %d 字,可渲染", len([]rune(string(b))))))
+	}
+	// 3. LLM 配置
+	if ctx.llm == nil || ctx.llm.apiKey == "" {
+		items = append(items, manjuHealthItem{Key: "llm", Label: "LLM 配置", Status: "bad", Detail: "未填 DeepSeek Key", FixHint: "设置 → 智能体调度 → 填 Key 并应用/保存"})
+	} else {
+		items = append(items, ok("llm", "已配置 "+ctx.llm.model))
+	}
+	// 4. ComfyUI 连通
+	if ver, cerr := ctx.comfy.online(); cerr != nil {
+		items = append(items, manjuHealthItem{Key: "comfy", Label: "ComfyUI", Status: "warn", Detail: "连不上 " + ctx.comfy.base + "(" + truncate(cerr.Error(), 50) + ")", FixHint: "启动 ComfyUI 或核对 comfy_url"})
+	} else {
+		items = append(items, ok("comfy", "在线 " + ver))
+	}
+	// 5. 关键模型存在性
+	if missing := ctx.missingModels(); len(missing) > 0 {
+		items = append(items, manjuHealthItem{Key: "models", Label: "关键模型", Status: "warn", Detail: "缺失: " + strings.Join(missing, ", "), FixHint: "放入 ComfyUI-Shared/models 对应子目录"})
+	} else {
+		items = append(items, ok("models", "SDXL/动漫/Z-Image 均就位"))
+	}
+	// 6. 渲染参数
+	steps, _ := manjuToInt(R["steps"])
+	turbo, _ := manjuToInt(R["turbo_steps"])
+	if s := str(R["turbo_lora"]); s != "" && steps > 0 && turbo > 0 && steps > turbo {
+		items = append(items, manjuHealthItem{Key: "render_steps", Label: "采样步数", Status: "warn", Detail: fmt.Sprintf("已配 Turbo LoRA(%s) 但步数=%d,建议 %d 步(约2.9倍提速)", s, steps, turbo), Fixable: true, FixHint: fmt.Sprintf("一键改为 %d 步", turbo)})
+	} else {
+		items = append(items, ok("render_steps", fmt.Sprintf("steps=%d turbo=%d", steps, turbo)))
+	}
+	seed, _ := manjuToInt(R["seed"])
+	if seed == 0 {
+		items = append(items, manjuHealthItem{Key: "render_seed", Label: "随机种子", Status: "warn", Detail: "seed 为空/0,跨镜头一致性无锚点", Fixable: true, FixHint: "一键设为 1688"})
+	} else {
+		items = append(items, ok("render_seed", fmt.Sprintf("seed=%d(全剧固定)", seed)))
+	}
+	fps, _ := manjuToInt(R["fps"])
+	if fps < 8 || fps > 60 {
+		items = append(items, manjuHealthItem{Key: "render_fps", Label: "帧率", Status: "bad", Detail: fmt.Sprintf("fps=%d 超出 8-60", fps), Fixable: true, FixHint: "一键改为 24"})
+	} else {
+		items = append(items, ok("render_fps", fmt.Sprintf("%d fps", fps)))
+	}
+	mi, _ := manjuToInt(R["min_shot_seconds"])
+	ma, _ := manjuToInt(R["max_shot_seconds"])
+	if mi > 0 && ma > 0 && mi > ma {
+		items = append(items, manjuHealthItem{Key: "render_dur", Label: "镜头时长", Status: "bad", Detail: fmt.Sprintf("最短%d > 最长%d,矛盾", mi, ma), Fixable: true, FixHint: "一键改为 4-12s"})
+	} else {
+		items = append(items, ok("render_dur", fmt.Sprintf("%d-%d s", mi, ma)))
+	}
+	// 7. 审片官
+	if loadAgentCfg(ctx).VisionModel == "" {
+		items = append(items, manjuHealthItem{Key: "agent", Label: "审片官", Status: "warn", Detail: "未配置视觉模型,智能一条龙只做机械质检不判分", FixHint: "设置 → 智能体调度 → 选视觉模型"})
+	} else {
+		items = append(items, ok("agent", "视觉模型就绪"))
+	}
+	return items
+}
+
+// missingModels 检查配置里引用的关键模型是否在磁盘上(检查点/UNET/CLIP/VAE/LoRA)。
+// 目录兼容:UNET 类先查 diffusion_models 再查 unet;CLIP 类先查 text_encoders 再查 clip
+// (ComfyUI 新版默认索引 diffusion_models/text_encoders,旧版用 unet/clip)。
+func (ctx *manjuCtx) missingModels() []string {
+	cands := []struct{ name, sub, alt string }{
+		{str(ctx.R["animagine_ckpt"]), "checkpoints", ""},
+		{str(ctx.R["z_image_unet"]), "diffusion_models", "unet"},
+		{str(ctx.R["z_image_clip"]), "text_encoders", "clip"},
+		{str(ctx.R["z_image_vae"]), "vae", ""},
+		{str(ctx.R["turbo_lora"]), "loras", ""},
+		{str(ctx.R["unet_fl2va"]), "diffusion_models", "unet"},
+		{str(ctx.R["unet_ref2va"]), "diffusion_models", "unet"},
+		{str(ctx.R["vae_video"]), "vae", ""},
+		{str(ctx.R["vae_audio"]), "vae", ""},
+	}
+	seen := map[string]bool{}
+	var missing []string
+	for _, c := range cands {
+		if c.name == "" || seen[c.name] {
+			continue
+		}
+		seen[c.name] = true
+		if !fileExists(filepath.Join(ctx.sharedModels, c.sub, c.name)) && (c.alt == "" || !fileExists(filepath.Join(ctx.sharedModels, c.alt, c.name))) {
+			missing = append(missing, c.name)
+		}
+	}
+	return missing
+}
+
+// manjuHealth 体检接口:返回全项清单 + ok/warn/bad 汇总
+func manjuHealth(w http.ResponseWriter, r *http.Request) {
+	configPath := r.URL.Query().Get("config")
+	if configPath == "" {
+		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+		return
+	}
+	ctx, err := newManjuCtx(configPath, "", "", "", "")
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		return
+	}
+	items := manjuHealthCheck(ctx)
+	n := map[string]int{}
+	for _, it := range items {
+		n[it.Status]++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": items, "summary": n})
+}
+
+// manjuHealthFix 一键修复可修复的体检项(写回 config.json 后重跑体检)
+func manjuHealthFix(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	configPath := str(body["config"])
+	key := str(body["key"])
+	if configPath == "" || key == "" {
+		http.Error(w, `{"error":"missing config/key"}`, http.StatusBadRequest)
+		return
+	}
+	ctx, err := newManjuCtx(configPath, "", "", "", "")
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		return
+	}
+	cfg := ctx.cfg
+	R, _ := cfg["render"].(map[string]any)
+	switch key {
+	case "render_steps":
+		if t, ok := manjuToInt(R["turbo_steps"]); ok && t > 0 {
+			R["steps"] = t
+		}
+	case "render_seed":
+		R["seed"] = 1688
+	case "render_fps":
+		R["fps"] = 24
+	case "render_dur":
+		R["min_shot_seconds"] = 4
+		R["max_shot_seconds"] = 12
+	default:
+		http.Error(w, `{"error":"该检查项不可自动修复"}`, http.StatusBadRequest)
+		return
+	}
+	if err := writeManjuConfig(configPath, cfg); err != nil {
+		http.Error(w, `{"error":"写入配置失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+		return
+	}
+	ctx2, err := newManjuCtx(configPath, "", "", "", "")
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": manjuHealthCheck(ctx2)})
+}
+
+// containsAny text 是否包含任一关键词
+func containsAny(text string, keys ...string) bool {
+	for _, k := range keys {
+		if strings.Contains(text, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// manjuAgentChat 自然语言指令:关键词意图 → 动作(体检/推荐风格/审片报告/总结/修复);
+// 前端收到 action 后执行对应流程,reply 为智能体答复文案。
+func manjuAgentChat(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	configPath := str(body["config"])
+	if configPath == "" {
+		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+		return
+	}
+	text := strings.ToLower(strings.TrimSpace(str(body["text"])))
+	reply, action := "", ""
+	project := filepath.Base(filepath.Dir(configPath))
+	switch {
+	case text == "":
+		reply = "我是漫剧智能体 🤖,可以对我说:体检 / 推荐风格 / 审片报告 / 总结 / 修复"
+	case containsAny(text, "体检", "检查", "健康", "诊断", "分析项目", "看看项目"):
+		action = "health"
+	case containsAny(text, "风格", "画风", "推荐风格"):
+		action = "style"
+	case containsAny(text, "审片", "判分", "分数", "报告", "得分"):
+		// 内联审片摘要
+		sum := agentStatusSummary(configPath)
+		shots := anyArr(sum["shots"])
+		pass, failed, esc := 0, 0, 0
+		for _, s := range shots {
+			m := s.(map[string]any)
+			if st := str(m["status"]); st == "pass" || st == "fixed" || st == "accepted" {
+				pass++
+			} else if st == "failed" {
+				failed++
+			}
+		}
+		esc = len(anyArr(sum["escalations"]))
+		if len(shots) == 0 {
+			reply = "还没有审片记录。跑一次「🤖 智能一条龙」后,我会逐镜判分并给出报告。"
+		} else {
+			reply = fmt.Sprintf("📊 审片报告:共审 %d 镜 — ✅ %d 通过 / ⚠️ %d 待处理%s。点右上「审片报告」面板可看每镜维度详情与升级卡。",
+				len(shots), pass, failed, map[bool]string{true: fmt.Sprintf(" / 🚨 %d 待拍板", esc)}[esc > 0])
+		}
+	case containsAny(text, "总结", "记忆", "学习", "统计", "回顾", "趋势", "档案", "经验"):
+		reply = manjuMemorySummary(project)
+	case containsAny(text, "修复", "处理问题", "修一下", "修了", "都修", "修问题"):
+		action = "fixall"
+	case containsAny(text, "你好", "hi", "hello", "在吗", "你是谁", "帮助", "help", "怎么用"):
+		reply = "我是漫剧智能体 🤖,负责帮你把小说变成成片。可以对我说:\n· 体检 / 分析项目 —— 全项体检 + 一键修复\n· 推荐风格 —— 深度分析小说,自动更新渲染风格\n· 审片报告 —— 查看逐镜判分\n· 总结 / 学习 —— 汇总高频问题与分数趋势\n· 修复 —— 自动处理可修复的配置问题"
+	default:
+		reply = "没听懂这句话 😅 可以试试:体检 / 推荐风格 / 审片报告 / 总结 / 修复"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "reply": reply, "action": action})
+}
+
+// ---- 记忆学习汇总 ----
+
+// manjuMemorySummary 把项目记忆整理成一段可读总结(审片/学习统计)
+func manjuMemorySummary(project string) string {
+	st := loadAgentState(project)
+	m := st.Memory
+	if m.RunCount == 0 && len(m.ScoreTrend) == 0 && len(m.StyleChoices) == 0 && len(m.IssueStats) == 0 {
+		return "我还没有学习记录。跑一次「智能一条龙」或「深度分析风格」后,我会积累审片问题、分数趋势与风格选择经验。"
+	}
+	var b strings.Builder
+	if m.RunCount > 0 {
+		fmt.Fprintf(&b, "🧠 已为你运行 %d 次 · 审片 %d 镜 · 自动返工 %d 次\n", m.RunCount, m.JudgedShots, m.ReworkCount)
+	}
+	if len(m.ScoreTrend) > 0 {
+		first, last := m.ScoreTrend[0], m.ScoreTrend[len(m.ScoreTrend)-1]
+		delta := last.Score - first.Score
+		trend := "持平"
+		if delta > 1.5 {
+			trend = "↑ 提升 " + fmt.Sprintf("%.0f", delta) + " 分"
+		} else if delta < -1.5 {
+			trend = "↓ 回落 " + fmt.Sprintf("%.0f", -delta) + " 分"
+		}
+		fmt.Fprintf(&b, "📈 审片均分 %.0f(%d 镜)%s\n", last.Score, last.Count, trend)
+	}
+	if len(m.IssueStats) > 0 {
+		type kv struct{ k string; v int }
+		var top []kv
+		for k, v := range m.IssueStats {
+			top = append(top, kv{k, v})
+		}
+		sort.Slice(top, func(i, j int) bool { return top[i].v > top[j].v })
+		b.WriteString("🔁 高频问题: ")
+		for i, t := range top {
+			if i >= 3 {
+				break
+			}
+			if i > 0 {
+				b.WriteString(" / ")
+			}
+			fmt.Fprintf(&b, "%s×%d", t.k, t.v)
+		}
+		b.WriteString("\n")
+	}
+	if len(m.StyleChoices) > 0 {
+		last := m.StyleChoices[len(m.StyleChoices)-1]
+		fmt.Fprintf(&b, "🎨 最近风格: %s → %s(%s)\n", styleLabelCN(last.Old), styleLabelCN(last.New), last.Reason)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// manjuStyleCNName 预设 key → 中文名(与前端 STYLE_CN 一致,仅展示用)
+var manjuStyleCNName = map[string]string{
+	"2.5d": "2.5D 动漫", "real": "写实", "3d": "3D CG", "anime": "二次元",
+	"handdrawn": "手绘", "papercraft": "纸艺", "clay": "粘土", "ink": "水墨",
+}
+
+// styleLabelCN 风格值转中文展示(组合元素逐个转中文,自定义词原样)
+func styleLabelCN(style string) string {
+	if style == "" {
+		return "未设置"
+	}
+	parts := strings.Split(style, "+")
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		if cn, ok := manjuStyleCNName[p]; ok {
+			parts[i] = cn
+		} else {
+			parts[i] = p
+		}
+	}
+	return strings.Join(parts, " + ")
+}
+
+// manjuDiagnoseError 阶段失败诊断:错误模式 → 诊断结论 + 建议
+func manjuDiagnoseError(stage string, err error) (string, string) {
+	e := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(e, "safetensors") || strings.Contains(e, "checkpoint") || strings.Contains(e, "not found") && strings.Contains(e, "model"):
+		return "模型缺失/不匹配", "检查 ComfyUI 模型目录与配置里的模型名是否完全一致(含大小写),缺失模型补齐后重试"
+	case strings.Contains(e, "out of memory") || strings.Contains(e, "cuda out") || strings.Contains(e, "oom"):
+		return "显存不足(OOM)", "ComfyUI 面板 /free 释放显存,或降低画幅、分阶段渲染;小显存建议 768×1344 以下"
+	case strings.Contains(e, "connection refused") || strings.Contains(e, "connect") || strings.Contains(e, "comfy"):
+		return "ComfyUI 未连通", "确认 ComfyUI 已启动且 comfy_url 正确(默认 127.0.0.1:8190)"
+	case strings.Contains(e, "401") || strings.Contains(e, "unauthorized") || strings.Contains(e, "invalid api key"):
+		return "API Key 无效", "在 设置 → 智能体调度 重新填写 Key 并保存后重试"
+	case strings.Contains(e, "timeout") || strings.Contains(e, "timed out"):
+		return "请求超时", "网络波动或服务繁忙,稍后重试;反复超时可检查代理/网络"
+	case strings.Contains(e, "json") || strings.Contains(e, "parse") || strings.Contains(e, "unmarshal"):
+		return "LLM 输出异常", "模型输出非预期格式,自动重试一次;仍失败可降低 max_tokens 或换模型"
+	default:
+		return "未知错误", "点「环境自检」体检项目,或查看运行日志定位具体阶段"
+	}
+}

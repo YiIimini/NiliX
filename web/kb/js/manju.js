@@ -22,11 +22,12 @@
     "9:16": [768, 1344],
   };
 
-  /* 风格 key → 中文名(项目卡片展示用;不在表内视为自定义风格原样显示) */
-  const STYLE_CN = {
-    "2.5d": "2.5D 动漫", "real": "写实", "3d": "3D CG", "anime": "二次元",
-    "handdrawn": "手绘", "papercraft": "纸艺", "clay": "粘土", "ink": "水墨",
-  };
+  /* 预设风格(单一数据源:按钮渲染/多选组合/卡片展示共用;key 须与后端 manjuStyles 一致,加预设只改这里) */
+  const STYLE_PRESETS = [
+    ["2.5d", "2.5D 动漫"], ["real", "写实"], ["3d", "3D CG"], ["anime", "二次元"],
+    ["handdrawn", "手绘"], ["papercraft", "纸艺"], ["clay", "粘土"], ["ink", "水墨"],
+  ];
+  const STYLE_CN = Object.fromEntries(STYLE_PRESETS);
 
   const INT_KEYS = ["width", "height", "fps", "steps", "turbo_steps", "seed", "min_shot_seconds", "max_shot_seconds"];
   const STR_KEYS = ["comfy_url", "unet_fl2va", "unet_ref2va", "clip", "vae_video", "vae_audio",
@@ -86,12 +87,14 @@
       "点「环境自检」可先体检 ComfyUI / 模型 / 依赖是否就绪",
     ] },
     { ic: "🤖", t: "智能体调度", ps: [
-      "<b>🤖 智能一条龙</b> = 一条龙 + 智能体：渲染完成后<b>审片官逐镜判分</b>（八维度，对齐 H3 官方能力）",
+      "点<b>🤖 智能一条龙</b>先弹窗询问：<b>「是」</b>= Agent 深度分析小说内容，自动推荐并更新渲染风格（可组合叠加，如 2.5D+水墨）后走全流程；<b>「否」</b>= 按当前渲染配置直接走智能一条龙",
+      "智能一条龙 = 一条龙 + 智能体：渲染完成后<b>审片官逐镜判分</b>（八维度，对齐 H3 官方能力）",
+      "<b>🔍 项目体检</b>：一键诊断 配置/小说/LLM/ComfyUI/模型/渲染参数/审片官，可修复项（步数/种子/帧率/时长）一键写回 config",
+      "<b>💬 右栏可对智能体说话</b>：体检 / 推荐风格 / 审片报告 / 总结 / 修复，支持快捷指令按钮",
+      "<b>🧠 学习档案</b>：跨次运行记忆——运行次数、审片均分趋势、高频问题、最近风格选择；阶段失败自动<b>智能诊断</b>给出原因与修复建议",
       "未达标镜头<b>自动返工</b>：修复师按审片意见改写 H3 提示词 → 删缓存定点重渲染（预算默认 2 轮，防无限重试）",
       "预算耗尽仍不达标 → <b>推送微信</b> + 右栏「审片报告」升级卡，点「重试此镜 / 忽略」人工拍板",
-      "审片报告面板：分数块点击看维度详情/问题清单，可手动重审单镜",
-      "视觉模型在<b>设置 → 智能体调度</b> 配置（OpenAI 兼容；推荐智谱 <b>glm-4.6v-flash</b> 免费，大小写不限）",
-      "API 地址填根地址或完整 <code>/chat/completions</code> 端点均可（自动兼容）；Key 留空用项目 DeepSeek",
+      "视觉模型在<b>设置 → 智能体调度</b> 配置（OpenAI 兼容；推荐智谱 <b>glm-4.6v-flash</b> 免费）；Key 留空用项目 DeepSeek",
       "「测试视觉模型」<b>随时可点</b>：没有定妆照时自动用合成测试图验证连通（约 5-10s）",
       "未配置视觉模型时自动降级：仅机械质检（黑屏/无声）+ 升级，不判分不返工",
       "<b>剧本师复核</b>在方案阶段给出节奏/台词/爽点评议（低于 60 分推送提醒），只报告不改动方案",
@@ -105,9 +108,11 @@
     ] },
     { ic: "🎨", t: "渲染风格", ps: [
       "8 个预设：<b>2.5D 动漫 / 写实 / 3D CG / 二次元 / 手绘 / 纸艺 / 粘土 / 水墨</b>",
-      "也可输<b>自定义风格</b>（英文，如 cyberpunk / pixel art / watercolor）点「应用」",
-      "风格为<b>提示词级注入</b>：同时写入角色/场景图与每镜 H3 提示词，全片画风统一",
-      "<b>写实 = live-action 真人电影级</b>；改后下次运行生效（已渲染镜头不受影响）",
+      "<b>预设可多选叠加</b>：点击即选中/取消，可同时组合多个，如 2.5D+水墨",
+      "<b>自定义风格</b>：在下方输入英文描述(如 cyberpunk / pixel art)点「应用」,<b>自动叠加到当前预设</b>;与预设重复的词(如已选 2.5D 再输 2.5D)自动过滤",
+      "风格为<b>提示词级注入</b>：拼成一句英文分别写入定妆照/场景图、每镜 Ref2VA 开头与空镜 [Shot 1],全片画风统一",
+      "点风格区右上角 <b>「?」</b>可查看 8 个官方示例动图,并<b>详细展示当前风格解析后的英文措辞</b>(三个注入位置各一段)",
+      "组合含<b>写实</b>时定妆照走 Z-Image(真人级)；改后下次运行生效(已渲染镜头不受影响)",
     ] },
     { ic: "📐", t: "渲染参数", ps: [
       "<b>画幅</b>官方 6 档：21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16，竖屏短剧推荐 <b>9:16（768×1344）</b>",
@@ -279,17 +284,20 @@
       $("manju-novel-pick").addEventListener("click", () => this.openPicker("novel"));
       $("manju-novel-detect").addEventListener("click", () => this.detectNovel());
 
-      // 风格
-      document.querySelectorAll("#manju-style button[data-style]").forEach((b) =>
-        b.addEventListener("click", () => { this.style = b.dataset.style; this.renderStyle(); this.saveDraft(); })
-      );
+      // 风格:预设按钮按单一数据源渲染;点击即多选切换(点中=选中,再点=取消,组合以 + 连接)
+      this.renderStylePresets();
+      $("manju-style").addEventListener("click", (e) => {
+        const b = e.target.closest("button[data-style]");
+        if (!b) return;
+        this.toggleStyle(b.dataset.style, true);
+      });
       // 风格预览:官方示例 GIF(MiniMax H3 官方技能仓库素材,已本地化)
       $("manju-style-help").addEventListener("click", () => this.openStylePreview());
-      // 自定义风格:输入英文风格描述,点「应用」生效
+      // 自定义风格:输入英文风格描述点「应用」,叠加到当前选中的预设风格(重复词自动过滤)
       $("manju-style-apply").addEventListener("click", () => {
         const v = $("manju-style-custom").value.trim();
         if (!v) { this.setErr("请先输入自定义风格描述"); return; }
-        this.style = v;
+        this.style = this.combineCustom(v);
         this.renderStyle();
         this.saveDraft();
       });
@@ -338,6 +346,7 @@
       );
       $("manju-resume").addEventListener("click", () => this.runResume());
       $("manju-agent-run").addEventListener("click", () => this.runAgent());
+      $("manju-health").addEventListener("click", () => this.openHealth());
       $("manju-env").addEventListener("click", () => this.doEnv());
       $("manju-stop").addEventListener("click", () => this.stop());
       $("manju-clear-log").addEventListener("click", () => { $("manju-log").textContent = "(就绪)"; });
@@ -569,13 +578,19 @@
     },
     /* 设置弹窗:智能体 + DeepSeek API Key + 微信通知(使用说明按钮后的设置按钮进入) */
     openSettings() {
+      // 立即开壳(加载中),避免异步请求期间点按钮无反应;代次守卫防"关闭后又弹回"
+      this.openModal("设置", '<div class="dir-loading">加载中…</div>', true);
+      const gen = this._modalGen;
       const q = this.project ? "?config=" + encodeURIComponent(this.project) : "";
       const agP = this.project ? get("/api/manju/agent" + q).catch(() => null) : Promise.resolve(null);
       // 通知配置单独存于 notify.json,须与渲染设置合并回填,否则重开弹窗显示为空
       const notifyP = get("/api/manju/notify").catch(() => ({}));
       get("/api/manju/settings" + q)
         .catch(() => ({}))
-        .then((n) => notifyP.then((nf) => agP.then((ag) => this.renderSettings(Object.assign({}, n, nf), ag))));
+        .then((n) => notifyP.then((nf) => agP.then((ag) => {
+          if (gen !== this._modalGen) return;   // 弹窗已被关闭/切换:放弃渲染,不弹回
+          this.renderSettings(Object.assign({}, n, nf), ag);
+        })));
     },
     renderSettings(n, ag) {
       n = n || {};
@@ -643,7 +658,7 @@
                   <label>返工轮数</label><input id="manju-ag-retries" class="manju-input manju-num" type="number" min="0" max="4" value="${ag.maxRetries == null ? 2 : ag.maxRetries}"><span class="manju-set-unit">轮</span>
                 </div>
               </div>
-              <div class="manju-set-status">审片八维度对齐 MiniMax H3 官方能力：主体/场景一致性(Ref2VA 参考保持)、动作/运镜符合(多模态指令遵循)、可见性(近黑防线)、技术质量(畸变/水印)、风格、口型对白。低分镜头由修复师改写 H3 提示词后自动定点重渲染（「🤖 智能一条龙」走全流程）。</div>
+              <div class="manju-set-status">审片八维度对齐 MiniMax H3 官方能力：主体/场景一致性(Ref2VA 参考保持)、动作/运镜符合(多模态指令遵循)、可见性(近黑防线)、技术质量(畸变/水印)、风格、口型对白。低分镜头由修复师改写 H3 提示词后自动定点重渲染（「🤖 智能一条龙」走全流程）。点「🤖 智能一条龙」会先询问是否让 Agent 深度分析小说内容并更新渲染风格（是=分析后更新；否=按当前配置直接跑）。</div>
               <div class="manju-set-actions">
                 <button id="manju-ag-save" class="hrs-btn hrs-btn-primary">保存智能体配置</button>
                 <button id="manju-ag-test" class="hrs-btn">测试视觉模型</button>
@@ -866,6 +881,9 @@
         this.fillForm();
         this.renderChips();
         this.refreshOutputs();
+        // 体检预热:发现可修复项 → 右栏 Agent 面板出主动建议横幅(仅一次/会话)
+        this._healthTipDismissed = false;
+        this.loadHealth(false);
       }).catch((e) => { this.info = null; this.renderChips(); });
     },
 
@@ -875,7 +893,7 @@
       const R = this.info.render || {};
       const model = (this.info.llm || {}).model;
       const items = [
-        "风格：" + (STYLE_CN[this.info.style] || this.info.style || ""),
+        "风格：" + this.styleLabel(this.info.style),
         model && "LLM：" + model,
         R.comfy_url && "ComfyUI：" + R.comfy_url,
         R.width && R.height && R.fps && "画幅：" + R.width + "×" + R.height + " @" + R.fps + "fps",
@@ -961,15 +979,73 @@
       this.renderRatio();
     },
 
+    /* 预设按钮渲染:从 STYLE_PRESETS 单一数据源生成(保留下方的「?」帮助按钮) */
+    renderStylePresets() {
+      const seg = $("manju-style");
+      if (!seg) return;
+      seg.querySelectorAll("button[data-style]").forEach((b) => b.remove());
+      const frag = document.createDocumentFragment();
+      STYLE_PRESETS.forEach(([key, label]) => {
+        const b = document.createElement("button");
+        b.className = "hrs-btn";
+        b.dataset.style = key;
+        b.textContent = label;
+        b.title = "点击选中/取消（可多选叠加组合）";
+        frag.appendChild(b);
+      });
+      seg.insertBefore(frag, $("manju-style-help"));
+    },
+
+    /* 当前 style 中选中的预设 key 集合(组合以 + 分隔;不在预设表内的段落视为自定义词) */
+    styleKeys() {
+      return new Set(String(this.style || "").split("+").map((s) => s.trim()).filter((s) => s && STYLE_CN[s] !== undefined));
+    },
+
+    /* 风格展示:预设转中文名、自定义词原样,多元素以 + 连接(卡片/chips 用) */
+    styleLabel(style) {
+      if (!style) return "";
+      return String(style).split("+").map((s) => s.trim()).filter(Boolean)
+        .map((s) => STYLE_CN[s] || s).join(" + ");
+    },
+
+    /* 风格切换:点击切换选中态(可多选叠加,至少保留一个);组合 key 以 + 分隔存 this.style */
+    toggleStyle(key, multi) {
+      const keys = this.styleKeys();
+      if (multi) {
+        if (keys.has(key)) keys.delete(key); else keys.add(key);
+        if (keys.size === 0) keys.add(key); // 至少保留一个预设
+      } else {
+        keys.clear();
+        keys.add(key);
+      }
+      this.style = [...keys].join("+");
+      this.renderStyle();
+      this.saveDraft();
+    },
+
+    /* 自定义风格叠加到当前预设:预设在前、自定义词在后;与预设重复(大小写不敏感,含中文名)及自定义词内部重复均自动过滤 */
+    combineCustom(v) {
+      const keys = this.styleKeys();
+      const parts = [...keys];
+      const seen = new Set(parts.flatMap((k) => [k.toLowerCase(), (STYLE_CN[k] || "").toLowerCase()]).filter(Boolean));
+      String(v).split(/[,+]+/).map((s) => s.trim()).filter(Boolean).forEach((s) => {
+        const lower = s.toLowerCase();
+        if (!seen.has(lower)) { seen.add(lower); parts.push(s); }
+      });
+      return parts.join("+");
+    },
+
     renderStyle() {
-      document.querySelectorAll("#manju-style button").forEach((b) =>
-        b.classList.toggle("on", b.dataset.style === this.style)
+      const keys = this.styleKeys();
+      document.querySelectorAll("#manju-style button[data-style]").forEach((b) =>
+        b.classList.toggle("on", keys.has(b.dataset.style))
       );
-      // 自定义风格：style 不是预设 key 时回填自定义输入框，否则清空
+      // 自定义风格:style 中非预设的部分回填自定义输入框(纯预设组合则清空)
       const custom = $("manju-style-custom");
       if (custom) {
-        const isPreset = !!document.querySelector('#manju-style button[data-style="' + (this.style || "") + '"]');
-        custom.value = isPreset ? "" : (this.style || "");
+        const nonPreset = String(this.style || "").split("+").map((s) => s.trim())
+          .filter((s) => s && STYLE_CN[s] === undefined);
+        custom.value = nonPreset.join("+");
       }
     },
 
@@ -1170,8 +1246,48 @@
       }).then(() => { this.poll(); }).catch((e) => this.setErr(e.message));
     },
 
-    /* 智能一条龙:一条龙 + 智能体调度(剧本复核 → 渲染 → 审片判分 → 自动返工 → 例外升级) */
+    /* 智能一条龙:先询问是否让 Agent 深度分析小说并更新渲染配置(主要是风格),再走全流程 */
     runAgent() {
+      if (!this.project) { this.setErr("请先选择项目"); return; }
+      if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
+      this.setErr("");
+      this.openModal("🤖 智能一条龙",
+        `<div class="manju-confirm">
+          <p class="mc-q">Agent 会自动检测小说内容深度分析，调整更新渲染配置参数？</p>
+          <p class="mc-d">「是」：Agent 深度分析本章节内容，自动推荐并更新渲染风格（支持预设组合，如 2.5D+水墨），随后走渲染流程；<br>「否」：按当前渲染配置直接走智能一条龙（剧本复核 → 渲染 → 审片判分 → 自动返工）。</p>
+          <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+            <button id="mc-yes" class="hrs-btn hrs-btn-primary">是</button>
+            <button id="mc-no" class="hrs-btn">否</button>
+          </div>
+        </div>`);
+      $("mc-yes").addEventListener("click", () => { this.closeModal(); this.agentStyleThenRun(); });
+      $("mc-no").addEventListener("click", () => { this.closeModal(); this.runAgentFlow(); });
+    },
+
+    /* 深度分析风格(共用):调 LLM 分析章节 → 更新渲染风格 → 返回结果(调用方决定后续动作) */
+    styleAnalyze() {
+      return post("/api/manju/agent/style", {
+        config: this.project, chapters: this.chapters, episode: this.episode, novel: this.novel,
+      }).then((r) => {
+        this.style = r.style;
+        this.renderStyle();
+        this.saveDraft();
+        return r;
+      });
+    },
+
+    /* 「是」分支:深度分析 → 更新渲染风格 → 走智能一条龙 */
+    agentStyleThenRun() {
+      $("manju-log").textContent = "(🤖 深度分析小说内容，推荐并更新渲染风格 ...)";
+      this.styleAnalyze().then((r) => {
+        $("manju-log").textContent = "(🤖 风格已更新：" + this.styleLabel(r.old) + " → " + this.styleLabel(r.style) +
+          (r.reason ? "，" + r.reason : "") + "，走渲染流程 ...)";
+        this.runAgentFlow();
+      }).catch((e) => this.setErr("深度分析失败：" + e.message));
+    },
+
+    /* 智能一条龙本体:一条龙 + 智能体调度(剧本复核 → 渲染 → 审片判分 → 自动返工 → 例外升级) */
+    runAgentFlow() {
       if (!this.project) { this.setErr("请先选择项目"); return; }
       if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
       this.setErr("");
@@ -1180,6 +1296,130 @@
         config: this.project, chapters: this.chapters, episode: this.episode,
         phase: "all", only: this.only, novel: this.novel, agent: true,
       }).then(() => { this.poll(); }).catch((e) => this.setErr(e.message));
+    },
+
+    /* ---- 项目体检:全项诊断 + 一键修复 ---- */
+    openHealth() {
+      if (!this.project) { this.setErr("请先选择项目"); return; }
+      this.openModal("🔍 项目体检", '<div class="mj-health"><div class="mj-health-load">🤖 智能体正在体检项目…</div></div>', true);
+      this.loadHealth(true, this._modalGen);
+    },
+    loadHealth(showModal, gen) {
+      const render = (items) => {
+        // 代次守卫:弹窗已被关闭/切换 → 放弃渲染,不弹回
+        if (gen !== undefined && gen !== this._modalGen) return;
+        const n = { ok: 0, warn: 0, bad: 0 };
+        items.forEach((it) => n[it.status]++);
+        const ic = { ok: "✅", warn: "⚠️", bad: "❌" };
+        const body = `<div class="mj-health">
+          <div class="mj-health-head">🤖 智能体检 · <b class="mj-hb-bad">${n.bad} 项异常</b> / <b class="mj-hb-warn">${n.warn} 项建议</b> / ${n.ok} 项正常</div>
+          <div class="mj-health-items">
+            ${items.map((it) => `
+            <div class="mj-health-item ${it.status}">
+              <div class="mj-hi-main">
+                <span class="mj-hi-ic">${ic[it.status] || "•"}</span>
+                <b>${esc(it.label)}</b>
+                <span class="mj-hi-detail">${esc(it.detail)}</span>
+              </div>
+              ${it.fixable ? `<button class="hrs-btn hrs-btn-primary mj-hi-fix" data-fix="${esc(it.key)}">一键修复</button>` : ""}
+              ${(!it.fixable && it.fixHint) ? `<span class="mj-hi-hint">${esc(it.fixHint)}</span>` : ""}
+            </div>`).join("")}
+          </div>
+          <div class="manju-meta" style="margin-top:10px">体检为本地秒查(不调用模型);「一键修复」直接写回 config.json 渲染配置。</div>
+        </div>`;
+        if (showModal) this.openModal("🔍 项目体检", body, true);
+        this._health = items;
+        this._healthFix = items.filter((it) => it.fixable && it.status !== "ok");
+        if (!showModal) this.renderAgent(); // 非弹窗模式(预热):刷新右栏面板出建议横幅
+        // 修复按钮绑定(弹窗刚生成时)
+        document.querySelectorAll("#manju-modal .mj-hi-fix").forEach((b) =>
+          b.addEventListener("click", () => this.fixHealth(b.dataset.fix, b))
+        );
+      };
+      if (showModal) {
+        get("/api/manju/agent/health?config=" + encodeURIComponent(this.project)).then((r) => render(r.items || [])).catch((e) => {
+          if (gen !== undefined && gen !== this._modalGen) return;
+          this.openModal("🔍 项目体检", '<div class="mj-health"><div class="mj-health-load">体检失败: ' + esc(e.message) + '</div></div>', true);
+        });
+      } else {
+        get("/api/manju/agent/health?config=" + encodeURIComponent(this.project)).then((r) => render(r.items || [])).catch(() => {});
+      }
+    },
+    fixHealth(key, btn) {
+      if (!this.project) return;
+      const gen = this._modalGen;   // 修复期间弹窗被关闭 → 不再刷新弹窗内容
+      if (btn) { btn.disabled = true; btn.textContent = "修复中…"; }
+      post("/api/manju/agent/health/fix", { config: this.project, key }).then((r) => {
+        this.loadHealth(true, gen);
+        this.loadProject();
+      }).catch((e) => {
+        if (btn) { btn.disabled = false; btn.textContent = "一键修复"; }
+        this.setErr("修复失败：" + e.message);
+      });
+    },
+    fixAllHealth() {
+      return get("/api/manju/agent/health?config=" + encodeURIComponent(this.project)).then((r) => {
+        const need = (r.items || []).filter((it) => it.fixable && it.status !== "ok");
+        if (!need.length) return { fixed: [] };
+        const chain = need.reduce((p, it) => p.then(() => post("/api/manju/agent/health/fix", { config: this.project, key: it.key }).catch(() => {})), Promise.resolve());
+        return chain.then(() => ({ fixed: need.map((x) => x.label) }));
+      });
+    },
+
+    /* ---- Agent 对话(自然语言指令) ---- */
+    renderChatLog() {
+      const log = $("mj-ag-chat-log");
+      if (!log) return;
+      log.innerHTML = (this._chatLog || []).map((m) =>
+        `<div class="mj-chat-bubble ${m.who}"><span class="mj-c-who">${m.who === "me" ? "你" : "🤖"}</span> ${m.html}</div>`).join("");
+      log.scrollTop = log.scrollHeight;
+    },
+    agentChat(text) {
+      if (!this.project) { this.setErr("请先选择项目"); return; }
+      if (!text.trim()) return;
+      this._chatLog = this._chatLog || [];
+      const say = (html, who) => { this._chatLog.push({ html, who }); this.renderChatLog(); };
+      say(esc(text), "me");
+      post("/api/manju/agent/chat", { config: this.project, text }).then((r) => {
+        say(r.reply ? r.reply.split("\n").map((l) => esc(l)).join("<br>") : "…", "ag");
+        if (r.action === "health") this.openHealth();
+        else if (r.action === "style") {
+          const inp = $("mj-ag-chat-input");
+          if (inp) inp.disabled = true;
+          say("🤔 我在深度分析本章内容，推荐最匹配的渲染风格…", "ag");
+          this.styleAnalyze().then((r2) => {
+            say("✅ 风格已更新：<b>" + esc(this.styleLabel(r2.old)) + "</b> → <b>" + esc(this.styleLabel(r2.style)) + "</b>" + (r2.reason ? "（" + esc(r2.reason) + "）" : ""), "ag");
+            if (inp) inp.disabled = false;
+          }).catch((e) => {
+            say("❌ " + esc(e.message), "ag");
+            if (inp) inp.disabled = false;
+          });
+        } else if (r.action === "fixall") {
+          say("🔧 正在自动处理可修复项…", "ag");
+          this.fixAllHealth().then((fr) => {
+            say(fr.fixed.length ? "✅ 已修复：" + esc(fr.fixed.join("、")) : "ℹ️ 没有可自动修复的项", "ag");
+            this.loadHealth(false);
+            this.loadProject();
+          }).catch((e) => say("❌ " + esc(e.message), "ag"));
+        }
+      }).catch((e) => say("❌ " + esc(e.message), "ag"));
+    },
+    bindChat() {
+      const send = () => {
+        const inp = $("mj-ag-chat-input");
+        if (!inp) return;
+        const v = inp.value.trim();
+        if (!v) return;
+        inp.value = "";
+        this.agentChat(v);
+      };
+      const sb = $("mj-ag-chat-send");
+      if (sb) sb.addEventListener("click", send);
+      const inp = $("mj-ag-chat-input");
+      if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+      document.querySelectorAll("#manju-agent-panel [data-chat]").forEach((b) =>
+        b.addEventListener("click", () => { const inp2 = $("mj-ag-chat-input"); if (inp2) inp2.value = b.dataset.chat; this.agentChat(b.dataset.chat); })
+      );
     },
 
     /* ---- 智能体:审片报告面板 + 升级处理 ---- */
@@ -1234,17 +1474,57 @@
     renderAgent() {
       const el = $("manju-agent-panel");
       if (!el) return;
+      // 静态区(对话/快捷指令)只在首次构造
+      if (!el.querySelector(".mj-ag-chat")) {
+        el.insertAdjacentHTML("beforeend", `
+          <div class="mj-ag-chat">
+            <div class="mj-ag-chat-log" id="mj-ag-chat-log"></div>
+            <div class="mj-ag-chat-in">
+              <input id="mj-ag-chat-input" placeholder="对智能体说…(体检 / 推荐风格 / 总结 / 修复)" spellcheck="false">
+              <button id="mj-ag-chat-send" class="hrs-btn hrs-btn-primary">➤</button>
+            </div>
+            <div class="mj-ag-chat-quick">
+              <button class="hrs-btn" data-chat="体检">🔍 体检</button>
+              <button class="hrs-btn" data-chat="推荐风格">🎨 风格</button>
+              <button class="hrs-btn" data-chat="总结">🧠 总结</button>
+              <button class="hrs-btn" data-chat="修复">🔧 修复</button>
+            </div>
+          </div>`);
+        this.bindChat();
+      }
       const ag = this.agent;
-      if (!ag || (!ag.configured && !(ag.shots || []).length && !(ag.escalations || []).length)) {
+      const mem = (ag && ag.memory) || {};
+      const lastErr = ag && ag.lastError;
+      const trend = mem.scoreTrend || [];
+      const lastPt = trend[trend.length - 1];
+      const issueTop = Object.entries(mem.issueStats || {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
+      const styleChoices = mem.styleChoices || [];
+      const styleLast = styleChoices[styleChoices.length - 1];
+      const memLines = [];
+      if (mem.runCount) memLines.push(`🏃 运行 ${mem.runCount} 次 · 审片 ${mem.judgedShots || 0} 镜 · 返工 ${mem.reworkCount || 0} 次`);
+      if (lastPt) memLines.push(`📈 最近审片均分 ${Math.round(lastPt.score)} 分(${lastPt.count} 镜)`);
+      if (issueTop.length) memLines.push(`🔁 高频问题: ${issueTop.map(([k, v]) => `${k.length > 14 ? k.slice(0, 14) + "…" : k}×${v}`).join(" / ")}`);
+      if (styleLast) memLines.push(`🎨 最近风格: ${this.styleLabel(styleLast.old)} → ${this.styleLabel(styleLast.new)}`);
+      // 主动建议横幅:点 × 后本会话不再显示(loadProject 时重置)
+      const needFix = this._healthTipDismissed ? [] : (this._healthFix || []).filter((it) => it.status !== "ok");
+      const hasData = !!(needFix.length || (ag && (ag.configured || (ag.shots || []).length || (ag.escalations || []).length ||
+        memLines.length || lastErr)));
+      if (!hasData) {
         el.classList.add("hidden");
-        el.innerHTML = "";
         return;
       }
       el.classList.remove("hidden");
-      const shots = ag.shots || [];
+      // 动态报告区(轮询重建,聊天区在面板里不受影响)
+      let body = $("mj-ag-body");
+      if (!body) {
+        body = document.createElement("div");
+        body.id = "mj-ag-body";
+        el.insertBefore(body, el.querySelector(".mj-ag-chat"));
+      }
+      const shots = (ag && ag.shots) || [];
       const pass = shots.filter((s) => s.status === "pass" || s.status === "fixed").length;
       const failed = shots.filter((s) => s.status === "failed").length;
-      const escs = ag.escalations || [];
+      const escs = (ag && ag.escalations) || [];
       const chips = shots.map((s) => {
         const cls = s.status === "pass" ? "ok" : s.status === "fixed" ? "ok fixed" : s.status === "accepted" ? "acc" : s.status === "pending" ? "pend" : "bad";
         const dims = s.dimensions || {};
@@ -1263,21 +1543,39 @@
             <button class="hrs-btn" data-esc-ignore="${e.shot}">忽略</button>
           </div>
         </div>`).join("");
-      const rv = ag.planReview;
+      const rv = ag && ag.planReview;
       const review = rv ? `<div class="mj-ag-review ${(rv.score || 0) < 60 ? "low" : ""}">📖 剧本复核 ${Math.round(rv.score || 0)} 分${(rv.issues || []).length ? " · " + esc(rv.issues[0]) : ""}</div>` : "";
-      el.innerHTML = `
+      const errCard = (lastErr && lastErr.stage && !(this.status && this.status.running)) ? `
+        <div class="mj-ag-err"><b>❌ 上次中断于「${esc(lastErr.stage)}」· 🤖 ${esc(lastErr.diagnosis || "未知错误")}</b>
+        <span>${esc(lastErr.suggestion || "")}</span></div>` : "";
+      const memCard = memLines.length ? `
+        <div class="mj-ag-mem"><div class="mj-ag-mem-t">🧠 学习档案</div>
+        <div class="mj-ag-mem-l">${memLines.map((l) => `<div>${esc(l)}</div>`).join("")}</div></div>` : "";
+      const tipCard = needFix.length ? `
+        <div class="mj-ag-tip" id="mj-ag-tip">
+          <span class="mj-tip-t">💡 体检发现 ${needFix.length} 项可优化: ${needFix.map((x) => esc(x.label)).join("、")}</span>
+          <span class="mj-tip-acts"><button class="hrs-btn hrs-btn-primary" id="mj-tip-open">查看并修复</button><button class="hrs-btn" id="mj-tip-x">×</button></span>
+        </div>` : "";
+      body.innerHTML = `
+        ${errCard}
+        ${memCard}
+        ${tipCard}
         <div class="mj-ag-head">
           <span class="mj-ag-title">🤖 审片报告</span>
-          <span class="mj-ag-meta">${ag.visionModel ? esc(ag.visionModel) : "未配置视觉模型"} · 及格 ${Math.round(ag.passScore || 75)} · 返工≤${ag.maxRetries == null ? 2 : ag.maxRetries}</span>
+          <span class="mj-ag-meta">${ag ? (esc(ag.visionModel) || "未配置视觉模型") : "未运行"}${ag ? " · 及格 " + Math.round(ag.passScore || 75) + " · 返工≤" + (ag.maxRetries == null ? 2 : ag.maxRetries) : ""}</span>
         </div>
         ${review}
         <div class="mj-ag-summary">${pass} 通过 / ${failed} 待处理${escs.length ? ` / <b class="mj-ag-esc-n">${escs.length} 待拍板</b>` : ""}</div>
         <div class="mj-ag-chips">${chips}</div>
         ${escs.length ? `<div class="mj-ag-escs">${escCards}</div>` : ""}
-        ${!ag.visionModel ? `<div class="mj-ag-hint">⚙️ 设置 → 智能体：填写视觉模型后启用逐镜判分（未配置时仅机械质检与升级）</div>` : ""}`;
-      el.querySelectorAll("[data-esc-retry]").forEach((b) => b.addEventListener("click", () => this.resolveEsc(parseInt(b.dataset.escRetry, 10), "retry")));
-      el.querySelectorAll("[data-esc-ignore]").forEach((b) => b.addEventListener("click", () => this.resolveEsc(parseInt(b.dataset.escIgnore, 10), "ignore")));
-      el.querySelectorAll(".mj-ag-chip").forEach((c) => c.addEventListener("click", () => this.rejudge(parseInt(c.dataset.shot, 10))));
+        ${ag && !ag.visionModel ? `<div class="mj-ag-hint">⚙️ 设置 → 智能体：填写视觉模型后启用逐镜判分（未配置时仅机械质检与升级）</div>` : ""}`;
+      body.querySelectorAll("[data-esc-retry]").forEach((b) => b.addEventListener("click", () => this.resolveEsc(parseInt(b.dataset.escRetry, 10), "retry")));
+      body.querySelectorAll("[data-esc-ignore]").forEach((b) => b.addEventListener("click", () => this.resolveEsc(parseInt(b.dataset.escIgnore, 10), "ignore")));
+      body.querySelectorAll(".mj-ag-chip").forEach((c) => c.addEventListener("click", () => this.rejudge(parseInt(c.dataset.shot, 10))));
+      const open = body.querySelector("#mj-tip-open");
+      if (open) open.addEventListener("click", () => this.openHealth());
+      const x = body.querySelector("#mj-tip-x");
+      if (x) x.addEventListener("click", () => { this._healthTipDismissed = true; this.renderAgent(); });
     },
 
     doEnv() {
@@ -1729,14 +2027,15 @@
         ["3d-animation-short-generator.gif", "3D 动画短片", "预设:3D CG"],
         ["handdrawn-live-video-generator.gif", "手绘真人实拍", "预设:手绘"],
         ["papercraft-stop-motion-explainer.gif", "纸艺定格动画", "预设:纸艺"],
-        ["paper-collage-explainer.gif", "纸片拼贴讲解", "预设:纸艺/粘土"],
+        ["paper-collage-explainer-generator.gif", "纸片拼贴讲解", "预设:纸艺/粘土"],
         ["music-video-subtitle-generator.gif", "MV 字幕视频", "预设:2.5D 动漫"],
         ["brand-promo-video-generator.gif", "品牌宣传大片", "预设:写实"],
         ["co-op-game-intro-generator.gif", "游戏开场 CG", "预设:3D CG/二次元"],
         ["minimalist-product-ad-generator.gif", "极简产品广告", "预设:写实"],
       ];
       this.openModal("风格预览 · MiniMax H3 官方示例",
-        `<div class="manju-style-grid">
+        `<div class="manju-style-cur" id="manju-style-cur"><span class="msc-k">当前风格</span><b>${esc(this.styleLabel(this.style))}</b><span class="msc-load">（解析中…）</span></div>
+        <div class="manju-style-grid">
           ${S.map(([f, name, tag]) => `
           <div class="manju-style-card">
             <div class="manju-style-gif"><img src="/assets/styles/${f}" alt="${name}" loading="lazy"></div>
@@ -1744,7 +2043,21 @@
             <div class="manju-style-tag">${tag}</div>
           </div>`).join("")}
         </div>
-        <div class="manju-meta" style="margin-top:10px">示例动图来自 MiniMax H3 官方技能仓库(本地化展示);默认 8 预设为其提示词级风格映射,自定义风格可输英文描述。</div>`, true);
+        <div class="manju-meta" style="margin-top:10px">示例动图来自 MiniMax H3 官方技能仓库(本地化展示);默认 8 预设为其提示词级风格映射,<b>可多选叠加</b>(点击预设即选中、再点取消,可组合多个如 2.5D+水墨),也可输自定义英文描述(点「应用」叠加到预设,重复词自动过滤)。</div>`, true);
+      this.loadStyleDetail();
+    },
+
+    /* 拉取当前风格的解析措辞(定妆照/场景图、Ref2VA 开头、空镜 [Shot 1]),填充「?」弹窗详细说明 */
+    loadStyleDetail() {
+      const el = $("manju-style-cur");
+      if (!el) return;
+      get("/api/manju/style?style=" + encodeURIComponent(this.style || "2.5d")).then((r) => {
+        if (!el) return;
+        if (!r || !r.asset) { el.innerHTML = "当前风格解析失败"; return; }
+        const rows = [["定妆照/场景图", r.asset], ["Ref2VA 开头", r.opening], ["空镜 [Shot 1]", r.shot1]]
+          .map(([k, v]) => `<div class="msc-row"><span class="msc-k">${k}</span><code>${esc(v)}</code></div>`).join("");
+        el.innerHTML = `<div class="msc-name">当前风格：<b>${esc(this.styleLabel(r.style))}</b></div>${rows}`;
+      }).catch(() => { if (el) el.innerHTML = "当前风格解析失败"; });
     },
     previewImage(path, name) {
       // 收集当前文档所有可预览图片(按 DOM 顺序),定位当前图索引
@@ -1803,6 +2116,9 @@
     /* ---- 弹窗 ---- */
     openModal(title, bodyHtml, wide) {
       if (!this._bound) this.bind();   // 自愈:任何页面(未进漫剧页)调用弹窗都先绑定关闭/遮罩/Esc
+      // 代次守卫:任何开/关弹窗都会使挂起的异步渲染(设置/体检)失效,
+      // 防止"请求完成时弹窗已被关闭 → 又弹回来"的关闭失效竞态
+      this._modalGen = (this._modalGen || 0) + 1;
       $("manju-modal-title").textContent = title;
       $("manju-modal-body").innerHTML = bodyHtml;
       const panel = document.querySelector("#manju-modal .manju-modal-panel");
@@ -1810,6 +2126,7 @@
       $("manju-modal").classList.remove("hidden");
     },
     closeModal() {
+      this._modalGen = (this._modalGen || 0) + 1;   // 关闭即作废所有挂起的异步渲染
       if (this._pvKey) {
         document.removeEventListener("keydown", this._pvKey);
         this._pvKey = null;

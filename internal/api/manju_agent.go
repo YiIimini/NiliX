@@ -94,6 +94,42 @@ type manjuAgentPlanReview struct {
 	At          int64    `json:"at"`
 }
 
+// manjuStyleChoice 一次风格更新记忆
+type manjuStyleChoice struct {
+	At     int64  `json:"at"`
+	Old    string `json:"old"`
+	New    string `json:"new"`
+	Reason string `json:"reason"`
+}
+
+// manjuScorePoint 一轮审片的均分节点(分数趋势)
+type manjuScorePoint struct {
+	Episode string  `json:"episode"`
+	Score   float64 `json:"score"`
+	Count   int     `json:"count"`
+	At      int64   `json:"at"`
+}
+
+// manjuAgentMemory 智能体跨次运行的学习记忆
+type manjuAgentMemory struct {
+	RunCount    int                `json:"runCount"`
+	JudgedShots int                `json:"judgedShots"`
+	ReworkCount int                `json:"reworkCount"`
+	IssueStats  map[string]int     `json:"issueStats,omitempty"`
+	ScoreTrend  []manjuScorePoint  `json:"scoreTrend,omitempty"`
+	StyleChoices []manjuStyleChoice `json:"styleChoices,omitempty"`
+	LastRunAt   int64              `json:"lastRunAt"`
+}
+
+// manjuAgentError 阶段失败诊断记录
+type manjuAgentError struct {
+	Stage      string `json:"stage"`
+	Message    string `json:"message"`
+	Diagnosis  string `json:"diagnosis"`
+	Suggestion string `json:"suggestion"`
+	At         int64  `json:"at"`
+}
+
 type manjuAgentState struct {
 	Episode     string                     `json:"episode"`
 	PassScore   float64                    `json:"passScore"`
@@ -102,6 +138,8 @@ type manjuAgentState struct {
 	PlanReview  *manjuAgentPlanReview      `json:"planReview,omitempty"`
 	Shots       map[string]*agent.Judgment `json:"shots"` // 镜头ID → 最新结论(当前集)
 	Escalations []manjuAgentEscalation     `json:"escalations,omitempty"`
+	Memory      manjuAgentMemory           `json:"memory,omitempty"`  // 学习记忆(跨次运行)
+	LastError   *manjuAgentError           `json:"lastError,omitempty"` // 最近一次阶段失败诊断
 	UpdatedAt   int64                      `json:"updatedAt"`
 }
 
@@ -125,6 +163,15 @@ func loadAgentStateLocked(project string) *manjuAgentState {
 	}
 	if st.Shots == nil {
 		st.Shots = map[string]*agent.Judgment{}
+	}
+	if st.Memory.IssueStats == nil {
+		st.Memory.IssueStats = map[string]int{}
+	}
+	if st.Memory.ScoreTrend == nil {
+		st.Memory.ScoreTrend = []manjuScorePoint{}
+	}
+	if st.Memory.StyleChoices == nil {
+		st.Memory.StyleChoices = []manjuStyleChoice{}
 	}
 	return st
 }
@@ -190,6 +237,8 @@ func agentStatusSummary(configPath string) map[string]any {
 	}
 	out["escalations"] = esc
 	out["escalationCount"] = len(esc)
+	out["memory"] = st.Memory
+	out["lastError"] = st.LastError
 	return out
 }
 
@@ -203,6 +252,13 @@ func manjuAgentPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
 	if phase != "all" {
 		stages = []string{phase}
 	}
+	// 学习记忆:记录本次运行
+	manjuAgentMu.Lock()
+	st0 := loadAgentStateLocked(ctx.project)
+	st0.Memory.RunCount++
+	st0.Memory.LastRunAt = time.Now().Unix()
+	saveAgentStateLocked(ctx.project, st0)
+	manjuAgentMu.Unlock()
 	for _, st := range stages {
 		if lg.stopped() {
 			lg.logf("⏹ 任务已被手动停止。已完成产物保留,可直接再点同按钮续跑。")
@@ -229,6 +285,14 @@ func manjuAgentPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
 		}
 		if err != nil {
 			lg.logf("❌ 阶段 " + st + " 失败: " + err.Error())
+			// 智能诊断:识别错误模式,结论与建议落 agent_state 供工作台展示
+			diag, sugg := manjuDiagnoseError(st, err)
+			lg.logf("🤖 智能诊断[" + diag + "]: " + sugg)
+			manjuAgentMu.Lock()
+			ste := loadAgentStateLocked(ctx.project)
+			ste.LastError = &manjuAgentError{Stage: st, Message: err.Error(), Diagnosis: diag, Suggestion: sugg, At: time.Now().Unix()}
+			saveAgentStateLocked(ctx.project, ste)
+			manjuAgentMu.Unlock()
 			return 1
 		}
 	}
@@ -274,6 +338,152 @@ func agentPlanReview(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) {
 	if score < 60 {
 		manjuNotifySend(fmt.Sprintf("漫剧《%s》%s · 📖 剧本复核 %.0f 分偏低,建议先看工作台审片报告再继续渲染", ctx.project, ctx.episode, score))
 	}
+}
+
+// ---- 深度分析:小说内容 → 推荐并更新渲染风格 ----
+
+// manjuStyleCN 中文风格叫法 → 预设 key(LLM 可能输出中文名,映射保证落库合法;key 已去空格小写)
+var manjuStyleCN = map[string]string{
+	"2.5d动漫": "2.5d", "动漫": "2.5d", "2.5d半写实": "2.5d",
+	"写实": "real", "真人": "real", "实拍": "real", "真人实拍": "real", "电影感": "real",
+	"3dcg": "3d", "3d动画": "3d", "三维": "3d", "三维cg": "3d",
+	"二次元": "anime", "日漫": "anime", "日系": "anime", "动漫插画": "anime",
+	"手绘": "handdrawn", "手绘插画": "handdrawn", "插画": "handdrawn",
+	"纸艺": "papercraft", "剪纸": "papercraft", "纸片拼贴": "papercraft", "拼贴": "papercraft",
+	"粘土": "clay", "黏土": "clay", "泥塑": "clay", "橡皮泥": "clay",
+	"水墨": "ink", "水墨画": "ink", "国画": "ink", "写意": "ink",
+}
+
+// manjuStyleCNEN 中文风格词 → 英文自定义措辞(不进预设,原样拼入提示词)
+var manjuStyleCNEN = map[string]string{
+	"赛博朋克": "cyberpunk", "蒸汽朋克": "steampunk", "水彩": "watercolor", "水彩画": "watercolor",
+	"像素": "pixel art", "像素风": "pixel art", "油画": "oil painting",
+	"科幻": "sci-fi", "古风": "ancient Chinese aesthetic", "国潮": "Chinese retro wave",
+	"暗黑": "dark fantasy", "哥特": "gothic", "浮世绘": "ukiyo-e", "版画": "woodblock print",
+	"蜡笔": "crayon", "素描": "sketch", "铅笔": "pencil sketch", "胶片": "film grain", "复古": "vintage",
+}
+
+// isASCIIWord 是否为纯英文自定义词(含空格/-/. 等,长度受限;中文会被滤掉防污染英文提示词)
+func isASCIIWord(s string) bool {
+	if s == "" || len(s) > 60 {
+		return false
+	}
+	for _, r := range s {
+		if r >= 128 {
+			return false
+		}
+	}
+	return true
+}
+
+// manjuNormalizeStyle 把 LLM 返回的风格描述规整为合法 style(预设 key / key+key 组合 / 英文自定义词):
+// 预设 key 大小写不敏感、中文叫法映射到 key、中文风格词转英文措辞、非法片段丢弃。
+func manjuNormalizeStyle(raw string) (string, string) {
+	notes := []string{}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, t := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '+' || r == '、' || r == '/' || r == '|' || r == '，' }) {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		key := ""
+		low := strings.ToLower(t)
+		flat := strings.ReplaceAll(low, " ", "")
+		if _, ok := manjuStyles[low]; ok {
+			key = low // 预设 key(大小写不敏感)
+		} else if k, ok := manjuStyleCN[flat]; ok {
+			key = k // 中文叫法 → 预设 key
+		} else if k, ok := manjuStyleCNEN[flat]; ok {
+			key = k // 中文风格词 → 英文措辞
+		} else if isASCIIWord(t) {
+			key = t // 英文自定义词原样保留
+		} else {
+			notes = append(notes, t+"(已忽略)")
+			continue
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, key)
+	}
+	return strings.Join(out, "+"), strings.Join(notes, "; ")
+}
+
+// manjuAgentStyleAnalyze 深度分析小说章节 → LLM 推荐渲染风格 → 写入 config.json(主要调整风格项)。
+// 返回旧/新风格与推荐理由,由前端决定是否继续走智能一条龙。
+func manjuAgentStyleAnalyze(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	configPath := str(body["config"])
+	if configPath == "" {
+		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+		return
+	}
+	ctx, err := newManjuCtx(configPath, str(body["episode"]), str(body["chapters"]), "", str(body["novel"]))
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		return
+	}
+	if ctx.llm == nil || ctx.llm.apiKey == "" {
+		http.Error(w, `{"error":"未配置 LLM(设置 → 智能体),无法深度分析"}`, http.StatusBadRequest)
+		return
+	}
+	text, err := ctx.chapterText()
+	if err != nil {
+		http.Error(w, `{"error":"读小说失败: `+err.Error()+`"}`, http.StatusBadRequest)
+		return
+	}
+	if len([]rune(text)) < 200 {
+		http.Error(w, `{"error":"小说内容太少,无法深度分析"}`, http.StatusBadRequest)
+		return
+	}
+	old := str(ctx.cfg["style"])
+	sys := `你是漫剧(竖屏短剧)渲染风格分析师,根据小说章节内容判断最匹配的渲染风格。
+【分析要点】题材类型(古装/现代/玄幻/科幻/都市/悬疑…)、叙事基调(热血/治愈/暗黑/甜宠…)、场景与美术特征、目标观众画风偏好。
+【输出 JSON(严格)】{"style": "...", "reason": "..."}
+style 取值规则:
+- 单个预设 key: 2.5d(2.5D动漫半写实) / real(写实真人电影) / 3d(3D CG) / anime(二次元) / handdrawn(手绘) / papercraft(纸艺) / clay(粘土) / ink(水墨)
+- 或多个预设组合,用 + 连接(如 2.5d+ink,最多 3 个,语义冲突的组合不要)
+- 或简短英文风格描述(≤6 个单词),如 cyberpunk / watercolor, light novel
+reason: 不超过 100 字中文,说明题材/基调与所选风格的匹配理由。`
+	user := "当前渲染风格: " + old + "\n需渲染章节: " + ctx.chapters + " / 集 " + ctx.episode + "\n\n小说章节内容(节选):\n" + truncate(text, 12000)
+	out, err := ctx.llm.chatJSON(sys, user, 0.3)
+	if err != nil {
+		http.Error(w, `{"error":"深度分析失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+		return
+	}
+	style, notes := manjuNormalizeStyle(str(out["style"]))
+	if style == "" {
+		http.Error(w, `{"error":"模型未给出有效风格,请重试或选择「否」按当前配置运行"}`, http.StatusInternalServerError)
+		return
+	}
+	reason := str(out["reason"])
+	if notes != "" {
+		if reason != "" {
+			reason += ";"
+		}
+		reason += notes
+	}
+	ctx.cfg["style"] = style
+	if err := writeManjuConfig(configPath, ctx.cfg); err != nil {
+		http.Error(w, `{"error":"写入渲染配置失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+		return
+	}
+	// 学习记忆:记录风格选择(保留最近 10 次)
+	manjuAgentMu.Lock()
+	stc := loadAgentStateLocked(ctx.project)
+	stc.Memory.StyleChoices = append(stc.Memory.StyleChoices, manjuStyleChoice{At: time.Now().Unix(), Old: old, New: style, Reason: reason})
+	if len(stc.Memory.StyleChoices) > 10 {
+		stc.Memory.StyleChoices = stc.Memory.StyleChoices[len(stc.Memory.StyleChoices)-10:]
+	}
+	saveAgentStateLocked(ctx.project, stc)
+	manjuAgentMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "style": style, "old": old, "reason": reason})
 }
 
 // ---- 机械质检(JSON 报告) ----
@@ -663,6 +873,50 @@ func agentJudgeAndRework(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	} else {
 		lg.logf("🎉 审片全部通过")
 	}
+	// 学习记忆:本轮判分 → 高频问题统计 + 均分趋势 + 返工次数
+	manjuAgentMu.Lock()
+	stm := loadAgentStateLocked(ctx.project)
+	stm.Memory.ReworkCount += round
+	total, cnt := 0.0, 0
+	for _, j := range stm.Shots {
+		if j.Score > 0 {
+			total += j.Score
+			cnt++
+		}
+		for _, is := range j.Issues {
+			is = strings.TrimSpace(is)
+			if is != "" {
+				stm.Memory.IssueStats[is]++
+			}
+		}
+	}
+	if cnt > 0 {
+		stm.Memory.ScoreTrend = append(stm.Memory.ScoreTrend, manjuScorePoint{
+			Episode: ctx.episode, Score: total / float64(cnt), Count: cnt, At: time.Now().Unix()})
+		if len(stm.Memory.ScoreTrend) > 30 {
+			stm.Memory.ScoreTrend = stm.Memory.ScoreTrend[len(stm.Memory.ScoreTrend)-30:]
+		}
+		stm.Memory.JudgedShots += cnt
+	}
+	// IssueStats 防膨胀:只保留 top 60
+	if len(stm.Memory.IssueStats) > 60 {
+		type kv struct{ k string; v int }
+		var arr []kv
+		for k, v := range stm.Memory.IssueStats {
+			arr = append(arr, kv{k, v})
+		}
+		sort.Slice(arr, func(i, j int) bool { return arr[i].v > arr[j].v })
+		nw := map[string]int{}
+		for i, it := range arr {
+			if i >= 60 {
+				break
+			}
+			nw[it.k] = it.v
+		}
+		stm.Memory.IssueStats = nw
+	}
+	saveAgentStateLocked(ctx.project, stm)
+	manjuAgentMu.Unlock()
 	return nil
 }
 
@@ -867,6 +1121,12 @@ func resolveEscalation(project, episode string, shotID int, action string) {
 // ---- HTTP 端点 ----
 
 func registerAgentRoutes(mux *http.ServeMux) {
+	// 深度分析小说内容 → 推荐并更新渲染风格(智能一条龙「是」分支)
+	mux.HandleFunc("POST /api/manju/agent/style", manjuAgentStyleAnalyze)
+	// 项目体检 / 一键修复 / 自然语言指令
+	mux.HandleFunc("GET /api/manju/agent/health", manjuHealth)
+	mux.HandleFunc("POST /api/manju/agent/health/fix", manjuHealthFix)
+	mux.HandleFunc("POST /api/manju/agent/chat", manjuAgentChat)
 	// 审片状态 + 配置读取(key 打码)
 	mux.HandleFunc("GET /api/manju/agent", func(w http.ResponseWriter, r *http.Request) {
 		configPath := r.URL.Query().Get("config")

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,7 +30,26 @@ var (
 	harnessTitleRe = regexp.MustCompile(`(?is)<title[^>]*>\s*([^<]*?)\s*</title>`)
 )
 
-// ServiceStatus 服务状态（含进程与日志信息）。
+// comfyParams 启动参数单一数据源:启动时由 main 用 settings.json 注入,
+// HUD 卡片 / Comfy 页面 / 实际启动命令共用同一份,保证同步。
+var comfyParams = struct {
+	url, in, out string
+}{url: comfyURL, in: "", out: ""}
+
+// SetComfyParams 由 main 在加载 settings.json 后调用,统一注入 ComfyUI 启动参数。
+func SetComfyParams(url, inputDir, outputDir string) {
+	if url != "" {
+		comfyParams.url = url
+	}
+	if inputDir != "" {
+		comfyParams.in = inputDir
+	}
+	if outputDir != "" {
+		comfyParams.out = outputDir
+	}
+}
+
+// ServiceStatus 服务状态（含进程、日志与启动参数信息）。
 type ServiceStatus struct {
 	Online  bool   `json:"online"`
 	Title   string `json:"title"`
@@ -38,6 +58,19 @@ type ServiceStatus struct {
 	LogPath string `json:"logPath"`
 	LogTail string `json:"logTail"`
 	Err     string `json:"err"`
+	// Startup 启动参数(与 HUD/Comfy 页面展示共用,保证同步)
+	Startup StartupInfo `json:"startup"`
+}
+
+// StartupInfo 当前生效的 ComfyUI 启动参数。
+type StartupInfo struct {
+	URL     string `json:"url"`
+	Root    string `json:"root"`
+	Shared  string `json:"shared"`
+	Input   string `json:"input"`
+	Output  string `json:"output"`
+	Python  string `json:"python"`
+	Port    string `json:"port"`
 }
 
 func findPortPID(port string) int {
@@ -76,13 +109,13 @@ func tailFile(path string) string {
 
 func probeComfy() ServiceStatus {
 	client := http.Client{Timeout: 900 * time.Millisecond}
-	resp, err := client.Get(comfyURL + "/")
+	resp, err := client.Get(comfyParams.url + "/")
 	if err != nil {
-		return ServiceStatus{Online: false, Err: "offline", LogPath: comfyLogPath, LogTail: comfyLogTail()}
+		return ServiceStatus{Online: false, Err: "offline", LogPath: comfyLogPath, LogTail: comfyLogTail(), Startup: currentStartup()}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return ServiceStatus{Online: false, Err: "http " + http.StatusText(resp.StatusCode), LogPath: comfyLogPath, LogTail: comfyLogTail()}
+		return ServiceStatus{Online: false, Err: "http " + http.StatusText(resp.StatusCode), LogPath: comfyLogPath, LogTail: comfyLogTail(), Startup: currentStartup()}
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	title := ""
@@ -90,8 +123,33 @@ func probeComfy() ServiceStatus {
 		title = strings.TrimSpace(string(m[1]))
 	}
 	return ServiceStatus{
-		Online: true, Title: title, URL: comfyURL, Pid: findPortPID("8190"),
-		LogPath: comfyLogPath, LogTail: comfyLogTail(),
+		Online: true, Title: title, URL: comfyParams.url, Pid: findPortPID(currentPort()),
+		LogPath: comfyLogPath, LogTail: comfyLogTail(), Startup: currentStartup(),
+	}
+}
+
+// currentPort 从生效的 comfy_url 解析端口(默认 8190)。
+func currentPort() string {
+	u, err := neturl.Parse(comfyParams.url)
+	if err != nil || u.Port() == "" {
+		return "8190"
+	}
+	return u.Port()
+}
+
+// currentStartup 汇总当前生效的启动参数(供 HUD / Comfy 页面展示,单一数据源)。
+func currentStartup() StartupInfo {
+	in, out := comfyParams.in, comfyParams.out
+	if in == "" {
+		in = filepath.Join(comfyShared, "input")
+	}
+	if out == "" {
+		out = filepath.Join(comfyShared, "output")
+	}
+	return StartupInfo{
+		URL: comfyParams.url, Root: comfyRoot, Shared: comfyShared,
+		Input: in, Output: out, Python: filepath.Join(comfyRoot, ".venv", "Scripts", "python.exe"),
+		Port: currentPort(),
 	}
 }
 
@@ -100,17 +158,27 @@ func startComfy() error {
 	if _, err := os.Stat(py); err != nil {
 		return err
 	}
+	in, out := comfyParams.in, comfyParams.out
+	if in == "" {
+		in = filepath.Join(comfyShared, "input")
+	}
+	if out == "" {
+		out = filepath.Join(comfyShared, "output")
+	}
 	args := []string{
 		filepath.Join(comfyRoot, "main.py"),
 		"--listen", "127.0.0.1",
-		"--port", "8190",
+		"--port", currentPort(),
 		"--disable-auto-launch",
-		"--output-directory", filepath.Join(comfyShared, "output"),
-		"--input-directory", filepath.Join(comfyShared, "input"),
+		"--output-directory", out,
+		"--input-directory", in,
 	}
 	cmd := exec.Command(py, args...)
 	cmd.Dir = comfyRoot
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	// 中文 Windows 默认 ANSI 编码(GBK):重定向 stdout 后 Python 打印 emoji 会抛
+	// UnicodeEncodeError 直接崩溃(实测 ComfyUI 启动秒死、日志全空的根因)。强制 UTF-8。
+	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUNBUFFERED=1")
 	f, err := os.OpenFile(comfyLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return err

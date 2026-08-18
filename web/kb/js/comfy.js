@@ -23,7 +23,7 @@ const ComfyView = {
     $("cfy-start-big").addEventListener("click", () => this.startService());
     $("cfy-stop").addEventListener("click", () => this.stopService());
     $("cfy-open").addEventListener("click", () => {
-      if (this.online) window.open(this.COMFY_URL, "_blank");
+      if (this.online) window.open(this.comfyUrl(), "_blank");
     });
     $("cfy-log-btn").addEventListener("click", () => this.toggleLog());
     // 内嵌页面加载完成(或失败)后收起加载占位
@@ -97,6 +97,12 @@ const ComfyView = {
     const online = !!d.online;
     const becameOnline = online && !this.online;
     this.online = online;
+    // 启动参数单一数据源:以服务端返回为准(HUD 卡片与本站共用,改 settings.json 即同步)
+    if (d.startup && d.startup.url) {
+      this._url = d.startup.url;
+      const offSub = document.querySelector("#cfy-offline .hrs-off-s");
+      if (offSub) offSub.textContent = I18N.t("comfy.offlineSub") + "（" + d.startup.url + "）";
+    }
 
     const dot = document.querySelector("#view-comfy .hrs-dot");
     const txt = document.getElementById("cfy-txt");
@@ -125,7 +131,7 @@ const ComfyView = {
     if (online && (!this.frameLoaded || becameOnline)) {
       this.frameLoaded = true;
       this.frameReady = false;
-      frame.src = this.COMFY_URL + "/";
+      frame.src = this.comfyUrl() + "/";
       if (loading) loading.classList.remove("hidden");
     }
     // 操作完成:启动/停止状态机复位
@@ -137,6 +143,8 @@ const ComfyView = {
       this.renderLog();
     }
   },
+
+  comfyUrl() { return this._url || this.COMFY_URL; },
 
   /* 启动服务,轮询直至就绪;失败显示错误行 */
   async startService() {

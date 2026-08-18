@@ -609,7 +609,7 @@ class DirView {
 
         <div class="nv-sec">
           <div class="nv-sec-t">📝 项目信息
-            <span class="nv-tip" data-tip="创作流程:填书名(可留空自动)/题材/风格/章节数 → 立项生成设定集与逐章大纲 → 逐章生成(每章≥1280字,7章一卷) → 自动连写全本,完成后书架直接阅读。若书名已存在创作中项目,自动进入续写模式。">?</span>
+            <span class="nv-tip" data-tip="创作流程:填书名(可留空自动)/题材/风格/章节数 → 可先点「🧠 AI 策划」做立项分析(题材定位/卖点/风格建议/开篇钩子,一键采用风格)→ 立项生成设定集与逐章大纲 → 逐章生成(每章≥1280字,7章一卷) → 自动连写全本。已写章节可点章节块「AI 审稿」(8 维评分+问题+建议,进创作档案)。若书名已存在创作中项目,自动进入续写模式。">?</span>
           </div>
           <div class="nv-form">
             <div class="nv-row"><label>书名</label><input id="nv-title" class="manju-input" placeholder="如:吞天废子" spellcheck="false"></div>
@@ -624,9 +624,11 @@ class DirView {
         <div class="nv-sec">
           <div class="nv-sec-t">🚀 生成控制</div>
           <div class="nv-actions nv-center">
+            <button id="nv-analyze" class="hrs-btn" title="🤖 立项前 AI 策划分析：题材定位/目标读者/卖点/风格建议/开篇钩子/风险提醒，纯分析不改文件">🧠 AI 策划</button>
             <button id="nv-start" class="hrs-btn hrs-btn-primary">🚀 立项生成大纲</button>
             <span class="nv-status" id="nv-status"></span>
           </div>
+          <div id="nv-analysis" class="nv-analysis hidden"></div>
         </div>
 
         <div id="nv-work" class="nv-sec nv-work hidden">
@@ -641,10 +643,12 @@ class DirView {
             <span class="nv-status" id="nv-progress"></span>
           </div>
           <div class="nv-state" id="nv-state">准备就绪,点击上方按钮开始写作</div>
+          <div id="nv-review" class="nv-review hidden"></div>
           <div id="nv-chapters" class="nv-chapters"></div>
         </div>
       </div>`);
     $("nv-start").addEventListener("click", () => this.nvCreate());
+    $("nv-analyze").addEventListener("click", () => this.nvAnalyze());
     $("nv-next").addEventListener("click", () => this.nvChapter(false));
     $("nv-auto").addEventListener("click", () => this.nvChapter(true));
     $("nv-stop").addEventListener("click", () => {
@@ -734,6 +738,7 @@ class DirView {
       const r = await fetch("/api/novel/progress?title=" + encodeURIComponent(this._nvTitle));
       const j = await r.json();
       this._nvDone = new Set((j.chapters || []).map((c) => c.no));
+      this._nvReviews = (j.state && j.state.Reviews) || {};
       this._nvTotal = this._nvTotal || Math.max(56, (j.chapters || []).length + 1);
       const box = $("nv-chapters");
       if (!box) return;
@@ -741,12 +746,22 @@ class DirView {
       const cur = this._nvCur || 0;
       for (let n = 1; n <= this._nvTotal; n++) {
         const done = this._nvDone.has(n);
+        const rv = this._nvReviews[n];
         const act = n === cur;
-        html += `<span class="nv-ch ${done ? "done" : ""} ${act ? "act" : ""}" title="第 ${n} 章">${done ? "✓" : n}</span>`;
+        const tip = done
+          ? (rv ? `第${n}章 · 审稿 ${Math.round(rv.score)} 分${rv.issues && rv.issues[0] ? " · " + rv.issues[0] : ""}(点此重审)` : `第${n}章 · 点击 AI 审稿(8 维评分)`)
+          : `第 ${n} 章(未写)`;
+        html += `<span class="nv-ch ${done ? "done" : ""} ${rv ? "rev" : ""} ${act ? "act" : ""}" data-rev="${done ? n : ""}" title="${tip}">${done ? (rv ? Math.round(rv.score) : "✓") : n}</span>`;
       }
       box.innerHTML = html;
+      box.querySelectorAll("[data-rev]").forEach((c) =>
+        c.addEventListener("click", () => this.nvReview(parseInt(c.dataset.rev, 10)))
+      );
+      // 创作档案:已审章节数 / 均分 / 高频问题
+      const rs = j.reviewSummary || {};
+      const archive = rs.count ? ` · 🧠 已评 ${rs.count} 章均分 ${Math.round(rs.avg)}${rs.topIssue ? "(高频:" + rs.topIssue + ")" : ""}` : "";
       const p = $("nv-progress");
-      if (p) p.textContent = `已写 ${this._nvDone.size} / ${this._nvTotal} 章`;
+      if (p) p.textContent = `已写 ${this._nvDone.size} / ${this._nvTotal} 章${archive}`;
       const bar = $("nv-bar"), pct = $("nv-percent");
       if (bar && this._nvTotal) {
         const v = Math.round(this._nvDone.size / this._nvTotal * 100);
@@ -754,6 +769,61 @@ class DirView {
         if (pct) pct.textContent = v + "%";
       }
     } catch (e) { /* 忽略 */ }
+  }
+
+  /* 立项前 AI 策划分析:题材定位/卖点/风格建议/开篇钩子/风险,展示分析卡(不改文件) */
+  async nvAnalyze() {
+    const box = $("nv-analysis");
+    if (!box) return;
+    box.classList.remove("hidden");
+    box.innerHTML = '<div class="nv-state busy">🤖 策划分析中(约 10-30s)…</div>';
+    try {
+      const r = await fetch("/api/novel/analyze", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ genre: ($("nv-genre").value || "").trim(), style: ($("nv-style").value || "").trim() }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+      const p = j.plan || {};
+      const rows = [["🎯 题材定位", p.position], ["💎 核心卖点", p.selling], ["🎨 风格建议", p.style_advice], ["🪝 开篇钩子", p.hook], ["⚠️ 风险提醒", p.risk]];
+      box.innerHTML = `
+        <div class="nv-analyze-t">🤖 AI 策划分析</div>
+        ${rows.map(([k, v]) => v ? `<div class="nv-analyze-row"><span>${k}</span>${this.escapeHtml(v)}</div>` : "").join("")}
+        ${p.style_advice ? `<div class="nv-actions" style="margin-top:8px"><button id="nv-analyze-use" class="hrs-btn hrs-btn-primary">采用风格建议</button></div>` : ""}`;
+      const use = $("nv-analyze-use");
+      if (use) use.addEventListener("click", () => {
+        $("nv-style").value = String(p.style_advice || "").trim();
+        use.textContent = "✅ 已采用";
+      });
+    } catch (e) {
+      box.innerHTML = `<div class="nv-state">❌ 策划分析失败: ${this.escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  /* 章节 AI 审稿:8 维评分 + 问题清单 + 修改建议,结论进创作档案 */
+  async nvReview(no) {
+    const box = $("nv-review");
+    if (!box || !this._nvTitle) return;
+    box.classList.remove("hidden");
+    box.innerHTML = '<div class="nv-state busy">🤖 审稿中(8 维评分,约 10-30s)…</div>';
+    try {
+      const r = await fetch("/api/novel/review", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: this._nvTitle, no }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+      const rv = j.review || {};
+      const dims = rv.dims || {};
+      const D = [["开篇暴击", "opening"], ["冲突张力", "conflict"], ["爽点密度", "satisfy"], ["节奏紧凑", "pace"], ["台词质量", "dialogue"], ["钩子设计", "hook"], ["可拍性", "shootable"], ["一致性", "consistency"]];
+      box.innerHTML = `
+        <div class="nv-analyze-t">🔍 第 ${no} 章 · AI 审稿 <b class="${(rv.score || 0) >= 75 ? "rv-ok" : "rv-low"}">${Math.round(rv.score || 0)} 分</b></div>
+        <div class="nv-dims">${D.map(([k, key]) => {
+          const v = Math.round(dims[key] || 0);
+          return `<span class="nv-dim ${v >= 75 ? "ok" : v >= 60 ? "mid" : "low"}">${k} ${v}</span>`;
+        }).join("")}</div>
+        ${(rv.issues || []).length ? `<div class="nv-issues">${rv.issues.map((x) => `<div>⚠️ ${this.escapeHtml(x)}</div>`).join("")}</div>` : ""}
+        ${rv.suggestion ? `<div class="nv-issues"><div>💡 ${this.escapeHtml(rv.suggestion)}</div></div>` : ""}`;
+      this.nvRefresh();
+    } catch (e) {
+      box.innerHTML = `<div class="nv-state">❌ 审稿失败: ${this.escapeHtml(e.message)}</div>`;
+    }
   }
   async nvChapter(auto) {
     if (!this._nvTitle) return;
