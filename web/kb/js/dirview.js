@@ -88,10 +88,18 @@ class DirView {
     const menu = document.createElement("div");
     menu.className = "card-menu";
     menu.setAttribute("aria-hidden", "true");
-    menu.innerHTML = `<button class="cm-item cm-hide">${I18N.t("book.hide")}</button>`;
+    menu.innerHTML = `<button class="cm-item cm-hide">${I18N.t("book.hide")}</button>` +
+      (this.mode === "book" ? `<button class="cm-item cm-continue">✍ 小说续作</button>` : "");
     menu.querySelector(".cm-hide").addEventListener("click", (e) => {
       e.stopPropagation();
       this.hideCurrent();
+    });
+    const cont = menu.querySelector(".cm-continue");
+    if (cont) cont.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const name = this._menuName;
+      this.closeCardMenu();
+      if (name) NovelView.openNovelCreate(name);   // 续作:预填书名并自检
     });
     document.body.appendChild(menu);
     this._menu = menu;
@@ -552,9 +560,10 @@ class DirView {
 
   /* ---- 网页版爽文创作:立项(大纲) → 逐章/自动连写,固化 shuangwen-novel 流程 ---- */
   _nvStop = false;
-  async openNovelCreate() {
+  async openNovelCreate(initTitle) {
     const wb = typeof ManjuWorkbench !== "undefined" ? ManjuWorkbench : null;
     if (!wb) return;
+    this._nvTitle = (initTitle || "").trim() || null;
     wb.openModal("✍ 爽文小说创作", `
       <div class="nv-wrap">
         <div class="nv-hero">
@@ -566,7 +575,9 @@ class DirView {
         </div>
 
         <div class="nv-sec">
-          <div class="nv-sec-t">📝 项目信息</div>
+          <div class="nv-sec-t">📝 项目信息
+            <span class="nv-tip" data-tip="创作流程:填书名(可留空自动)/题材/风格/章节数 → 立项生成设定集与逐章大纲 → 逐章生成(每章≥1280字,7章一卷) → 自动连写全本,完成后书架直接阅读。若书名已存在创作中项目,自动进入续写模式。">?</span>
+          </div>
           <div class="nv-form">
             <div class="nv-row"><label>书名</label><input id="nv-title" class="manju-input" placeholder="如:吞天废子" spellcheck="false"></div>
             <div class="nv-grid2">
@@ -604,7 +615,44 @@ class DirView {
     $("nv-next").addEventListener("click", () => this.nvChapter(false));
     $("nv-auto").addEventListener("click", () => this.nvChapter(true));
     $("nv-stop").addEventListener("click", () => { this._nvStop = true; });
+    // 书名输入:防抖自检(存在创作中 → 续写模式)
+    let ckT = null;
+    $("nv-title").addEventListener("input", () => {
+      clearTimeout(ckT);
+      ckT = setTimeout(() => this.nvCheck(), 400);
+    });
+    if (this._nvTitle) {
+      $("nv-title").value = this._nvTitle;
+      $("nv-status").textContent = "正在检测创作状态…";
+      await this.nvCheck();
+    }
     this.nvRefresh();
+  }
+
+  /* 自检:该书是否已有创作中(设定集/章节),有则读取并进入续写模式 */
+  async nvCheck() {
+    const t = ($("nv-title").value || "").trim();
+    if (!t) { $("nv-work").classList.add("hidden"); return; }
+    try {
+      const r = await fetch("/api/novel/progress?title=" + encodeURIComponent(t), { cache: "no-store" });
+      const j = await r.json();
+      if (j.hasOutline) {
+        this._nvTitle = t;
+        const nos = (j.chapters || []).map((c) => c.no);
+        this._nvDone = new Set(nos);
+        this._nvTotal = Math.max(nos.length ? Math.max.apply(null, nos) : 8, 8);
+        $("nv-work").classList.remove("hidden");
+        $("nv-progress").textContent = `已写 ${nos.length} / ${this._nvTotal} 章`;
+        const st = $("nv-state");
+        if (st) { st.className = "nv-state ok"; st.textContent = `📖 检测到《${t}》创作中(${nos.length} 章已写),续写模式已就绪`; }
+        this.nvRefresh();
+      } else {
+        $("nv-work").classList.add("hidden");
+        const st = $("nv-state");
+        if (st) { st.className = "nv-state"; st.textContent = ""; }
+        $("nv-status").textContent = "";
+      }
+    } catch (e) { /* 静默 */ }
   }
   /* 书名留空自动:按题材/风格组合一个霸气书名 */
   nvAutoTitle(genre, style) {
