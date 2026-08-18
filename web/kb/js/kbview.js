@@ -199,14 +199,17 @@ const KbView = {
     };
     const curve = (P.kbCurve != null ? P.kbCurve : 0.05);
     const lineOp = (P.kbLineOp != null ? P.kbLineOp : 0.2);
+    // 删除前连线色=主题线色(--line)
+    const lineColor = getComputedStyle(document.documentElement).getPropertyValue("--line").trim() || "rgba(128,128,128,.4)";
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#4A90D9";
     // 常显标签:按哈希取前 kbLabels 个页面亮名(枢纽恒显)
     const labelBudget = P.kbLabels || 0;
     // 中心:README 索引节点(force 模式不给坐标,物理模拟自然居中;radial/ring 固定原点)
     const central = mode !== "force";
     nodes.push({ id: "README", name: "README · 索引", kind: "page", category: "索引", x: 0, y: 0, fixed: central,
-      symbol: "circle", symbolSize: 9,
-      itemStyle: { color: "#E8C268", borderColor: "#F5DFA0", borderWidth: 2.5, shadowBlur: 22, shadowColor: "rgba(232,194,104,.6)" },
-      label: { show: true, position: "bottom", distance: 8, color: "#E8C268", fontSize: 13, fontWeight: 800 } });
+      symbol: "circle", symbolSize: 18,
+      itemStyle: { color: App.catColor("索引"), borderColor: "#fff", borderWidth: 1.5, shadowBlur: 12 },
+      label: { show: false } });
     visCats.forEach((c, ci) => {
       const ang = -Math.PI / 2 + ci * (Math.PI * 2 / N);
       const hx = Math.cos(ang) * R1, hy = Math.sin(ang) * R1;
@@ -215,11 +218,11 @@ const KbView = {
       const sym = SYMS[ci % SYMS.length];
       // 枢纽
       nodes.push({ id: "hub:" + c.name, name: "◈ " + c.name, kind: "hub", category: c.name, x: hx, y: hy, fixed: central,
-        symbol: "circle", symbolSize: 9,
-        itemStyle: { color, borderColor: color, borderWidth: 2, shadowBlur: 12, shadowColor: color + "" },
-        label: { show: true, color, fontSize: 12, fontWeight: 700, position: "top", distance: 6 } });
+        symbol: "circle", symbolSize: Math.min(30, 13 + matched.length * 0.3),
+        itemStyle: { color, borderColor: "#fff", borderWidth: 1.2, shadowBlur: 10, shadowColor: color + "" },
+        label: { show: false } });
       links.push({ source: "README", target: "hub:" + c.name,
-        lineStyle: { color, width: 2.2, opacity: Math.min(0.85, lineOp + 0.3), curveness: curve } });
+        lineStyle: { color: lineColor, width: 1, opacity: 0.36, curveness: 0.1 } });
       // 页面簇:绕枢纽扇形散布(哈希抖动,确定性)
       const spread = (Math.PI * 2 / N) * 0.78;
       matched.forEach((p2, k) => {
@@ -233,11 +236,11 @@ const KbView = {
         const showLabel = labelBudget > 0 && (h % 97) < Math.max(1, Math.round(labelBudget / 5.8));
         nodes.push({ id: p2.name, name: p2.name, kind: "page", category: c.name,
           x: central ? px : undefined, y: central ? py : undefined,
-          symbol: shapeOf(h), symbolSize: 9,       // 统一尺寸,悬停放大(emphasis.scale)
+          symbol: "circle", symbolSize: 3 + (h % 6),   // 删除前:大小按关联度小梯度
           itemStyle: { color, opacity: 0.92, borderColor: color, borderWidth: 0.6 },
-          label: { show: showLabel, color, fontSize: 10 } });
+          label: { show: false } });
         links.push({ source: "hub:" + c.name, target: p2.name,
-          lineStyle: { color, width: 1, opacity: lineOp, curveness: curve } });
+          lineStyle: { color: lineColor, width: 1, opacity: 0.36, curveness: 0.1 } });
       });
       legend.push({ name: c.name, color, n: matched.length, emoji: c.emoji || "" });
     });
@@ -256,9 +259,7 @@ const KbView = {
         const hue = KbView.catPalette(a);
         links.push({
           source: e.source, target: e.target,
-          lineStyle: { color: hue, width: cross ? 1.2 : 0.8,
-            opacity: cross ? Math.min(0.5, lineOp + 0.22) : lineOp * 0.9,
-            curveness: cross ? (curve + 0.18) : (curve + 0.08), type: "solid" },
+          lineStyle: { color: lineColor, width: 0.8, opacity: 0.3, curveness: 0.1 },
         });
       }
     }
@@ -272,18 +273,18 @@ const KbView = {
         roam: true,
         draggable: true,
         force: mode === "force" ? {
-          repulsion: (P.kbRepel != null ? P.kbRepel : 200),
-          edgeLength: [Math.round((P.kbDist != null ? P.kbDist : 120) * 0.55), (P.kbDist != null ? P.kbDist : 120) * 2.2],
-          gravity: 0.028 + (P.kbGrav != null ? P.kbGrav : 8) * 0.004,   // 中心引力滑杆映射 0.028~0.148
-          friction: 0.62,
+          repulsion: (P.kbRepel != null ? P.kbRepel : 340),        // 删除前默认 340
+          edgeLength: [60, 140],                                       // 删除前
+          gravity: 0.06,                                               // 删除前
+          friction: 0.5,
           layoutAnimation: true,          // Obsidian 灵魂:开场收敛动画
         } : undefined,
         progressive: 260, progressiveThreshold: 520,
         hoverAnimation: false,
         edgeSymbol: ["none", "none"],
-        emphasis: Object.assign(
-          { scale: 2.4, itemStyle: { shadowBlur: 14 } },
-          (P.kbHoverLabel !== false) ? { label: { show: true, fontSize: 11.5, color: "#fff", fontWeight: 600 } } : { label: { show: false } }),
+        emphasis: { focus: "adjacency", label: { show: true, fontSize: 11.5, color: "#fff", fontWeight: 600 },
+          lineStyle: { width: 1.4, opacity: 0.85, color: accent } },
+        select: { label: { show: true, fontSize: 12, fontWeight: 700 }, itemStyle: { shadowBlur: 14 } },
         // 初始全图视野:按节点包络盒适配缩放(进入即看到全部节点);用户缩放后不重置
         center: ["50%", "50%"],
         zoom: this._fitZoomFor(mode, nodes),
@@ -292,8 +293,7 @@ const KbView = {
         data: nodes, links,
       }],
     }, true);
-    if (mode !== "force") this.startSpin(nodes.slice());
-    else this.stopSpin();
+    this.stopSpin();  // 删除前无公转
     document.getElementById("kb-legend").innerHTML = legend
       .map((l) => `<span class="kb-lg${this._catFilter === l.name ? " on" : ""}" data-cat="${l.name.replace(/"/g, "&quot;")}"><span class="gt-dot" style="background:${l.color}"></span>${l.emoji} ${l.name} <i>${l.n}</i></span>`).join("");
     document.querySelectorAll("#kb-legend .kb-lg").forEach((e2) =>
