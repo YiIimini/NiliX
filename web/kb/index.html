@@ -86,6 +86,9 @@
       <a href="#/manju" class="nav-link" data-route="manju">
         <svg class="ic" aria-hidden="true"><use href="#i-film"/></svg><span data-i18n="nav.manju">漫剧管理</span>
       </a>
+      <a href="#/kb" class="nav-link" data-route="kb">
+        <svg class="ic" aria-hidden="true"><use href="#i-grid"/></svg><span data-i18n="nav.kb">知识库</span>
+      </a>
       <a href="#/comfy" class="nav-link" data-route="comfy">
         <svg class="ic" aria-hidden="true"><use href="#i-comfy"/></svg><span data-i18n="nav.comfy">ComfyUI</span>
       </a>
@@ -101,6 +104,25 @@
   </header>
 
   <main class="stage">
+    <!-- 知识库:轻量索引页(仅读 README.md 单文件 + 锚点访问) -->
+    <section id="view-kb" class="view view-kb">
+      <div class="hrs-head">
+        <div class="hrs-title">
+          <h1>知识库</h1>
+          <p class="ov-sub">单文件索引加载 · 锚点直达 · 分类浏览</p>
+        </div>
+        <div class="hrs-tools">
+          <div class="hrs-search" id="kb-search-wrap">
+            <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+            <input id="kb-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索知识页…">
+          </div>
+          <button id="kb-refresh" class="hrs-btn" title="重新加载索引">刷新</button>
+        </div>
+      </div>
+      <p id="kb-err" class="hrs-err hidden"></p>
+      <div id="kb-cats" class="kb-cats"></div>
+    </section>
+
     <!-- 二级页:Comfy UI(内嵌 Web UI) -->
     <section id="view-comfy" class="view view-comfy">
       <div class="hrs-head">
@@ -160,6 +182,7 @@
             <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
             <input id="novel-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索书名…">
           </div>
+          <button id="novel-create" class="hrs-btn hrs-btn-primary">✍ 创作小说</button>
           <button id="novel-up" class="hrs-btn hidden" data-i18n="dir.up">上一级</button>
           <button id="novel-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -272,6 +295,7 @@
                 <button data-style="papercraft" class="hrs-btn">纸艺</button>
                 <button data-style="clay" class="hrs-btn">粘土</button>
                 <button data-style="ink" class="hrs-btn">水墨</button>
+                <button id="manju-style-help" class="manju-style-help" title="预览各风格官方示例">?</button>
               </div>
             </div>
 
@@ -441,6 +465,12 @@
       </div>
     </section>
   </main>
+
+  <!-- 悬浮 AI 小助手:对话云朵实时播报 Agent/管线状态 -->
+  <div id="ai-mascot" title="AI 助手 · 点击前往漫剧工作台">
+    <div id="ai-bubble" class="ai-bubble">AI 助手待命中 ✨</div>
+    <img id="ai-avatar" src="/assets/anim01.webp" alt="AI 助手" draggable="false">
+  </div>
 
   <!-- 小说阅读器:宽弹窗(正文 + 右侧章节目录,可手动隐藏) -->
   <div id="reader" class="reader" aria-hidden="true">
@@ -623,6 +653,7 @@
   <script src="/js/markdown.js?v=20260818i"></script>
   <script src="/js/app.js?v=20260818i"></script>
   <script src="/js/comfy.js?v=20260818i"></script>
+  <script src="/js/kbview.js?v=20260818i"></script>
   <script src="/js/dirview.js?v=20260818i"></script>
   <script src="/js/manju.js?v=20260818i"></script>
 </body>

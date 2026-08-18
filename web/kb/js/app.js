@@ -18,7 +18,8 @@ const App = {
     // 语言切换后重渲染当前视图(侧栏/图例/管理页为动态内容)
     document.addEventListener("i18n:changed", () => {
       const r = this.currentRoute();
-      if (r === "comfy" && typeof ComfyView !== "undefined") ComfyView.renderStatus();
+      if (r === "kb" && typeof KbView !== "undefined") KbView.enter();
+      else if (r === "comfy" && typeof ComfyView !== "undefined") ComfyView.renderStatus();
       else if (r === "novel" && typeof NovelView !== "undefined") NovelView.render();
       else if (r === "manju" && typeof ManjuView !== "undefined") ManjuView.render();
     });
@@ -31,6 +32,8 @@ const App = {
         }
       }
     });
+    const mascot = document.getElementById("ai-mascot");
+    if (mascot) mascot.addEventListener("click", () => { location.hash = "#/manju"; });
     this.applyNavVisibility();
     this.route();
   },
@@ -359,9 +362,22 @@ const App = {
     if (el) el.textContent = I18N.t("live.refreshed") + " " + new Date().toLocaleTimeString();
   },
 
+  /* 悬浮 AI 小助手:云朵播报(manju 轮询驱动);点击跳工作台 */
+  mascotSay(text, mood) {
+    const b = document.getElementById("ai-bubble");
+    if (!b || b.textContent === text) return;
+    b.textContent = text;
+    b.classList.remove("ai-pop");
+    void b.offsetWidth; // 重触发动画
+    b.classList.add("ai-pop");
+    const m = document.getElementById("ai-mascot");
+    if (m) m.classList.toggle("is-busy", mood === "busy");
+  },
+
   /* 当前路由:comfy / novel / manju(默认工作台) */
   currentRoute() {
     const hash = location.hash || "#/manju";
+    if (hash.startsWith("#/kb")) return "kb";
     if (hash.startsWith("#/comfy")) return "comfy";
     if (hash.startsWith("#/novel")) return "novel";
     return "manju";
@@ -369,6 +385,7 @@ const App = {
 
   route() {
     const route = this.currentRoute();
+    document.getElementById("view-kb").classList.toggle("is-active", route === "kb");
     document.getElementById("view-comfy").classList.toggle("is-active", route === "comfy");
     document.getElementById("view-novel").classList.toggle("is-active", route === "novel");
     document.getElementById("view-manju").classList.toggle("is-active", route === "manju");
@@ -380,7 +397,8 @@ const App = {
     // 路由切换时关闭管理页遗留弹窗(宽阅读器/单视频弹窗)
     if (typeof NovelView !== "undefined") NovelView.closeReader();
     if (typeof ManjuView !== "undefined") ManjuView.closeFilmModal();
-    if (route === "comfy") ComfyView.enter();
+    if (route === "kb" && typeof KbView !== "undefined") KbView.enter();
+    else if (route === "comfy") ComfyView.enter();
     else if (route === "novel") NovelView.enter();
     else {
       ManjuView.enter();

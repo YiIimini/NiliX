@@ -271,9 +271,11 @@
       $("manju-novel-detect").addEventListener("click", () => this.detectNovel());
 
       // 风格
-      document.querySelectorAll("#manju-style button").forEach((b) =>
+      document.querySelectorAll("#manju-style button[data-style]").forEach((b) =>
         b.addEventListener("click", () => { this.style = b.dataset.style; this.renderStyle(); this.saveDraft(); })
       );
+      // 风格预览:官方示例 GIF(MiniMax H3 官方技能仓库素材,已本地化)
+      $("manju-style-help").addEventListener("click", () => this.openStylePreview());
       // 自定义风格:输入英文风格描述,点「应用」生效
       $("manju-style-apply").addEventListener("click", () => {
         const v = $("manju-style-custom").value.trim();
@@ -1272,9 +1274,29 @@
         this.agent = s.agent || null;
         this.renderStatus();
         if (!s.running && s.done) this.refreshOutputs();
+        this.reportMascot(s);
       }).catch(() => {});
     },
 
+    /* 悬浮助手云朵:由状态汇总一句话(运行阶段/审片/升级) */
+    reportMascot(s) {
+      if (typeof App === "undefined" || !App.mascotSay) return;
+      const a = this.agent || {};
+      const bits = [];
+      if (s.running) {
+        const st = s.stage || "处理中";
+        bits.push(st + (s.shotTotal ? ` (${s.shotCur}/${s.shotTotal})` : "") + " · " + fmtTime(s.elapsedSec));
+      }
+      if (a.planReview && a.planReview.score) bits.push("剧本复核 " + a.planReview.score + " 分");
+      if (a.shots) {
+        const js = Object.values(a.shots);
+        const bad = js.filter((x) => x && x.score != null && x.score < (a.passScore || 75)).length;
+        if (bad) bits.push("审片 " + bad + " 镜待返工");
+      }
+      if (a.escalationCount) bits.push("⚠ " + a.escalationCount + " 镜升级待拍板");
+      if (!bits.length) bits.push(s.done ? "上一轮已完成 ✅ 随时开工" : "AI 助手待命中 ✨");
+      App.mascotSay(bits.join(" · "), s.running ? "busy" : "");
+    },
     renderStatus() {
       const s = this.status;
       const dot = document.querySelector("#manju-status .hrs-dot");
@@ -1669,6 +1691,29 @@
     },
 
     /* 图片预览(灯箱,上一张/下一张 分列图片左右两侧,参考侧栏收起按钮风格) */
+    /* 风格预览弹窗:官方 8 风格示例动图 + 对应预设标注 */
+    openStylePreview() {
+      const S = [
+        ["3d-animation-short-generator.gif", "3D 动画短片", "预设:3D CG"],
+        ["handdrawn-live-video-generator.gif", "手绘真人实拍", "预设:手绘"],
+        ["papercraft-stop-motion-explainer.gif", "纸艺定格动画", "预设:纸艺"],
+        ["paper-collage-explainer.gif", "纸片拼贴讲解", "预设:纸艺/粘土"],
+        ["music-video-subtitle-generator.gif", "MV 字幕视频", "预设:2.5D 动漫"],
+        ["brand-promo-video-generator.gif", "品牌宣传大片", "预设:写实"],
+        ["co-op-game-intro-generator.gif", "游戏开场 CG", "预设:3D CG/二次元"],
+        ["minimalist-product-ad-generator.gif", "极简产品广告", "预设:写实"],
+      ];
+      this.openModal("风格预览 · MiniMax H3 官方示例",
+        `<div class="manju-style-grid">
+          ${S.map(([f, name, tag]) => `
+          <div class="manju-style-card">
+            <div class="manju-style-gif"><img src="/assets/styles/${f}" alt="${name}" loading="lazy"></div>
+            <div class="manju-style-name">${name}</div>
+            <div class="manju-style-tag">${tag}</div>
+          </div>`).join("")}
+        </div>
+        <div class="manju-meta" style="margin-top:10px">示例动图来自 MiniMax H3 官方技能仓库(本地化展示);默认 8 预设为其提示词级风格映射,自定义风格可输英文描述。</div>`, true);
+    },
     previewImage(path, name) {
       // 收集当前文档所有可预览图片(按 DOM 顺序),定位当前图索引
       const imgs = Array.from(document.querySelectorAll("[data-img]"))
@@ -1691,9 +1736,9 @@
         : "";
       this.openModal(`${cur.name || "预览"}（${i + 1}/${list.length}）`,
         `<div class="manju-img-preview">
-          ${arrows}
           <div class="manju-pv-stage">
             <img src="/api/fs/file?path=${encodeURIComponent(cur.path)}" alt="">
+            ${arrows}
             ${list.length > 1 ? `<span class="manju-pv-count">${i + 1} / ${list.length}</span>` : ""}
           </div>
         </div>`);

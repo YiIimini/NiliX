@@ -46,6 +46,12 @@ class DirView {
     // 列表搜索:书架/海报墙按作品名过滤(输入框 id = <实例id>-search)
     const searchIn = document.getElementById(this.id + "-search");
     if (searchIn) searchIn.addEventListener("input", () => this.applyListFilter());
+    // 网页版爽文创作(shuangwen-novel 技能流程)
+    const createBtn = document.getElementById("novel-create");
+    if (createBtn && !createBtn._bound) {
+      createBtn._bound = true;
+      createBtn.addEventListener("click", () => NovelView.openNovelCreate());
+    }
     // 回到前台时刷新(用户可能在外部删改项目/文件,切回标签页要看到最新)
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) return;
@@ -536,6 +542,96 @@ class DirView {
     this._toc = null;
     this._current = null;
     this.closeScript();
+  }
+
+  /* ---- 网页版爽文创作:立项(大纲) → 逐章/自动连写,固化 shuangwen-novel 流程 ---- */
+  _nvStop = false;
+  async openNovelCreate() {
+    const wb = typeof ManjuWorkbench !== "undefined" ? ManjuWorkbench : null;
+    if (!wb) return;
+    wb.openModal("爽文小说创作", `
+      <div class="nv-form">
+        <div class="nv-row"><label>书名</label><input id="nv-title" class="manju-input" placeholder="如:吞天废子" spellcheck="false"></div>
+        <div class="nv-row"><label>题材</label><input id="nv-genre" class="manju-input" placeholder="如:玄幻逆袭 / 都市重生(留空自动)" spellcheck="false"></div>
+        <div class="nv-row"><label>风格</label><input id="nv-style" class="manju-input" placeholder="如:热血爽文 / 轻松搞笑(留空自动)" spellcheck="false"></div>
+        <div class="nv-row"><label>章节数</label><input id="nv-count" class="manju-input" type="number" min="8" max="300" value="56"><span class="nv-hint">每 7 章一卷,硬规范每章 ≥1280 字</span></div>
+        <div class="nv-actions">
+          <button id="nv-start" class="hrs-btn hrs-btn-primary">🚀 立项生成大纲</button>
+          <span class="nv-status" id="nv-status"></span>
+        </div>
+        <div id="nv-work" class="nv-work hidden">
+          <div class="nv-actions" style="margin-top:12px">
+            <button id="nv-next" class="hrs-btn">生成下一章</button>
+            <button id="nv-auto" class="hrs-btn hrs-btn-primary">⚡ 自动连写</button>
+            <button id="nv-stop" class="hrs-btn hrs-btn-danger">停止</button>
+            <span class="nv-status" id="nv-progress"></span>
+          </div>
+          <div id="nv-chapters" class="nv-chapters"></div>
+        </div>
+      </div>`, true);
+    $("nv-start").addEventListener("click", () => this.nvCreate());
+    $("nv-next").addEventListener("click", () => this.nvChapter(false));
+    $("nv-auto").addEventListener("click", () => this.nvChapter(true));
+    $("nv-stop").addEventListener("click", () => { this._nvStop = true; });
+    this.nvRefresh();
+  }
+  async nvCreate() {
+    const title = $("nv-title").value.trim();
+    if (!title) { $("nv-status").textContent = "请先填书名"; return; }
+    this._nvTitle = title;
+    $("nv-status").textContent = "大纲生成中(约 1-2 分钟,请勿关弹窗)…";
+    $("nv-start").disabled = true;
+    try {
+      const r = await fetch("/api/novel/create", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, genre: $("nv-genre").value.trim(), style: $("nv-style").value.trim(), chapters: parseInt($("nv-count").value, 10) || 56 }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+      $("nv-status").textContent = j.exists ? "已有大纲,续写模式" : "✅ 大纲完成";
+      $("nv-work").classList.remove("hidden");
+      this._nvTotal = j.chapters || 56;
+      await this.nvRefresh();
+    } catch (e) {
+      $("nv-status").textContent = "❌ " + e.message;
+    }
+    $("nv-start").disabled = false;
+  }
+  async nvRefresh() {
+    if (!this._nvTitle) return;
+    try {
+      const r = await fetch("/api/novel/progress?title=" + encodeURIComponent(this._nvTitle));
+      const j = await r.json();
+      this._nvDone = new Set((j.chapters || []).map((c) => c.no));
+      this._nvTotal = this._nvTotal || Math.max(56, (j.chapters || []).length + 1);
+      const box = $("nv-chapters");
+      if (!box) return;
+      let html = "";
+      for (let n = 1; n <= this._nvTotal; n++) {
+        const done = this._nvDone.has(n);
+        html += `<span class="nv-ch ${done ? "done" : ""}">${n}</span>`;
+      }
+      box.innerHTML = html;
+      const p = $("nv-progress");
+      if (p) p.textContent = `已写 ${this._nvDone.size} / ${this._nvTotal} 章`;
+    } catch (e) { /* 忽略 */ }
+  }
+  async nvChapter(auto) {
+    if (!this._nvTitle) return;
+    this._nvStop = false;
+    do {
+      const next = (() => { for (let n = 1; n <= (this._nvTotal || 56); n++) if (!this._nvDone || !this._nvDone.has(n)) return n; return 0; })();
+      if (!next) { $("nv-progress").textContent = "🎉 全本完成!关闭弹窗即可在书架阅读"; break; }
+      $("nv-progress").textContent = `第 ${next} 章写作中(约 30-60s)…`;
+      if (typeof App !== "undefined" && App.mascotSay) App.mascotSay(`小说《${this._nvTitle}》第 ${next} 章写作中…`, "busy");
+      try {
+        const r = await fetch("/api/novel/chapter", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: this._nvTitle, no: next }) });
+        const j = await r.json();
+        if (!r.ok) { $("nv-progress").textContent = "❌ 第" + next + "章: " + (j.error || r.status); break; }
+      } catch (e) { $("nv-progress").textContent = "❌ " + e.message; break; }
+      await this.nvRefresh();
+      if (!auto || this._nvStop) break;
+    } while (true);
+    this.render();
   }
 
   /* ---- 全书搜索:标题命中优先,否则正文含关键词给上下文摘要,点击跳章 ---- */
