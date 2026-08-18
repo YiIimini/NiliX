@@ -296,7 +296,7 @@ const KbView = {
       return all.length && catHit(c);
     });
     const N = visCats.length || 1;
-    const R1 = 190 + N * 36;                       // 枢纽环半径(更外扩,天然分散)
+    const R1 = 150 + N * 24;                       // 枢纽环半径(紧凑,人情味)
     const P = (typeof App !== "undefined" && App.prefs) ? App.prefs : {};
     const mode = P.kbLayout || "radial";
     const shapeOf = (h) => {
@@ -339,9 +339,9 @@ const KbView = {
         const h = hash(p2.name);
         const t = matched.length === 1 ? 0.5 : k / (matched.length - 1);
         const a = ang - spread / 2 + t * spread + ((h % 17) - 8) * 0.012;
-        let r = 130 + (h % 250) + Math.sqrt(k % 70) * 15;   // 更大散布半径,自然分散不扎堆
+        let r = 56 + (h % 96) + Math.sqrt(k % 40) * 8;      // 子节点贴枢纽,不疏离
         let px = hx + Math.cos(a) * r, py = hy + Math.sin(a) * r;
-        if (mode === "ring") { px = Math.cos(ang) * (R1 + 180 + (h % 90)); py = Math.sin(ang) * (R1 + 180 + (h % 90)); }
+        if (mode === "ring") { px = Math.cos(ang) * (R1 + 80 + (h % 55)); py = Math.sin(ang) * (R1 + 80 + (h % 55)); }
         const showLabel = labelBudget > 0 && (h % 97) < Math.max(1, Math.round(labelBudget / 5.8));
         nodes.push({ id: p2.name, name: p2.name, kind: "page", category: c.name,
           x: central ? px : undefined, y: central ? py : undefined,
@@ -382,9 +382,9 @@ const KbView = {
         roam: true,
         draggable: true,
         force: mode === "force" ? {
-          repulsion: (P.kbRepel != null ? P.kbRepel : 340),        // 删除前默认 340
-          edgeLength: [60, 140],                                       // 删除前
-          gravity: 0.06,                                               // 删除前
+          repulsion: (P.kbRepel != null ? P.kbRepel : 260),        // 紧凑:子节点不疏离
+          edgeLength: [48, 100],                                       // 链距收窄,簇更聚拢
+          gravity: 0.09,                                               // 引力加强,整体贴中心
           friction: 0.5,
           layoutAnimation: true,          // Obsidian 灵魂:开场收敛动画
         } : undefined,

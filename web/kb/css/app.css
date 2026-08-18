@@ -3824,22 +3824,77 @@ select option { text-align: center; }
 /* 关系图谱页:头部 + 图谱画布 + 图例(占满可视区) */
 .view-kb.is-active { display: flex; flex-direction: column; }
 
-/* 网页版爽文创作 */
+/* 网页版爽文创作(工坊版) */
+.nv-wrap { display: flex; flex-direction: column; gap: 14px; }
+.nv-hero {
+  display: flex; align-items: center; gap: 14px; padding: 16px 18px;
+  border-radius: 14px;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent) 4%, transparent) 60%);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.nv-hero-ic {
+  width: 48px; height: 48px; border-radius: 13px; flex: none;
+  display: flex; align-items: center; justify-content: center; font-size: 24px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 16px var(--glow);
+}
+.nv-hero-t { font-size: 15px; font-weight: 800; letter-spacing: 1px; color: var(--text); }
+.nv-hero-s { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.nv-sec {
+  border: 1px solid var(--panel-border); border-radius: 12px;
+  padding: 12px 14px; background: color-mix(in srgb, var(--surface) 45%, transparent);
+}
+.nv-sec-t {
+  font-size: 12.5px; font-weight: 700; letter-spacing: 1px; color: var(--text);
+  margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;
+}
+.nv-percent { font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
 .nv-form { display: flex; flex-direction: column; gap: 10px; }
 .nv-row { display: flex; align-items: center; gap: 10px; }
 .nv-row > label { width: 56px; flex: none; font-size: 12.5px; color: var(--muted); }
 .nv-row .manju-input { flex: 1; min-width: 0; }
+.nv-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .nv-hint { font-size: 11.5px; color: var(--muted); }
 .nv-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .nv-status { font-size: 12.5px; color: var(--muted); }
 .nv-work { border-top: 1px dashed var(--panel-border); padding-top: 10px; }
-.nv-chapters { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; max-height: 200px; overflow-y: auto; }
+.nv-bar { height: 8px; border-radius: 999px; background: color-mix(in srgb, var(--bg) 60%, transparent); overflow: hidden; margin-bottom: 12px; border: 1px solid var(--panel-border); }
+.nv-bar-fill {
+  height: 100%; width: 0%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #fff));
+  box-shadow: 0 0 10px var(--glow);
+  transition: width 0.5s ease;
+}
+.nv-state {
+  margin-top: 10px; padding: 9px 12px; border-radius: 10px; font-size: 12.5px;
+  background: color-mix(in srgb, var(--bg) 45%, transparent); border: 1px solid var(--panel-border);
+  color: var(--muted);
+}
+.nv-state.busy { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 8%, transparent); animation: nvPulse 1.6s ease-in-out infinite; }
+.nv-state.ok { color: #00a63e; border-color: rgba(0,166,62,.4); background: rgba(0,166,62,.08); }
+.nv-state.err { color: #d25c4d; border-color: rgba(210,92,77,.4); background: rgba(210,92,77,.08); }
+@keyframes nvPulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+.nv-chapters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; max-height: 220px; overflow-y: auto; }
 .nv-ch {
-  width: 34px; height: 26px; border-radius: 7px; font-size: 11.5px; font-variant-numeric: tabular-nums;
+  width: 36px; height: 28px; border-radius: 8px; font-size: 11.5px; font-variant-numeric: tabular-nums;
   display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid var(--panel-border); color: var(--muted);
+  background: color-mix(in srgb, var(--bg) 35%, transparent);
+  transition: all 0.2s;
 }
-.nv-ch.done { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.nv-ch.done {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent); font-weight: 700;
+}
+.nv-ch.act {
+  border-color: var(--accent); color: #fff;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--glow);
+  transform: scale(1.12);
+  animation: nvPulse 1.4s ease-in-out infinite;
+}
+@media (max-width: 640px) { .nv-grid2 { grid-template-columns: 1fr; } }
 
 /* 关系图谱(Obsidian 式)视图 */
 .kb-graph { flex: 1; min-height: 420px; }

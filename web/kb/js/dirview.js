@@ -549,23 +549,48 @@ class DirView {
   async openNovelCreate() {
     const wb = typeof ManjuWorkbench !== "undefined" ? ManjuWorkbench : null;
     if (!wb) return;
-    wb.openModal("爽文小说创作", `
-      <div class="nv-form">
-        <div class="nv-row"><label>书名</label><input id="nv-title" class="manju-input" placeholder="如:吞天废子" spellcheck="false"></div>
-        <div class="nv-row"><label>题材</label><input id="nv-genre" class="manju-input" placeholder="如:玄幻逆袭 / 都市重生(留空自动)" spellcheck="false"></div>
-        <div class="nv-row"><label>风格</label><input id="nv-style" class="manju-input" placeholder="如:热血爽文 / 轻松搞笑(留空自动)" spellcheck="false"></div>
-        <div class="nv-row"><label>章节数</label><input id="nv-count" class="manju-input" type="number" min="8" max="300" value="56"><span class="nv-hint">每 7 章一卷,硬规范每章 ≥1280 字</span></div>
-        <div class="nv-actions">
-          <button id="nv-start" class="hrs-btn hrs-btn-primary">🚀 立项生成大纲</button>
-          <span class="nv-status" id="nv-status"></span>
+    wb.openModal("✍ 爽文小说创作", `
+      <div class="nv-wrap">
+        <div class="nv-hero">
+          <div class="nv-hero-ic">📖</div>
+          <div>
+            <div class="nv-hero-t">爽文一条龙 · 创作工坊</div>
+            <div class="nv-hero-s">立项 → 大纲 → 逐章写作(每章 ≥1280 字 · 7 章一卷)</div>
+          </div>
         </div>
-        <div id="nv-work" class="nv-work hidden">
-          <div class="nv-actions" style="margin-top:12px">
-            <button id="nv-next" class="hrs-btn">生成下一章</button>
+
+        <div class="nv-sec">
+          <div class="nv-sec-t">📝 项目信息</div>
+          <div class="nv-form">
+            <div class="nv-row"><label>书名</label><input id="nv-title" class="manju-input" placeholder="如:吞天废子" spellcheck="false"></div>
+            <div class="nv-grid2">
+              <div class="nv-row"><label>题材</label><input id="nv-genre" class="manju-input" placeholder="玄幻逆袭(留空自动)" spellcheck="false"></div>
+              <div class="nv-row"><label>风格</label><input id="nv-style" class="manju-input" placeholder="热血爽文(留空自动)" spellcheck="false"></div>
+            </div>
+            <div class="nv-row"><label>章节数</label><input id="nv-count" class="manju-input manju-num" type="number" min="8" max="300" value="56"><span class="nv-hint">硬规范每章 ≥1280 字 · 7 章/卷</span></div>
+          </div>
+        </div>
+
+        <div class="nv-sec">
+          <div class="nv-sec-t">🚀 生成控制</div>
+          <div class="nv-actions">
+            <button id="nv-start" class="hrs-btn hrs-btn-primary">🚀 立项生成大纲</button>
+            <span class="nv-status" id="nv-status"></span>
+          </div>
+        </div>
+
+        <div id="nv-work" class="nv-sec nv-work hidden">
+          <div class="nv-sec-t">⏳ 写作进度
+            <span class="nv-percent" id="nv-percent">0%</span>
+          </div>
+          <div class="nv-bar"><div class="nv-bar-fill" id="nv-bar"></div></div>
+          <div class="nv-actions">
+            <button id="nv-next" class="hrs-btn">✍ 生成下一章</button>
             <button id="nv-auto" class="hrs-btn hrs-btn-primary">⚡ 自动连写</button>
-            <button id="nv-stop" class="hrs-btn hrs-btn-danger">停止</button>
+            <button id="nv-stop" class="hrs-btn hrs-btn-danger">■ 停止</button>
             <span class="nv-status" id="nv-progress"></span>
           </div>
+          <div class="nv-state" id="nv-state">准备就绪,点击上方按钮开始写作</div>
           <div id="nv-chapters" class="nv-chapters"></div>
         </div>
       </div>`);
@@ -605,13 +630,21 @@ class DirView {
       const box = $("nv-chapters");
       if (!box) return;
       let html = "";
+      const cur = this._nvCur || 0;
       for (let n = 1; n <= this._nvTotal; n++) {
         const done = this._nvDone.has(n);
-        html += `<span class="nv-ch ${done ? "done" : ""}">${n}</span>`;
+        const act = n === cur;
+        html += `<span class="nv-ch ${done ? "done" : ""} ${act ? "act" : ""}" title="第 ${n} 章">${done ? "✓" : n}</span>`;
       }
       box.innerHTML = html;
       const p = $("nv-progress");
       if (p) p.textContent = `已写 ${this._nvDone.size} / ${this._nvTotal} 章`;
+      const bar = $("nv-bar"), pct = $("nv-percent");
+      if (bar && this._nvTotal) {
+        const v = Math.round(this._nvDone.size / this._nvTotal * 100);
+        bar.style.width = Math.min(100, v) + "%";
+        if (pct) pct.textContent = v + "%";
+      }
     } catch (e) { /* 忽略 */ }
   }
   async nvChapter(auto) {
@@ -619,16 +652,31 @@ class DirView {
     this._nvStop = false;
     do {
       const next = (() => { for (let n = 1; n <= (this._nvTotal || 56); n++) if (!this._nvDone || !this._nvDone.has(n)) return n; return 0; })();
-      if (!next) { $("nv-progress").textContent = "🎉 全本完成!关闭弹窗即可在书架阅读"; break; }
+      if (!next) {
+        $("nv-progress").textContent = "🎉 全本完成!";
+        const st = $("nv-state"); if (st) { st.className = "nv-state ok"; st.textContent = "🎉 全本完成,关闭弹窗即可在书架阅读"; }
+        break;
+      }
+      this._nvCur = next;
       $("nv-progress").textContent = `第 ${next} 章写作中(约 30-60s)…`;
+      const st = $("nv-state");
+      if (st) { st.className = "nv-state busy"; st.textContent = "✍ 正在写第 " + next + " 章,AI 构思与码字中…"; }
       if (typeof App !== "undefined" && App.mascotSay) App.mascotSay(`小说《${this._nvTitle}》第 ${next} 章写作中…`, "busy");
       try {
         const r = await fetch("/api/novel/chapter", { method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: this._nvTitle, no: next }) });
         const j = await r.json();
         if (!r.ok) { $("nv-progress").textContent = "❌ 第" + next + "章: " + (j.error || r.status); break; }
-      } catch (e) { $("nv-progress").textContent = "❌ " + e.message; break; }
+      } catch (e) {
+        $("nv-progress").textContent = "❌ " + e.message;
+        const st2 = $("nv-state"); if (st2) { st2.className = "nv-state err"; st2.textContent = "❌ " + e.message; }
+        break;
+      }
+      this._nvCur = 0;
       await this.nvRefresh();
+      if (this._nvDone && this._nvDone.size === this._nvTotal) {
+        const st3 = $("nv-state"); if (st3) { st3.className = "nv-state ok"; st3.textContent = "🎉 全本完成!关闭弹窗即可在书架阅读"; }
+      }
       if (!auto || this._nvStop) break;
     } while (true);
     this.render();

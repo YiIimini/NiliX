@@ -10,11 +10,12 @@ const App = {
   loadPrefs() {
     const d = { aiOn: true, aiStatus: true, aiQuotes: true, aiWander: true, aiFreq: 22000, aiSize: 104, aiWanderInt: 11000,
       kbLayout: "force", kbShape: "mixed", kbCurve: 0.05, kbLineOp: 0.2, kbHoverLabel: true, kbLabels: 0,
-      kbRepel: 200, kbDist: 120, kbGrav: 8 };
+      kbRepel: 260, kbDist: 100, kbGrav: 9 };
     let s = null;
     try { s = JSON.parse(localStorage.getItem("kbw-prefs") || "null"); } catch (e) {}
     this.prefs = Object.assign(d, s || {});
-    if (s && (s.kbLayout === "radial" || s.kbLayout === "ring")) { this.prefs.kbLayout = "force"; } // 回滚:一律默认力导向物理(删除前)
+    if (s && (s.kbLayout === "radial" || s.kbLayout === "ring")) { this.prefs.kbLayout = "force"; }
+    if (s && s.kbRepel === 340) { this.prefs.kbRepel = 260; this.prefs.kbDist = 100; this.prefs.kbGrav = 9; } // 紧凑迁移
     return this.prefs;
   },
   savePrefs() {
