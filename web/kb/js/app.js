@@ -660,6 +660,7 @@ const App = {
     if (!this.prefs || !this.prefs.aiOn) return;
     const b = document.getElementById("ai-bubble");
     if (!b || b.textContent === text) return;
+    if (!/^\p{Emoji}/u.test(text) && !text.startsWith("💬")) text = "💬 " + text;  // 文字带表情
     b.textContent = text;                       // 气泡:整句直接显示(纯视觉美化,不做打字机)
     b.classList.remove("ai-pop");
     void b.offsetWidth; // 重触发动画
