@@ -1176,11 +1176,28 @@ func (ctx *manjuCtx) assetsFingerprint() string {
 	return sum
 }
 
-// shotCacheName 条件缓存名:项目_集号_a指纹_s镜头
-func (ctx *manjuCtx) shotCacheName(sid int) string {
-	ep := reNonWord.ReplaceAllString(ctx.episode, "_")
+// shotCacheName 条件缓存名:项目_v版本_内容指纹。
+// 内容指纹 = md5(提示词 + 角色列表 + 场景 + 画幅 + 帧数):同条件镜头共享同一份缓存,
+// Qwen3-VL 只编码一次(原来每镜头独立缓存,重复编码浪费;相同条件的后续镜头直接复用)。
+// 版本号进缓存名:逻辑升级(如多角色参考图)后旧缓存自动失效重编。
+const manjuCacheVer = "v2"
+
+func (ctx *manjuCtx) shotCacheName(s manjuShot) string {
 	proj := reNonWord.ReplaceAllString(ctx.project, "_")
-	return fmt.Sprintf("%s_%s_a%s_s%03d", proj, ep, ctx.assetsFingerprint(), sid)
+	return fmt.Sprintf("%s_%s_c%s", proj, manjuCacheVer, ctx.shotCondFingerprint(s))
+}
+
+// shotCondFingerprint 镜头条件指纹:决定缓存是否可复用的全部输入
+func (ctx *manjuCtx) shotCondFingerprint(s manjuShot) string {
+	h := md5.New()
+	fmt.Fprintf(h, "p=%s|w=%d|h=%d|len=%d|chars=%s|scene=%s|prompt=%s",
+		s.H3Prompt, ctx.w, ctx.h, h3Length(s.Duration, ctx.fps),
+		strings.Join(s.Characters, ","), s.Scene, s.H3Prompt)
+	sum := fmt.Sprintf("%x", h.Sum(nil))
+	if len(sum) > 10 {
+		sum = sum[:10]
+	}
+	return sum
 }
 
 // ---- 预编码 ----
@@ -1191,7 +1208,7 @@ func (ctx *manjuCtx) ensureEncoded(s manjuShot, cacheName string, lg *manjuLogge
 	}
 	lg.logf("  预编码提交...")
 	wf := h3EncWorkflow(ctx.R, s.H3Prompt, ctx.w, ctx.h, h3Length(s.Duration, ctx.fps),
-		ctx.charRefName(s), ctx.sceneRefName(s), cacheName, len(s.Characters) > 0)
+		ctx.charRefNames(s), ctx.sceneRefName(s), cacheName, len(s.Characters) > 0)
 	pid, err := ctx.comfy.submit(wf)
 	if err != nil {
 		return err
@@ -1217,7 +1234,7 @@ func stageEncode(ctx *manjuCtx, lg *manjuLogger) error {
 		if lg.stopped() {
 			return fmt.Errorf("已停止")
 		}
-		cacheName := ctx.shotCacheName(s.ID)
+		cacheName := ctx.shotCacheName(s)
 		if fileExists(h3CachePath(ctx.sharedModels, cacheName)) {
 			lg.logf("  跳过（缓存已存在）: " + cacheName + ".pt")
 			continue
@@ -1286,22 +1303,26 @@ func (ctx *manjuCtx) selectedShots(shots []manjuShot) []manjuShot {
 
 // ---- 参考图(复制到 ComfyUI input,LoadImage 直接按名读取) ----
 
-// charRefName 角色参考图:优先正脸特写 <cid>_face.png(身份锁定强),缺省回退全身定妆照
-func (ctx *manjuCtx) charRefName(s manjuShot) string {
-	if len(s.Characters) == 0 {
-		return ""
-	}
-	cid := s.Characters[0]
-	rel := "characters/" + cid + "_face.png"
-	if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
-		rel = "characters/" + cid + ".png"
-		if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
-			return ""
+// charRefNames 全部登场角色的参考图:每个角色优先正脸特写 <cid>_face.png(身份锁定强),
+// 缺省回退全身定妆照;最多前 3 个角色(参考图过多稀释 token)。多角色同镜逐一传图锁身份。
+func (ctx *manjuCtx) charRefNames(s manjuShot) []string {
+	var out []string
+	for i, cid := range s.Characters {
+		if i >= 3 {
+			break
 		}
+		rel := "characters/" + cid + "_face.png"
+		if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
+			rel = "characters/" + cid + ".png"
+			if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
+				continue
+			}
+		}
+		name := fmt.Sprintf("dir_char_%d_%d.png", s.ID, i)
+		_ = copyFile(filepath.Join(ctx.assetsDir, rel), filepath.Join(ctx.comfyInput, name))
+		out = append(out, name)
 	}
-	name := fmt.Sprintf("dir_char_%d.png", s.ID)
-	_ = copyFile(filepath.Join(ctx.assetsDir, rel), filepath.Join(ctx.comfyInput, name))
-	return name
+	return out
 }
 
 func (ctx *manjuCtx) sceneRefName(s manjuShot) string {
@@ -1355,8 +1376,24 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 				continue
 			}
 		}
-		cacheName := ctx.shotCacheName(s.ID)
+		cacheName := ctx.shotCacheName(s)
+		// 流水线预编码:当前镜渲染等待期间,后台预提交下一镜的 Qwen3-VL 编码
+		// (GPU 渲染与文本编码可并行,镜头间空窗从「编码+渲染」串行缩短为约一帧渲染时长)
+		var preErr error
+		var preWg sync.WaitGroup
+		if i+1 < len(selected) {
+			next := selected[i+1]
+			nextDst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", next.ID))
+			if !fileExists(nextDst) {
+				preWg.Add(1)
+				go func() {
+					defer preWg.Done()
+					preErr = ctx.ensureEncoded(next, ctx.shotCacheName(next), lg)
+				}()
+			}
+		}
 		if err := ctx.ensureEncoded(s, cacheName, lg); err != nil {
+			preWg.Wait()
 			return fmt.Errorf("镜头 %d 预编码失败: %w", s.ID, err)
 		}
 		idx := idxOf[s.ID]
@@ -1365,6 +1402,7 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 			ctx.steps, cacheName, len(s.Characters) > 0, chained, idx-1, idx)
 		pid, err := ctx.comfy.submit(wf)
 		if err != nil {
+			preWg.Wait()
 			return fmt.Errorf("镜头 %d 提交失败: %w", s.ID, err)
 		}
 		lg.logf("  渲染提交 " + pid[:8] + "...")
@@ -1375,28 +1413,39 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 				lg.logf("  ⚠️ 渲染被中断,5 秒后自动重试...")
 				time.Sleep(5 * time.Second)
 				if lg.stopped() {
+					preWg.Wait()
 					return fmt.Errorf("已停止")
 				}
 				pid, err = ctx.comfy.submit(wf)
 				if err != nil {
+					preWg.Wait()
 					return fmt.Errorf("镜头 %d 重试提交失败: %w", s.ID, err)
 				}
 				if err = ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second); err != nil {
+					preWg.Wait()
 					return fmt.Errorf("镜头 %d 渲染失败(重试后): %w", s.ID, err)
 				}
 			} else {
+				preWg.Wait()
 				return fmt.Errorf("镜头 %d 渲染失败: %w", s.ID, err)
 			}
 		}
 		entry := ctx.comfy.history(pid)
 		rel := comfyOutputVideo(entry)
 		if rel == "" {
+			preWg.Wait()
 			return fmt.Errorf("镜头 %d 任务完成但未找到视频输出", s.ID)
 		}
 		if err := copyFile(filepath.Join(ctx.comfyOutput, rel), dst); err != nil {
+			preWg.Wait()
 			return fmt.Errorf("镜头 %d 复制视频失败: %w", s.ID, err)
 		}
 		lg.logf(fmt.Sprintf("  ✅ 镜头 %d 完成（%.1f 分）-> %s", s.ID, time.Since(t0).Minutes(), dst))
+		// 等预编码收尾(通常渲染期间早已完成);失败在下一镜自己的 ensureEncoded 处暴露
+		preWg.Wait()
+		if preErr != nil {
+			lg.logf("  ⚠️ 下一镜预编码失败(下一镜将串行重试): " + truncate(preErr.Error(), 100))
+		}
 	}
 	lg.logf("🎉 渲染完成 -> " + clipsEp)
 	return nil

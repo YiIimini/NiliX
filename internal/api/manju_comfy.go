@@ -263,29 +263,26 @@ func wfAdd(workflow map[string]any, classType string, inputs map[string]any) str
 }
 
 // h3EncWorkflow 预编码工作流(只跑 Qwen3-VL,无 UNET;输出 CondSave 缓存 .pt)
-// hasChar: 有角色 → MiniMaxH3ReferenceToVideo(角色+场景双参考);空镜 → MiniMaxH3ImageToVideo(场景首帧)
-func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRef, sceneRef, cacheName string, hasChar bool) map[string]any {
+// hasChar: 有角色 → MiniMaxH3ReferenceToVideo(角色+场景多参考);空镜 → MiniMaxH3ImageToVideo(场景首帧)
+// charRefs: 全部登场角色的参考图(正脸优先),多角色同镜逐一传入锁身份
+func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs []string, sceneRef, cacheName string, hasChar bool) map[string]any {
 	wf := map[string]any{}
 	clip, vae, audioVae := h3Loaders(wf, R)
 	var condID string
 	if hasChar {
-		var charLoad, sceneLoad string
-		if charRef != "" {
-			charLoad = wfAdd(wf, "LoadImage", map[string]any{"image": charRef})
-		}
-		if sceneRef != "" {
-			sceneLoad = wfAdd(wf, "LoadImage", map[string]any{"image": sceneRef})
-		}
 		inputs := map[string]any{
 			"clip": refOf(clip), "vae": refOf(vae), "audio_vae": refOf(audioVae),
 			"prompt": prompt, "width": w, "height": h, "length": length, "ref_image_size": "match",
 		}
 		var refs []any
-		if charLoad != "" {
-			refs = append(refs, refOf(charLoad))
+		for _, cr := range charRefs { // 多角色:每个登场角色一张参考图(正脸优先)
+			if cr == "" {
+				continue
+			}
+			refs = append(refs, refOf(wfAdd(wf, "LoadImage", map[string]any{"image": cr})))
 		}
-		if sceneLoad != "" {
-			refs = append(refs, refOf(sceneLoad))
+		if sceneRef != "" {
+			refs = append(refs, refOf(wfAdd(wf, "LoadImage", map[string]any{"image": sceneRef})))
 		}
 		if len(refs) > 0 {
 			inputs["ref_images"] = refs

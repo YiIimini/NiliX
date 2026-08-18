@@ -391,14 +391,11 @@ def cmd_assemble(args):
         v = i.streams.video[0]
         a = i.streams.audio[0] if i.streams.audio else None
         dur = float(v.duration * v.time_base)
-        # 本镜头字幕窗口:镜头内 12%-92%,台词/旁白按句均分
+        # 本镜头字幕窗口:镜头内 12%-92%,台词/旁白按字数占比分配窗口
         # (12% 起:台词开说即出字幕,避免延后;92% 止:给下一镜转场留白)
         subs = []
         if ci < len(cues):
-            lines = cues[ci]
-            wa, wb = film_sec + 0.12 * dur, film_sec + 0.92 * dur
-            step = (wb - wa) / max(len(lines), 1)
-            subs = [(wa + k * step, wa + (k + 1) * step, txt) for k, txt in enumerate(lines)]
+            subs = _assign_subtitle_windows(cues[ci], dur, film_sec)
         ci += 1
         film_sec += dur
         # 视频+音频必须交错解码(PyAV 先解完视频再解音频会拿不到音频帧)
@@ -471,6 +468,302 @@ def cmd_facecrop(args):
     print(f"  ✂️ 正脸参考: {os.path.basename(args.dst)} ({crop.size[0]}x{crop.size[1]})")
 
 
+def cmd_asr(args):
+    """ASR 台词核对:用 faster-whisper(本地)转写视频语音,与分镜台词/旁白比对。
+
+    --plan 提供 direct_plan.json(取各镜台词),--shots 指定核对的镜头号(逗号分隔,空=全部)。
+    判定:逐字比对转写文本与台词原文(去空白/标点),不一致或漏台词 → 该镜标记台词不符,
+    进审片失败集自动返工。末行输出 JSON {"shots": {"1": {"ok": bool, "spoken": "...", "expected": "..."} } }。
+    模型:small(int8 CPU)首启自动下载到 ~/.cache;首次运行需联网,之后全离线。
+    """
+    import av
+    model_name = args.model or "small"
+    compute = "int8"
+    try:
+        from faster_whisper import WhisperModel
+        model = WhisperModel(model_name, device="cpu", compute_type=compute)
+    except Exception as e:
+        print(f"❌ faster-whisper 不可用({e});未安装时: venv pip install faster-whisper")
+        print(json.dumps({"shots": {}, "error": str(e)}))
+        sys.exit(1)
+
+    # 分镜台词:plan.json shots[].dialogue/narration(去「角色:」前缀)
+    expected = {}
+    if args.plan and os.path.exists(args.plan):
+        with open(args.plan, encoding="utf-8") as f:
+            plan = json.load(f)
+        import re
+        for s in plan.get("shots", []):
+            lines = []
+            dlg = (s.get("dialogue") or "").strip()
+            if dlg:
+                for ln in dlg.splitlines():
+                    ln = re.sub(r"^[^:：]{1,8}[:：]\s*", "", ln).strip()
+                    if ln:
+                        lines.append(ln)
+            nar = (s.get("narration") or "").strip()
+            if nar:
+                lines.append(nar)
+            sid = int(s.get("shot_id") or 0)
+            if sid and lines:
+                expected[sid] = " ".join(lines)
+
+    # 目标镜头
+    ids = []
+    if args.shots:
+        for p in args.shots.split(","):
+            p = p.strip()
+            if p.isdigit():
+                ids.append(int(p))
+    files = sorted(f for f in os.listdir(args.dir) if f.lower().endswith(".mp4"))
+    targets = []
+    for f in files:
+        sid = 0
+        m = reASRShot.search(f)
+        if m:
+            sid = int(m.group(1))
+        if ids and sid not in ids:
+            continue
+        targets.append((f, sid))
+    if not targets:
+        print("❌ 无待核对镜头: " + args.dir)
+        sys.exit(1)
+
+    def norm(t):
+        # 比对归一:去空白/常见标点(全半角都覆盖,含 ，。！？：；""''~…),统一小写;繁体转简体
+        # (whisper small 中文常输出繁体,如「濃/燈/終」,不归一会全部误判)
+        s = re.sub(r"[\s,，。.．!！?？\-—·、:；:;\"'‘’“”()\[\]{}<>《》~～…]+", "", (t or "")).lower()
+        try:
+            from opencc import OpenCC
+            s = OpenCC("t2s").convert(s)
+        except Exception:
+            pass  # opencc 未装:跳过简繁归一(比对稍严格,但不崩)
+        return s
+
+    def clip_txt(t, n):
+        t = (t or "").strip()
+        return t if len(t) <= n else t[:n] + "…"
+
+    out = {}
+    print(f"🎤 ASR 台词核对 {len(targets)} 镜(model={model_name}/{compute})")
+    for f, sid in targets:
+        p = os.path.join(args.dir, f)
+        try:
+            # 预检:无音轨的镜头 whisper 内部解 audio 流会越界,直接判失败(漏台词)
+            import av as _av
+            _c = _av.open(p)
+            _naudio = len(_c.streams.audio)
+            _c.close()
+            if _naudio == 0:
+                if expected.get(sid):
+                    print(f"  {f:12s} ❌ 无音轨(分镜要求台词「{clip_txt(expected.get(sid, ''), 20)}」)")
+                    out[str(sid or f)] = {"ok": False, "spoken": "", "expected": expected.get(sid, ""), "error": "no audio stream"}
+                else:
+                    print(f"  {f:12s} ⏭ 无音轨(无台词镜头,跳过)")
+                    out[str(sid or f)] = {"ok": True, "spoken": "", "expected": ""}
+                continue
+            # 抽音频:直接喂视频文件给 whisper(内部 ffmpeg 解码;PyAV 管线产物 mp4+aac 可直接读)
+            segments, info = model.transcribe(p, language="zh", beam_size=1, vad_filter=True)
+            spoken = " ".join(s.text.strip() for s in segments).strip()
+            exp = expected.get(sid, "")
+            ok = True
+            if exp:
+                ok = norm(spoken) == norm(exp)
+                # 完全包含也算过(whisper 可能多识别环境音字幕)
+                if not ok and norm(exp) and norm(exp) in norm(spoken):
+                    ok = True
+            elif args.strict:
+                ok = bool(spoken)  # 无台词镜头:strict 模式要求完全静音
+            else:
+                ok = True  # 无台词镜头非 strict 不核(旁白为 H3 画外音,字幕在成片烧录)
+            mark = "✅" if ok else "❌"
+            detail = f"期望[{clip_txt(exp, 30)}] 实听[{clip_txt(spoken, 30)}]" if exp else (f"实听[{clip_txt(spoken, 30)}]" if spoken else "(无台词,静音)")
+            print(f"  {f:12s} {mark} {detail}")
+            out[str(sid or f)] = {"ok": ok, "spoken": spoken, "expected": exp}
+        except Exception as e:
+            print(f"  {f:12s} ❌ {e}")
+            out[str(sid or f)] = {"ok": False, "error": str(e)}
+    print(json.dumps({"shots": out}, ensure_ascii=False))
+
+
+import re as _reGlobal  # noqa: E402
+reASRShot = _reGlobal.compile(r"^(\d+)\.mp4$", _reGlobal.IGNORECASE)
+def _cues_with_weights(lines):
+    """台词/旁白按字数加权:长句占更长的字幕窗口(原来是均分,长句放不下/短句空挂)"""
+    weights = [max(1, len(l)) for l in lines]
+    total = sum(weights)
+    return [w / total for w in weights]
+
+
+def _assign_subtitle_windows(cues, dur, film_sec):
+    """为每镜生成字幕窗口(镜头内 12%-92%);句内窗口按字数占比分配"""
+    subs = []
+    if not cues:
+        return subs
+    wa, wb = film_sec + 0.12 * dur, film_sec + 0.92 * dur
+    weights = _cues_with_weights(cues)
+    t = wa
+    for k, txt in enumerate(cues):
+        span = (wb - wa) * weights[k]
+        subs.append((t, t + span, txt))
+        t += span
+    return subs
+
+
+def cmd_trailer(args):
+    """预告片自动剪辑:按审片分数选高分镜头,掐头去尾取核心段拼接(目标时长 --target 秒,默认 30)。
+
+    选镜策略(脚本侧只按传入清单拼;清单由 Go 侧按审片分数+剧本位置生成):
+    clips 文本文件每行 "NN.mp4 score",Go 侧已排好序;每镜取中段 --seg 秒(默认 4s)。
+    复用 assemble 的合成参数(crf18/音量归一化/字幕烧录,字幕按预告片时间轴重新分配)。
+    """
+    import av
+    import numpy as np
+    from fractions import Fraction
+    if not os.path.exists(args.list):
+        print("❌ 镜头清单不存在: " + args.list)
+        sys.exit(1)
+    entries = []
+    with open(args.list, encoding="utf-8") as f:
+        for ln in f:
+            parts = ln.split()
+            if len(parts) >= 2:
+                entries.append((parts[0], float(parts[1])))
+    if not entries:
+        print("❌ 镜头清单为空")
+        sys.exit(1)
+    files = sorted(f for f in os.listdir(args.clips_dir) if f.lower().endswith(".mp4"))
+    have = set(files)
+    picked = [e for e in entries if e[0] in have]
+    if not picked:
+        print("❌ 清单镜头在目录中均不存在")
+        sys.exit(1)
+    out = args.out
+    if os.path.exists(out):
+        os.remove(out)
+    if os.path.dirname(out):
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+    fps = args.fps
+    cues = _load_subtitle_cues(args.plan) if args.plan else []
+    # 每镜掐头去尾取中段:总时长≈target;段长按 target/镜头数 clamp 到 [2, seg]
+    seg = max(2.0, min(args.seg, args.target / max(len(picked), 1)))
+    print(f"🎬 预告片: {len(picked)} 镜 × {seg:.1f}s ≈ {len(picked) * seg:.0f}s → {out}")
+
+    o = av.open(out, "w")
+    vs = o.add_stream("libx264", rate=fps)
+    vs.pix_fmt = "yuv420p"
+    vs.options = {"crf": "18", "preset": "medium"}
+    as_ = o.add_stream("aac", rate=32000)
+    as_.layout = "stereo"
+    as_.format = "fltp"
+    as_.bit_rate = 128000
+    resampler = av.AudioResampler(format="fltp", layout="stereo", rate=32000)
+
+    # 音量归一化(预扫峰值,同 assemble)
+    peak = 0.0
+    for name, _ in picked:
+        ip = av.open(os.path.join(args.clips_dir, name))
+        for fr in ip.decode(*ip.streams):
+            if isinstance(fr, av.AudioFrame):
+                arr = fr.to_ndarray()
+                mx = 1.0
+                if arr.dtype.kind in "iu":
+                    mx = float(np.iinfo(arr.dtype).max)
+                pk = float(np.abs(arr).max() / mx)
+                peak = max(peak, pk)
+                if peak > 0.95:
+                    break
+        ip.close()
+        if peak > 0.95:
+            break
+    gain = 1.0
+    if peak <= 0.0:
+        peak = 1e-6
+    if 0.02 <= peak < 0.25:
+        gain = min(4.0, 0.7 / peak)
+    elif peak > 0.9:
+        gain = 0.85 / peak
+    if gain != 1.0:
+        print(f"  🔊 音量归一化: 峰值 {peak:.2f} → 增益 x{gain:.2f}")
+
+    total_v, total_a = 0, 0
+    first = True
+    vpts = 0
+    vtb = Fraction(1, fps)
+    film_sec = 0.0
+    for name, _score in picked:
+        p = os.path.join(args.clips_dir, name)
+        i = av.open(p)
+        v = i.streams.video[0]
+        a = i.streams.audio[0] if i.streams.audio else None
+        full = float(v.duration * v.time_base)
+        # 掐头去尾取中段:前 15% 后 15% 弃(淡入淡出/转场边缘),中段截 seg 秒
+        st = max(0.0, full * 0.15)
+        if st + seg > full * 0.85:
+            st = max(0.0, full - seg)
+        try:
+            i.seek(int(st / v.time_base), stream=v)
+        except Exception:
+            pass
+        seg_dur = min(seg, full - st)
+        # 该镜字幕:预告片里台词直接下挂该段
+        sid = 0
+        m = reASRShot.search(name)
+        if m:
+            sid = int(m.group(1))
+        lines = cues[sid - 1] if 0 < sid <= len(cues) else []
+        subs = _assign_subtitle_windows(lines, seg_dur, film_sec) if lines else []
+        film_sec += seg_dur
+        streams = (v, a) if a is not None else (v,)
+        cut_v = 0
+        for frame in i.decode(*streams):
+            if isinstance(frame, av.VideoFrame):
+                t_in = (frame.pts or 0) * float(v.time_base)
+                if t_in < st or t_in > st + seg_dur:
+                    continue
+                if first:
+                    vs.width, vs.height = frame.width, frame.height
+                    first = False
+                frame.pts = vpts
+                frame.time_base = vtb
+                vpts += 1
+                cut_v += 1
+                if subs:
+                    t = (vpts - 1) / fps
+                    for sa, sb, txt in subs:
+                        if sa <= t < sb:
+                            frame = _draw_subtitle(frame, txt)
+                            break
+                for pkt in vs.encode(frame):
+                    o.mux(pkt)
+                total_v += 1
+                if cut_v >= int(seg_dur * fps) + 6:
+                    break
+            else:
+                t_in = (frame.pts or 0) * float(i.streams.audio[0].time_base)
+                if t_in < st or t_in > st + seg_dur:
+                    continue
+                for fr in _frame_list(resampler.resample(frame)):
+                    fr = _apply_gain(fr, gain, np)
+                    fr.pts = None
+                    for pkt in as_.encode(fr):
+                        o.mux(pkt)
+                    total_a += 1
+        for fr in _frame_list(resampler.resample(None)):
+            fr = _apply_gain(fr, gain, np)
+            fr.pts = None
+            for pkt in as_.encode(fr):
+                o.mux(pkt)
+            total_a += 1
+        i.close()
+    for pkt in vs.encode():
+        o.mux(pkt)
+    for pkt in as_.encode():
+        o.mux(pkt)
+    o.close()
+    print(f"  ✅ 预告片已写入 ({total_v} 帧 / 音频块 {total_a})")
+
+
 def main():
     ap = argparse.ArgumentParser(description="manju media helper")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -493,6 +786,20 @@ def main():
     f = sub.add_parser("facecrop")
     f.add_argument("--src", required=True)
     f.add_argument("--dst", required=True)
+    sr = sub.add_parser("asr")
+    sr.add_argument("--dir", required=True)
+    sr.add_argument("--plan", default="")
+    sr.add_argument("--shots", default="")
+    sr.add_argument("--model", default="small")
+    sr.add_argument("--strict", action="store_true")
+    tr = sub.add_parser("trailer")
+    tr.add_argument("--clips-dir", required=True)
+    tr.add_argument("--out", required=True)
+    tr.add_argument("--list", required=True, help="镜头清单文件,每行 'NN.mp4 分数'(已按优先级排序)")
+    tr.add_argument("--fps", type=int, default=24)
+    tr.add_argument("--target", type=float, default=30, help="目标总时长(秒)")
+    tr.add_argument("--seg", type=float, default=4, help="单镜最长段长(秒)")
+    tr.add_argument("--plan", default="")
     args = ap.parse_args()
     if args.cmd == "qc":
         cmd_qc(args)
@@ -502,6 +809,10 @@ def main():
         cmd_assemble(args)
     elif args.cmd == "facecrop":
         cmd_facecrop(args)
+    elif args.cmd == "asr":
+        cmd_asr(args)
+    elif args.cmd == "trailer":
+        cmd_trailer(args)
 
 
 if __name__ == "__main__":

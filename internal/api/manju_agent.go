@@ -523,6 +523,58 @@ reason: 不超过 100 字中文,说明题材/基调与所选风格的匹配理�
 
 // ---- 机械质检(JSON 报告) ----
 
+// runASRCheck ASR 台词核对(本地 faster-whisper):有台词镜头转写比对,不符 → 汇入 qcBad 触发返工。
+// 全本地 CPU small 模型;无台词镜头跳过;脚本/模型不可用时静默降级(不影响判分流程)。
+func (ctx *manjuCtx) runASRCheck(lg *manjuLogger, clipsEp string, shots []manjuShot, planPath string) map[int][]string {
+	var spoken []manjuShot
+	for _, s := range shots {
+		if strings.TrimSpace(s.Dialogue) != "" && fileExists(filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))) {
+			spoken = append(spoken, s)
+		}
+	}
+	if len(spoken) == 0 {
+		return nil
+	}
+	lg.logf(fmt.Sprintf("🎤 ASR 台词核对: %d 个有台词镜头(本地 small 模型,首次运行需下载)", len(spoken)))
+	ids := make([]string, 0, len(spoken))
+	for _, s := range spoken {
+		ids = append(ids, strconv.Itoa(s.ID))
+	}
+	out, err := ctx.runMediaOut("asr", "--dir", clipsEp, "--plan", planPath, "--shots", strings.Join(ids, ","))
+	if err != nil {
+		lg.logf("  ⚠️ ASR 核对不可用(忽略,继续视觉判分): " + truncate(err.Error(), 120))
+		return nil
+	}
+	m := parseJSONLine(out)
+	if m == nil {
+		return nil
+	}
+	shotsMap, _ := m["shots"].(map[string]any)
+	bad := map[int][]string{}
+	for id, v := range shotsMap {
+		r, ok := v.(map[string]any)
+		if !ok || r["ok"] == true {
+			continue
+		}
+		n, err := strconv.Atoi(id)
+		if err != nil {
+			continue
+		}
+		reason := "台词与分镜不符"
+		if e := str(r["error"]); e != "" {
+			reason = "ASR 失败: " + truncate(e, 60)
+		} else if sp, ex := str(r["spoken"]), str(r["expected"]); sp != "" || ex != "" {
+			reason = fmt.Sprintf("台词不符(实听「%s」vs 分镜「%s」)", truncate(sp, 24), truncate(ex, 24))
+		}
+		bad[n] = append(bad[n], reason)
+		lg.logf(fmt.Sprintf("  ❌ 镜头 %d %s", n, reason))
+	}
+	if len(bad) == 0 {
+		lg.logf("  ✅ 有台词镜头转写全部与分镜一致")
+	}
+	return bad
+}
+
 // runMediaOut 跑媒体辅助脚本并捕获完整 stdout(不写运行日志,供 JSON 解析)
 func (ctx *manjuCtx) runMediaOut(args ...string) (string, error) {
 	script := ensureMediaHelper()
@@ -636,11 +688,13 @@ func shotMetaFromPlan(s manjuShot, charMap, sceneMap map[string]map[string]any, 
 	return meta
 }
 
-// refImagesFor 镜头参考图:R2V=角色定妆照(优先正脸),FL2VA=场景图
+// refImagesFor 镜头参考图:R2V=全部登场角色定妆照(正脸优先,最多 3 个),FL2VA=场景图
 func (ctx *manjuCtx) refImagesFor(s manjuShot) []string {
 	var out []string
-	if len(s.Characters) > 0 {
-		cid := s.Characters[0]
+	for i, cid := range s.Characters {
+		if i >= 3 {
+			break
+		}
 		for _, rel := range []string{"characters/" + cid + "_face.png", "characters/" + cid + ".png"} {
 			p := filepath.Join(ctx.assetsDir, rel)
 			if fileExists(p) {
@@ -769,7 +823,7 @@ func planCharSceneMaps(plan map[string]any) (charMap, sceneMap map[string]map[st
 // (提示词改动只在重新编码时生效;缓存名不含提示词指纹,必须显式删)。
 func (ctx *manjuCtx) clearShotArtifacts(s manjuShot) {
 	_ = os.Remove(filepath.Join(ctx.clipsDir, ctx.episode, fmt.Sprintf("%02d.mp4", s.ID)))
-	_ = os.Remove(h3CachePath(ctx.sharedModels, ctx.shotCacheName(s.ID)))
+	_ = os.Remove(h3CachePath(ctx.sharedModels, ctx.shotCacheName(s)))
 }
 
 // updateShotPrompt 把修复师的新提示词写回方案 json + 逐镜提示词缓存
@@ -820,6 +874,17 @@ func agentJudgeAndRework(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 		return nil
 	}
 	qcBad, _ := ctx.runQCJSON(lg, clipsEp)
+	// ASR 台词核对:有台词镜头本地转写比对(不符进失败集触发返工;不可用自动降级)
+	planPath := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
+	if asrBad := ctx.runASRCheck(lg, clipsEp, selected, planPath); len(asrBad) > 0 {
+		if qcBad == nil {
+			qcBad = asrBad
+		} else {
+			for id, flags := range asrBad {
+				qcBad[id] = append(qcBad[id], flags...)
+			}
+		}
+	}
 	lg.logf(fmt.Sprintf("🤖 审片官开始判分: %d 镜(视觉模型 %s)", len(selected), orDefault(acfg.VisionModel, "未配置→仅机械质检")))
 	failed := ctx.judgeShots(lg, acfg, plan, selected, qcBad)
 
@@ -1317,6 +1382,86 @@ func registerAgentRoutes(mux *http.ServeMux) {
 			return
 		}
 		manjuAgentReworkRun(w, configPath, episode, shotID)
+	})
+
+	// 预告片自动剪辑:审片分数选镜头(高分优先+剧本关键位),本地合成 30s 预告
+	mux.HandleFunc("POST /api/manju/trailer", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		configPath := str(body["config"])
+		episode := orDefault(str(body["episode"]), "EP01")
+		target := 30.0
+		if v, ok := manjuToFloat(body["target"]); ok && v >= 10 && v <= 120 {
+			target = v
+		}
+		if configPath == "" {
+			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+			return
+		}
+		ctx, err := newManjuCtx(configPath, episode, "", "", "")
+		if err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
+		clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
+		if entries, err := os.ReadDir(clipsEp); err != nil || len(entries) == 0 {
+			http.Error(w, `{"error":"该集没有已渲染镜头,先跑渲染"}`, http.StatusBadRequest)
+			return
+		}
+		// 选镜:审片分数降序;无审片数据时按剧本位置(开场/中段/结尾各取)
+		st := loadAgentState(ctx.project)
+		type cand struct {
+			name  string
+			score float64
+		}
+		var cands []cand
+		if entries, err := os.ReadDir(clipsEp); err == nil {
+			for _, e := range entries {
+				n := e.Name()
+				if !strings.HasSuffix(strings.ToLower(n), ".mp4") {
+					continue
+				}
+				idStr := strings.TrimSuffix(n, ".mp4")
+				id, err := strconv.Atoi(idStr)
+				if err != nil {
+					continue
+				}
+				score := 0.0
+				if j := st.Shots[strconv.Itoa(id)]; j != nil && j.Score > 0 {
+					score = j.Score
+				}
+				cands = append(cands, cand{n, score})
+			}
+		}
+		if len(cands) == 0 {
+			http.Error(w, `{"error":"无可用镜头"}`, http.StatusBadRequest)
+			return
+		}
+		sort.Slice(cands, func(i, j int) bool { return cands[i].score > cands[j].score })
+		// 预告片镜头数:目标 30s/每镜 4s ≈ 8 镜上限
+		maxN := int(target/4) + 1
+		if maxN > len(cands) {
+			maxN = len(cands)
+		}
+		listPath := filepath.Join(os.TempDir(), fmt.Sprintf("manju_trailer_%d.txt", time.Now().UnixNano()))
+		defer os.Remove(listPath)
+		var lb strings.Builder
+		for i := 0; i < maxN; i++ {
+			fmt.Fprintf(&lb, "%s %.0f\n", cands[i].name, cands[i].score)
+		}
+		if err := os.WriteFile(listPath, []byte(lb.String()), 0644); err != nil {
+			http.Error(w, `{"error":"写清单失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+			return
+		}
+		out := filepath.Join(ctx.workdir, ctx.episode+"_预告片.mp4")
+		args := []string{"trailer", "--clips-dir", clipsEp, "--out", out, "--list", listPath,
+			"--fps", strconv.Itoa(ctx.fps), "--target", fmt.Sprintf("%.0f", target),
+			"--plan", filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")}
+		if _, err := ctx.runMediaOut(args...); err != nil {
+			http.Error(w, `{"error":"预告片合成失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "file": out, "shots": maxN})
 	})
 
 	// 视觉模型连通测试(拿项目第一张定妆照问一句话)

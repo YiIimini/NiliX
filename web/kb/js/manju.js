@@ -377,8 +377,28 @@
       const head = $("manju-out-fold");
       const body = $("manju-out-body");
       if (!head || !body) return;
-      head.addEventListener("click", () => this._setOutputsFold(!body.classList.contains("is-folded")));
+      head.addEventListener("click", (e) => {
+        if (e.target.closest("#manju-trailer")) return; // 预告片按钮不触发折叠
+        this._setOutputsFold(!body.classList.contains("is-folded"));
+      });
       if (localStorage.getItem("manju-out-collapsed") === "1") this._setOutputsFold(true);
+      // 预告片:按审片分数自动剪辑高分镜头
+      const tr = $("manju-trailer");
+      if (tr) tr.addEventListener("click", () => this.makeTrailer());
+    },
+
+    /* 预告片自动剪辑:高分镜头掐头去尾拼接 30s(音量归一+字幕),产物落工作目录 */
+    makeTrailer() {
+      if (!this.project) { this.setErr("请先选择项目"); return; }
+      const btn = $("manju-trailer");
+      btn.disabled = true;
+      btn.textContent = "剪辑中…";
+      post("/api/manju/trailer", { config: this.project, episode: this.episode, target: 30 }).then((r) => {
+        this.setErr("");
+        $("manju-log").textContent = "(🎬 预告片已生成: " + r.file + "(选 " + r.shots + " 个高分镜头) → 工作目录 " + this.episode + "_预告片.mp4)";
+        this.refreshOutputs();
+      }).catch((e) => this.setErr(e.message))
+        .finally(() => { btn.disabled = false; btn.textContent = "🎬 预告片"; });
     },
     _setOutputsFold(collapsed) {
       const body = $("manju-out-body");

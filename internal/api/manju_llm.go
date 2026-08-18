@@ -301,22 +301,24 @@ func manjuStyleShot1(style string) string {
 	return manjuStyleDesc(style).shot1
 }
 
-const manjuRef2vaTpl = `【Ref2VA 六段式（有角色，锁人物），严格此顺序】：
+const manjuRef2vaTpl = `【Ref2VA 六段式(有角色,锁人物),严格此顺序】:
 subject_definitions:
 <Subject 1> is the character in <Picture 1> with [完整外观：逐字引用角色卡 appearance；服装 costume 全字段；【性别强化】女=feminine facial structure, soft delicate features, long hair（禁男性化），男=masculine jawline, strong brow, broad shoulders（禁女性化）]
-<Subject 2> is the [场景名] environment in <Picture 2>, with [空间结构/材质/光线客观描述，引用场景卡]
-[关键道具：<Subject 3> is the [道具名] in <Picture 3>, with 外观描述；说明与角色互动]
+[多角色镜:每个登场角色一行 <Subject N> is the character in <Picture N>…,与参考图顺序一致(角色在前场景在后);画面里谁先出现谁 Subject 号靠前]
+<Subject N+1> is the [场景名] environment in <Picture N+1>, with [空间结构/材质/光线客观描述，引用场景卡]
+[关键道具：<Subject M> is the [道具名] in <Picture M>, with 外观描述；说明与角色互动]
 
 summary:
 [reference generation] 本镜任务概述（1-2 句英文，说明目标视频与参考主体关系）
 
 retention_analysis:
 <Subject 1> (appears in [Shot 1]): fully_preserved - 面部/发型/服装与 <Picture 1> 完全一致
-<Subject 2> (appears in [Shot 1]): fully_preserved - 场景布局/光线/背景与 <Picture 2> 一致
+[多角色镜:每个角色一行 retention_analysis,全部 fully_preserved]
+<Subject N+1> (appears in [Shot 1]): fully_preserved - 场景布局/光线/背景与 <Picture N+1> 一致
 [道具行同理]（标记只用官方四值：fully_preserved / partially_preserved / attribute_transfer / weak_reference）
 
 detailed_description:
-{style}。[实体锁定句：The face, hairstyle, costume of <Subject 1> must remain exactly as in <Picture 1> throughout the shot; the scene layout of <Subject 2> must match its reference.]
+{style}。[实体锁定句：The face, hairstyle, costume of <Subject 1> must remain exactly as in <Picture 1> throughout the shot; the scene layout of <Subject N+1> must match its reference.; 多角色镜加 Each character must keep their own identity from their own reference picture, never swap or blend identities.]
 [Shot 1] [300-500 词：开场构图→主体外观位置→动作状态变化→运镜（类型+幅度+速度）→光影→台词/旁白→收尾；<Subject N> 标签在主体首次出现处插入；情感戏/对话优先近景/中景；末尾散文排除项 no subtitles, no text overlays, no watermark；【亮度护栏·强制】Dark mood is fine for atmosphere, but the subject's face and body must remain clearly visible and well-lit at all times - use a clear light source on the subject (candlelight, moonlight, torch, window light); never render the frame nearly black]
 
 overall_soundscape:
