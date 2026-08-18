@@ -999,8 +999,10 @@ func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map
 			chars[cid] = m
 		}
 	}
+	// 用户负面提示词随镜传入:H3 无原生负面通道,由写作规范转译成正面排除句注入提示词
 	ctxData, _ := json.Marshal(map[string]any{
 		"shot": shotObj, "characters": chars, "scene": sceneMap[s.Scene],
+		"negative_prompt": ctx.negPrompt(),
 	})
 	out, err := ctx.llm.chatJSON(sys, string(ctxData), 0.3)
 	if err != nil {

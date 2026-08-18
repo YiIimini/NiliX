@@ -345,7 +345,8 @@ const manjuShotWritingRules = `
 4. 【旁白 = H3 原生画外音，不是 TTS】：写 The narrator (S1) says in an off-screen voiceover: <d>[中文]旁白</d> while the on-screen characters' lips remain completely closed（旁白计入 (S1) 说话顺序；旁白与台词不同时出现）
 5. 画外音台词也写 says in an off-screen voiceover ... while his/her lips remain completely closed
 6. 运镜三要素（类型+幅度+速度）写成句内自然英语（Push In/Pull Out/Pan/Truck/Tilt/Pedestal/Arc/Tracking/Static/POV/Roll/Shake）
-7. 排除项/可见文字用英文双引号原文；H3 为 CFG-distilled 无负面词，禁堆叠负面词
+7. 排除项/可见文字用英文双引号原文；H3 为 CFG-distilled 无负面词，禁堆叠负面词。
+   输入中的 negative_prompt(用户负面提示词)必须逐概念转译为正面排除句,合并写入 detailed_description 末尾散文(如 bad hands→no distorted hands;text→no text overlays, no watermark;flickering→no flickering frames);语义与既有排除项重复的合并,不重复罗列
 8. 画面禁情绪化形容词（只写机位/光影/动作/构图），音效只写现场声，BGM 只写乐器与节奏`
 
 func manjuShotPromptSystem(hasChar bool, style string) string {

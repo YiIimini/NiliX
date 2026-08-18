@@ -467,13 +467,14 @@ func manjuStyleAnalyzeRun(configPath, episode, chapters, novel string) (map[stri
 	}
 	old := str(ctx.cfg["style"])
 	sys := `你是漫剧(竖屏短剧)渲染风格分析师,根据小说章节内容判断最匹配的渲染风格。
-	【分析要点】题材类型(古装/现代/玄幻/科幻/都市/悬疑…)、叙事基调(热血/治愈/暗黑/甜宠…)、场景与美术特征、目标观众画风偏好。
-	【输出 JSON(严格)】{"style": "...", "reason": "..."}
-style 取值规则:
-	- 单个预设 key: 2.5d(2.5D动漫半写实) / real(写实真人电影) / 3d(3D CG) / anime(二次元) / handdrawn(手绘) / papercraft(纸艺) / clay(粘土) / ink(水墨)
-	- 或多个预设组合,用 + 连接(如 2.5d+ink,最多 3 个,语义冲突的组合不要)
-	- 或简短英文风格描述(≤6 个单词),如 cyberpunk / watercolor, light novel
-	reason: 不超过 100 字中文,说明题材/基调与所选风格的匹配理由。`
+【分析要点】题材类型(古装/现代/玄幻/科幻/都市/悬疑…)、叙事基调(热血/治愈/暗黑/甜宠…)、场景与美术特征、目标观众画风偏好。
+【输出 JSON(严格)】{"style": "...", "reason": "..."}
+style 取值规则(多维组合,禁止只给单一预设):
+- 主体画风:预设 key 2.5d(2.5D动漫半写实) / real(写实真人电影) / 3d(3D CG) / anime(二次元) / handdrawn(手绘) / papercraft(纸艺) / clay(粘土) / ink(水墨),最多 2 个
+- 累加题材元素词(取材于小说内容,英文短语):时代/文化氛围(如 ancient Chinese aesthetic / cyberpunk / steampunk)、美术质感(如 watercolor / oil painting / film grain)、光影气质(如 moody cinematic lighting / bright pastel);2-3 个
+- 整体用 + 连接(如 ink+ancient Chinese aesthetic+watercolor / 2.5d+cyberpunk+neon lighting),总元素 3-5 个,语义冲突的组合不要
+- 所有题材元素词必须是英文(H3 提示词直接使用),中文风格词自行翻译
+reason: 不超过 100 字中文,说明题材/基调与各风格元素的匹配理由。`
 	user := "当前渲染风格: " + old + "\n需渲染章节: " + ctx.chapters + " / 集 " + ctx.episode + "\n\n小说章节内容(节选):\n" + truncate(text, 12000)
 	out, err := ctx.llm.chatJSON(sys, user, 0.3)
 	if err != nil {
