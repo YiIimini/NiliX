@@ -31,7 +31,7 @@ const I18N = {
       const k = el.dataset.i18nTitle;
       if (this.dict[k] != null) el.title = this.dict[k];
     });
-    document.title = this.t("app.name") + (this.lang === "zh" ? " · 我的工作台" : "");
+    document.title = this.t("app.name"); // 窗口标题只显示 NiliX
     document.querySelectorAll(".lang-btn").forEach((b) =>
       b.classList.toggle("is-active", b.dataset.lang === this.lang)
     );

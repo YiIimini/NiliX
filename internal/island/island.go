@@ -219,7 +219,7 @@ func Run(islandURL string, onClose func(), a Actions) error {
 
 	w := webview.New(false)
 	defer w.Destroy()
-	w.SetTitle("NiliX")
+	w.SetTitle("NiliX HUD") // 与管理主窗口(NiliX)区分,供窗口枚举识别
 	w.SetSize(miniW, miniH, webview.HintNone)
 	w.SetTransparent() // WebView2 背景透明，消除胶囊圆角外的白色块
 

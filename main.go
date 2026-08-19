@@ -4,6 +4,7 @@ import (
 	"embed"
 	"errors"
 	"flag"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -48,13 +48,14 @@ var islandFS embed.FS
 // 第二个会创建卡死——实测结论,故主窗口走 Edge App 进程,互不冲突)。
 // 关闭窗口 = 驻留托盘(渲染/续写任务不中断),托盘菜单或再次双击可唤起;托盘「退出」才真正退出。
 
-const mainWinTitle = "NiliX · 我的工作台" // 管理页运行时标题(i18n 动态设置),Edge App 窗口标题与其一致(FindWindow 依据)
+const mainWinTitle = "NiliX" // 管理主窗口标题(Edge App 窗口=页面 title,恒为 NiliX;灵动岛为 NiliX HUD 区分)
 
 var (
 	user32Lazy           = syscall.NewLazyDLL("user32.dll")
 	procWinShow          = user32Lazy.NewProc("ShowWindow")
 	procWinSetForeground = user32Lazy.NewProc("SetForegroundWindow")
 	procWinFind          = user32Lazy.NewProc("FindWindowW")
+	procGetSysMetrics    = user32Lazy.NewProc("GetSystemMetrics")
 )
 
 // msedgePath 定位 Edge 浏览器(系统自带;WebView2 运行时本就依赖同一 Edge)
@@ -85,7 +86,32 @@ func runMainWindow(url string) {
 		return
 	}
 	log.Printf("主窗口(Edge App)打开: %s", url)
-	cmd := exec.Command(edge, "--app="+url, "--window-size=1440,900")
+	// 自适应屏幕:按工作区(SM_CXFULLSCREEN/SM_CYFULLSCREEN)的 85%/88% 取尺寸,
+	// 上限 1600×960(大屏不过分铺满),小屏不超出,居中放置
+	sw, _, _ := procGetSysMetrics.Call(16) // SM_CXFULLSCREEN(工作区宽)
+	sh, _, _ := procGetSysMetrics.Call(17) // SM_CYFULLSCREEN(工作区高)
+	if sw == 0 || sh == 0 {
+		sw, sh = 1920, 1040
+	}
+	w := int(float64(sw) * 0.85)
+	h := int(float64(sh) * 0.88)
+	if w > 1600 {
+		w = 1600
+	}
+	if h > 960 {
+		h = 960
+	}
+	if w < 960 {
+		w = int(sw) - 40
+	}
+	if h < 600 {
+		h = int(sh) - 40
+	}
+	x := (int(sw) - w) / 2
+	y := (int(sh) - h) / 2
+	cmd := exec.Command(edge, "--app="+url,
+		fmt.Sprintf("--window-size=%d,%d", w, h),
+		fmt.Sprintf("--window-position=%d,%d", x, y))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 	if err := cmd.Start(); err != nil {
 		log.Printf("主窗口启动失败: %v(回退系统浏览器)", err)
@@ -98,15 +124,15 @@ var (
 	procGetTextW    = user32Lazy.NewProc("GetWindowTextW")
 )
 
-// findMainWindow 枚举顶层窗口按标题模糊查找管理主窗口(含"工作台"字样;
-// FindWindowW 精确匹配对不可见字符/前后缀差异不可靠)。
+// findMainWindow 枚举顶层窗口按标题精确匹配管理主窗口(title 恒为 "NiliX";
+// 灵动岛窗口标题为 "NiliX HUD" 已区分;不用 FindWindowW 因其对动态 title 前后缀不可靠)。
 func findMainWindow() uintptr {
 	var found uintptr
 	cb := syscall.NewCallback(func(h, l uintptr) uintptr {
 		buf := make([]uint16, 128)
 		n, _, _ := procGetTextW.Call(h, uintptr(unsafe.Pointer(&buf[0])), 128)
 		title := syscall.UTF16ToString(buf[:n])
-		if strings.Contains(title, "NiliX") && strings.Contains(title, "工作台") {
+		if title == mainWinTitle {
 			found = h
 			return 0 // 停止枚举
 		}
@@ -231,23 +257,14 @@ func onReady(url string) func() {
 		systray.SetIcon(iconICO)
 		systray.SetTitle("NiliX")
 		systray.SetTooltip("NiliX")
-		mHome := systray.AddMenuItem("打开主页", "打开 NiliX 漫剧管理主页")
-		mNovel := systray.AddMenuItem("小说管理", "打开小说管理")
-		mManju := systray.AddMenuItem("漫剧管理", "打开漫剧管理页")
-		mComfy := systray.AddMenuItem("ComfyUI", "打开 ComfyUI 页面")
-		systray.AddSeparator()
+		mApp := systray.AddMenuItem("NiliX", "打开 NiliX 工作台")
+		mApp.SetIcon(iconICO) // 菜单项带应用图标
 		mAuto := systray.AddMenuItemCheckbox("开机自启", "开机自动启动 NiliX", autostart.Enabled())
-		mQuit := systray.AddMenuItem("退出", "停止服务并退出托盘")
+		mQuit := systray.AddMenuItem("结束应用", "关闭窗口与服务并退出")
 		go func() {
 			for {
 				select {
-				case <-mHome.ClickedCh:
-					showMainWindow(url)
-				case <-mNovel.ClickedCh:
-					showMainWindow(url)
-				case <-mManju.ClickedCh:
-					showMainWindow(url)
-				case <-mComfy.ClickedCh:
+				case <-mApp.ClickedCh:
 					showMainWindow(url)
 				case <-mAuto.ClickedCh:
 					if mAuto.Checked() {
