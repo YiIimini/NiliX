@@ -680,13 +680,13 @@ const App = {
     });
   },
 
-  /* 全局对话:调智能体聊天接口;回复显示在顶部回复横幅;action 在漫剧管理页委托其完整流程 */
+  /* 全局对话:调智能体聊天接口;回复显示在顶部回复横幅;action 在视频管理页委托其完整流程 */
   mascotChat(text) {
     this.aiReply("me", esc(text));
     const wb = (typeof ManjuWorkbench !== "undefined") ? ManjuWorkbench : null;
     const cfg = (wb && wb.project) || localStorage.getItem("manju-project") || "";
     if (!cfg) {
-      this.aiReply("ag", "请先在<b>漫剧管理</b>页选择项目,我才能分析项目状态 🤖");
+      this.aiReply("ag", "请先在<b>视频管理</b>页选择项目,我才能分析项目状态 🤖");
       return;
     }
     const inManju = !!(wb && wb.project === cfg);
@@ -700,7 +700,7 @@ const App = {
       this.mascotSay(d.reply || "…");
       if (d.action === "health") {
         if (inManju) wb.openHealth();
-        else this.aiReply("ag", "👉 体检详情请到<b>漫剧管理</b>页查看(或点页面里的「🔍 项目体检」)");
+        else this.aiReply("ag", "👉 体检详情请到<b>视频管理</b>页查看(或点页面里的「🔍 项目体检」)");
       } else if (d.action === "style") {
         // 风格分析已由后端执行完(d.reply 带新旧风格与理由);刷新界面
         if (inManju) wb.loadProject();
@@ -914,7 +914,7 @@ const App = {
     }
   },
 
-  /* 当前路由:comfy / novel / manju(默认漫剧管理;关系图谱页已移除) */
+  /* 当前路由:comfy / novel / manju(默认视频管理;关系图谱页已移除) */
   currentRoute() {
     const hash = location.hash || "#/manju";
     if (hash.startsWith("#/comfy")) return "comfy";
@@ -941,7 +941,7 @@ const App = {
       ManjuView.enter();
       if (typeof ManjuWorkbench !== "undefined") ManjuWorkbench.enter();
     }
-    // 离开漫剧管理页时停止其轮询(iframe/状态常驻仅在本页需要)
+    // 离开视频管理页时停止其轮询(iframe/状态常驻仅在本页需要)
     if (route !== "manju" && typeof ManjuWorkbench !== "undefined") ManjuWorkbench.leave();
     this.mascotOnRoute(route);
   },

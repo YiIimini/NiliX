@@ -7,10 +7,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=20260819l1">
-<link rel="stylesheet" href="/css/themes.css?v=20260819l1">
-<link rel="stylesheet" href="/css/materials.css?v=20260819l1">
-<link rel="stylesheet" href="/css/app.css?v=20260819l1">
+<link rel="icon" type="image/png" href="/icon.png?v=20260819m1">
+<link rel="stylesheet" href="/css/themes.css?v=20260819m1">
+<link rel="stylesheet" href="/css/materials.css?v=20260819m1">
+<link rel="stylesheet" href="/css/app.css?v=20260819m1">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -78,7 +78,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260819l1" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260819m1" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -87,7 +87,7 @@
         <svg class="ic" aria-hidden="true"><use href="#i-book"/></svg><span data-i18n="nav.novel">小说管理</span>
       </a>
       <a href="#/manju" class="nav-link" data-route="manju">
-        <svg class="ic" aria-hidden="true"><use href="#i-film"/></svg><span data-i18n="nav.manju">漫剧管理</span>
+        <svg class="ic" aria-hidden="true"><use href="#i-film"/></svg><span data-i18n="nav.manju">视频管理</span>
       </a>
       <a href="#/comfy" class="nav-link" data-route="comfy">
         <svg class="ic" aria-hidden="true"><use href="#i-comfy"/></svg><span data-i18n="nav.comfy">ComfyUI</span>
@@ -176,11 +176,11 @@
       <div id="novel-detail" class="dir-detail hidden"></div>
     </section>
 
-    <!-- 二级页:漫剧管理(原生工作台 + 右侧成品列表收缩栏) -->
+    <!-- 二级页:视频管理(原生工作台 + 右侧成品列表收缩栏) -->
     <section id="view-manju" class="view view-dir view-manju">
       <div class="hrs-head">
         <div class="hrs-title">
-          <h1 data-i18n="manju.title">漫剧管理</h1>
+          <h1 data-i18n="manju.title">视频管理</h1>
           <p class="ov-sub">漫剧工作台 · 一站式管线 · 成品列表</p>
         </div>
         <div class="hrs-tools">
@@ -542,7 +542,7 @@
             <svg class="ic" aria-hidden="true"><use href="#i-list"/></svg>
             <span id="reader-toc-label" data-i18n="book.toc">章节目录</span>
           </button>
-          <button id="reader-script-btn" class="reader-toc-btn" title="漫剧制作（代入漫剧管理一条龙）" aria-label="Make Manju">
+          <button id="reader-script-btn" class="reader-toc-btn" title="漫剧制作（代入视频管理一条龙）" aria-label="Make Manju">
             <svg class="ic" aria-hidden="true"><use href="#i-film"/></svg>
             <span data-i18n="book.script">生成剧本</span>
           </button>
@@ -662,7 +662,7 @@
             </div>
           </div>
           <div class="settings-row">
-            <span class="settings-row-label" data-i18n="settings.showManju">漫剧管理页</span>
+            <span class="settings-row-label" data-i18n="settings.showManju">视频管理页</span>
             <label class="toggle"><input type="checkbox" id="set-show-manju"><span class="tk"></span></label>
           </div>
           <div class="settings-row">
@@ -751,7 +751,7 @@
           </div>
         </div>
 
-        <!-- 剧本模型(LLM):已隐藏——小说转剧本能力并入漫剧管理(DeepSeek Key/视觉模型均在漫剧设置·智能体调度里配置);
+        <!-- 剧本模型(LLM):已隐藏——小说转剧本能力并入视频管理(DeepSeek Key/视觉模型均在漫剧设置·智能体调度里配置);
              DOM 保留避免 app.js loadLLMSettings 空引用,后端 /api/settings llm 不动 -->
         <div class="settings-group" hidden>
           <div class="settings-label"><span class="sl-emoji">🎬</span><span data-i18n="settings.llm">剧本模型（LLM）</span></div>
@@ -779,11 +779,11 @@
       </div>
     </div>
   </div>
-  <script src="/js/i18n.js?v=20260819l1"></script>
-  <script src="/js/markdown.js?v=20260819l1"></script>
-  <script src="/js/app.js?v=20260819l1"></script>
-  <script src="/js/comfy.js?v=20260819l1"></script>
-  <script src="/js/dirview.js?v=20260819l1"></script>
-  <script src="/js/manju.js?v=20260819l1"></script>
+  <script src="/js/i18n.js?v=20260819m1"></script>
+  <script src="/js/markdown.js?v=20260819m1"></script>
+  <script src="/js/app.js?v=20260819m1"></script>
+  <script src="/js/comfy.js?v=20260819m1"></script>
+  <script src="/js/dirview.js?v=20260819m1"></script>
+  <script src="/js/manju.js?v=20260819m1"></script>
 </body>
 </html>
