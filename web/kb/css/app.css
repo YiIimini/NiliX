@@ -3309,13 +3309,22 @@ select.manju-input {
 .manju-project-col .manju-select {
   width: 100%; max-width: none; min-width: 0;
 }
+/* 参数区:全部参数共用一个卡片边框(单项不加边框),每行一条「标签：值」 */
 .manju-project-col .manju-chips {
   margin-top: 8px;
-  display: flex; flex-direction: column; gap: 5px;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
 }
-/* 项目卡片数据项:每行一条「标签：值」,左对齐 */
 .manju-project-col .manju-chips .manju-chip {
   display: block; margin: 0; text-align: left;
+  border: none; border-radius: 0; padding: 4px 0;
+}
+/* 行间极淡分隔线(卡片内阅读辅助,非单项边框) */
+.manju-project-col .manju-chips .manju-chip + .manju-chip {
+  border-top: 1px solid color-mix(in srgb, var(--panel-border) 50%, transparent);
 }
 
 /* 执行管线卡片(右悬浮列内):按钮换行、不挤压 */
