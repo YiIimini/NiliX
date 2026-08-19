@@ -1447,6 +1447,10 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 				// 中断残留的 0 字节文件:跳过会让坏产物混进成片,QC 阶段才暴露,直接删除重渲
 				_ = os.Remove(dst)
 				lg.logf("  ⚠️ 发现 0 字节残留,删除重渲: " + dst)
+			} else if ctx.shotManifestStatus(s) == "stale" {
+				// 产物过期(提示词/定妆照/场景图/画幅已变):旧镜头会被跳过复用,必须删旧重渲
+				lg.logf("  ⚠️ 镜头 " + strconv.Itoa(s.ID) + " 产物已过期(输入已变),删旧重渲(含条件缓存)")
+				ctx.clearShotArtifacts(s)
 			} else {
 				lg.logf("  跳过（已存在）: " + dst)
 				continue
@@ -1565,6 +1569,9 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 		return fmt.Errorf("镜头 %d 复制视频失败: %w", s.ID, err)
 	}
 	ctx.renderCKClear(ckKey) // 产物已收,检查点使命完成
+	if dstDir == filepath.Join(ctx.clipsDir, ctx.episode) {
+		ctx.manifestMark(s, chained) // 定稿产物入清单(时效追踪;草稿不入)
+	}
 	lg.logf(fmt.Sprintf("  ✅ 镜头 %d 完成（%.1f 分）-> %s", s.ID, time.Since(t0).Minutes(), dst))
 	return nil
 }

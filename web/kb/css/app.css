@@ -4540,3 +4540,4 @@ select option { text-align: center; }
 /* 云端 2K 定稿:集标题按钮与产物徽标 */
 .manju-out-title .manju-up2k-btn { padding: 1px 8px; font-size: 11px; margin-left: 6px; flex: none; }
 .manju-vid-2k .manju-vid-name { color: var(--accent); }
+.manju-stale-tag { font-size: 10px; color: #e3b341; margin-right: 2px; white-space: nowrap; cursor: help; }

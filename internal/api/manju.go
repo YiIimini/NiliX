@@ -1431,6 +1431,34 @@ func manjuOutputs(w http.ResponseWriter, r *http.Request) {
 	for _, e := range eps {
 		episodes = append(episodes, manjuEpisodeOutputs(P, e))
 	}
+	// 产物时效角标:提示词/定妆照/画幅已变但旧产物仍在的镜头标 stale(前端「已过期」徽标,
+	// 下次渲染自动删旧重渲)。manifest 无记录的旧项目不标(unknown 兼容)。
+	if mctx, err := newManjuCtx(configPath, "", "", "", ""); err == nil {
+		for _, epAny := range episodes {
+			ep, _ := epAny.(map[string]any)
+			if ep == nil {
+				continue
+			}
+			mctx.episode = str(ep["episode"])
+			plan, shots, err := mctx.loadPlan()
+			if err != nil {
+				continue
+			}
+			_ = plan
+			clips, _ := ep["clips"].([]map[string]any)
+			for _, c := range clips {
+				idStr := strings.TrimSuffix(str(c["name"]), filepath.Ext(str(c["name"])))
+				for _, s := range shots {
+					if strconv.Itoa(s.ID) == idStr {
+						if mctx.shotManifestStatus(s) == "stale" {
+							c["stale"] = true
+						}
+						break
+					}
+				}
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"characters": characters, "scenes": scenes, "episodes": episodes})
 }
 

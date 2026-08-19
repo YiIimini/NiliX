@@ -269,3 +269,65 @@ func TestRenderCKReclaim(t *testing.T) {
 	}
 	srv3.Close()
 }
+
+// TestShotManifestLifecycle 产物时效清单:mark→current、改提示词→stale、删产物→missing、
+// 无记录→unknown 兼容、clearShotArtifacts 清记录
+func TestShotManifestLifecycle(t *testing.T) {
+	proj := "zz_manifest_test"
+	dir := filepath.Join(manjuRoot, proj)
+	_ = os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+	workdir := dir
+	_ = os.MkdirAll(filepath.Join(workdir, "assets", "characters"), 0755)
+	_ = os.MkdirAll(filepath.Join(workdir, "assets", "scenes"), 0755)
+	_ = os.MkdirAll(filepath.Join(workdir, "clips", "EP01"), 0755)
+	_ = os.MkdirAll(filepath.Join(workdir, "analysis"), 0755)
+	_ = os.WriteFile(filepath.Join(workdir, "config.json"), []byte(`{"paths":{"workdir":"`+filepath.ToSlash(workdir)+`"}}`), 0644)
+	ctx, err := newManjuCtx(filepath.Join(dir, "config.json"), "EP01", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := manjuShot{ID: 3, Scene: "s1", H3Prompt: "p1", Duration: 5, Characters: []string{"c1"}}
+	mp4 := filepath.Join(ctx.clipsDir, "EP01", "03.mp4")
+	_ = os.WriteFile(mp4, []byte("v"), 0644)
+
+	if st := ctx.shotManifestStatus(s); st != "unknown" {
+		t.Errorf("无记录应 unknown: %s", st)
+	}
+	ctx.manifestMark(s, true)
+	if st := ctx.shotManifestStatus(s); st != "current" {
+		t.Errorf("mark 后应 current: %s", st)
+	}
+	// 改提示词 → stale
+	s.H3Prompt = "p2"
+	if st := ctx.shotManifestStatus(s); st != "stale" {
+		t.Errorf("改提示词应 stale: %s", st)
+	}
+	s.H3Prompt = "p1"
+	// 改资产(定妆照 mtime/新增)→ stale
+	_ = os.WriteFile(filepath.Join(workdir, "assets", "characters", "c1.png"), []byte("x"), 0644)
+	if st := ctx.shotManifestStatus(s); st != "stale" {
+		t.Errorf("换定妆照应 stale(条件缓存隐性失效防线): %s", st)
+	}
+	// 删产物 → missing
+	_ = os.Remove(mp4)
+	if st := ctx.shotManifestStatus(s); st != "missing" {
+		t.Errorf("删产物应 missing: %s", st)
+	}
+	// clearShotArtifacts:mp4 与清单记录一起清
+	_ = os.WriteFile(mp4, []byte("v"), 0644)
+	ctx.manifestMark(s, false)
+	ctx.clearShotArtifacts(s)
+	if st := ctx.shotManifestStatus(s); st != "missing" {
+		t.Errorf("clearShotArtifacts 后应 missing(产物已删): %s", st)
+	}
+	if e := ctx.manifestLoad().Shots["3"]; e != nil {
+		t.Errorf("clearShotArtifacts 应清清单记录: %v", e)
+	}
+	// seam 记录(转场硬切依据)
+	ctx.manifestMark(s, true)
+	m := ctx.manifestLoad()
+	if e := m.Shots["3"]; e == nil || !e.Seam {
+		t.Errorf("seam 未记录: %v", e)
+	}
+}

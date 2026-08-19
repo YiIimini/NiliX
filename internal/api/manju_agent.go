@@ -850,11 +850,12 @@ func planCharSceneMaps(plan map[string]any) (charMap, sceneMap map[string]map[st
 	return
 }
 
-// clearShotArtifacts 删镜头 mp4 + 条件缓存(.pt),让定点重渲染真正重做
+// clearShotArtifacts 删镜头 mp4 + 条件缓存(.pt)+ 清单记录,让定点重渲染真正重做
 // (提示词改动只在重新编码时生效;缓存名不含提示词指纹,必须显式删)。
 func (ctx *manjuCtx) clearShotArtifacts(s manjuShot) {
 	_ = os.Remove(filepath.Join(ctx.clipsDir, ctx.episode, fmt.Sprintf("%02d.mp4", s.ID)))
 	_ = os.Remove(h3CachePath(ctx.sharedModels, ctx.shotCacheName(s)))
+	ctx.manifestRemove(s.ID)
 }
 
 // updateShotPrompt 把修复师的新提示词写回方案 json + 逐镜提示词缓存
@@ -971,7 +972,14 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 			dst := filepath.Join(judgeDir, fmt.Sprintf("%02d.mp4", s.ID))
 			finalP := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
 			firstRound := queueIsFirst // 首轮=正常渲(接缝);返工轮=独立生成(不接缝,防旧 latent 污染)
-			if !draftMode && fileExists(finalP) {
+			if !draftMode && fileExists(dst) && ctx.shotManifestStatus(s) == "stale" {
+				lg.logf(fmt.Sprintf("⚠️ 镜头 %d 产物已过期(输入已变),删旧重渲", s.ID))
+				ctx.clearShotArtifacts(s)
+			} else if draftMode && fileExists(finalP) && ctx.shotManifestStatus(s) == "stale" {
+				lg.logf(fmt.Sprintf("⚠️ 镜头 %d 定稿已过期(输入已变),删旧走草稿重审", s.ID))
+				ctx.clearShotArtifacts(s)
+			}
+			if !draftMode && fileExists(dst) {
 				lg.logf(fmt.Sprintf("♻️ 镜头 %d 已有产物,直接进入审片", s.ID))
 			} else if draftMode && fileExists(finalP) {
 				lg.logf(fmt.Sprintf("✅ 镜头 %d 已有定稿产物,跳过草稿与审片", s.ID))
@@ -1101,6 +1109,10 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 			}
 			done++
 			dst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
+			if fileExists(dst) && ctx.shotManifestStatus(s) == "stale" {
+				lg.logf(fmt.Sprintf("⚠️ 镜头 %d 定稿已过期(输入已变),删旧重渲", s.ID))
+				ctx.clearShotArtifacts(s)
+			}
 			if fileExists(dst) {
 				lg.logf(fmt.Sprintf("  跳过（已定稿）: %s", dst))
 				continue
