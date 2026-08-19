@@ -466,8 +466,11 @@ func manjuNormalizeStyle(raw string) (string, string) {
 			key = k // 中文风格词 → 英文措辞
 		} else if isASCIIWord(t) {
 			key = t // 英文自定义词原样保留
+		} else if len([]rune(t)) <= 30 {
+			key = t // 中文/其它语言自定义词原样保留(用户输入的题材词如 东方神话 直接作风格词,
+			// 不再忽略——此前会被静默丢掉,「东方神话+东方修仙」输入无效)
 		} else {
-			notes = append(notes, t+"(已忽略)")
+			notes = append(notes, truncate(t, 20)+"(过长已忽略)")
 			continue
 		}
 		if seen[key] {

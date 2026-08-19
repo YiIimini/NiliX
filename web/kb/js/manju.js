@@ -127,7 +127,7 @@
     { ic: "🎨", t: "渲染风格", ps: [
       "8 个预设：<b>2.5D 动漫 / 写实 / 3D CG / 二次元 / 手绘 / 纸艺 / 粘土 / 水墨</b>",
       "<b>预设可多选叠加</b>：点击即选中/取消，可同时组合多个，如 2.5D+水墨",
-      "<b>自定义风格</b>：在下方输入英文描述(如 cyberpunk / pixel art)点「应用」,<b>自动叠加到当前预设</b>;与预设重复的词(如已选 2.5D 再输 2.5D)自动过滤",
+      "<b>自定义风格</b>：输入框可一次输入<b>多个元素</b>——用 + 或逗号分隔(如「东方神话+东方修仙+东方玄幻+美女如云」),<b>回车或点「应用」自动解析</b>逐词叠加,无需逐个输入;中文/英文词均可(中文原样保留为风格词),与预设重复的词自动过滤",
       "风格为<b>提示词级注入</b>：拼成一句英文分别写入定妆照/场景图、每镜 Ref2VA 开头与空镜 [Shot 1],全片画风统一",
       "点风格区右上角 <b>「?」</b>可查看 8 个官方示例动图,并<b>详细展示当前风格解析后的英文措辞</b>(三个注入位置各一段)",
       "组合含<b>写实</b>时定妆照走 Z-Image(真人级)；改后下次运行生效(已渲染镜头不受影响)",
@@ -419,13 +419,19 @@
       // 风格预览:官方示例 GIF(MiniMax H3 官方技能仓库素材,已本地化)
       $("manju-style-help").addEventListener("click", () => this.openStylePreview());
       // 自定义风格:输入英文风格描述点「应用」,以 TAG 标签叠加展示在输入框上方(重复词自动过滤)
-      $("manju-style-apply").addEventListener("click", () => {
+      // 应用:点击按钮或回车(Enter)均可——支持一次输入多元素(+ 或逗号分隔,如
+      // 「东方神话+东方修仙+东方玄幻+美女如云」),自动解析逐词叠加,无需逐个输入
+      const applyCustom = () => {
         const v = $("manju-style-custom").value.trim();
         if (!v) { this.setErr("请先输入自定义风格描述"); return; }
         this.style = this.combineCustom(v);
         $("manju-style-custom").value = ""; // 已变成标签,输入框清空待下一次输入
         this.renderStyle();
         this.saveDraft();
+      };
+      $("manju-style-apply").addEventListener("click", applyCustom);
+      $("manju-style-custom").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); applyCustom(); }
       });
       // 画幅
       document.querySelectorAll("#manju-ratio button").forEach((b) =>

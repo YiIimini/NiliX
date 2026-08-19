@@ -97,7 +97,7 @@ func TestAgentNormalizeStyle(t *testing.T) {
 		{"写实, 赛博朋克, 3D", "real+cyberpunk+3d"},
 		{"2.5d+2.5d+写实", "2.5d+real"},
 		{"水墨画、像素风、油画", "ink+pixel art+oil painting"},
-		{"真实系图片", ""}, // 中文未收录词 → 忽略
+		{"真实系图片", "真实系图片"}, // 中文自定义词 → 原样保留(2026-08-19 起不再忽略)
 		{"anime + watercolor", "anime+watercolor"},
 		{"手绘, 纸片拼贴, 粘土", "handdrawn+papercraft+clay"},
 	}
@@ -555,5 +555,24 @@ func TestAgentSettingsProjectMissing(t *testing.T) {
 	gd3, _ := out3["globalDefaults"].(map[string]any)
 	if gd3["visionModel"] != "glm-4.6v-flash" {
 		t.Errorf("保存后全局默认未回填: %v", out3)
+	}
+}
+
+// TestManjuNormalizeStyleCN 中文自定义词保留:输入 东方神话+东方修仙 应原样保留(此前被静默忽略)
+func TestManjuNormalizeStyleCN(t *testing.T) {
+	style, notes := manjuNormalizeStyle("东方神话+东方修仙+2.5d")
+	if notes != "" {
+		t.Fatalf("中文词不应被忽略: notes=%q", notes)
+	}
+	if style != "东方神话+东方修仙+2.5d" {
+		t.Fatalf("中文词应原样保留: %q", style)
+	}
+	// 预设中文叫法仍映射
+	if s, _ := manjuNormalizeStyle("水墨+赛博朋克"); s != "ink+cyberpunk" {
+		t.Fatalf("预设/映射词应转换: %q", s)
+	}
+	// 超长词忽略
+	if s, n := manjuNormalizeStyle("这是一个非常非常非常非常非常非常非常非常非常非常非常非常非常长的自定义风格词测试"); n == "" || s != "" {
+		t.Fatalf("超长词应忽略: style=%q notes=%q", s, n)
 	}
 }
