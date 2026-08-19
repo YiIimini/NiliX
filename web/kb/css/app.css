@@ -4595,6 +4595,8 @@ select option { text-align: center; }
   background: var(--muted); box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 14%, transparent);
 }
 .mj-tl-main { min-width: 0; overflow-wrap: anywhere; padding-right: 8px; }
+/* 普通行(非阶段节点):内容合并 3-4 列占满整行宽度,一行写满才换行(右列时间位不空置) */
+.mj-tl-row:not(.stage) .mj-tl-main { grid-column: 3 / -1; }
 .mj-tl-time {
   text-align: right; font-size: 9.5px; color: var(--muted); opacity: .8;
   font-variant-numeric: tabular-nums; line-height: 1.6; align-self: start;
