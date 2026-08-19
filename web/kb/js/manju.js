@@ -2216,7 +2216,7 @@
       fd.append("episode", this.episode);
       fd.append("char", charId);
       fd.append("file", file);
-      fetch("/api/manju/gacha/upload", { method: "POST", body: fd, cache: "no-store" })
+      fetch("/api/manju/gacha/upload", { method: "POST", body: fd, cache: "no-store", headers: { "X-NiliX-Token": nilixTok() } })
         .then((r) => r.json())
         .then((r) => {
           if (r.ok) {

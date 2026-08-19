@@ -166,7 +166,7 @@ const ComfyView = {
     this.setErr("");
     this.setButtonsState("start", true);
     try {
-      const r = await fetch("/api/comfy/start", { method: "POST" });
+      const r = await fetch("/api/comfy/start", { method: "POST", headers: window.nilixHeaders ? window.nilixHeaders({}) : {} });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         throw new Error(body.error || "start failed");
@@ -193,7 +193,7 @@ const ComfyView = {
     this.setErr("");
     this.setButtonsState("stop", true);
     try {
-      const r = await fetch("/api/comfy/stop", { method: "POST" });
+      const r = await fetch("/api/comfy/stop", { method: "POST", headers: window.nilixHeaders ? window.nilixHeaders({}) : {} });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         throw new Error(body.error || "stop failed");

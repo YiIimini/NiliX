@@ -1165,7 +1165,7 @@ class DirView {
     ManjuWorkbench.openModal("漫剧制作", `<div class="dir-loading">正在创建漫剧项目《${this.escapeHtml(name)}》…</div>`);
     try {
       const r = await fetch("/api/manju/create", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: tokHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ name, novel: novelDir, apiKey: "" }),
       }).then((r) => r.json());
       ManjuWorkbench.closeModal();
@@ -1196,7 +1196,7 @@ class DirView {
     };
     setBtn(true, "启动中…");
     fetch("/api/manju/run", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: tokHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ config: configPath, chapters, episode, phase: "all", fresh: !!fresh }),
     }).then((r) => r.json()).then((d) => {
       setBtn(false, I18N.t("book.script"));

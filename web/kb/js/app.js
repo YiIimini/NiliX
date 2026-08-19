@@ -411,6 +411,11 @@ const App = {
     if (t && t.length > 8) return t;
     try { return localStorage.getItem("nilix_token") || ""; } catch (e) { return ""; }
   },
+  nilixHeaders(h) {
+    const t = this.nilixTok();
+    if (!t) return h || {};
+    return Object.assign({}, h || {}, { "X-NiliX-Token": t });
+  },
   async api(path) {
     const tok = this.nilixTok();
     const r = await fetch(path, tok ? { headers: { "X-NiliX-Token": tok } } : {});
@@ -687,7 +692,7 @@ const App = {
     const inManju = !!(wb && wb.project === cfg);
     fetch("/api/manju/agent/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: this.nilixHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ config: cfg, text }),
     }).then((r) => r.json()).then((d) => {
       const reply = (d.reply || "…").split("\n").map(esc).join("<br>");
