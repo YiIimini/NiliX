@@ -20,6 +20,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"nilix/internal/agent"
 )
 
 //go:embed scripts/manju_media.py
@@ -122,6 +124,7 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	ctx.analysisDir = filepath.Join(ctx.workdir, "analysis")
 	ctx.clipsDir = filepath.Join(ctx.workdir, "clips")
 	ctx.llm = manjuLLMFromCfg(cfg)
+	ctx.llm.onUsage = func(model string, u agent.Usage) { manjuStatsAdd(ctx.project, model, u) }
 	ctx.comfy = newComfyClient(str(R["comfy_url"]))
 	if n, ok := manjuToInt(R["width"]); ok && n > 0 {
 		ctx.w = n

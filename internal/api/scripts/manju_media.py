@@ -390,7 +390,9 @@ def cmd_assemble(args):
         print(f"  🔊 音量归一化: 峰值 {peak:.2f} → 增益 x{gain:.2f}")
     print(f"🎬 合成 {len(files)} 个镜头 → {out} (crf18, {fps}fps, mosaic={args.mosaic}, 字幕{'on' if cues else 'off'})")
 
-    o = av.open(out, "w")
+    # movflags=+faststart:moov 前置,网络播放/进度条拖动不卡(PyAV 重编码路径原先没有,
+    # 只有闲置的旧 ffmpeg 直拼路径有 +faststart)
+    o = av.open(out, "w", options={"movflags": "+faststart"})
     vs = o.add_stream("libx264", rate=fps)
     vs.pix_fmt = "yuv420p"
     vs.options = {"crf": "18", "preset": "medium"}
@@ -670,7 +672,7 @@ def cmd_trailer(args):
     seg = max(2.0, min(args.seg, args.target / max(len(picked), 1)))
     print(f"🎬 预告片: {len(picked)} 镜 × {seg:.1f}s ≈ {len(picked) * seg:.0f}s → {out}")
 
-    o = av.open(out, "w")
+    o = av.open(out, "w", options={"movflags": "+faststart"})
     vs = o.add_stream("libx264", rate=fps)
     vs.pix_fmt = "yuv420p"
     vs.options = {"crf": "18", "preset": "medium"}

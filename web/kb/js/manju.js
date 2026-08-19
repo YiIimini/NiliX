@@ -1648,6 +1648,14 @@
       const styleLast = styleChoices[styleChoices.length - 1];
       const memLines = [];
       if (mem.runCount) memLines.push(`🏃 运行 ${mem.runCount} 次 · 审片 ${mem.judgedShots || 0} 镜 · 返工 ${mem.reworkCount || 0} 次`);
+      // token 用量记账(文本+视觉全部外部调用,分模型累计)
+      const st = (ag && ag.llmStats) || {};
+      if (st.calls) {
+        const wan = (n) => n >= 10000 ? (n / 10000).toFixed(1) + " 万" : String(n);
+        const models = Object.entries(st.byModel || {}).sort((a, b) => (b[1].totalTokens || 0) - (a[1].totalTokens || 0))
+          .map(([m, e]) => `${m} ${e.calls}次/${wan(e.totalTokens || 0)}`).join(" · ");
+        memLines.push(`🪙 累计 ${st.calls} 次调用 / ${wan(st.totalTokens || 0)} tokens${models ? "(" + models + ")" : ""}`);
+      }
       if (lastPt) memLines.push(`📈 最近审片均分 ${Math.round(lastPt.score)} 分(${lastPt.count} 镜)`);
       if (issueTop.length) memLines.push(`🔁 高频问题: ${issueTop.map(([k, v]) => `${k.length > 14 ? k.slice(0, 14) + "…" : k}×${v}`).join(" / ")}`);
       if (styleLast) memLines.push(`🎨 最近风格: ${this.styleLabel(styleLast.old)} → ${this.styleLabel(styleLast.new)}`);

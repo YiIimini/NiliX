@@ -26,6 +26,13 @@ var visionFallbackChain = map[string]string{
 // visionBackoffs 429/过载退避节奏(glm-vision 技能:4s/10s/20s 三次)
 var visionBackoffs = []time.Duration{4 * time.Second, 10 * time.Second, 20 * time.Second}
 
+// Usage 一次调用的 token 用量(OpenAI 兼容响应的 usage 字段,缺失为 0)
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 // VisionClient OpenAI 兼容视觉模型客户端(支持模型链)
 type VisionClient struct {
 	BaseURL string
@@ -36,6 +43,8 @@ type VisionClient struct {
 	client  *http.Client
 	// LastUsedModel 最近一次成功调用实际使用的模型(降级时≠Model,Judgment 记录用)
 	LastUsedModel string
+	// OnUsage 每次成功调用回抛 token 用量(项目级记账用;可为 nil)
+	OnUsage func(model string, u Usage)
 }
 
 // NewVisionClient 构造(超时缺省 180s:审片一次带多图,慢模型也要等得起)。
@@ -187,12 +196,17 @@ func (v *VisionClient) doChatOnce(body map[string]any) (string, error) {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage Usage `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &r); err != nil {
 		return "", fmt.Errorf("视觉模型响应解析失败: %w", err)
 	}
 	if len(r.Choices) == 0 {
 		return "", fmt.Errorf("视觉模型空响应")
+	}
+	if v.OnUsage != nil && r.Usage.TotalTokens > 0 {
+		model, _ := body["model"].(string)
+		v.OnUsage(model, r.Usage)
 	}
 	return r.Choices[0].Message.Content, nil
 }

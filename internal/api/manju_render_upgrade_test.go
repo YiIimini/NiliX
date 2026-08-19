@@ -6,20 +6,22 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"nilix/internal/agent"
 )
 
 // TestResTierDims 分辨率档位换算:等比缩放 + 对齐 32 + 竖/横屏短边判定 + 无效档位回退
 func TestResTierDims(t *testing.T) {
 	cases := []struct {
-		tier       string
-		w, h       int
-		ew, eh     int
-		ok         bool
+		tier   string
+		w, h   int
+		ew, eh int
+		ok     bool
 	}{
-		{"draft", 768, 1344, 416, 736, true},   // 竖屏 9:16 → 短边 416
+		{"draft", 768, 1344, 416, 736, true}, // 竖屏 9:16 → 短边 416
 		{"standard", 768, 1344, 768, 1344, true},
-		{"fhd", 768, 1344, 1088, 1920, true},   // 1344*1088/768=1904 → 对齐 32 → 1920
-		{"draft", 1344, 768, 736, 416, true},   // 横屏:高为短边
+		{"fhd", 768, 1344, 1088, 1920, true},    // 1344*1088/768=1904 → 对齐 32 → 1920
+		{"draft", 1344, 768, 736, 416, true},    // 横屏:高为短边
 		{"custom", 768, 1344, 768, 1344, false}, // custom/未知档位 → 原值
 		{"nope", 100, 200, 100, 200, false},
 	}
@@ -170,4 +172,33 @@ func TestListManjuEpisodesSkipsWorkDirs(t *testing.T) {
 func mustJSON(v any) []byte {
 	b, _ := json.MarshalIndent(v, "", "  ")
 	return b
+}
+
+// TestLLMStats token 用量记账:分模型累计、落盘往返、零用量跳过
+func TestLLMStats(t *testing.T) {
+	proj := "zz_llm_stats_test"
+	defer os.RemoveAll(filepath.Join(manjuRoot, proj))
+	manjuStatsAdd(proj, "", agent.Usage{}) // 空 project/零用量:不落盘不崩
+	if _, err := os.Stat(manjuStatsPath(proj)); err == nil {
+		t.Errorf("空用量不应落盘")
+	}
+	manjuStatsAdd(proj, "deepseek-chat", agent.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150})
+	manjuStatsAdd(proj, "deepseek-chat", agent.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15})
+	manjuStatsAdd(proj, "glm-4.6v-flash", agent.Usage{PromptTokens: 2000, CompletionTokens: 300, TotalTokens: 2300})
+	st := manjuStatsLoad(proj)
+	if st.Calls != 3 || st.Total != 2465 {
+		t.Errorf("总量异常: %v", st)
+	}
+	ds := st.ByModel["deepseek-chat"]
+	if ds == nil || ds.Calls != 2 || ds.Prompt != 110 || ds.Completion != 55 {
+		t.Errorf("deepseek 累计异常: %v", ds)
+	}
+	glm := st.ByModel["glm-4.6v-flash"]
+	if glm == nil || glm.Total != 2300 {
+		t.Errorf("glm 累计异常: %v", glm)
+	}
+	// status 摘要带出记账
+	if sum := agentStatusSummary(filepath.Join(manjuRoot, proj, "config.json")); sum["llmStats"] == nil {
+		t.Errorf("status 摘要未带 llmStats")
+	}
 }

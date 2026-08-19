@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"nilix/internal/agent"
 )
 
 type manjuLLM struct {
@@ -23,6 +25,8 @@ type manjuLLM struct {
 	maxTokens   int
 	timeout     time.Duration
 	client      *http.Client
+	// onUsage 每次成功调用回抛 token 用量(项目级 llm_stats.json 记账;可为 nil)
+	onUsage func(model string, u agent.Usage)
 }
 
 // manjuLLMFromCfg 从 config.json 构造 LLM 客户端(服务/模型缺省时回退到存为默认的服务,再回退 DeepSeek)
@@ -119,6 +123,7 @@ func (l *manjuLLM) chat(system, user string, temp float64) (string, error) {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage agent.Usage `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &r); err != nil {
 		return "", fmt.Errorf("LLM 响应解析失败: %w", err)
@@ -129,6 +134,9 @@ func (l *manjuLLM) chat(system, user string, temp float64) (string, error) {
 	// 输出打满 max_tokens:JSON 被截断,直接判失败(调用方可精简重试)
 	if r.Choices[0].FinishReason == "length" {
 		return "", errLLMTruncated
+	}
+	if l.onUsage != nil && r.Usage.TotalTokens > 0 {
+		l.onUsage(l.model, r.Usage)
 	}
 	return r.Choices[0].Message.Content, nil
 }

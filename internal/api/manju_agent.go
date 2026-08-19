@@ -112,7 +112,9 @@ func (ctx *manjuCtx) visionClient(acfg agent.Config) *agent.VisionClient {
 	if key == "" {
 		key = agent.EnvAPIKey() // 环境变量兜底(GLM_VISION_API_KEY)
 	}
-	return agent.NewVisionClient(base, key, strings.TrimSpace(acfg.VisionModel), 180*time.Second)
+	vc := agent.NewVisionClient(base, key, strings.TrimSpace(acfg.VisionModel), 180*time.Second)
+	vc.OnUsage = func(model string, u agent.Usage) { manjuStatsAdd(ctx.project, model, u) }
+	return vc
 }
 
 // ---- 审片状态落盘(<项目>/agent_state.json,随项目目录删除) ----
@@ -230,6 +232,8 @@ func agentStatusSummary(configPath string) map[string]any {
 		return out
 	}
 	project := filepath.Base(filepath.Dir(configPath))
+	// token 记账不依赖项目 config(项目目录在即可读)
+	out["llmStats"] = manjuStatsLoad(project)
 	ctx, err := newManjuCtx(configPath, "", "", "", "")
 	if err != nil {
 		return out
@@ -279,6 +283,7 @@ func agentStatusSummary(configPath string) map[string]any {
 	out["escalationCount"] = len(esc)
 	out["memory"] = st.Memory
 	out["lastError"] = st.LastError
+	// token 用量记账(文本+视觉全部外部调用,分模型累计)
 	return out
 }
 
