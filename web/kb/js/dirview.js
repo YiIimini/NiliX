@@ -910,6 +910,10 @@ class DirView {
       } else if (j.done) {
         const el = $("nv-progress"); if (el) el.textContent = "🎉 全本完成!";
         const st = $("nv-state"); if (st) { st.className = "nv-state ok"; st.textContent = "🎉 全本完成,关闭弹窗即可在书架阅读"; }
+        if (j.qa) {
+          const st2 = $("nv-state");
+          if (st2) st2.textContent = "🎉 全本完成 · 📋 全量QA:" + (String(j.qa).includes("PASS") ? "PASS ✅" : String(j.qa).slice(0, 120));
+        }
         const b = $("nv-auto"), nb = $("nv-next");
         if (b) b.disabled = false;
         if (nb) nb.disabled = false;

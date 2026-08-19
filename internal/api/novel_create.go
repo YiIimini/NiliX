@@ -74,13 +74,19 @@ func (s *Server) handleNovelCreate(w http.ResponseWriter, r *http.Request) {
 	llm := backend.NewLLMClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model,
 		time.Duration(cfg.LLM.RequestTimeout)*time.Second)
 	sys := "你是资深爽文小说架构师,只输出 JSON,不输出任何其它内容。"
-	usr := fmt.Sprintf(`为小说《%s》设计全本设定与逐章大纲。
+	usr := fmt.Sprintf(`为小说《%s》设计全本设定与逐章大纲(写足写细,本书质量的决定性步骤)。
 题材:%s;风格:%s;总章数:%d(每 7 章一卷)。
 爽点主线固定:开局被欺负 → 中期反转 → 后期打脸 → 结局封神。
 严格输出 JSON:
-{"logline":"一句话故事","characters":[{"name":"","desc":"身份/性格/金手指,60字内","img_prompt":"写实电影级人物生图提示词,含外貌/服装/气质,60-100字,禁日漫风"}],"world":"世界观与力量体系,150字内,必含可量化等级表","volumes":[{"no":1,"title":"卷名"}],
-"chapters":[{"no":1,"title":"章节名","premise":"本章事件,50字内","conflict":"冲突与爽点,40字内"}]}
-chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d。`, req.Title, nvOrDefault(req.Genre, "玄幻逆袭"),
+{"logline":"一句话故事",
+"characters":[{"name":"","age":"年龄/身份","looks":"具体外貌细节(发型/脸型/特征伤疤等实物记忆点)","persona":"一句话人设+判词","arc":"核心目标与成长弧线","color":"代表色","prop":"具名道具","habit":"动作习惯","desc":"功能位(主角/伪善反派/助攻/工具人)+性格关键词,60字内","img_prompt":"写实电影级英文生图提示词:Cinematic film still, photorealistic + 年龄/东方特征 + 3个具体外貌记忆点(服饰/发饰/伤痕实物) + 神态 + 环境光 + 85mm lens, shallow depth of field, ultra detailed, 8k, movie poster quality;禁日漫风"}],
+"world":"时代背景/势力对立(≥2股,与主角恩怨挂钩)/核心规则;必含可量化灵力等级表(全书战力对表),200字内",
+"goldenfinger":"金手指:规则铁律 + 代价(无代价的开挂是垃圾),60字内",
+"volumes":[{"no":1,"title":"卷名"}],
+"chapters":[{"no":1,"title":"章节名","premise":"本章事件,50字内","conflict":"冲突与爽点,40字内","foreshadow":"本章埋/收的伏笔,20字内(无则空)"}]}
+要求:characters 必含主角+伪善型反派+助攻(下属/知己/神秘大佬)+工具人(两三笔立住),全部主要角色逐个填全字段;
+chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d;首卷埋线、末卷收线,每卷末章是卷末高潮,章章有钩子。`,
+		req.Title, nvOrDefault(req.Genre, "玄幻逆袭"),
 		nvOrDefault(req.Style, "热血爽文"), req.Chapters, req.Chapters, (req.Chapters+6)/7)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
@@ -95,19 +101,28 @@ chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d。`, req.Title, nvO
 		Logline    string `json:"logline"`
 		Characters []struct {
 			Name      string `json:"name"`
+			Age       string `json:"age"`
+			Looks     string `json:"looks"`
+			Persona   string `json:"persona"`
+			Arc       string `json:"arc"`
+			Color     string `json:"color"`
+			Prop      string `json:"prop"`
+			Habit     string `json:"habit"`
 			Desc      string `json:"desc"`
 			ImgPrompt string `json:"img_prompt"`
 		} `json:"characters"`
-		World    string `json:"world"`
-		Volumes  []struct {
+		World        string `json:"world"`
+		GoldenFinger string `json:"goldenfinger"`
+		Volumes      []struct {
 			No    int    `json:"no"`
 			Title string `json:"title"`
 		} `json:"volumes"`
 		Chapters []struct {
-			No       int    `json:"no"`
-			Title    string `json:"title"`
-			Premise  string `json:"premise"`
-			Conflict string `json:"conflict"`
+			No         int    `json:"no"`
+			Title      string `json:"title"`
+			Premise    string `json:"premise"`
+			Conflict   string `json:"conflict"`
+			Foreshadow string `json:"foreshadow"`
 		} `json:"chapters"`
 	}
 	if err := json.Unmarshal([]byte(stripJSONFence(raw)), &plan); err != nil || len(plan.Chapters) == 0 {
@@ -116,14 +131,23 @@ chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d。`, req.Title, nvO
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# %s —— 设定集与大纲\n\n> 题材:%s | 风格:%s | 计划 %d 章(7章/卷)\n\n## 一句话故事\n%s\n\n## 世界观\n%s\n\n## 人物\n",
+	fmt.Fprintf(&sb, "# %s —— 设定集与大纲\n\n> 题材:%s | 风格:%s | 计划 %d 章(7章/卷)\n\n## 一句话故事\n%s\n\n## 世界观\n%s\n",
 		req.Title, nvOrDefault(req.Genre, "玄幻逆袭"), nvOrDefault(req.Style, "热血爽文"), len(plan.Chapters), plan.Logline, plan.World)
+	if plan.GoldenFinger != "" {
+		fmt.Fprintf(&sb, "\n## 金手指\n%s\n", plan.GoldenFinger)
+	}
+	sb.WriteString("\n## 人物(九要素档案)\n")
 	for _, c := range plan.Characters {
-		p := c.Desc
-		if c.ImgPrompt != "" {
-			p += " | 生图:" + c.ImgPrompt
+		fmt.Fprintf(&sb, "- **%s**(%s):%s\n  人设:%s | 成长:%s | 代表色:%s | 道具:%s | 习惯:%s",
+			c.Name, nvOrDefault(c.Age, "-"), c.Desc, nvOrDefault(c.Persona, "-"), nvOrDefault(c.Arc, "-"),
+			nvOrDefault(c.Color, "-"), nvOrDefault(c.Prop, "-"), nvOrDefault(c.Habit, "-"))
+		if c.Looks != "" {
+			fmt.Fprintf(&sb, "\n  外貌:%s", c.Looks)
 		}
-		fmt.Fprintf(&sb, "- **%s**:%s\n", c.Name, p)
+		if c.ImgPrompt != "" {
+			fmt.Fprintf(&sb, "\n  生图:%s", c.ImgPrompt)
+		}
+		sb.WriteString("\n")
 	}
 	sb.WriteString("\n## 卷结构\n")
 	for _, v := range plan.Volumes {
@@ -131,7 +155,11 @@ chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d。`, req.Title, nvO
 	}
 	sb.WriteString("\n## 逐章大纲\n")
 	for _, ch := range plan.Chapters {
-		fmt.Fprintf(&sb, "- 第%03d章 %s:%s|%s\n", ch.No, ch.Title, ch.Premise, ch.Conflict)
+		fmt.Fprintf(&sb, "- 第%03d章 %s:%s|%s", ch.No, ch.Title, ch.Premise, ch.Conflict)
+		if ch.Foreshadow != "" {
+			fmt.Fprintf(&sb, "|伏笔:%s", ch.Foreshadow)
+		}
+		sb.WriteString("\n")
 	}
 	if err := os.MkdirAll(filepath.Join(proj, "设定集"), 0755); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -525,6 +553,7 @@ type novelAutoTask struct {
 	Total   int    `json:"total"`
 	Done    bool   `json:"done"`
 	Err     string `json:"error,omitempty"` // 失败原因(LLM 报错/字数不足等),前端展示并指向断点续写
+	QA      string `json:"qa,omitempty"`    // 全量 QA(qa_check.py)摘要,完成时展示
 	stop    chan struct{}
 	ctx     context.Context // 停止续写时 cancel:中断在途 LLM 调用,不再烧 token
 	cancel  context.CancelFunc
@@ -546,6 +575,9 @@ func novelAutoStatus(title string) map[string]any {
 	out := map[string]any{"title": t.Title, "running": t.Running, "current": t.Current, "total": t.Total, "done": t.Done}
 	if t.Err != "" {
 		out["error"] = t.Err
+	}
+	if t.QA != "" {
+		out["qa"] = t.QA
 	}
 	return out
 }
@@ -588,59 +620,65 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 			_ = recover()
 		}()
 		proj := novelProjDir(req.Title)
-		for {
-			next := 0
-			novelAutoMu.Lock()
-			cur := t.Current
-			novelAutoMu.Unlock()
-			// 找下一未写章:一次目录扫描建章号集合(原来每章最多 600 次全树 Walk,书越厚越慢)
-			have := map[int]bool{}
-			_ = filepath.Walk(proj, func(p string, info os.FileInfo, err error) error {
-				if err != nil || info.IsDir() {
-					return nil
-				}
-				if m := reChapterNo.FindStringSubmatch(info.Name()); m != nil {
-					if n, e := strconv.Atoi(m[1]); e == nil {
-						have[n] = true
-					}
-				}
+		// 技能阶段3 并行写卷:未写章按卷分组,卷内串行(保证卷内衔接),卷间并行(卷与卷只靠
+		// 设定集+大纲耦合,天然可并行)。并发 4(技能为 8 代理;对 LLM API 限速更稳)。
+		have := map[int]bool{}
+		_ = filepath.Walk(proj, func(p string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
 				return nil
-			})
-			for n := cur + 1; n <= 600; n++ {
-				if !have[n] {
-					next = n
-					break
+			}
+			if m := reChapterNo.FindStringSubmatch(info.Name()); m != nil {
+				if n, e := strconv.Atoi(m[1]); e == nil {
+					have[n] = true
 				}
 			}
-			if next == 0 {
-				novelAutoMu.Lock()
-				t.Done = true
-				novelAutoMu.Unlock()
-				rebuildFullBookTOC(proj, req.Title) // 全本目录一次性重建(逐章纯追加不维护目录)
-				return
+			return nil
+		})
+		total := 600
+		if b, err := os.ReadFile(filepath.Join(proj, "设定集", "设定集与大纲.md")); err == nil {
+			if m := reNovelPlan.FindStringSubmatch(string(b)); len(m) > 1 {
+				if v, e := strconv.Atoi(m[1]); e == nil && v > 0 {
+					total = v
+				}
 			}
+		}
+		groups := map[int][]int{}
+		for n := 1; n <= total; n++ {
+			if !have[n] {
+				vol := (n + 6) / 7
+				groups[vol] = append(groups[vol], n)
+			}
+		}
+		if len(groups) == 0 {
+			novelAutoMu.Lock()
+			t.Done = true
+			novelAutoMu.Unlock()
+			rebuildFullBookTOC(proj, req.Title)
+			return
+		}
+		writeOne := func(no int) bool { // 返回 false=停止/失败(该卷终止)
 			select {
 			case <-t.stop:
-				return
+				return false
 			default:
 			}
-			res, err := writeNovelChapter(t.ctx, req.Title, next, cfg, "")
+			res, err := writeNovelChapter(t.ctx, req.Title, no, cfg, "")
 			novelAutoMu.Lock()
-			if err == nil && !res["exists"].(bool) {
-				t.Current = next
+			if err == nil && !res["exists"].(bool) && no > t.Current {
+				t.Current = no
 			}
 			novelAutoMu.Unlock()
 			if err != nil {
 				novelAutoMu.Lock()
 				t.Err = err.Error()
 				novelAutoMu.Unlock()
-				return // 失败停(可手动重启续写;原因经 status 接口展示)
+				return false
 			}
 			// Agent 化续写:自动审稿,低于 70 分带意见删稿重写一轮,重写稿复审归档
 			if res["exists"] == false && cfg.LLM.APIKey != "" {
-				if f, _ := findChapter(proj, next); f != "" {
+				if f, _ := findChapter(proj, no); f != "" {
 					if content, cerr := os.ReadFile(f); cerr == nil {
-						if rv, rerr := reviewChapterCore(cfg, proj, req.Title, next, string(content)); rerr == nil {
+						if rv, rerr := reviewChapterCore(cfg, proj, req.Title, no, string(content)); rerr == nil {
 							if rv.Score < 70 {
 								note := strings.Join(rv.Issues, ";")
 								if rv.Suggestion != "" {
@@ -650,10 +688,10 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 									note += rv.Suggestion
 								}
 								_ = os.Remove(f)
-								if res2, err2 := writeNovelChapter(t.ctx, req.Title, next, cfg, note); err2 == nil && res2["exists"] == false {
-									if f2, _ := findChapter(proj, next); f2 != "" {
+								if res2, err2 := writeNovelChapter(t.ctx, req.Title, no, cfg, note); err2 == nil && res2["exists"] == false {
+									if f2, _ := findChapter(proj, no); f2 != "" {
 										if c2, e2 := os.ReadFile(f2); e2 == nil {
-											_, _ = reviewChapterCore(cfg, proj, req.Title, next, string(c2)) // 重写稿复审(归档)
+											_, _ = reviewChapterCore(cfg, proj, req.Title, no, string(c2)) // 重写稿复审(归档)
 										}
 									}
 								}
@@ -664,9 +702,45 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 			}
 			select {
 			case <-t.stop:
-				return
-			case <-time.After(2 * time.Second): // 限速,避免把 LLM 打爆
+				return false
+			case <-time.After(2 * time.Second): // 卷内限速,避免把 LLM 打爆
 			}
+			return true
+		}
+		sem := make(chan struct{}, 4)
+		var wg sync.WaitGroup
+		for _, nos := range groups {
+			wg.Add(1)
+			go func(nos []int) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				for _, no := range nos {
+					if !writeOne(no) {
+						return
+					}
+				}
+			}(nos)
+		}
+		wg.Wait()
+		select {
+		case <-t.stop:
+			return
+		default:
+		}
+		novelAutoMu.Lock()
+		t.Done = true
+		novelAutoMu.Unlock()
+		rebuildFullBookTOC(proj, req.Title) // 全本目录一次性重建(逐章纯追加不维护目录)
+		// 技能阶段4 全量 QA:qa_check.py 校验文件数/每章字数/禁用词/违规词/加粗,摘要供 status 展示
+		if qa := runNovelQACheck(proj); qa != "" {
+			lines := strings.Split(strings.TrimSpace(qa), "\n")
+			if len(lines) > 6 {
+				lines = lines[len(lines)-6:]
+			}
+			novelAutoMu.Lock()
+			t.QA = strings.Join(lines, " | ")
+			novelAutoMu.Unlock()
 		}
 	}()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": true})
@@ -852,6 +926,7 @@ func writeNovelChapter(ctx context.Context, title string, no int, cfg config.Set
 	}
 	prevTail := "(本书第一章,直接开局)"
 	if no > 1 {
+		prevTail = "(上一章尚未生成(并行写卷中),按设定集与大纲衔接本卷剧情直接开写)"
 		if pf, _ := findChapter(proj, no-1); pf != "" {
 			if pb, err := os.ReadFile(pf); err == nil {
 				t := strings.TrimSpace(string(pb))
@@ -866,7 +941,14 @@ func writeNovelChapter(ctx context.Context, title string, no int, cfg config.Set
 	}
 	llm := backend.NewLLMClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model,
 		time.Duration(cfg.LLM.RequestTimeout)*time.Second)
+	// shuangwen-novel 技能规范:章节写作规范全文 + 违规词库硬禁词(动笔前必读,写作/QA 两关都生效)
 	sys := "你是爽文小说写手。要求:正文口语化短句、去AI味;场景/情绪具体;每章结尾留钩子;不要小标题、不要总结。只输出 JSON。"
+	if spec := novelWritingSpec(); spec != "" {
+		sys += "\n\n【章节写作规范(动笔前通读,逐条遵守)】\n" + spec
+	}
+	if hard := novelHardBanned(); len(hard) > 0 {
+		sys += "\n\n【内容安全违规词(硬禁,正文中绝不出现)】" + strings.Join(hard, "、")
+	}
 	usr := fmt.Sprintf(`小说《%s》设定与大纲如下(节选):
 %s
 
@@ -889,9 +971,29 @@ func writeNovelChapter(ctx context.Context, title string, no int, cfg config.Set
 		Title   string `json:"title"`
 		Content string `json:"content"`
 	}
-	// 字数校验与硬性要求一致(≥1280 字);低于要求按失败处理,避免残章混进正文
-	if err := json.Unmarshal([]byte(stripJSONFence(raw)), &ch); err != nil || len([]rune(ch.Content)) < 1280 {
-		return nil, fmt.Errorf("第%d章解析失败或字数不足(需≥1280字),请重试", no)
+	// 机械 QA(技能 qa_check 同口径):中文字数/去AI味禁用词/违规词硬禁/加粗;命中自动重写一轮
+	parseOK := json.Unmarshal([]byte(stripJSONFence(raw)), &ch) == nil
+	var qaProblems []string
+	if !parseOK {
+		qaProblems = []string{"输出解析失败(非预期 JSON)"}
+	} else {
+		qaProblems = novelChapterQA(ch.Content)
+	}
+	if len(qaProblems) > 0 {
+		// 机械校验未过 → 自动重写一轮(意见与审稿意见合并注入);仍不过才报错人工重试
+		note := "机械校验未过:" + strings.Join(qaProblems, ";")
+		if reviewNote != "" {
+			note = reviewNote + ";" + note
+		}
+		raw2, err2 := llm.Chat(ctx, []backend.ChatMessage{
+			{Role: "system", Content: sys},
+			{Role: "user", Content: usr + "\n\n【重写模式】上一稿未达标,意见如下,重写整章修正(直接输出修正后完整正文,不要提及审稿):\n" + note}}, 8000, 0.85)
+		if err2 == nil {
+			_ = json.Unmarshal([]byte(stripJSONFence(raw2)), &ch)
+		}
+		if novelChapterQA(ch.Content) != nil {
+			return nil, fmt.Errorf("第%d章两轮均未过机械校验(%s),请手动重试", no, truncate(note, 120))
+		}
 	}
 	chTitle := novelTitleSan.ReplaceAllString(ch.Title, "")
 	if chTitle == "" {
