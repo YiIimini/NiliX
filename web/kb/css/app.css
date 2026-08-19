@@ -2615,7 +2615,7 @@ body.view-dir-active .top-search { display: none; }
 }
 .manju-sysmon .ms-it:first-child { border-left: none; }
 .manju-sysmon .ms-it i { font-style: normal; font-size: 9.5px; color: var(--muted); letter-spacing: 1px; }
-.manju-sysmon .ms-it .ms-line { display: flex; align-items: baseline; justify-content: center; gap: 4px; min-width: 0; }
+.manju-sysmon .ms-it .ms-line { display: flex; align-items: baseline; justify-content: center; gap: 8px; min-width: 0; }
 .manju-sysmon .ms-it b {
   font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums;
   color: var(--text); white-space: nowrap;
