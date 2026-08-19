@@ -481,7 +481,7 @@ func manjuJianyingExport(w http.ResponseWriter, r *http.Request) {
 	outDir := filepath.Join(ctx.workdir, "剪映草稿")
 	name := ctx.episode + "_NiliX"
 	args := []string{"jianying", "--clips-dir", clipsEp, "--out-dir", outDir, "--name", name,
-		"--fps", strconv.Itoa(ctx.fps), "--plan", filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")}
+		"--fps", strconv.Itoa(ctx.fps), "--plan", manjuFindPlanDir(ctx.analysisDir, ctx.episode)}
 	if trans := orDefault(str(ctx.R["transition"]), "cut"); manjuTransitions[trans] {
 		args = append(args, "--transition", trans)
 		if hc := ctx.seamHardCuts(); hc != "" {

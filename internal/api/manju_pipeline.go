@@ -780,7 +780,10 @@ type manjuShot struct {
 
 // loadPlan 读取 analysis/<ep>_direct_plan.json,规范化镜头字段
 func (ctx *manjuCtx) loadPlan() (map[string]any, []manjuShot, error) {
-	p := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
+	p := manjuFindPlanDir(ctx.analysisDir, ctx.episode)
+	if p == "" {
+		return nil, nil, fmt.Errorf("方案不存在: %s_direct_plan.json", ctx.episode)
+	}
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return nil, nil, err

@@ -1564,10 +1564,74 @@ func parseJSONLine(s string) map[string]any {
 	return nil
 }
 
+// manjuEpNum 提取集号中的数字(EP01→1, EP01-EP56→1),用于方案文件集号排序
+func manjuEpNum(ep string) int {
+	m := regexp.MustCompile(`\d+`).FindString(ep)
+	if m == "" {
+		return 0
+	}
+	n, _ := strconv.Atoi(m)
+	return n
+}
+
+// manjuScanMin 扫描 analysis 目录,返回后缀匹配且集号最小的现有方案文件路径(如 EP01_*);
+// 同集多后缀时按 suffs 传入顺序优先(如 direct_plan 优先于 characters)。
+func manjuScanMin(analysisDir string, suffs ...string) string {
+	best, bestEp, bestIdx := "", "", -1
+	entries, _ := os.ReadDir(analysisDir)
+	for _, e := range entries {
+		n := e.Name()
+		cand, idx := "", -1
+		for i, s := range suffs {
+			if strings.HasSuffix(n, s) {
+				cand, idx = strings.TrimSuffix(n, s), i
+				break
+			}
+		}
+		if cand == "" {
+			continue
+		}
+		if best == "" ||
+			manjuEpNum(cand) < manjuEpNum(bestEp) ||
+			(manjuEpNum(cand) == manjuEpNum(bestEp) && idx < bestIdx) {
+			best, bestEp, bestIdx = filepath.Join(analysisDir, n), cand, idx
+		}
+	}
+	return best
+}
+
+// manjuFindPlanFile 找角色方案文件(characters 优先回退 direct_plan):
+// 指定集号(非 0/空)按 <ep>_characters.json → <ep>_direct_plan.json 找;
+// 集号 0/空/该集未生成时,扫描 analysis 取集号最小的现有方案(如 EP01)。
+func manjuFindPlanFile(analysisDir, episode string) string {
+	if episode != "" && episode != "0" {
+		for _, name := range []string{episode + "_characters.json", episode + "_direct_plan.json"} {
+			if p := filepath.Join(analysisDir, name); fileExists(p) {
+				return p
+			}
+		}
+	}
+	return manjuScanMin(analysisDir, "_characters.json", "_direct_plan.json")
+}
+
+// manjuFindPlanDir 找完整分镜方案(direct_plan 优先,需 shots 时用):
+// 指定集号(非 0/空)按 <ep>_direct_plan.json → <ep>_characters.json 找;
+// 集号 0/空/该集未生成时,扫描 analysis 取集号最小的现有方案。
+func manjuFindPlanDir(analysisDir, episode string) string {
+	if episode != "" && episode != "0" {
+		for _, name := range []string{episode + "_direct_plan.json", episode + "_characters.json"} {
+			if p := filepath.Join(analysisDir, name); fileExists(p) {
+				return p
+			}
+		}
+	}
+	return manjuScanMin(analysisDir, "_direct_plan.json", "_characters.json")
+}
+
 // manjuPlan 读取方案 JSON,返回角色列表(供角色抽卡)
 func manjuPlan(w http.ResponseWriter, r *http.Request) {
 	configPath := r.URL.Query().Get("config")
-	episode := orDefault(r.URL.Query().Get("episode"), "EP01")
+	episode := r.URL.Query().Get("episode")
 	if configPath == "" {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
@@ -1578,20 +1642,14 @@ func manjuPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	P, _ := cfg["paths"].(map[string]any)
-	// 角色方案优先读 _characters.json(角色抽卡前置阶段产物),回退旧 _direct_plan.json
-	var planPath string
-	var dataBytes []byte
-	for _, name := range []string{episode + "_characters.json", episode + "_direct_plan.json"} {
-		p := filepath.Join(str(P["analysis"]), name)
-		if b, err := os.ReadFile(p); err == nil {
-			planPath, dataBytes = p, b
-			break
-		}
-	}
+	planPath := manjuFindPlanFile(str(P["analysis"]), episode)
 	if planPath == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"exists": false, "error": "角色方案未生成，请先抽卡生成角色方案"})
 		return
 	}
+	dataBytes, _ := os.ReadFile(planPath)
+	planEp := strings.TrimSuffix(filepath.Base(planPath), "_characters.json")
+	planEp = strings.TrimSuffix(planEp, "_direct_plan.json")
 	var plan map[string]any
 	if json.Unmarshal(dataBytes, &plan) != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"exists": false, "error": "方案解析失败"})
@@ -1609,8 +1667,8 @@ func manjuPlan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	shots := 0
-	// 镜头数单独从 _direct_plan.json 读(角色方案 _characters.json 只有角色/场景,无 shots)
-	if b, err := os.ReadFile(filepath.Join(str(P["analysis"]), episode+"_direct_plan.json")); err == nil {
+	// 镜头数单独从同集 _direct_plan.json 读(角色方案 _characters.json 只有角色/场景,无 shots)
+	if b, err := os.ReadFile(filepath.Join(str(P["analysis"]), planEp+"_direct_plan.json")); err == nil {
 		var sp map[string]any
 		if json.Unmarshal(b, &sp) == nil {
 			if arr, ok := sp["shots"].([]any); ok {

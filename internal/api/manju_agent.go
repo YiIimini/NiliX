@@ -1127,7 +1127,7 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	passed := 0
 	escCount := 0
 	autoAccept, autoRegen := 0, 0 // 终审自动拍板:接受/重写计数
-	planPath := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
+	planPath := manjuFindPlanDir(ctx.analysisDir, ctx.episode)
 	for len(queue) > 0 && !lg.stopped() {
 		// 本轮三路并行:①逐镜渲染,渲完立即后台并发审片(渲染不空等——审片期间 GPU 继续渲下一镜);
 		// ②渲染一结束即启动批量 ASR(只依赖产物文件,不需判分结论)——与视觉审片并行,
@@ -1465,7 +1465,7 @@ func agentJudgeRemaining(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	if len(missed) > 0 {
 		lg.logf(fmt.Sprintf("🤖 补审 %d 个漏审镜头(中断续跑)", len(missed)))
 		qcBad, _ := ctx.runQCJSON(lg, clipsEp, "")
-		planPath := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
+		planPath := manjuFindPlanDir(ctx.analysisDir, ctx.episode)
 		if asrBad := ctx.runASRCheck(lg, clipsEp, missed, planPath); len(asrBad) > 0 {
 			for id, flags := range asrBad {
 				qcBad[id] = append(qcBad[id], flags...)
@@ -1577,7 +1577,7 @@ func agentJudgeAndRework(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	}
 	qcBad, _ := ctx.runQCJSON(lg, clipsEp, "")
 	// ASR 台词核对:有台词镜头本地转写比对(不符进失败集触发返工;不可用自动降级)
-	planPath := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
+	planPath := manjuFindPlanDir(ctx.analysisDir, ctx.episode)
 	if asrBad := ctx.runASRCheck(lg, clipsEp, selected, planPath); len(asrBad) > 0 {
 		if qcBad == nil {
 			qcBad = asrBad
@@ -2324,7 +2324,7 @@ func registerAgentRoutes(mux *http.ServeMux) {
 		out := filepath.Join(ctx.workdir, ctx.episode+"_预告片.mp4")
 		args := []string{"trailer", "--clips-dir", clipsEp, "--out", out, "--list", listPath,
 			"--fps", strconv.Itoa(ctx.fps), "--target", fmt.Sprintf("%.0f", target),
-			"--plan", filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")}
+			"--plan", manjuFindPlanDir(ctx.analysisDir, ctx.episode)}
 		if _, err := ctx.runMediaOut(args...); err != nil {
 			http.Error(w, `{"error":"预告片合成失败: `+err.Error()+`"}`, http.StatusInternalServerError)
 			return
