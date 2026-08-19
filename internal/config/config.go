@@ -24,6 +24,15 @@ type Settings struct {
 	// Agent 智能体全局默认配置(视觉模型/判分参数):项目 config.json 的 agent 节可覆盖。
 	// 指针+omitempty:前端顶栏设置表单不带此字段时不会被零值清空。
 	Agent *AgentSettings `json:"agent,omitempty"`
+	// Window 桌面主窗口记忆(用户调整后持久化,下次启动直接加载;0=未记忆按 16:9 默认)
+	Window WindowSettings `json:"window,omitempty"`
+}
+
+// WindowSettings 主窗口尺寸记忆(用户手动调整窗口大小后落盘,下次启动直接恢复)
+type WindowSettings struct {
+	Width  int `json:"width,omitempty"`
+	Height int `json:"height,omitempty"`
+	Max    bool `json:"max,omitempty"` // 是否最大化
 }
 
 // AgentSettings 智能体全局默认(视觉模型地址/Key/模型/及格线/返工轮数)。

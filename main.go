@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -50,6 +51,33 @@ var islandFS embed.FS
 
 const mainWinTitle = "NiliX" // 管理主窗口标题(Edge App 窗口=页面 title,恒为 NiliX;灵动岛为 NiliX HUD 区分)
 
+// ---- 主窗口尺寸记忆(用户调整后持久化,下次启动直接加载;独立 json,避免动加密 settings) ----
+const mainWinMemFile = "mainwin.json"
+
+type mainWinMem struct {
+	W, H int
+	Max  bool
+	Set  bool // 是否已记忆过
+}
+
+func loadMainWinMem() mainWinMem {
+	var m mainWinMem
+	b, err := os.ReadFile(mainWinMemFile)
+	if err != nil {
+		return m
+	}
+	_ = json.Unmarshal(b, &m)
+	if m.W < 400 || m.H < 300 {
+		m.Set = false
+	}
+	return m
+}
+
+func saveMainWinMem(m mainWinMem) {
+	b, _ := json.Marshal(m)
+	_ = os.WriteFile(mainWinMemFile, b, 0644)
+}
+
 var (
 	user32Lazy           = syscall.NewLazyDLL("user32.dll")
 	procWinShow          = user32Lazy.NewProc("ShowWindow")
@@ -58,6 +86,7 @@ var (
 	procGetSysMetrics    = user32Lazy.NewProc("GetSystemMetrics")
 	procSetWindowPos     = user32Lazy.NewProc("SetWindowPos")
 	procWinClose         = user32Lazy.NewProc("PostMessageW")
+	procGetWindowRect    = user32Lazy.NewProc("GetWindowRect")
 )
 
 // msedgePath 定位 Edge 浏览器(系统自带;WebView2 运行时本就依赖同一 Edge)
@@ -79,37 +108,139 @@ func fileOK(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
-// calcMainWinSize 按屏幕工作区计算 16:9 窗口尺寸与居中坐标(宽=工作区85%≤1600;高受限反向缩宽)
+// calcMainWinSize 窗口尺寸:有记忆用记忆(用户调过的尺寸),无记忆按 16:9 默认;
+// 记忆尺寸超出当前屏幕时收进工作区,居中放置
 func calcMainWinSize() (x, y, w, h int) {
-	sw, _, _ := procGetSysMetrics.Call(16) // SM_CXFULLSCREEN(工作区宽)
-	sh, _, _ := procGetSysMetrics.Call(17) // SM_CYFULLSCREEN(工作区高)
+	if m := loadMainWinMem(); m.Set {
+		w, h = m.W, m.H
+	} else {
+		w, h = defaultMainWinSize()
+	}
+	sw, _, _ := procGetSysMetrics.Call(16)
+	sh, _, _ := procGetSysMetrics.Call(17)
 	if sw == 0 || sh == 0 {
 		sw, sh = 1920, 1040
 	}
-	w = int(float64(sw) * 0.85)
-	if w > 1600 {
-		w = 1600
+	if w > int(sw)-20 {
+		w = int(sw) - 20
 	}
-	h = w * 9 / 16
-	if maxH := int(float64(sh) * 0.88); h > maxH {
-		h = maxH
-		w = h * 16 / 9
+	if h > int(sh)-20 {
+		h = int(sh) - 20
 	}
 	return (int(sw) - w) / 2, (int(sh) - h) / 2, w, h
 }
 
-// fitMainWindow 找到主窗口后强制 16:9 尺寸+居中(Edge App 的 --window-size 在复用已有
-// Edge 进程时不生效,窗口按上次记忆尺寸打开——由本进程 SetWindowPos 兜底校正)
+// defaultMainWinSize 无记忆时的 16:9 默认(宽=工作区85%≤1600;高受限反向缩宽)
+func defaultMainWinSize() (int, int) {
+	sw, _, _ := procGetSysMetrics.Call(16)
+	sh, _, _ := procGetSysMetrics.Call(17)
+	if sw == 0 || sh == 0 {
+		sw, sh = 1920, 1040
+	}
+	w := int(float64(sw) * 0.85)
+	if w > 1600 {
+		w = 1600
+	}
+	h := w * 9 / 16
+	if maxH := int(float64(sh) * 0.88); h > maxH {
+		h = maxH
+		w = h * 16 / 9
+	}
+	return w, h
+}
+
+// fitMainWindow 把窗口设为 calcMainWinSize()(有记忆=记忆尺寸,无=16:9 默认)。
+// Edge App 会忽略 --window-size(复用进程时按自己记忆开)且 SetWindowPos 对运行中的
+// msedge 窗口无效——尺寸不符时关旧窗重新创建(新进程参数生效);用户之后手动缩放由
+// saveWinLoop 更新记忆,下次启动按新记忆设置——记忆闭环。
 func fitMainWindow() {
 	h := findMainWindow()
 	if h == 0 {
 		return
 	}
 	x, y, w, hgt := calcMainWinSize()
-	_, _, _ = procSetWindowPos.Call(h, 0, uintptr(x), uintptr(y), uintptr(w), uintptr(hgt), 0x0004) // SWP_NOZORDER
+	var r w32RECT
+	procGetWindowRect.Call(h, uintptr(unsafe.Pointer(&r)))
+	curW, curH := int(r.Right-r.Left), int(r.Bottom-r.Top)
+	if curW == 0 || curH == 0 || (curW == w && curH == hgt) {
+		return // 已符合期望(或读不到,不干预)
+	}
+	// 先试 SetWindowPos(部分环境有效);无效则关旧开新
+	_, _, _ = procSetWindowPos.Call(h, 0, uintptr(x), uintptr(y), uintptr(w), uintptr(hgt), 0x0004)
+	time.Sleep(800 * time.Millisecond)
+	procGetWindowRect.Call(h, uintptr(unsafe.Pointer(&r)))
+	if int(r.Right-r.Left) != w || int(r.Bottom-r.Top) != hgt {
+		log.Printf("主窗口尺寸不符(当前 %dx%d,期望 %dx%d),关旧开新", curW, curH, w, hgt)
+		_, _, _ = procWinClose.Call(h, 0x0010, 0, 0)
+		time.Sleep(600 * time.Millisecond)
+		runMainWindowForSize(w, hgt)
+	}
 }
 
-// runMainWindow 用 Edge App 模式打开管理窗口(独立应用窗口,开后校正 16:9)
+// runMainWindowForSize 以指定尺寸创建主窗口(新进程 --window-size 参数生效;
+// fit 关旧开新专用,复用 runMainWindow 主体但传尺寸)
+func runMainWindowForSize(w, h int) {
+	url := "http://127.0.0.1:8787"
+	edge := msedgePath()
+	if edge == "" {
+		openBrowser(url)
+		return
+	}
+	sw, _, _ := procGetSysMetrics.Call(16)
+	sh, _, _ := procGetSysMetrics.Call(17)
+	if sw == 0 || sh == 0 {
+		sw, sh = 1920, 1040
+	}
+	x := (int(sw) - w) / 2
+	y := (int(sh) - h) / 2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	cmd := exec.Command(edge, "--app="+url,
+		fmt.Sprintf("--window-size=%d,%d", w, h),
+		fmt.Sprintf("--window-position=%d,%d", x, y))
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
+	if err := cmd.Start(); err != nil {
+		log.Printf("主窗口重建失败: %v", err)
+	}
+}
+
+// w32RECT GetWindowRect 输出
+type w32RECT struct{ Left, Top, Right, Bottom int32 }
+
+// saveMainWindowSize 读取当前窗口尺寸并持久化(用户在 Edge 标题栏自行调整后记忆;
+// 由 saveWinLoop 每 3s 检测一次,尺寸变化即落盘)
+func saveMainWindowSize() {
+	h := findMainWindow()
+	if h == 0 {
+		return
+	}
+	var r w32RECT
+	procGetWindowRect.Call(h, uintptr(unsafe.Pointer(&r)))
+	w, hgt := int(r.Right-r.Left), int(r.Bottom-r.Top)
+	if w < 400 || hgt < 300 {
+		return
+	}
+	if m := loadMainWinMem(); m.Set && m.W == w && m.H == hgt {
+		return
+	}
+	saveMainWinMem(mainWinMem{W: w, H: hgt, Set: true})
+}
+
+// saveWinLoop 常驻轮询:记忆窗口尺寸(用户拖动/缩放后 3s 内落盘)。
+// 启动先等 10s(fitMainWindow 校正完成后再开始,避免把 Edge 启动时的旧尺寸覆盖进记忆)。
+func saveWinLoop() {
+	time.Sleep(10 * time.Second)
+	for {
+		time.Sleep(3 * time.Second)
+		saveMainWindowSize()
+	}
+}
+
+// runMainWindow 用 Edge App 模式打开管理窗口(独立应用窗口)
 func runMainWindow(url string) {
 	edge := msedgePath()
 	if edge == "" {
@@ -245,6 +376,7 @@ func main() {
 	go func() {
 		time.Sleep(400 * time.Millisecond) // 等 HTTP listen 就绪
 		showMainWindow(url)
+		go saveWinLoop() // 记忆用户调整的窗口尺寸
 	}()
 
 	// 灵动岛悬浮胶囊（WebView2）
