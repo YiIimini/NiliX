@@ -1500,6 +1500,23 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 	if err := ctx.ensureEncodedAt(s, cacheName, w, h, lg); err != nil {
 		return fmt.Errorf("镜头 %d 预编码失败: %w", s.ID, err)
 	}
+	// 崩溃恢复:上次「已提交未收产物」的任务先尝试收回(已完成免重渲/在跑的等完再收/丢失的重新提交)
+	ckKey := strconv.Itoa(s.ID)
+	if dstDir == ctx.draftDir() {
+		ckKey += "@d"
+	}
+	if old := ctx.renderCKGet(ckKey); old != "" {
+		if ok2, rerr := ctx.tryReclaim(old, dst, lg); ok2 {
+			ctx.renderCKClear(ckKey)
+			return nil
+		} else if rerr != nil {
+			lg.logf("  ⚠️ 上次未收产物的任务无法恢复(" + truncate(rerr.Error(), 120) + "),重新提交")
+			ctx.renderCKClear(ckKey)
+		} else {
+			lg.logf("  ⚠️ 上次任务已丢失(ComfyUI 重启),重新提交")
+			ctx.renderCKClear(ckKey)
+		}
+	}
 	chained := !fresh && idx > 1 && fileExists(h3ContextLatentPath(ctx.comfyOutput, idx-1))
 	if fresh {
 		lg.logf("  ♻️ 镜头 " + strconv.Itoa(s.ID) + " 返工重渲:独立生成(不接缝)")
@@ -1517,6 +1534,7 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 	if err != nil {
 		return fmt.Errorf("镜头 %d 提交失败: %w", s.ID, err)
 	}
+	ctx.renderCKSet(ckKey, pid) // 提交即落盘:崩溃后可按 prompt_id 收回,绝不重复烧 GPU
 	lg.logf("  渲染提交 " + pid[:8] + "...")
 	t0 := time.Now()
 	if err := ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second); err != nil {
@@ -1546,6 +1564,7 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 	if err := copyFile(filepath.Join(ctx.comfyOutput, rel), dst); err != nil {
 		return fmt.Errorf("镜头 %d 复制视频失败: %w", s.ID, err)
 	}
+	ctx.renderCKClear(ckKey) // 产物已收,检查点使命完成
 	lg.logf(fmt.Sprintf("  ✅ 镜头 %d 完成（%.1f 分）-> %s", s.ID, time.Since(t0).Minutes(), dst))
 	return nil
 }

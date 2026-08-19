@@ -2,10 +2,13 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"nilix/internal/agent"
 )
@@ -201,4 +204,68 @@ func TestLLMStats(t *testing.T) {
 	if sum := agentStatusSummary(filepath.Join(manjuRoot, proj, "config.json")); sum["llmStats"] == nil {
 		t.Errorf("status 摘要未带 llmStats")
 	}
+}
+
+// TestRenderCKRoundtrip 渲染检查点落盘往返:set/get/clear
+func TestRenderCKRoundtrip(t *testing.T) {
+	ctx := &manjuCtx{
+		analysisDir: t.TempDir(),
+		episode:     "EP01",
+	}
+	if ctx.renderCKGet("03") != "" {
+		t.Fatalf("空检查点应返回空")
+	}
+	ctx.renderCKSet("03", "pid-abc")
+	ctx.renderCKSet("03@d", "pid-draft")
+	if ctx.renderCKGet("03") != "pid-abc" || ctx.renderCKGet("03@d") != "pid-draft" {
+		t.Errorf("检查点读写不一致: %v", ctx.renderCKLoad().Shots)
+	}
+	ctx.renderCKClear("03")
+	if ctx.renderCKGet("03") != "" || ctx.renderCKGet("03@d") != "pid-draft" {
+		t.Errorf("clear 不应影响其它 key")
+	}
+}
+
+// TestRenderCKReclaim 崩溃恢复三分支:已完成→收产物;失败→错误;丢失→false+nil
+func TestRenderCKReclaim(t *testing.T) {
+	lg := &manjuLogger{state: manjuState}
+	outDir := t.TempDir()
+	src := filepath.Join(outDir, "manju_00001.mp4")
+	_ = os.WriteFile(src, []byte("video-bytes"), 0644)
+
+	mkServer := func(entry string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/history/") {
+				_, _ = w.Write([]byte(entry))
+				return
+			}
+			_, _ = w.Write([]byte("{}"))
+		}))
+	}
+	// 1. 已完成 → 收回产物
+	srv := mkServer(`{"p1": {"status": {"status_str": "success", "completed": true},
+		"outputs": {"9": {"video": [{"filename": "manju_00001.mp4", "subfolder": ""}]}}}}`)
+	ctx := &manjuCtx{comfy: newComfyClient(srv.URL), comfyOutput: outDir, analysisDir: t.TempDir(), episode: "EP01"}
+	dst := filepath.Join(t.TempDir(), "03.mp4")
+	ok, err := ctx.tryReclaim("p1", dst, lg)
+	if !ok || err != nil || !fileExists(dst) {
+		t.Errorf("已完成任务应收回产物: ok=%v err=%v dst存在=%v", ok, err, fileExists(dst))
+	}
+	srv.Close()
+	// 2. 失败 → 错误(调用方清检查点重新提交)
+	srv2 := mkServer(`{"p2": {"status": {"status_str": "error", "messages": [{"data": {"exception_message": "OOM"}}]}}}`)
+	ctx2 := &manjuCtx{comfy: newComfyClient(srv2.URL), comfyOutput: outDir, analysisDir: t.TempDir(), episode: "EP01"}
+	if ok2, err2 := ctx2.tryReclaim("p2", dst, lg); ok2 || err2 == nil || !strings.Contains(err2.Error(), "OOM") {
+		t.Errorf("失败任务应返回错误: ok=%v err=%v", ok2, err2)
+	}
+	srv2.Close()
+	// 3. history 无记录(ComfyUI 重启)→ false+nil(丢失,重新提交)
+	manjuReclaimLostWait = 200 * time.Millisecond
+	defer func() { manjuReclaimLostWait = 90 * time.Second }()
+	srv3 := mkServer(`{}`)
+	ctx3 := &manjuCtx{comfy: newComfyClient(srv3.URL), comfyOutput: outDir, analysisDir: t.TempDir(), episode: "EP01"}
+	if ok3, err3 := ctx3.tryReclaim("p3", dst, lg); ok3 || err3 != nil {
+		t.Errorf("丢失任务应 false+nil: ok=%v err=%v", ok3, err3)
+	}
+	srv3.Close()
 }
