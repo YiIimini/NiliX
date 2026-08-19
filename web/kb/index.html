@@ -7,10 +7,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=20260819ae3">
-<link rel="stylesheet" href="/css/themes.css?v=20260819ae3">
-<link rel="stylesheet" href="/css/materials.css?v=20260819ae3">
-<link rel="stylesheet" href="/css/app.css?v=20260819ae3">
+<link rel="icon" type="image/png" href="/icon.png?v=20260819ae4">
+<link rel="stylesheet" href="/css/themes.css?v=20260819ae4">
+<link rel="stylesheet" href="/css/materials.css?v=20260819ae4">
+<link rel="stylesheet" href="/css/app.css?v=20260819ae4">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -78,7 +78,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260819ae3" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260819ae4" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -216,9 +216,7 @@
                 <select id="manju-project" class="manju-select"><option value="">— 选择项目 —</option></select>
                 <button id="manju-create" class="hrs-btn" title="新建/创建漫剧项目">✚ 新建项目</button>
               </div>
-              <div class="manju-row manju-health-row">
-                <button id="manju-health" class="hrs-btn" title="🤖 项目体检：配置/小说/LLM/ComfyUI/模型/渲染参数一键诊断，可修复项一键处理">🔍 项目体检</button>
-              </div>
+          <!-- 环境自检/项目体检已整合为执行管线 ⓪「项目体检」弹窗 -->
               <div id="manju-chips-title" class="manju-sub-title" hidden>参数</div>
               <div id="manju-chips" class="manju-chips"></div>
             </div>
@@ -326,7 +324,7 @@
                 <option value="increment">重试递增</option>
                 <option value="random">重试随机</option>
               </select>
-              <label class="manju-check" title="SageAttention 注意力加速补丁(需 ComfyUI-KJNodes 的 PatchSageAttentionKJ;RTX 50 系白捡提速),环境自检会校验节点"><input id="manju-sage" type="checkbox">SageAttn</label>
+              <label class="manju-check" title="SageAttention 注意力加速补丁(需 ComfyUI-KJNodes 的 PatchSageAttentionKJ;RTX 50 系白捡提速),项目体检会校验节点"><input id="manju-sage" type="checkbox">SageAttn</label>
               <label class="manju-check" title="AI 一条龙:审片返工轮用缩放分辨率草稿(约1/4像素量),全部落定后自动全分辨率定稿重渲(零返工)"><input id="manju-draft-judge" type="checkbox">草稿预审</label>
               <span class="manju-label">缩放</span><input id="manju-draft-scale" class="manju-input manju-num" type="number" min="0.2" max="0.95" step="0.05" title="草稿预审的分辨率缩放(0.2-0.95,默认 0.5)">
               <span class="manju-label">长镜</span>
@@ -418,12 +416,6 @@
             <div id="manju-gacha" class="manju-gacha-body hidden"></div>
           </div>
 
-          <!-- 环境自检(条件显示) -->
-          <div id="manju-env-card" class="manju-card hidden">
-            <h3 class="manju-card-title">环境自检</h3>
-            <pre id="manju-env-out" class="manju-log"></pre>
-          </div>
-
           </div><!-- /manju-content-col -->
 
           <!-- 右列：执行管线（悬浮，贴合内容右侧，与项目卡片对称） -->
@@ -431,7 +423,7 @@
             <div class="manju-card manju-pipeline-card">
               <h3 class="manju-card-title">执行管线</h3>
               <div class="manju-row manju-stage-row">
-                <button id="manju-env" class="hrs-btn"><span class="mj-step-no">0</span>环境自检</button>
+                <button id="manju-env" class="hrs-btn" title="🔍 项目体检：环境就绪性 + 配置/参数智能诊断，可修复项一键处理"><span class="mj-step-no">0</span>项目体检</button>
               </div>
               <div class="manju-row manju-stage-row">
                 <button class="hrs-btn" data-phase="plan"><span class="mj-step-no">1</span>方案</button>
@@ -785,11 +777,11 @@
       </div>
     </div>
   </div>
-  <script src="/js/i18n.js?v=20260819ae3"></script>
-  <script src="/js/markdown.js?v=20260819ae3"></script>
-  <script src="/js/app.js?v=20260819ae3"></script>
-  <script src="/js/comfy.js?v=20260819ae3"></script>
-  <script src="/js/dirview.js?v=20260819ae3"></script>
-  <script src="/js/manju.js?v=20260819ae3"></script>
+  <script src="/js/i18n.js?v=20260819ae4"></script>
+  <script src="/js/markdown.js?v=20260819ae4"></script>
+  <script src="/js/app.js?v=20260819ae4"></script>
+  <script src="/js/comfy.js?v=20260819ae4"></script>
+  <script src="/js/dirview.js?v=20260819ae4"></script>
+  <script src="/js/manju.js?v=20260819ae4"></script>
 </body>
 </html>

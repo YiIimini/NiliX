@@ -4262,6 +4262,10 @@ select option { text-align: center; }
 .mj-hi-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; }
 .mj-hi-fix { flex: none; padding: 3px 12px; font-size: 11.5px; }
 .mj-health-foot { font-size: 11.5px; color: var(--muted); padding: 2px 2px 0; }
+/* 项目体检弹窗:环境自检只读文本区(与智能体检分区) */
+.mj-hp-env-sec { margin-top: 14px; padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--muted) 25%, transparent); }
+.mj-hp-env-title { font-size: 12px; font-weight: 700; margin-bottom: 6px; letter-spacing: .3px; }
+#mj-hp-env { max-height: 200px; overflow: auto; font-size: 11px; line-height: 1.5; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; background: color-mix(in srgb, var(--muted) 7%, transparent); border-radius: 8px; padding: 8px 10px; }
 
 /* 审片详情弹窗 */
 .manju-judge { display: flex; flex-direction: column; gap: 10px; }

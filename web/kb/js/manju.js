@@ -93,19 +93,19 @@
       "正脸参考 <code>_face.png</code> 从定妆照切「完整头部+肩部」用于 R2V 锁脸",
     ] },
     { ic: "🎬", t: "执行管线", ps: [
-      "阶段按钮带序号：⓪环境自检 ①方案 ②资产 ③编码 ④渲染 ⑤质检 ⑥合成（顺序执行）",
+      "阶段按钮带序号：⓪项目体检 ①方案 ②资产 ③编码 ④渲染 ⑤质检 ⑥合成（顺序执行）",
       "第一排单跑某阶段；「快速执行」下：<b>一条龙</b> = 全流程自动化",
       "中断后点<b>▶ 续跑</b>：从上次断点继续，已完成阶段幂等跳过；<b>崩溃恢复</b>：渲染中提交即落盘 prompt_id，续跑先查 ComfyUI history 收回已完成任务，绝不重复烧 GPU",
-      "点「环境自检」可先体检 ComfyUI / 模型 / 依赖是否就绪（含 SageAttention 节点校验）",
+      "点「项目体检」：环境自检（ComfyUI / 模型 / 依赖就绪性）+ 智能诊断（配置/参数/审片官），可修复项一键写回 config",
       "产物区每集可：<b>☁️ 2K</b>（本地定稿镜提交 MiniMax 云端升 2K，设置里填 Key）/ <b>📦 剪映</b>（导出视频+字幕轨草稿，可继续编辑；需 venv 装 pyJianYingDraft）",
       "镜头 ⋮ 菜单支持<b>单镜云端 2K</b>；<b>⚠️ 已过期</b>徽标 = 提示词/定妆照已变，下次渲染自动删旧重渲",
       "产物区<b>🧹 清理</b>：清理抽卡候选/审片抽帧/云端 2K(均可重新生成,定妆照/定稿/成片不动)",
-      "每次任务结束自动写<b>诊断快照</b>到 <code>manju/logs/diagnose/&lt;项目&gt;_diagnose.json</code>(配置 Key 打码+状态+环境自检),反馈问题时直接提供该文件即可定位",
+      "每次任务结束自动写<b>诊断快照</b>到 <code>manju/logs/diagnose/&lt;项目&gt;_diagnose.json</code>(配置 Key 打码+状态+项目体检),反馈问题时直接提供该文件即可定位",
     ] },
     { ic: "🤖", t: "智能体调度", ps: [
       "点<b>🤖 AI 一条龙</b>先弹窗询问：<b>「是」</b>= Agent 深度分析小说内容，自动推荐并更新渲染风格（可组合叠加，如 2.5D+水墨）后走全流程；<b>「否」</b>= 按当前渲染配置直接走AI 一条龙",
       "AI 一条龙 = 一条龙 + 智能体：渲染完成后<b>审片官逐镜判分</b>（八维度，对齐 H3 官方能力）",
-      "<b>🔍 项目体检</b>：一键诊断 配置/小说/LLM/ComfyUI/模型/渲染参数/审片官，可修复项（步数/种子/帧率/时长）一键写回 config",
+      "<b>🔍 项目体检</b>（执行管线 ⓪）：环境自检（ComfyUI/模型/依赖就绪性）+ 智能诊断（配置/小说/LLM/渲染参数/审片官），可修复项一键写回 config",
       "<b>💬 右栏可对智能体说话</b>：体检 / 推荐风格 / 审片报告 / 总结 / 修复，支持快捷指令按钮",
       "<b>🧠 学习档案</b>：跨次运行记忆——运行次数、审片均分趋势、高频问题、最近风格选择；阶段失败自动<b>智能诊断</b>给出原因与修复建议",
       "未达标镜头<b>自动返工</b>：修复师按审片意见改写 H3 提示词 → 删缓存定点重渲染（预算默认 2 轮，防无限重试）",
@@ -137,7 +137,7 @@
       "<b>档位</b>快捷切换分辨率：416P 草稿（快速试片）→ 768P 标准（默认）→ 1088P 高清，按画幅等比换算并对齐 32；选「手动宽高」则直接用上面的宽高值",
       "<b>步数</b>默认 20；<b>Turbo步</b>默认 8（8 步 ≈ 20 步画质、约 2.9 倍提速）",
       "<b>seed</b> 全剧固定保证跨镜头一致；<b>seed策略</b>控制返工：固定（默认）/ 重试递增（第 N 次返工 seed+N）/ 重试随机（返工换新随机）——返工仍抽同一 seed 等于重抽同一命运的卡",
-      "<b>SageAttn</b>：SageAttention 注意力加速补丁（需 ComfyUI-KJNodes），RTX 50 系白捡提速；开启后「环境自检」会校验节点是否可用",
+      "<b>SageAttn</b>：SageAttention 注意力加速补丁（需 ComfyUI-KJNodes），RTX 50 系白捡提速；开启后「项目体检」会校验节点是否可用",
       "<b>草稿预审</b>（AI 一条龙）：审片返工轮用缩放分辨率草稿（默认 0.5 ≈ 1/4 像素量，可调 0.2-0.95），全部落定后自动<b>全分辨率定稿重渲</b>——审片轮 GPU 时间约降 3/4，定稿零返工",
       "<b>时长</b> min/max 4–15s，大模型逐镜时长在此区间自动 clamp",
     ] },
@@ -198,7 +198,7 @@
       "方案: <code>analysis/&lt;集&gt;_direct_plan.json</code>",
       "镜头: <code>clips/&lt;集&gt;/NN.mp4</code>",
       "成片: <code>&lt;剧名&gt;/&lt;集&gt;_成片.mp4</code>",
-      "诊断快照: <code>manju/logs/diagnose/&lt;项目&gt;_diagnose.json</code>(每次任务结束自动生成,覆盖保留最近一次;含配置 Key 打码/状态/环境自检)",
+      "诊断快照: <code>manju/logs/diagnose/&lt;项目&gt;_diagnose.json</code>(每次任务结束自动生成,覆盖保留最近一次;含配置 Key 打码/状态/项目体检)",
       "云端 2K: <code>clips/&lt;集&gt;/2k/NN.mp4</code>;剪映草稿: <code>&lt;剧名&gt;/剪映草稿/</code>",
     ] },
   ];
@@ -344,7 +344,7 @@
       const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
       const wasEmpty = !log.dataset.last;
       log.dataset.last = src;
-      const stageCN = { env: "环境自检", plan: "方案", assets: "资产", encode: "编码", render: "渲染", qc: "质检", assemble: "合成", upscale: "云端 2K" };
+      const stageCN = { env: "项目体检", plan: "方案", assets: "资产", encode: "编码", render: "渲染", qc: "质检", assemble: "合成", upscale: "云端 2K" };
       const lines = src.split("\n");
       const MAX = 300;
       const view = lines.length > MAX ? lines.slice(-MAX) : lines;
@@ -496,8 +496,7 @@
       );
       $("manju-resume").addEventListener("click", () => this.runResume());
       $("manju-agent-run").addEventListener("click", () => this.runAgent());
-      $("manju-health").addEventListener("click", () => this.openHealth());
-      $("manju-env").addEventListener("click", () => this.doEnv());
+      $("manju-env").addEventListener("click", () => this.openHealth());
       $("manju-stop").addEventListener("click", () => this.stop());
       $("manju-clear-log").addEventListener("click", () => { this.logNote("(就绪)"); });
 
@@ -1693,49 +1692,88 @@
     },
 
     /* ---- 项目体检:全项诊断 + 一键修复 ---- */
+    /* 项目体检(整合):智能体检 items(可一键修复) + 环境自检文本(ComfyUI/模型/依赖就绪性,只读) */
     openHealth() {
       if (!this.project) { this.setErr("请先选择项目"); return; }
-      this.openModal("🔍 项目体检", '<div class="mj-health"><div class="mj-health-load">🤖 智能体正在体检项目…</div></div>', true);
-      this.loadHealth(true, this._modalGen);
+      this.openModal("🔍 项目体检", `<div class="mj-health">
+        <div class="mj-health-load" id="mj-hp-load">🤖 智能体正在体检项目…</div>
+        <div id="mj-hp-items"></div>
+        <div class="mj-hp-env-sec">
+          <div class="mj-hp-env-title">🧰 环境自检（ComfyUI / 模型 / 依赖就绪性，只读）</div>
+          <pre id="mj-hp-env" class="manju-log">(运行中…)</pre>
+        </div>
+      </div>`, true);
+      const gen = this._modalGen;
+      post("/api/manju/env", { config: this.project }).then((r) => {
+        if (gen !== this._modalGen) return;
+        const el = $("mj-hp-env");
+        if (el) el.textContent = (r.output || "") + "\n[exit " + r.exitCode + "]";
+      }).catch((e) => {
+        if (gen !== this._modalGen) return;
+        const el = $("mj-hp-env");
+        if (el) el.textContent = "错误: " + e.message;
+      });
+      get("/api/manju/agent/health?config=" + encodeURIComponent(this.project)).then((r) => {
+        if (gen !== this._modalGen) return;
+        const el = $("mj-hp-items");
+        if (!el) return;
+        el.innerHTML = this._healthItemsHTML(r.items || []);
+        this._bindHealthFix();
+        const loadEl = $("mj-hp-load");
+        if (loadEl) loadEl.remove();
+      }).catch(() => {});
     },
+
+    /* 智能体检 items → HTML(徽章计数 + 逐项状态 + 可修复按钮) */
+    _healthItemsHTML(items) {
+      const n = { ok: 0, warn: 0, bad: 0 };
+      items.forEach((it) => n[it.status]++);
+      const ic = { ok: "✅", warn: "⚠️", bad: "❌" };
+      return `<div class="mj-health-head">
+        <span class="mj-hh-title">🤖 智能体检</span>
+        <span class="mj-hh-pill bad">❌ 异常 ${n.bad}</span>
+        <span class="mj-hh-pill warn">⚠️ 建议 ${n.warn}</span>
+        <span class="mj-hh-pill ok">✅ 正常 ${n.ok}</span>
+      </div>
+      <div class="mj-health-items">
+        ${items.map((it) => `
+        <div class="mj-health-item ${it.status}">
+          <span class="mj-hi-ic">${ic[it.status] || "•"}</span>
+          <div class="mj-hi-body">
+            <div class="mj-hi-top">
+              <b>${esc(it.label)}</b>
+              ${it.fixable ? `<button class="hrs-btn hrs-btn-primary mj-hi-fix" data-fix="${esc(it.key)}">一键修复</button>` : ""}
+            </div>
+            <div class="mj-hi-detail">${esc(it.detail)}</div>
+            ${(!it.fixable && it.fixHint) ? `<div class="mj-hi-hint">💡 ${esc(it.fixHint)}</div>` : ""}
+          </div>
+        </div>`).join("")}
+      </div>
+      <div class="mj-health-foot">体检为本地秒查(不调用模型);「一键修复」直接写回 config.json 渲染配置。</div>`;
+    },
+
+    /* 绑定当前弹窗内的「一键修复」按钮 */
+    _bindHealthFix() {
+      document.querySelectorAll("#manju-modal .mj-hi-fix").forEach((b) =>
+        b.addEventListener("click", () => this.fixHealth(b.dataset.fix, b))
+      );
+    },
+
+    /* 体检预热(非弹窗):刷新右栏 Agent 面板建议横幅 */
     loadHealth(showModal, gen) {
       const render = (items) => {
         // 代次守卫:弹窗已被关闭/切换 → 放弃渲染,不弹回
         if (gen !== undefined && gen !== this._modalGen) return;
-        const n = { ok: 0, warn: 0, bad: 0 };
-        items.forEach((it) => n[it.status]++);
-        const ic = { ok: "✅", warn: "⚠️", bad: "❌" };
-        const body = `<div class="mj-health">
-          <div class="mj-health-head">
-            <span class="mj-hh-title">🤖 智能体检</span>
-            <span class="mj-hh-pill bad">❌ 异常 ${n.bad}</span>
-            <span class="mj-hh-pill warn">⚠️ 建议 ${n.warn}</span>
-            <span class="mj-hh-pill ok">✅ 正常 ${n.ok}</span>
-          </div>
-          <div class="mj-health-items">
-            ${items.map((it) => `
-            <div class="mj-health-item ${it.status}">
-              <span class="mj-hi-ic">${ic[it.status] || "•"}</span>
-              <div class="mj-hi-body">
-                <div class="mj-hi-top">
-                  <b>${esc(it.label)}</b>
-                  ${it.fixable ? `<button class="hrs-btn hrs-btn-primary mj-hi-fix" data-fix="${esc(it.key)}">一键修复</button>` : ""}
-                </div>
-                <div class="mj-hi-detail">${esc(it.detail)}</div>
-                ${(!it.fixable && it.fixHint) ? `<div class="mj-hi-hint">💡 ${esc(it.fixHint)}</div>` : ""}
-              </div>
-            </div>`).join("")}
-          </div>
-          <div class="mj-health-foot">体检为本地秒查(不调用模型);「一键修复」直接写回 config.json 渲染配置。</div>
-        </div>`;
-        if (showModal) this.openModal("🔍 项目体检", body, true);
+        if (showModal) {
+          this.openModal("🔍 项目体检", this._healthItemsHTML(items), true);
+        } else {
+          this._health = items;
+          this._healthFix = items.filter((it) => it.fixable && it.status !== "ok");
+          this.renderAgent();
+        }
         this._health = items;
         this._healthFix = items.filter((it) => it.fixable && it.status !== "ok");
-        if (!showModal) this.renderAgent(); // 非弹窗模式(预热):刷新右栏面板出建议横幅
-        // 修复按钮绑定(弹窗刚生成时)
-        document.querySelectorAll("#manju-modal .mj-hi-fix").forEach((b) =>
-          b.addEventListener("click", () => this.fixHealth(b.dataset.fix, b))
-        );
+        this._bindHealthFix();
       };
       if (showModal) {
         get("/api/manju/agent/health?config=" + encodeURIComponent(this.project)).then((r) => render(r.items || [])).catch((e) => {
@@ -1751,7 +1789,16 @@
       const gen = this._modalGen;   // 修复期间弹窗被关闭 → 不再刷新弹窗内容
       if (btn) { btn.disabled = true; btn.textContent = "修复中…"; }
       post("/api/manju/agent/health/fix", { config: this.project, key }).then((r) => {
-        this.loadHealth(true, gen);
+        if (gen !== this._modalGen) return; // 弹窗已关闭:不再刷新
+        // 只刷新弹窗内的智能体检区(环境自检区保留)
+        get("/api/manju/agent/health?config=" + encodeURIComponent(this.project)).then((r2) => {
+          if (gen !== this._modalGen) return;
+          const el = $("mj-hp-items");
+          if (el) {
+            el.innerHTML = this._healthItemsHTML(r2.items || []);
+            this._bindHealthFix();
+          }
+        }).catch(() => {});
         this.loadProject();
       }).catch((e) => {
         if (btn) { btn.disabled = false; btn.textContent = "一键修复"; }
@@ -1916,14 +1963,6 @@
       if (x) x.addEventListener("click", () => { this._healthTipDismissed = true; this.renderAgent(); });
     },
 
-    doEnv() {
-      if (!this.project) return;
-      $("manju-env-card").classList.remove("hidden");
-      $("manju-env-out").textContent = "(运行环境自检...)";
-      post("/api/manju/env", { config: this.project }).then((r) => {
-        $("manju-env-out").textContent = (r.output || "") + "\n[exit " + r.exitCode + "]";
-      }).catch((e) => { $("manju-env-out").textContent = "错误: " + e.message; });
-    },
 
     stop() {
       if (this.stopping) return;
