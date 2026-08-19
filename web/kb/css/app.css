@@ -4527,3 +4527,7 @@ select option { text-align: center; }
   color: var(--accent);
 }
 .manju-vid-menu:active { transform: scale(0.92); }
+
+/* 项目卡片:体检按钮行(新建项目下方),与选择器行留间距 */
+.manju-health-row { margin-top: 8px; }
+.manju-health-row .hrs-btn { flex: 1; justify-content: center; }
