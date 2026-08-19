@@ -324,6 +324,12 @@
               <label class="manju-check" title="SageAttention 注意力加速补丁(需 ComfyUI-KJNodes 的 PatchSageAttentionKJ;RTX 50 系白捡提速),环境自检会校验节点"><input id="manju-sage" type="checkbox">SageAttn</label>
               <label class="manju-check" title="智能一条龙:审片返工轮用缩放分辨率草稿(约1/4像素量),全部落定后自动全分辨率定稿重渲(零返工)"><input id="manju-draft-judge" type="checkbox">草稿预审</label>
               <span class="manju-label">缩放</span><input id="manju-draft-scale" class="manju-input manju-num" type="number" min="0.2" max="0.95" step="0.05" title="草稿预审的分辨率缩放(0.2-0.95,默认 0.5)">
+              <span class="manju-label">长镜</span>
+              <select id="manju-take" class="manju-input" title="多切点长镜(experimental):相邻同场景镜头合并为一次生成,组内 [Shot N] At MM:SS.mmm 多机位切点;关闭=一镜一渲+接缝">
+                <option value="1">关闭</option>
+                <option value="2">2镜/组</option>
+                <option value="3">3镜/组</option>
+              </select>
             </div>
 
             <div class="manju-row">

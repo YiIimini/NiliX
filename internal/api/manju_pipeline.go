@@ -685,6 +685,8 @@ type manjuShot struct {
 	Narration  string
 	Duration   int
 	H3Prompt   string
+	TakeTail   bool        // 多切点长镜的内镜:不独立渲染,由组头一次生成覆盖
+	TakeGroup  []manjuShot // 多切点长镜组头携带整组(含自身;单镜为空)
 }
 
 // loadPlan 读取 analysis/<ep>_direct_plan.json,规范化镜头字段
@@ -985,6 +987,9 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 	}
 	need := false
 	for _, s := range shots {
+		if s.TakeTail {
+			continue // 长镜内镜不独立生成提示词(由组头多切点提示词覆盖)
+		}
 		if s.H3Prompt == "" && prompts[strconv.Itoa(s.ID)] == "" {
 			need = true
 			break
@@ -1011,6 +1016,9 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 	// 回写 h3_prompt 到 plan(保持 shot 顺序引用)
 	shotObjs, _ := plan["shots"].([]any)
 	for i, s := range shots {
+		if s.TakeTail {
+			continue // 内镜由组头承载
+		}
 		if s.H3Prompt != "" || prompts[strconv.Itoa(s.ID)] != "" {
 			continue
 		}
@@ -1054,14 +1062,28 @@ func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map
 			chars[cid] = m
 		}
 	}
-	// 用户负面提示词随镜传入:H3 无原生负面通道,由写作规范转译成正面排除句注入提示词
-	// 用户负面提示词随镜传入:H3 无原生负面通道,由写作规范转译成正面排除句注入提示词
-	// 学习记忆反哺:本项目历史高频审片问题(如 面部扭曲×8)注入,提示词生成时针对性正面规避
-	ctxData, _ := json.Marshal(map[string]any{
+	data := map[string]any{
 		"shot": shotObj, "characters": chars, "scene": sceneMap[s.Scene],
 		"negative_prompt": ctx.negPrompt(),
 		"known_issues":    topAgentIssues(ctx.project, 3),
-	})
+	}
+	// 多切点长镜:附加规范 + 组内各镜字段与切点时间(take_shots 供 LLM 直引,不必自算)
+	if len(s.TakeGroup) > 1 {
+		sys += manjuMultiCutAddon
+		var group []any
+		cum := 0.0
+		for _, g := range s.TakeGroup {
+			gm := map[string]any{
+				"shot_id": g.ID, "shot_size": g.ShotSize, "camera": g.Camera, "action": g.Action,
+				"dialogue": g.Dialogue, "narration": g.Narration, "duration": g.Duration,
+				"scene": g.Scene, "characters": g.Characters, "cut_at": manjuTimecode(cum),
+			}
+			group = append(group, gm)
+			cum += float64(g.Duration)
+		}
+		data["take_shots"] = group
+	}
+	ctxData, _ := json.Marshal(data)
 	out, err := ctx.llm.chatJSON(sys, string(ctxData), 0.3)
 	if err != nil {
 		return "", err
@@ -1071,6 +1093,15 @@ func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map
 		return "", fmt.Errorf("LLM 未返回 h3_prompt")
 	}
 	return hp, nil
+}
+
+// manjuTimecode 秒 → MM:SS.mmm(H3 官方多切点时间戳格式)
+func manjuTimecode(sec float64) string {
+	total := int(sec * 1000)
+	ms := total % 1000
+	ss := (total / 1000) % 60
+	mm := total / 60000
+	return fmt.Sprintf("%02d:%02d.%03d", mm, ss, ms)
 }
 
 // ---- 资产(定妆照 SDXL + 场景图 Z-Image,已存在复用) ----
@@ -1324,13 +1355,15 @@ func stageEncode(ctx *manjuCtx, lg *manjuLogger) error {
 	return nil
 }
 
-// ensurePlanAndPrompts 方案 + 逐镜提示词(渲染/预编码前置)
+// ensurePlanAndPrompts 方案 + 多切点分组 + 逐镜提示词(渲染/预编码前置)
 func (ctx *manjuCtx) ensurePlanAndPrompts(lg *manjuLogger) (map[string]any, []manjuShot, error) {
 	plan, err := ctx.ensurePlan(lg)
 	if err != nil {
 		return nil, nil, err
 	}
 	shots, _ := planShots(plan)
+	ctx.ensureTakes(plan, shots, lg)   // 多切点长镜分组(experimental,默认关)
+	shots = applyTakes(plan, shots)    // 组头时长=总和,内镜标 TakeTail
 	if err := ctx.genShotPrompts(plan, shots, lg); err != nil {
 		return nil, nil, err
 	}
@@ -1338,7 +1371,105 @@ func (ctx *manjuCtx) ensurePlanAndPrompts(lg *manjuLogger) (map[string]any, []ma
 	if err != nil {
 		return nil, nil, err
 	}
-	return plan, shots, nil
+	return plan, applyTakes(plan, shots), nil
+}
+
+// shotsPerTake 多切点长镜每组镜头数(1=关闭;render.shots_per_take 2-3)
+func (ctx *manjuCtx) shotsPerTake() int {
+	if n, ok := manjuToInt(ctx.R["shots_per_take"]); ok && n >= 2 && n <= 3 {
+		return n
+	}
+	return 1
+}
+
+// ensureTakes 多切点长镜分组(experimental):相邻、同场景镜头贪心打包(组内时长和 ≤15s、
+// 数量 ≤shots_per_take)。分组确定性且只生成一次写回 plan.takes(提示词缓存稳定性依赖)。
+func (ctx *manjuCtx) ensureTakes(plan map[string]any, shots []manjuShot, lg *manjuLogger) {
+	if ctx.shotsPerTake() < 2 {
+		return
+	}
+	if plan["takes"] != nil {
+		return // 已有分组复用(方案重生成时 takes 随旧方案一起消失,自动重分组)
+	}
+	var takes []any
+	var cur []manjuShot
+	flush := func() {
+		defer func() { cur = nil }()
+		if len(cur) < 2 {
+			return
+		}
+		ids := make([]any, 0, len(cur))
+		for _, s := range cur {
+			ids = append(ids, s.ID)
+		}
+		takes = append(takes, ids)
+	}
+	for _, s := range shots {
+		if len(cur) > 0 {
+			last := cur[len(cur)-1]
+			sum := 0
+			for _, c := range cur {
+				sum += c.Duration
+			}
+			// 新镜加入的约束:同场景 + 组内数量/时长上限
+			if s.Scene != last.Scene || len(cur) >= ctx.shotsPerTake() || sum+s.Duration > 15 {
+				flush()
+			}
+		}
+		cur = append(cur, s)
+	}
+	flush()
+	plan["takes"] = takes // 空也写(标记已分组,避免每次运行重复计算)
+	if err := ctx.writePlan(plan); err == nil && len(takes) > 0 {
+		n := 0
+		for _, t := range takes {
+			n += len(anyArr(t))
+		}
+		lg.logf(fmt.Sprintf("🎥 多切点长镜: %d 组(覆盖 %d 镜,组内 [Shot N] 切点一次生成)", len(takes), n))
+	}
+}
+
+// applyTakes 解析 plan.takes:组头 Duration=组内总和(clamp 15s,渲染一次),
+// 内镜标 TakeTail(渲染阶段跳过;字幕/ASR 由组头文件按 takes 合并承载)。
+func applyTakes(plan map[string]any, shots []manjuShot) []manjuShot {
+	byID := map[int]*manjuShot{}
+	for i := range shots {
+		byID[shots[i].ID] = &shots[i]
+	}
+	for _, g := range anyArr(plan["takes"]) {
+		var ids []int
+		for _, x := range anyArr(g) {
+			if n, ok := manjuToInt(x); ok {
+				ids = append(ids, n)
+			}
+		}
+		if len(ids) < 2 {
+			continue
+		}
+		head := byID[ids[0]]
+		if head == nil {
+			continue
+		}
+		sum := 0
+		var group []manjuShot
+		for _, id := range ids {
+			s := byID[id]
+			if s == nil {
+				continue
+			}
+			group = append(group, *s)
+			sum += s.Duration
+			if id != ids[0] {
+				s.TakeTail = true
+			}
+		}
+		if sum > 15 {
+			sum = 15 // API 时长上限 clamp
+		}
+		head.Duration = sum
+		head.TakeGroup = group
+	}
+	return shots
 }
 
 // stagePlan 方案阶段:LLM 直出人物/场景/分镜 + 逐镜 H3 提示词
@@ -1347,30 +1478,33 @@ func stagePlan(ctx *manjuCtx, lg *manjuLogger) error {
 	return err
 }
 
-// selectedShots 按 only 过滤
+// selectedShots 按 only 过滤(内镜恒过滤:由组头一次渲染覆盖)
 func (ctx *manjuCtx) selectedShots(shots []manjuShot) []manjuShot {
-	if ctx.only == "" {
-		return shots
-	}
 	sel := map[int]bool{}
-	for _, p := range strings.Split(ctx.only, ",") {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if i := strings.Index(p, "-"); i > 0 {
-			a, _ := strconv.Atoi(p[:i])
-			b, _ := strconv.Atoi(p[i+1:])
-			for n := a; n <= b; n++ {
+	all := ctx.only == ""
+	if !all {
+		for _, p := range strings.Split(ctx.only, ",") {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if i := strings.Index(p, "-"); i > 0 {
+				a, _ := strconv.Atoi(p[:i])
+				b, _ := strconv.Atoi(p[i+1:])
+				for n := a; n <= b; n++ {
+					sel[n] = true
+				}
+			} else if n, err := strconv.Atoi(p); err == nil {
 				sel[n] = true
 			}
-		} else if n, err := strconv.Atoi(p); err == nil {
-			sel[n] = true
 		}
 	}
 	var out []manjuShot
 	for _, s := range shots {
-		if sel[s.ID] {
+		if s.TakeTail {
+			continue
+		}
+		if all || sel[s.ID] {
 			out = append(out, s)
 		}
 	}

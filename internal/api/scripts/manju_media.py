@@ -237,18 +237,19 @@ def _subtitle_font(size):
 
 
 def _load_subtitle_cues(plan_path):
-    """读 direct_plan 的台词/旁白,按镜头顺序返回句子列表(与 NN.mp4 序号对齐)。
+    """读 direct_plan 的台词/旁白,返回 ({shot_id: [句子]}, {head_id: [内镜id]})。
 
     台词去掉「角色:」前缀,旁白原文保留;多句用换行分隔的台词逐行拆成独立句子,
     同一镜头内每句按序均分字幕窗口(避免把换行文本整段传给 PIL 测量导致崩溃)。
+    takes(多切点长镜分组)时,组头文件承载组内全部台词/旁白(内镜不独立成片)。
     """
     import json
     import re
     if not plan_path or not os.path.exists(plan_path):
-        return []
+        return {}, {}
     with open(plan_path, encoding="utf-8") as f:
         plan = json.load(f)
-    cues = []
+    by_id = {}
     for s in plan.get("shots", []):
         lines = []
         dlg = (s.get("dialogue") or "").strip()
@@ -263,8 +264,23 @@ def _load_subtitle_cues(plan_path):
                 ln = ln.strip()
                 if ln:
                     lines.append(ln)
-        cues.append(lines)
-    return cues
+        sid = int(s.get("shot_id") or 0)
+        if sid:
+            by_id[sid] = lines
+    takes = {}
+    for grp in plan.get("takes") or []:
+        ids = [int(x) for x in grp if isinstance(x, (int, float))]
+        if len(ids) >= 2:
+            takes[ids[0]] = ids[1:]
+    return by_id, takes
+
+
+def _cues_for_shot(by_id, takes, sid):
+    """某镜头文件的字幕句集:多切点长镜组头合并组内全部台词/旁白"""
+    lines = list(by_id.get(sid, []))
+    for inner in takes.get(sid, []):
+        lines.extend(by_id.get(inner, []))
+    return lines
 
 
 def _wrap_lines(d, text, font, maxw):
@@ -450,7 +466,7 @@ def cmd_assemble(args):
     if os.path.dirname(out):
         os.makedirs(os.path.dirname(out), exist_ok=True)
     fps = args.fps
-    cues = _load_subtitle_cues(args.plan)
+    cues_by_id, takes_map = _load_subtitle_cues(args.plan)
 
     # ---- 转场配置:cut(硬切,默认)/ fade(闪黑淡入淡出)/ dissolve(叠化) ----
     # 硬切边界 = MotionContext 接缝镜头的起始处(Go 侧从 manifest 提取 seam 标记传入):
@@ -511,7 +527,7 @@ def cmd_assemble(args):
     if gain != 1.0:
         print(f"  🔊 音量归一化: 峰值 {peak:.2f} → 增益 x{gain:.2f}")
     tname = {"cut": "硬切", "fade": "闪黑", "dissolve": "叠化"}[args.transition]
-    print(f"🎬 合成 {len(files)} 个镜头 → {out} (crf18, {fps}fps, 转场:{tname}{trans_frames and f'×{trans_frames}帧' or ''}, mosaic={args.mosaic}, 字幕{'on' if cues else 'off'}, BGM{'on' if bgm is not None else 'off'})")
+    print(f"🎬 合成 {len(files)} 个镜头 → {out} (crf18, {fps}fps, 转场:{tname}{trans_frames and f'×{trans_frames}帧' or ''}, mosaic={args.mosaic}, 字幕{'on' if cues_by_id else 'off'}, BGM{'on' if bgm is not None else 'off'})")
 
     o = av.open(out, "w", options={"movflags": "+faststart"})
     vs = o.add_stream("libx264", rate=fps)
@@ -545,9 +561,9 @@ def cmd_assemble(args):
         tail_trans = trans_frames > 0 and ci + 1 < len(files) and next_sid not in hard_cuts
         # 本镜头字幕窗口:镜头内 12%-92%,台词/旁白按字数占比分配窗口
         # (12% 起:台词开说即出字幕,避免延后;92% 止:给下一镜转场留白)
-        subs = []
-        if ci < len(cues):
-            subs = _assign_subtitle_windows(cues[ci], dur, film_sec)
+        # 多切点长镜:组头文件承载组内全部台词/旁白
+        cue_lines = _cues_for_shot(cues_by_id, takes_map, sid)
+        subs = _assign_subtitle_windows(cue_lines, dur, film_sec) if cue_lines else []
         film_sec += dur
         # BGM 闪避窗口 = 字幕窗口(对白时段压 BGM);mixer 在首轮有字幕时构建
         if bgm is not None and bgm_mixer is None and subs:
@@ -700,22 +716,11 @@ def cmd_asr(args):
     # 分镜台词:plan.json shots[].dialogue/narration(去「角色:」前缀)
     expected = {}
     if args.plan and os.path.exists(args.plan):
-        with open(args.plan, encoding="utf-8") as f:
-            plan = json.load(f)
-        import re
-        for s in plan.get("shots", []):
-            lines = []
-            dlg = (s.get("dialogue") or "").strip()
-            if dlg:
-                for ln in dlg.splitlines():
-                    ln = re.sub(r"^[^:：]{1,8}[:：]\s*", "", ln).strip()
-                    if ln:
-                        lines.append(ln)
-            nar = (s.get("narration") or "").strip()
-            if nar:
-                lines.append(nar)
-            sid = int(s.get("shot_id") or 0)
-            if sid and lines:
+        cues_by_id2, takes_map2 = _load_subtitle_cues(args.plan)
+        for sid, lines in cues_by_id2.items():
+            for inner in takes_map2.get(sid, []):  # 长镜组头:组内台词并入核对文本
+                lines = lines + cues_by_id2.get(inner, [])
+            if lines:
                 expected[sid] = " ".join(lines)
 
     # 目标镜头
@@ -854,7 +859,7 @@ def cmd_trailer(args):
     if os.path.dirname(out):
         os.makedirs(os.path.dirname(out), exist_ok=True)
     fps = args.fps
-    cues = _load_subtitle_cues(args.plan) if args.plan else []
+    cues_by_id, takes_map = _load_subtitle_cues(args.plan) if args.plan else ({}, {})
     # 每镜掐头去尾取中段:总时长≈target;段长按 target/镜头数 clamp 到 [2, seg]
     seg = max(2.0, min(args.seg, args.target / max(len(picked), 1)))
     print(f"🎬 预告片: {len(picked)} 镜 × {seg:.1f}s ≈ {len(picked) * seg:.0f}s → {out}")
@@ -921,7 +926,7 @@ def cmd_trailer(args):
         m = reASRShot.search(name)
         if m:
             sid = int(m.group(1))
-        lines = cues[sid - 1] if 0 < sid <= len(cues) else []
+        lines = _cues_for_shot(cues_by_id, takes_map, sid)
         subs = _assign_subtitle_windows(lines, seg_dur, film_sec) if lines else []
         film_sec += seg_dur
         streams = (v, a) if a is not None else (v,)
@@ -1020,7 +1025,7 @@ def cmd_jianying(args):
     if not files:
         print("❌ 无镜头可导出: " + args.clips_dir)
         sys.exit(1)
-    cues = _load_subtitle_cues(args.plan)
+    cues_by_id, takes_map = _load_subtitle_cues(args.plan)
     hard_cuts = set()
     if args.hard_cuts:
         for x in args.hard_cuts.split(","):
@@ -1047,7 +1052,7 @@ def cmd_jianying(args):
         except AttributeError:
             script.add_track(tt, name)
     _add_track(TrackType.video)
-    has_subs = any(cues[i] for i in range(min(len(cues), len(files))))
+    has_subs = any(_cues_for_shot(cues_by_id, takes_map, _shot_no(n)) for n in files)
     if has_subs:
         _add_track(TrackType.text, "字幕")
     text_style = TextStyle(
@@ -1078,9 +1083,10 @@ def cmd_jianying(args):
             if next_sid not in hard_cuts and sid not in hard_cuts:
                 seg.add_transition(trans_map[args.transition])
         script.add_segment(seg)
-        # 字幕轨(与 assemble 相同的窗口分配,TextSegment 不烧录)
-        if i < len(cues) and cues[i]:
-            for sa, sb, txt in _assign_subtitle_windows(cues[i], dur, film_sec):
+        # 字幕轨(与 assemble 相同的窗口分配,TextSegment 不烧录;长镜组头合并组内台词)
+        cue_lines = _cues_for_shot(cues_by_id, takes_map, sid)
+        if cue_lines:
+            for sa, sb, txt in _assign_subtitle_windows(cue_lines, dur, film_sec):
                 script.add_segment(TextSegment(
                     text=txt, timerange=trange(int(sa * 1_000_000), int((sb - sa) * 1_000_000)),
                     style=text_style, border=text_border, shadow=text_shadow, clip_settings=sub_pos,

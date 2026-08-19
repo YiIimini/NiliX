@@ -390,3 +390,14 @@ func manjuShotPromptSystem(hasChar bool, style string) string {
 	}
 	return sys
 }
+
+// manjuMultiCutAddon 多切点长镜附加规范(experimental;官方 [Shot N] At MM:SS.mmm 语法,
+// 切点时间由输入 take_shots[].cut_at 直供,避免 LLM 自算出错)
+const manjuMultiCutAddon = `
+
+【多切点长镜头(Multi-Cut Long Take,单次生成内多镜头切换)附加规范】:
+- 本提示词覆盖输入 take_shots 里的一组连续镜头,单次生成内含多个机位切点:
+  [Shot 1] 开场段无时间戳;每个后续切点写 [Shot N] At MM:SS.mmm(直接引用该镜输入的 cut_at,时间严格递增)
+- 每个 [Shot N] 段完整交代:景别/机位/主体动作/台词(如有,逐字保留);切点处画面与声音同步切换,干净利落
+- 整段一气呵成的连续调度感;detailed_description/integrated_multimodal_description 按切点分段组织
+- total duration = 输入 shot.duration(组内时长和);最后一段自然收尾`

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -329,5 +330,95 @@ func TestShotManifestLifecycle(t *testing.T) {
 	m := ctx.manifestLoad()
 	if e := m.Shots["3"]; e == nil || !e.Seam {
 		t.Errorf("seam 未记录: %v", e)
+	}
+}
+
+// TestApplyTakes 多切点长镜:组头时长=总和(clamp 15)、内镜 TakeTail、selectedShots 过滤
+func TestApplyTakes(t *testing.T) {
+	plan := map[string]any{
+		"takes": []any{[]any{1, 2, 3}, []any{5, 6}},
+	}
+	shots := []manjuShot{
+		{ID: 1, Scene: "a", Duration: 5}, {ID: 2, Scene: "a", Duration: 4},
+		{ID: 3, Scene: "a", Duration: 4}, {ID: 4, Scene: "b", Duration: 6},
+		{ID: 5, Scene: "b", Duration: 8}, {ID: 6, Scene: "b", Duration: 9},
+	}
+	out := applyTakes(plan, shots)
+	if out[0].Duration != 13 || len(out[0].TakeGroup) != 3 {
+		t.Errorf("组头(1)应 Duration=13 且携带整组: %d %v", out[0].Duration, len(out[0].TakeGroup))
+	}
+	if out[1].TakeTail != true || out[2].TakeTail != true {
+		t.Errorf("内镜(2,3)应标 TakeTail")
+	}
+	if out[3].TakeTail || len(out[3].TakeGroup) != 0 {
+		t.Errorf("独立镜(4)不应受影响")
+	}
+	if out[4].Duration != 15 || !out[5].TakeTail {
+		t.Errorf("组(5,6)时长应 clamp 15: %d", out[4].Duration)
+	}
+	// selectedShots:内镜被过滤
+	ctx := &manjuCtx{}
+	sel := ctx.selectedShots(out)
+	ids := []int{}
+	for _, s := range sel {
+		ids = append(ids, s.ID)
+	}
+	if fmt.Sprint(ids) != "[1 4 5]" {
+		t.Errorf("selectedShots 应只剩组头与独立镜: %v", ids)
+	}
+	// only 过滤同时生效:only=2(内镜)→ 空
+	ctx2 := &manjuCtx{only: "2"}
+	if sel2 := ctx2.selectedShots(out); len(sel2) != 0 {
+		t.Errorf("only=内镜应无渲染目标: %v", sel2)
+	}
+}
+
+// TestEnsureTakes 分组贪心:同场景相邻、组内数量/时长上限、确定性只生成一次
+func TestEnsureTakes(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(cfgPath, []byte(`{"render":{"shots_per_take":3}}`), 0644)
+	// workdir 指向临时目录(newManjuCtx 只需 render 节)
+	ctx := &manjuCtx{R: map[string]any{"shots_per_take": 3}}
+	shots := []manjuShot{
+		{ID: 1, Scene: "a", Duration: 5}, {ID: 2, Scene: "a", Duration: 5},
+		{ID: 3, Scene: "a", Duration: 5}, {ID: 4, Scene: "a", Duration: 5}, // 15s 上限,4 不可并入
+		{ID: 5, Scene: "b", Duration: 3}, // 换场景另起
+	}
+	plan := map[string]any{"shots": []any{}}
+	lg := &manjuLogger{state: manjuState}
+	ctx.ensureTakes(plan, shots, lg)
+	takes := anyArr(plan["takes"])
+	if len(takes) != 1 {
+		t.Fatalf("应只分出 1 组(1-3;4 超时长另起单镜,5 换场景单镜): %v", takes)
+	}
+	g := anyArr(takes[0])
+	if len(g) != 3 || fmt.Sprint(g[0]) != "1" {
+		t.Errorf("组应为 [1 2 3]: %v", g)
+	}
+	// 已有 takes 不重算
+	ctx.ensureTakes(plan, shots, lg)
+	if len(anyArr(plan["takes"])) != 1 {
+		t.Errorf("已有分组应复用不重算")
+	}
+	// 关闭(默认 1)不分组
+	plan2 := map[string]any{"shots": []any{}}
+	ctx2 := &manjuCtx{R: map[string]any{}}
+	ctx2.ensureTakes(plan2, shots, lg)
+	if plan2["takes"] != nil {
+		t.Errorf("shots_per_take<2 不应分组")
+	}
+}
+
+// TestManjuTimecode 多切点时间戳格式 MM:SS.mmm
+func TestManjuTimecode(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want string
+	}{{0, "00:00.000"}, {3.5, "00:03.500"}, {63.256, "01:03.256"}, {15, "00:15.000"}}
+	for _, c := range cases {
+		if got := manjuTimecode(c.in); got != c.want {
+			t.Errorf("timecode(%v)=%s,期望 %s", c.in, got, c.want)
+		}
 	}
 }

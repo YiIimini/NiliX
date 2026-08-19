@@ -79,6 +79,7 @@ var manjuRenderIntFields = map[string]manjuIntField{
 	"turbo_steps":      {1, 30},
 	"min_shot_seconds": {1, 15},
 	"max_shot_seconds": {1, 15},
+	"shots_per_take":   {1, 3},
 }
 
 // manjuRenderStrFields 渲染参数字符串字段(模型名/地址 + 运行参数)

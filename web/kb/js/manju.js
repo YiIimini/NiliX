@@ -40,7 +40,7 @@
   /* 分辨率档位中文名(chips 展示;key 与后端 manjuResTiers 一致) */
   const RES_TIER_CN = { draft: "416P 草稿", standard: "768P 标准", fhd: "1088P 高清" };
 
-  const INT_KEYS = ["width", "height", "fps", "steps", "turbo_steps", "seed", "min_shot_seconds", "max_shot_seconds"];
+  const INT_KEYS = ["width", "height", "fps", "steps", "turbo_steps", "seed", "min_shot_seconds", "max_shot_seconds", "shots_per_take"];
   const STR_KEYS = ["comfy_url", "unet_fl2va", "unet_ref2va", "clip", "vae_video", "vae_audio",
     "z_image_unet", "z_image_clip", "z_image_vae", "turbo_lora",
     "chapters", "episode", "shots"];
@@ -50,7 +50,7 @@
     "manju-width": 768, "manju-height": 1344, "manju-fps": 24,
     "manju-steps": 20, "manju-turbo": 8, "manju-seed": 1688,
     "manju-minsec": 4, "manju-maxsec": 12, "manju-mosaic-level": 16,
-    "manju-draft-scale": 0.5, "manju-bgm-gain": 0.28,
+    "manju-draft-scale": 0.5, "manju-bgm-gain": 0.28, "manju-take": 1,
   };
 
   /* 负面提示词默认值(与后端 manjuNegPrompt 一致;配置缺省/为空时回填展示) */
@@ -1081,6 +1081,7 @@
         R.draft_judge && "📐草稿预审",
         R.transition && R.transition !== "cut" && "转场:" + ({ fade: "闪黑", dissolve: "叠化" }[R.transition] || R.transition),
         R.bgm && "🎵BGM",
+        R.shots_per_take && R.shots_per_take > 1 && "🎥长镜×" + R.shots_per_take,
       ].filter(Boolean);
       el.innerHTML = items.map((c) => `<span class="manju-chip">${esc(c)}</span>`).join("");
     },
@@ -1092,7 +1093,7 @@
         "manju-clip", "manju-vae-video", "manju-vae-audio", "manju-zimage-unet", "manju-zimage-clip",
         "manju-zimage-vae", "manju-turbo-lora", "manju-turbo-lora-r2v", "manju-char-male", "manju-char-female", "manju-animagine",
         "manju-banned-words", "manju-mosaic-level", "manju-res-tier", "manju-seed-policy", "manju-draft-scale",
-        "manju-transition", "manju-bgm", "manju-bgm-gain"];
+        "manju-transition", "manju-bgm", "manju-bgm-gain", "manju-take"];
     },
     draftKey() { return "render-" + (this.project || ""); },
     /* 渲染配置草稿记忆:未点「保存参数」的编辑也随刷新保留,按项目隔离 */
@@ -1138,6 +1139,7 @@
       num("manju-seed", R.seed);
       num("manju-minsec", R.min_shot_seconds);
       num("manju-maxsec", R.max_shot_seconds);
+      num("manju-take", R.shots_per_take != null && R.shots_per_take !== "" ? R.shots_per_take : 1);
       set("manju-comfy-url", R.comfy_url);
       set("manju-neg-prompt", R.neg_prompt || NEG_PROMPT_DEFAULT);
       set("manju-unet-fl2va", R.unet_fl2va);
@@ -1346,7 +1348,7 @@
       const R = cfg.render || cfg;
       this.style = cfg.style || this.style;
       const set = (id, v) => { if (v !== undefined && v !== null && v !== "") $(id).value = v; };
-      INT_KEYS.forEach((k) => set("manju-" + { width: "width", height: "height", fps: "fps", steps: "steps", turbo_steps: "turbo", seed: "seed", min_shot_seconds: "minsec", max_shot_seconds: "maxsec" }[k], R[k]));
+      INT_KEYS.forEach((k) => set("manju-" + { width: "width", height: "height", fps: "fps", steps: "steps", turbo_steps: "turbo", seed: "seed", min_shot_seconds: "minsec", max_shot_seconds: "maxsec", shots_per_take: "take" }[k], R[k]));
       set("manju-comfy-url", R.comfy_url);
       set("manju-neg-prompt", R.neg_prompt || NEG_PROMPT_DEFAULT);
       set("manju-unet-fl2va", R.unet_fl2va);
@@ -1375,6 +1377,7 @@
       set("manju-transition", R.transition || "cut");
       set("manju-bgm", R.bgm || "");
       set("manju-bgm-gain", R.bgm_gain != null && R.bgm_gain !== "" ? R.bgm_gain : 0.28);
+      set("manju-take", R.shots_per_take != null && R.shots_per_take !== "" ? R.shots_per_take : 1);
       this.renderStyle();
       this.renderRatio();
     },
@@ -1444,7 +1447,7 @@
       const m = {
         width: "manju-width", height: "manju-height", fps: "manju-fps", steps: "manju-steps",
         turbo_steps: "manju-turbo", seed: "manju-seed", min_shot_seconds: "manju-minsec",
-        max_shot_seconds: "manju-maxsec",
+        max_shot_seconds: "manju-maxsec", shots_per_take: "manju-take",
       };
       const v = $(m[k]).value;
       return v === "" ? undefined : parseInt(v, 10);
