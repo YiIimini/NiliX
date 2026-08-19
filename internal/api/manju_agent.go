@@ -1688,6 +1688,14 @@ func registerAgentRoutes(mux *http.ServeMux) {
 				res["visionKeyMasked"] = masked
 				res["visionBaseUrl"] = acfg.VisionBaseURL
 				res["agentEnabled"] = acfg.Enabled
+				// 云端 2K Key(项目 render 节优先,回退全局 server/settings.json;掩码展示)
+				if mmKey := manjuMinimaxKey(ctx); mmKey != "" {
+					res["hasMinimaxKey"] = true
+					res["minimaxKeyMasked"] = "已配置"
+					if len(mmKey) > 9 {
+						res["minimaxKeyMasked"] = mmKey[:5] + "…" + mmKey[len(mmKey)-4:]
+					}
+				}
 			} else {
 				// 项目缺失(目录被删/未创建):不整体失败——仍返回全局默认,前端展示"项目缺失,按全局配置"
 				res["projectMissing"] = true
@@ -1768,6 +1776,15 @@ func registerAgentRoutes(mux *http.ServeMux) {
 					return
 				}
 				SetGlobalAgentCfg(g)
+				// 云端 2K Key 全局默认:与 DeepSeek 默认 Key 同处(server/settings.json 明文,须合并写不覆盖)
+				if k := strings.TrimSpace(str(body["minimax_api_key"])); k != "" {
+					def := map[string]any{}
+					if b, err := os.ReadFile(manjuSettingsFile); err == nil {
+						_ = json.Unmarshal(b, &def)
+					}
+					def["minimax_api_key"] = k
+					_ = writeManjuSettings(def)
+				}
 				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "global": true})
 				return
 			}
@@ -1786,6 +1803,15 @@ func registerAgentRoutes(mux *http.ServeMux) {
 			}
 			fillAgentFields(A)
 			cfg["agent"] = A
+			// 云端 2K Key(项目级):非空才写 render 节(空值不清已有 Key)
+			if k := strings.TrimSpace(str(body["minimax_api_key"])); k != "" {
+				RN, _ := cfg["render"].(map[string]any)
+				if RN == nil {
+					RN = map[string]any{}
+					cfg["render"] = RN
+				}
+				RN["minimax_api_key"] = k
+			}
 			if err := writeManjuConfig(configPath, cfg); err != nil {
 				http.Error(w, `{"error":"保存失败: `+err.Error()+`"}`, http.StatusInternalServerError)
 				return

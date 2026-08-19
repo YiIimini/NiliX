@@ -62,7 +62,7 @@ var reManjuStage = regexp.MustCompile(`━━━ 阶段 (\w+)`)
 var reManjuShot = regexp.MustCompile(`\[(\d+)/(\d+)\]`)
 
 // manjuStageOrder 管线阶段顺序(与前端 FLOW 一致,用于计算总体进度)
-var manjuStageOrder = []string{"env", "plan", "assets", "encode", "render", "qc", "assemble"}
+var manjuStageOrder = []string{"env", "plan", "assets", "encode", "render", "qc", "assemble", "upscale"}
 
 var manjuPhases = map[string]bool{
 	"all": true, "plan": true, "assets": true, "encode": true, "render": true, "qc": true, "assemble": true,
@@ -86,6 +86,7 @@ var manjuRenderStrFields = []string{
 	"comfy_url", "neg_prompt", "unet_fl2va", "unet_ref2va", "clip", "vae_video", "vae_audio",
 	"z_image_unet", "z_image_clip", "z_image_vae", "turbo_lora", "turbo_lora_r2v", "animagine_ckpt",
 	"chapters", "episode", "shots",
+	"minimax_api_key", "minimax_base_url",
 }
 
 // manjuRenderBoolFields 渲染参数布尔字段(SageAttention 加速/草稿预审开关)
@@ -207,7 +208,7 @@ const manjuNotifyFile = manjuRoot + `\logs\notify.json`
 // manjuStageName 阶段 key → 中文名(通知文案)
 var manjuStageName = map[string]string{
 	"env": "环境自检", "plan": "方案", "assets": "资产", "encode": "编码",
-	"render": "渲染", "qc": "质检", "assemble": "合成",
+	"render": "渲染", "qc": "质检", "assemble": "合成", "upscale": "云端2K",
 }
 
 // manjuNotify 通知配置(落盘 logs\notify.json)
@@ -1373,10 +1374,11 @@ func listManjuEpisodes(P map[string]any) []string {
 	return out
 }
 
-// manjuEpisodeOutputs 单个集的产物:镜头 + 成片 + 方案文件
+// manjuEpisodeOutputs 单个集的产物:镜头 + 云端2K定稿 + 成片 + 方案文件
 func manjuEpisodeOutputs(P map[string]any, episode string) map[string]any {
 	vidExts := map[string]bool{".mp4": true, ".mov": true, ".webm": true}
 	clips := listManjuMedia(filepath.Join(str(P["clips"]), episode), vidExts)
+	upscaled := listManjuMedia(filepath.Join(str(P["clips"]), episode, "2k"), vidExts)
 	var final any
 	if info, err := os.Stat(filepath.Join(str(P["workdir"]), episode+"_成片.mp4")); err == nil {
 		final = map[string]any{"name": episode + "_成片.mp4", "path": filepath.Join(str(P["workdir"]), episode+"_成片.mp4"), "size": info.Size()}
@@ -1387,7 +1389,7 @@ func manjuEpisodeOutputs(P map[string]any, episode string) map[string]any {
 			artifacts[f] = info.Size()
 		}
 	}
-	return map[string]any{"episode": episode, "clips": clips, "final": final, "artifacts": artifacts}
+	return map[string]any{"episode": episode, "clips": clips, "upscaled": upscaled, "final": final, "artifacts": artifacts}
 }
 
 // manjuOutputs 产物列表:人物/场景为全项目共享,视频/方案/成片按集区分(episode 参数缺省=全部集)
@@ -1717,5 +1719,6 @@ func registerManjuRoutes(mux *http.ServeMux) {
 		manjuNotifySend(msg)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
+	registerUpscaleRoutes(mux)
 	registerAgentRoutes(mux)
 }

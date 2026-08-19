@@ -4536,3 +4536,7 @@ select option { text-align: center; }
 /* 卡片菜单:删除项目(红色警示) */
 .cm-item.danger { color: #f87171; }
 .cm-item.danger:hover { background: rgba(248,113,113,.12); }
+
+/* 云端 2K 定稿:集标题按钮与产物徽标 */
+.manju-out-title .manju-up2k-btn { padding: 1px 8px; font-size: 11px; margin-left: 6px; flex: none; }
+.manju-vid-2k .manju-vid-name { color: var(--accent); }

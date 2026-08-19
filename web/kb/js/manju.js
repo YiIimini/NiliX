@@ -740,6 +740,12 @@
                   <label>返工轮数</label><input id="manju-ag-retries" class="manju-input manju-num" type="number" min="0" max="4" value="${ag.maxRetries == null ? 2 : ag.maxRetries}"><span class="manju-set-unit">轮</span>
                 </div>
               </div>
+              <div class="manju-set-sub">☁️ 云端 2K 定稿 · MiniMax(审片通过的本地定稿镜提交云端升 2K,本地 GPU 零负担)</div>
+              <div class="manju-field-row">
+                <label>API Key</label>
+                <input id="manju-ag-mmkey" class="manju-input manju-mono" type="password" placeholder="${ag.hasMinimaxKey ? "已保存(" + esc(ag.minimaxKeyMasked || "") + "),留空沿用" : "MiniMax 平台 API Key(产物区「☁️ 2K」按钮用)"}" spellcheck="false" autocomplete="off">
+              </div>
+              <div class="manju-set-status">本地 768×1344 / 24fps / 17k+5 帧网格产物与官方 /v2/video_regeneration 预校验完全兼容:提交前本地体检(32 整除/面积/帧率/帧网格/音轨/50MB),2K 产物落 clips/集/2k/。国内平台在项目 config.render.minimax_base_url 填 https://api.minimaxi.com</div>
               <div class="manju-set-status">审片八维度对齐 MiniMax H3 官方能力：主体/场景一致性(Ref2VA 参考保持)、动作/运镜符合(多模态指令遵循)、可见性(近黑防线)、技术质量(畸变/水印)、风格、口型对白。低分镜头由修复师改写 H3 提示词后自动定点重渲染（「🤖 智能一条龙」走全流程）。点「🤖 智能一条龙」会先询问是否让 Agent 深度分析小说内容并更新渲染风格（是=分析后更新；否=按当前配置直接跑）。</div>
               ${(() => {
                 const g = ag.globalDefaults || {};
@@ -939,6 +945,7 @@
           pass_score: parseFloat($("manju-ag-pass").value) || 75,
           max_retries: parseInt($("manju-ag-retries").value, 10),
         },
+        minimax_api_key: $("manju-ag-mmkey") ? $("manju-ag-mmkey").value.trim() : "",
       }).then(() => {
         msg.textContent = "✅ 已保存";
         setTimeout(() => { msg.textContent = ""; }, 3000);
@@ -982,6 +989,7 @@
           pass_score: parseFloat($("manju-ag-pass").value) || 75,
           max_retries: parseInt($("manju-ag-retries").value, 10),
         },
+        minimax_api_key: $("manju-ag-mmkey") ? $("manju-ag-mmkey").value.trim() : "",
       }).then(() => {
         msg.textContent = "✅ 已存为全局默认（所有项目共用）";
         setTimeout(() => { msg.textContent = ""; }, 4000);
@@ -1000,6 +1008,7 @@
           pass_score: parseFloat($("manju-ag-pass").value) || 75,
           max_retries: parseInt($("manju-ag-retries").value, 10),
         },
+        minimax_api_key: $("manju-ag-mmkey") ? $("manju-ag-mmkey").value.trim() : "",
       });
     },
     saveNotify() {
@@ -2128,21 +2137,23 @@
         : `<div class="manju-empty">暂无场景图</div>`;
       html += `</div></div>`;
 
-      // 视频按集区分(默认展开,每集独立折叠记忆;成片置顶高亮)
+      // 视频按集区分(默认展开,每集独立折叠记忆;成片置顶高亮;云端 2K 产物带徽标)
       const renderEp = (ep) => {
         const clips = ep.clips || [];
+        const ups = ep.upscaled || [];
         const final = ep.final;
         const vids = (final ? [final] : []).concat(clips);
-        if (!vids.length) return "";
+        if (!vids.length && !ups.length) return "";
         const arts = Object.keys(ep.artifacts || {});
         const secKey = "video-" + (ep.episode || "");
         let h = `<div class="manju-out-sec${this._secFolded(secKey) ? " is-folded" : ""}" data-sec="${secKey}">`;
-        h += `<div class="manju-out-title"><span class="manju-sec-foldbtn">${this._secFolded(secKey) ? "▸" : "▾"}</span>🎬 ${esc(ep.episode)} <span class="manju-out-count">${clips.length} 镜头${final ? " · 成片" : ""}</span></div>`;
+        h += `<div class="manju-out-title"><span class="manju-sec-foldbtn">${this._secFolded(secKey) ? "▸" : "▾"}</span>🎬 ${esc(ep.episode)} <span class="manju-out-count">${clips.length} 镜头${final ? " · 成片" : ""}${ups.length ? " · ☁️2K×" + ups.length : ""}</span>${clips.length ? `<button class="hrs-btn manju-up2k-btn" data-up2k="${esc(ep.episode || "")}" title="云端 2K 定稿:本地定稿镜提交 MiniMax 升 2K(需在设置里填 MiniMax Key),产物落 clips/${esc(ep.episode || "")}/2k/">☁️ 2K</button>` : ""}</div>`;
         h += `<div class="manju-sec-body">`;
         h += `<div class="manju-vids">${vids.map((v) => {
           const isFinal = v === final;
           return `<div class="manju-vid${isFinal ? " manju-vid-final" : ""}" data-video="${esc(v.path)}" data-name="${esc(v.name)}" title="播放 ${esc(v.name)}"><span class="manju-vid-play">▶</span><span class="manju-vid-name">${esc(v.name)}</span><span class="manju-meta">${isFinal ? "成片 · " : ""}${fmtSize(v.size)}</span><button class="manju-vid-menu" data-menu="${esc(v.path)}" data-ep="${esc(ep.episode || "")}" data-isfinal="${isFinal ? "1" : ""}" title="更多操作">⋮</button></div>`;
         }).join("")}</div>`;
+        if (ups.length) h += `<div class="manju-vids" style="margin-top:6px">${ups.map((v) => `<div class="manju-vid manju-vid-2k" data-video="${esc(v.path)}" data-name="${esc(v.name)}" title="播放 ${esc(v.name)}(云端 2K)"><span class="manju-vid-play">▶</span><span class="manju-vid-name">☁️ ${esc(v.name)}</span><span class="manju-meta">2K · ${fmtSize(v.size)}</span><button class="manju-vid-menu" data-menu="${esc(v.path)}" data-ep="${esc(ep.episode || "")}" data-isfinal="0" title="更多操作">⋮</button></div>`).join("")}</div>`;
         if (arts.length) h += `<div class="manju-meta" style="margin-top:6px">📋 ${arts.map(esc).join("、")}</div>`;
         h += `</div></div>`;
         return h;
@@ -2185,16 +2196,37 @@
           this.openDeleteMenu(btn.dataset.menu, btn.dataset.ep, btn.dataset.isfinal === "1");
         })
       );
+      $("manju-outputs").querySelectorAll(".manju-up2k-btn").forEach((btn) =>
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.startUpscale(btn.dataset.up2k, "");
+        })
+      );
     },
 
-    /* 产物删除确认弹窗:文件级(单 mp4)/ 集级(镜头目录+成片+预告片) */
+    /* 云端 2K 定稿:整集(shots 空)或指定镜头;后台任务,进度走运行日志 */
+    startUpscale(ep, shots) {
+      if (!this.project) { this.setErr("请先选择项目"); return; }
+      if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
+      this.setErr("");
+      $("manju-log").textContent = "(☁️ 云端 2K 定稿提交中 ...)";
+      post("/api/manju/upscale2k", {
+        config: this.project, episode: ep || this.episode, shots: shots || "",
+      }).then(() => { this.poll(); })
+        .catch((e) => this.setErr(e.message));
+    },
+
+    /* 产物操作弹窗:镜头文件附「云端 2K」入口;删除支持 文件级(单 mp4)/ 集级 */
     openDeleteMenu(path, ep, isFinal) {
       if (!this.project) { this.setErr("请先选择项目"); return; }
-      this.openModal("🗑 删除确认",
+      const fname = path.split(/[\\/]/).pop() || "";
+      const isShot = /^\d+\.mp4$/i.test(fname); // 本地定稿镜头(非成片/预告片/2K 产物)
+      this.openModal("🛠 产物操作",
         `<div class="manju-confirm">
-          <p class="mc-q">要删除哪个范围?</p>
-          <p class="mc-d">文件:${esc(path.split(/[\\/]/).pop() || "")}${isFinal ? "(成片)" : "(镜头)"}${ep ? "<br>集:${esc(ep)}" : ""}</p>
-          <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+          <p class="mc-q">要做什么?</p>
+          <p class="mc-d">文件:${esc(fname)}${isFinal ? "(成片)" : isShot ? "(镜头)" : ""}${ep ? "<br>集:${esc(ep)}" : ""}</p>
+          <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px;flex-wrap:wrap">
+            ${isShot ? '<button id="up-2k" class="hrs-btn hrs-btn-primary" title="此镜提交 MiniMax 云端升 2K(需设置里填 Key)">☁️ 此镜云端 2K</button>' : ""}
             <button id="del-file" class="hrs-btn">删除此文件</button>
             <button id="del-ep" class="hrs-btn hrs-btn-danger">删除本集全部</button>
             <button id="del-cancel" class="hrs-btn">取消</button>
@@ -2203,6 +2235,11 @@
       $("del-cancel").addEventListener("click", () => this.closeModal());
       $("del-file").addEventListener("click", () => this.deleteOutput("file", path, ep));
       $("del-ep").addEventListener("click", () => this.deleteOutput("episode", "", ep));
+      const upBtn = $("up-2k");
+      if (upBtn) upBtn.addEventListener("click", () => {
+        this.closeModal();
+        this.startUpscale(ep || this.episode, String(parseInt(fname, 10) || ""));
+      });
     },
 
     deleteOutput(scope, path, ep) {

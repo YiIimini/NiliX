@@ -9,6 +9,8 @@
   assemble --clips-dir <d> --out <p> --episode <ep> [--fps 24] [--mosaic N] [--plan <direct_plan.json>]
                                          合成:镜头 crf18 拼接 + 32kHz 立体声,按 plan 台词/旁白烧录字幕,可选逐帧打码
   facecrop --src <png> --dst <png>       正脸特写参考:切上部居中头肩区域并放大(身份锁定用)
+  probe --file <mp4>                     探测视频参数(宽高/帧率/帧数/音轨/编码/大小,云端2K预校验数据源),
+                                         末行输出 JSON {"width":..,"height":..,"fps":..,"frames":..,"hasAudio":..,...}
 """
 import argparse
 import json
@@ -787,6 +789,32 @@ def cmd_trailer(args):
     print(f"  ✅ 预告片已写入 ({total_v} 帧 / 音频块 {total_a})")
 
 
+def cmd_probe(args):
+    """探测视频参数(云端 2K 重生成预校验数据源):宽高/帧率/帧数/音轨/编码/大小/时长。
+    帧数用逐帧解码精确计数(ComfyUI 产物 mp4 的 nb_frames 元数据常缺失,不可靠;≤362 帧解码很快)。"""
+    import av
+    c = av.open(args.file)
+    v = c.streams.video[0]
+    fps = float(v.average_rate) if v.average_rate else 0.0
+    frames = 0
+    for _ in c.decode(v):
+        frames += 1
+    a = c.streams.audio[0] if c.streams.audio else None
+    info = {
+        "width": v.width, "height": v.height,
+        "fps": round(fps, 3), "frames": frames,
+        "duration_s": round(frames / fps, 3) if fps else 0.0,
+        "hasAudio": a is not None,
+        "codecV": v.codec.name if v.codec else "",
+        "codecA": (a.codec.name if a.codec else "") if a is not None else "",
+        "sizeBytes": os.path.getsize(args.file),
+    }
+    c.close()
+    print(f"  📊 {info['width']}x{info['height']} @{info['fps']}fps {info['frames']}帧 "
+          f"音轨:{'yes' if info['hasAudio'] else 'no'} {info['sizeBytes'] / 1048576:.1f}MB")
+    print(json.dumps(info, ensure_ascii=False))
+
+
 def main():
     ap = argparse.ArgumentParser(description="manju media helper")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -811,6 +839,8 @@ def main():
     f = sub.add_parser("facecrop")
     f.add_argument("--src", required=True)
     f.add_argument("--dst", required=True)
+    pr = sub.add_parser("probe")
+    pr.add_argument("--file", required=True)
     sr = sub.add_parser("asr")
     sr.add_argument("--dir", required=True)
     sr.add_argument("--plan", default="")
@@ -834,6 +864,8 @@ def main():
         cmd_assemble(args)
     elif args.cmd == "facecrop":
         cmd_facecrop(args)
+    elif args.cmd == "probe":
+        cmd_probe(args)
     elif args.cmd == "asr":
         cmd_asr(args)
     elif args.cmd == "trailer":
