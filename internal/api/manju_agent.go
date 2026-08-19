@@ -92,6 +92,9 @@ func loadAgentCfg(ctx *manjuCtx) agent.Config {
 		if n, ok := manjuToInt(m["frames_per_shot"]); ok && n > 0 {
 			acfg.FramesPerShot = n
 		}
+		if n, ok := manjuToInt(m["judge_concurrency"]); ok && n > 0 {
+			acfg.JudgeConcurrency = n
+		}
 	}
 	acfg.Normalize()
 	return acfg
@@ -251,6 +254,7 @@ func agentStatusSummary(configPath string) map[string]any {
 	out["visionModel"] = acfg.VisionModel
 	out["passScore"] = acfg.PassScore
 	out["maxRetries"] = acfg.MaxRetries
+	out["judgeConcurrency"] = acfg.JudgeConcurrency
 	st := loadAgentState(project)
 	out["episode"] = st.Episode
 	if st.PlanReview != nil {
@@ -974,10 +978,12 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	escCount := 0
 	planPath := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
 	for len(queue) > 0 && !lg.stopped() {
-		// 本轮两阶段:①逐镜渲染,渲完立即后台并发审片(渲染不空等——审片期间 GPU 继续渲下一镜);
-		// ②轮末批量 ASR 台词核对(whisper 模型整轮只加载一次,原来每镜加载一次是主要变慢原因)
+		// 本轮三路并行:①逐镜渲染,渲完立即后台并发审片(渲染不空等——审片期间 GPU 继续渲下一镜);
+		// ②渲染一结束即启动批量 ASR(只依赖产物文件,不需判分结论)——与视觉审片并行,
+		//   省掉原先「等全部判分完 → 再串行跑 ASR」的整段(whisper 模型加载+全轮转写);
+		// ③轮末汇总失败镜头走修复/升级
 		var jw sync.WaitGroup
-		judgeSem := make(chan struct{}, 2) // 视觉判分 API 并发上限
+		judgeSem := make(chan struct{}, acfg.JudgeConcurrency) // 视觉判分 API 并发上限(可配,默认 2;免费档调高易 429)
 		for _, s := range queue {
 			if lg.stopped() {
 				jw.Wait()
@@ -1013,23 +1019,35 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 					return err
 				}
 			}
-			// 后台即时审片(qc 单镜 + 视觉判分;ASR 轮末批量),结论落 agent_state
+			// 后台即时审片(qc 单镜 + 视觉判分;ASR 与审片并行),结论落 agent_state
 			jw.Add(1)
 			go func(s manjuShot) {
 				defer jw.Done()
 				judgeSem <- struct{}{}
 				defer func() { <-judgeSem }()
-				lg.logf(fmt.Sprintf("🤖 审片官接管镜头 %d ...", s.ID))
+				t0 := time.Now()
+				qcT0 := time.Now()
 				qcBad, _ := ctx.runQCJSON(lg, judgeDir, strconv.Itoa(s.ID))
+				qcDur := time.Since(qcT0)
+				lg.logf(fmt.Sprintf("🤖 审片官接管镜头 %d ...", s.ID))
 				ctx.judgeShots(lg, acfg, plan, []manjuShot{s}, qcBad, judgeDir)
+				lg.logf(fmt.Sprintf("    ⏱ 镜头 %d 审片 %.1fs(质检 %.1fs + 判分 %.1fs)",
+					s.ID, time.Since(t0).Seconds(), qcDur.Seconds(), (time.Since(t0) - qcDur).Seconds()))
 			}(s)
 		}
-		jw.Wait() // 等本轮全部审片落定
+		// ASR 与视觉审片并行开跑(ASR 只需产物文件;渲染循环已结束,全部镜头就绪)
+		var asrWg sync.WaitGroup
+		var asrBad map[int][]string
+		asrWg.Add(1)
+		go func() {
+			defer asrWg.Done()
+			asrBad = ctx.runASRCheck(lg, judgeDir, queue, planPath)
+		}()
+		jw.Wait()   // 等本轮全部审片落定
+		asrWg.Wait() // 等批量 ASR(与审片并行,通常早已完成)
 		if lg.stopped() {
 			return fmt.Errorf("已停止")
 		}
-		// 批量 ASR:本轮全部有台词镜头一次转写(一次模型加载),结果并入失败集
-		asrBad := ctx.runASRCheck(lg, judgeDir, queue, planPath)
 
 		// 汇总失败镜头(视觉判分未过 / 判分调用出错 / ASR 台词不符)→ 升级或修复重渲
 		var redo []manjuShot
@@ -1763,6 +1781,9 @@ func registerAgentRoutes(mux *http.ServeMux) {
 				}
 				if n, ok := manjuToInt(m["max_retries"]); ok && n >= 0 && n <= 4 {
 					A["max_retries"] = n
+				}
+				if n, ok := manjuToInt(m["judge_concurrency"]); ok && n >= 1 && n <= 4 {
+					A["judge_concurrency"] = n
 				}
 			}
 			if str(body["global"]) == "true" {

@@ -13,18 +13,19 @@ import (
 // ---- 配置(项目 config.json 的 agent 节) ----
 
 type Config struct {
-	Enabled        bool    `json:"enabled"`          // 智能体调度总开关
-	VisionBaseURL  string  `json:"vision_base_url"`  // 视觉模型 OpenAI 兼容地址(空=用项目 llm 地址)
-	VisionAPIKey   string  `json:"vision_api_key"`   // 视觉模型 Key(空=用项目 llm key)
-	VisionModel    string  `json:"vision_model"`     // 视觉模型名(空=审片官禁用,仅机械质检)
-	PassScore      float64 `json:"pass_score"`       // 及格线(加权总分,0-100)
-	MaxRetries     int     `json:"max_retries"`      // 自动返工轮数上限(每轮=修复提示词+重编码+重渲染)
-	FramesPerShot  int     // 抽帧数(缺省 3,不落盘到配置)
+	Enabled          bool    `json:"enabled"`           // 智能体调度总开关
+	VisionBaseURL    string  `json:"vision_base_url"`   // 视觉模型 OpenAI 兼容地址(空=用项目 llm 地址)
+	VisionAPIKey     string  `json:"vision_api_key"`    // 视觉模型 Key(空=用项目 llm key)
+	VisionModel      string  `json:"vision_model"`      // 视觉模型名(空=审片官禁用,仅机械质检)
+	PassScore        float64 `json:"pass_score"`        // 及格线(加权总分,0-100)
+	MaxRetries       int     `json:"max_retries"`       // 自动返工轮数上限(每轮=修复提示词+重编码+重渲染)
+	JudgeConcurrency int     `json:"judge_concurrency"` // 视觉判分 API 并发上限(1-4,默认 2;付费 Key 可调高提速)
+	FramesPerShot    int     // 抽帧数(缺省 3,不落盘到配置)
 }
 
 // DefaultConfig 缺省配置:75 分及格、最多 2 轮返工(预算封顶,防无限重试烧 GPU)
 func DefaultConfig() Config {
-	return Config{PassScore: 75, MaxRetries: 2, FramesPerShot: 3}
+	return Config{PassScore: 75, MaxRetries: 2, JudgeConcurrency: 2, FramesPerShot: 3}
 }
 
 // Normalize 兜底非法取值
@@ -37,6 +38,12 @@ func (c *Config) Normalize() {
 	}
 	if c.MaxRetries > 4 {
 		c.MaxRetries = 4
+	}
+	if c.JudgeConcurrency <= 0 {
+		c.JudgeConcurrency = 2
+	}
+	if c.JudgeConcurrency > 4 {
+		c.JudgeConcurrency = 4
 	}
 	if c.FramesPerShot <= 0 {
 		c.FramesPerShot = 3

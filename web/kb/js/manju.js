@@ -741,6 +741,9 @@
                 <div class="manju-field-row">
                   <label>返工轮数</label><input id="manju-ag-retries" class="manju-input manju-num" type="number" min="0" max="4" value="${ag.maxRetries == null ? 2 : ag.maxRetries}"><span class="manju-set-unit">轮</span>
                 </div>
+                <div class="manju-field-row">
+                  <label>判分并发</label><input id="manju-ag-conc" class="manju-input manju-num" type="number" min="1" max="4" value="${ag.judgeConcurrency == null ? 2 : ag.judgeConcurrency}" title="视觉判分 API 并发上限(1-4)。免费档(智谱 flash)建议 2——调高易触发 429(会自动退避+粘性降级);付费 Key 可调 3-4 提速审片"><span class="manju-set-unit">路</span>
+                </div>
               </div>
               <div class="manju-set-sub">☁️ 云端 2K 定稿 · MiniMax(审片通过的本地定稿镜提交云端升 2K,本地 GPU 零负担)</div>
               <div class="manju-field-row">
@@ -946,6 +949,7 @@
           vision_model: v.model,
           pass_score: parseFloat($("manju-ag-pass").value) || 75,
           max_retries: parseInt($("manju-ag-retries").value, 10),
+          judge_concurrency: parseInt($("manju-ag-conc").value, 10) || 2,
         },
         minimax_api_key: $("manju-ag-mmkey") ? $("manju-ag-mmkey").value.trim() : "",
       }).then(() => {
@@ -990,6 +994,7 @@
           vision_model: v.model,
           pass_score: parseFloat($("manju-ag-pass").value) || 75,
           max_retries: parseInt($("manju-ag-retries").value, 10),
+          judge_concurrency: parseInt($("manju-ag-conc").value, 10) || 2,
         },
         minimax_api_key: $("manju-ag-mmkey") ? $("manju-ag-mmkey").value.trim() : "",
       }).then(() => {
@@ -1009,6 +1014,7 @@
           vision_model: v.model,
           pass_score: parseFloat($("manju-ag-pass").value) || 75,
           max_retries: parseInt($("manju-ag-retries").value, 10),
+          judge_concurrency: parseInt($("manju-ag-conc").value, 10) || 2,
         },
         minimax_api_key: $("manju-ag-mmkey") ? $("manju-ag-mmkey").value.trim() : "",
       });
