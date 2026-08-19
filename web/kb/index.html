@@ -663,6 +663,20 @@
             </select>
           </div>
           <div class="settings-row">
+            <span class="settings-row-label">左右摇摆</span>
+            <label class="toggle"><input type="checkbox" id="set-ai-waddle"><span class="tk"></span></label>
+            <span class="settings-hint">闲逛/步行时的摇摆动画</span>
+          </div>
+          <div class="settings-row">
+            <span class="settings-row-label">摇摆幅度</span>
+            <select id="set-ai-waddle-amp" class="settings-input">
+              <option value="0">关闭(0°)</option>
+              <option value="1.5">轻(1.5°)</option>
+              <option value="2.5" selected>中(2.5°)</option>
+              <option value="4">大(4°)</option>
+            </select>
+          </div>
+          <div class="settings-row">
             <span class="settings-row-label">对话闲置隐藏</span>
             <label class="toggle"><input type="checkbox" id="set-ai-chat-hide"><span class="tk"></span></label>
             <span class="settings-hint">对话框无交互自动收起</span>

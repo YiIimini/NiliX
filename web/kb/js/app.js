@@ -13,7 +13,7 @@ const App = {
 
   loadPrefs() {
     const d = { aiOn: true, aiStatus: true, aiQuotes: true, aiWander: true, aiFreq: 22000, aiSize: 104, aiWanderInt: 11000,
-      aiChatHide: true, aiChatHideSec: 60, // 对话闲置自动收起:开关 + 秒数
+      aiChatHide: true, aiChatHideSec: 60, aiWaddle: true, aiWaddleAmp: 2.5, // 闲置收起 + 左右摇摆(幅度°)
       kbLayout: "force", kbShape: "mixed", kbCurve: 0.05, kbLineOp: 0.2, kbHoverLabel: true, kbLabels: 0,
       kbRepel: 260, kbDist: 100, kbGrav: 9 };
     let s = null;
@@ -37,6 +37,7 @@ const App = {
     set("set-ai-freq", P.aiFreq); set("set-ai-size", P.aiSize);
     set("set-ai-wander-int", P.aiWanderInt);
     chk("set-ai-chat-hide", P.aiChatHide); set("set-ai-chat-hide-sec", P.aiChatHideSec);
+    chk("set-ai-waddle", P.aiWaddle); set("set-ai-waddle-amp", P.aiWaddleAmp);
     const apply = () => {
       const m = document.getElementById("ai-mascot");
       if (m) {
@@ -44,6 +45,9 @@ const App = {
         const av = document.getElementById("ai-avatar");
         av.style.width = av.style.height = P.aiSize + "px";
       }
+      // 左右摇摆:幅度写 CSS 变量(--ai-waddle),0=关闭
+      const amp = P.aiWaddle ? (P.aiWaddleAmp || 2.5) : 0;
+      document.body.style.setProperty("--ai-waddle", amp + "deg");
       if (P.aiFreq !== this._mqFreq) {
         this._mqFreq = P.aiFreq;
         clearInterval(this._mqT);
@@ -56,12 +60,12 @@ const App = {
       }
       this.savePrefs();
     };
-    ["set-ai-on", "set-ai-status", "set-ai-quotes", "set-ai-wander", "set-ai-chat-hide"].forEach((id) =>
+    ["set-ai-on", "set-ai-status", "set-ai-quotes", "set-ai-wander", "set-ai-chat-hide", "set-ai-waddle"].forEach((id) =>
       el(id).addEventListener("change", (e) => {
-        const k = { "set-ai-on": "aiOn", "set-ai-status": "aiStatus", "set-ai-quotes": "aiQuotes", "set-ai-wander": "aiWander", "set-ai-chat-hide": "aiChatHide" }[id];
+        const k = { "set-ai-on": "aiOn", "set-ai-status": "aiStatus", "set-ai-quotes": "aiQuotes", "set-ai-wander": "aiWander", "set-ai-chat-hide": "aiChatHide", "set-ai-waddle": "aiWaddle" }[id];
         P[k] = e.target.checked; apply();
       }));
-    [["set-ai-freq", "aiFreq", parseInt], ["set-ai-size", "aiSize", parseInt], ["set-ai-wander-int", "aiWanderInt", parseInt], ["set-ai-chat-hide-sec", "aiChatHideSec", parseInt]].forEach(([id, k, cast]) => {
+    [["set-ai-freq", "aiFreq", parseInt], ["set-ai-size", "aiSize", parseInt], ["set-ai-wander-int", "aiWanderInt", parseInt], ["set-ai-chat-hide-sec", "aiChatHideSec", parseInt], ["set-ai-waddle-amp", "aiWaddleAmp", parseFloat]].forEach(([id, k, cast]) => {
       const e2 = el(id);
       if (e2) e2.addEventListener("change", () => { P[k] = cast(e2.value); apply(); });
     });
