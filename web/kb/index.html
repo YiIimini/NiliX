@@ -7,10 +7,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=20260819p1">
-<link rel="stylesheet" href="/css/themes.css?v=20260819p1">
-<link rel="stylesheet" href="/css/materials.css?v=20260819p1">
-<link rel="stylesheet" href="/css/app.css?v=20260819p1">
+<link rel="icon" type="image/png" href="/icon.png?v=20260819q1">
+<link rel="stylesheet" href="/css/themes.css?v=20260819q1">
+<link rel="stylesheet" href="/css/materials.css?v=20260819q1">
+<link rel="stylesheet" href="/css/app.css?v=20260819q1">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -78,7 +78,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260819p1" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260819q1" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -185,15 +185,6 @@
         </div>
         <div class="hrs-tools">
           <span id="manju-status" class="hrs-status"><span class="hrs-dot off"></span><span id="manju-txt">空闲</span></span>
-          <button id="manju-guide" class="hrs-btn hrs-btn-icon" title="使用说明" aria-label="Guide">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
-          </button>
-          <button id="manju-settings" class="hrs-btn hrs-btn-icon" title="设置" aria-label="Settings">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          </button>
-          <button id="manju-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/></svg>
-          </button>
         </div>
       </div>
       <p id="manju-err" class="hrs-err hidden"></p>
@@ -238,7 +229,20 @@
 
           <!-- 小说来源 -->
           <div class="manju-card">
-            <h3 class="manju-card-title">小说来源</h3>
+            <div class="manju-card-head manju-novel-head">
+              <h3 class="manju-card-title">小说来源</h3>
+              <div class="manju-save-group">
+                <button id="manju-guide" class="hrs-btn hrs-btn-icon" title="使用说明" aria-label="Guide">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+                </button>
+                <button id="manju-settings" class="hrs-btn hrs-btn-icon" title="设置" aria-label="Settings">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                </button>
+                <button id="manju-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/></svg>
+                </button>
+              </div>
+            </div>
             <div class="manju-row">
               <input id="manju-novel" class="manju-input manju-wide" placeholder="小说文件路径（.md）" spellcheck="false">
               <button id="manju-novel-paste" class="hrs-btn hrs-btn-primary hidden">粘贴文章</button>
@@ -778,11 +782,11 @@
       </div>
     </div>
   </div>
-  <script src="/js/i18n.js?v=20260819p1"></script>
-  <script src="/js/markdown.js?v=20260819p1"></script>
-  <script src="/js/app.js?v=20260819p1"></script>
-  <script src="/js/comfy.js?v=20260819p1"></script>
-  <script src="/js/dirview.js?v=20260819p1"></script>
-  <script src="/js/manju.js?v=20260819p1"></script>
+  <script src="/js/i18n.js?v=20260819q1"></script>
+  <script src="/js/markdown.js?v=20260819q1"></script>
+  <script src="/js/app.js?v=20260819q1"></script>
+  <script src="/js/comfy.js?v=20260819q1"></script>
+  <script src="/js/dirview.js?v=20260819q1"></script>
+  <script src="/js/manju.js?v=20260819q1"></script>
 </body>
 </html>

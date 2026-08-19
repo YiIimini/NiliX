@@ -4676,3 +4676,8 @@ select option { text-align: center; }
   background: #f5b942; box-shadow: 0 0 0 3px color-mix(in srgb, #f5b942 20%, transparent), 0 0 8px color-mix(in srgb, #f5b942 55%, transparent);
 }
 .manju-interrupt-tip .hrs-btn { flex: none; padding: 3px 12px; font-size: 11.5px; }
+/* 小说来源卡片头部:标题 + 使用说明/设置/刷新(自页头迁入) */
+.manju-novel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.manju-novel-head .manju-card-title { margin-bottom: 0; }
+.manju-novel-head .manju-save-group { display: flex; align-items: center; gap: 8px; }
+.manju-novel-head .hrs-btn-icon { width: 28px; height: 28px; }
