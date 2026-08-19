@@ -117,6 +117,14 @@ func (ctx *manjuCtx) visionClient(acfg agent.Config) *agent.VisionClient {
 	return vc
 }
 
+// visionClientShared 每 run 共享一个视觉客户端:粘性降级状态跨镜头保留——
+// 429 高峰一次降级成功后,后续镜头判分直接从备模型开始(此前每镜新建 client,
+// 每镜都要在主模型上重烧 4/10/20s 退避才降级,高峰期审片被拖慢 34s/镜)。
+func (ctx *manjuCtx) visionClientShared(acfg agent.Config) *agent.VisionClient {
+	ctx.visionOnce.Do(func() { ctx.vision = ctx.visionClient(acfg) })
+	return ctx.vision
+}
+
 // ---- 审片状态落盘(<项目>/agent_state.json,随项目目录删除) ----
 
 type manjuAgentEscalation struct {
@@ -756,9 +764,10 @@ func (ctx *manjuCtx) judgeShots(lg *manjuLogger, acfg agent.Config, plan map[str
 		}
 		return failed
 	}
-	vc := ctx.visionClient(acfg)
+	vc := ctx.visionClientShared(acfg)
 	charMap, sceneMap := planCharSceneMaps(plan)
 	styleDesc := manjuStyleDesc(ctx.style).asset
+	primaryModel := strings.Split(strings.TrimSpace(acfg.VisionModel), ",")[0]
 	var failed []int
 	for _, s := range shots {
 		clip := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
@@ -793,7 +802,12 @@ func (ctx *manjuCtx) judgeShots(lg *manjuLogger, acfg agent.Config, plan map[str
 					}
 					weakStr = "(弱项:" + strings.Join(parts, "/") + ")"
 				}
-				lg.logf(fmt.Sprintf("🤖 审片 镜头 %d: %.1f 分 %s %s", s.ID, jd.Score, mark, weakStr))
+				// 降级标注:实际模型 ≠ 配置主模型 → 明示已降级(粘性窗口内直连备模型)
+				degrade := ""
+				if jd.Model != "" && jd.Model != primaryModel {
+					degrade = " ⤵️已降级 " + jd.Model
+				}
+				lg.logf(fmt.Sprintf("🤖 审片 镜头 %d: %.1f 分 %s %s%s", s.ID, jd.Score, mark, weakStr, degrade))
 				for _, is := range jd.Issues {
 					lg.logf("      · " + is)
 				}

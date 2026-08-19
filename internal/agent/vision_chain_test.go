@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -69,4 +70,87 @@ func TestVisionModelChainFallback(t *testing.T) {
 func decodeJSONBody(r *http.Request, v any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// TestVisionStickyFallback 粘性降级:429 降级成功后,冷却窗内后续调用直接从备模型开始
+// (不再重烧主模型退避);冷却结束回探主模型;主模型恢复后粘性清除。
+func TestVisionStickyFallback(t *testing.T) {
+	old, oldCd := visionBackoffs, visionStickyCooldown
+	visionBackoffs = []time.Duration{0, 0, 0}
+	visionStickyCooldown = 60 * time.Millisecond // 冷却窗缩短,便于测试回探
+	defer func() { visionBackoffs, visionStickyCooldown = old, oldCd }()
+
+	var mu sync.Mutex
+	calls := map[string]int{}
+	primaryOK := false // 主模型是否已"恢复"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = decodeJSONBody(r, &body)
+		mu.Lock()
+		calls[body.Model]++
+		pOK := primaryOK
+		mu.Unlock()
+		if body.Model == "glm-4.6v-flash" && !pOK {
+			w.WriteHeader(429)
+			_, _ = w.Write([]byte(`{"error":"overloaded"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok","finish_reason":"stop"}}]}`))
+	}))
+	defer srv.Close()
+
+	vc := NewVisionClient(srv.URL, "k", "glm-4.6v-flash", 5*60*1e9)
+	// 第 1 次调用:主模型 4 次 429(首试+3 退避)→ 降级备模型成功
+	if _, err := vc.chatImage("s", "u", nil, 0.1); err != nil {
+		t.Fatalf("第 1 次调用应降级成功: %v", err)
+	}
+	mu.Lock()
+	p1, b1 := calls["glm-4.6v-flash"], calls["glm-4v-flash"]
+	mu.Unlock()
+	if p1 != 4 || b1 != 1 {
+		t.Fatalf("第 1 次应为主 4 次+备 1 次: primary=%d backup=%d", p1, b1)
+	}
+	// 第 2 次调用(冷却窗内):直接从备模型开始,主模型不再被尝试
+	if _, err := vc.chatImage("s", "u", nil, 0.1); err != nil {
+		t.Fatalf("第 2 次调用失败: %v", err)
+	}
+	mu.Lock()
+	p2 := calls["glm-4.6v-flash"]
+	mu.Unlock()
+	if p2 != 4 {
+		t.Fatalf("粘性窗口内不应再打主模型: primary=%d(应保持 4)", p2)
+	}
+	// 冷却结束:第 3 次调用回探主模型(仍 429,再降级)
+	time.Sleep(80 * time.Millisecond)
+	if _, err := vc.chatImage("s", "u", nil, 0.1); err != nil {
+		t.Fatalf("第 3 次调用失败: %v", err)
+	}
+	mu.Lock()
+	p3 := calls["glm-4.6v-flash"]
+	mu.Unlock()
+	if p3 != 8 {
+		t.Fatalf("冷却后应回探主模型(再 +4 次): primary=%d(应 8)", p3)
+	}
+	// 主模型恢复 + 冷却结束:回探主模型成功,粘性清除;此后一直走主模型
+	mu.Lock()
+	primaryOK = true
+	mu.Unlock()
+	time.Sleep(80 * time.Millisecond)
+	if _, err := vc.chatImage("s", "u", nil, 0.1); err != nil || vc.LastUsedModel != "glm-4.6v-flash" {
+		t.Fatalf("主模型恢复后应回探成功: %v %s", err, vc.LastUsedModel)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := vc.chatImage("s", "u", nil, 0.1); err != nil {
+			t.Fatalf("粘性清除后调用失败: %v", err)
+		}
+	}
+	mu.Lock()
+	bFinal := calls["glm-4v-flash"]
+	mu.Unlock()
+	if bFinal != 3 { // 第 1、2(粘性)、3 次用过备模型;主模型恢复后(4-6 次)不再碰
+		t.Fatalf("主模型恢复后不应再碰备模型: backup=%d(应 3)", bFinal)
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,7 +46,15 @@ type VisionClient struct {
 	LastUsedModel string
 	// OnUsage 每次成功调用回抛 token 用量(项目级记账用;可为 nil)
 	OnUsage func(model string, u Usage)
+	// 粘性降级(429 高峰):一次降级成功后,冷却窗内后续调用直接从备模型开始——
+	// 不再每次先在主模型上烧完 4/10/20s 退避才降级;冷却结束自动回探主模型恢复。
+	stickyMu    sync.Mutex
+	stickyIdx   int
+	stickyUntil time.Time
 }
+
+// visionStickyCooldown 粘性降级冷却窗(测试可缩短)
+var visionStickyCooldown = 15 * time.Minute
 
 // NewVisionClient 构造(超时缺省 180s:审片一次带多图,慢模型也要等得起)。
 // baseURL 兼容三种写法:根地址 / 带 /chat/completions 的完整端点 / 带尾斜杠。
@@ -111,7 +120,8 @@ func imageDataURI(path string) (string, error) {
 
 // chatImage 多模态单轮:system + user 文本 + 图片(imagePaths 按顺序附加)。
 // 模型链逐个尝试:每个模型按 4s/10s/20s 退避重试 429/网络类错误,重试耗尽且链上有
-// 备模型则自动降级继续;全链失败返回聚合错误(不再空转——免费档整链过载时明确告知稍后再试)。
+// 备模型则自动降级继续;粘性降级——降级成功后冷却窗内直接从备模型开始(省每镜 34s
+// 主模型退避),冷却结束回探主模型;全链失败返回聚合错误(不再空转)。
 func (v *VisionClient) chatImage(system, user string, imagePaths []string, temperature float64) (string, error) {
 	content := []map[string]any{{"type": "text", "text": user}}
 	for _, p := range imagePaths {
@@ -124,8 +134,16 @@ func (v *VisionClient) chatImage(system, user string, imagePaths []string, tempe
 			"image_url": map[string]string{"url": uri},
 		})
 	}
+	// 起始模型:粘性窗口内从上次降级成功的备模型直连
+	start := 0
+	v.stickyMu.Lock()
+	if v.stickyIdx > 0 && time.Now().Before(v.stickyUntil) {
+		start = v.stickyIdx
+	}
+	v.stickyMu.Unlock()
 	var errs []string
-	for mi, model := range v.Models {
+	for mi := start; mi < len(v.Models); mi++ {
+		model := v.Models[mi]
 		body := map[string]any{
 			"model":       model,
 			"temperature": temperature,
@@ -144,10 +162,14 @@ func (v *VisionClient) chatImage(system, user string, imagePaths []string, tempe
 			out, err := v.doChatOnce(body)
 			if err == nil {
 				v.LastUsedModel = model
+				// 粘性记账:备模型成功 → 冷却窗内直连;主模型成功 → 清粘性(已恢复)
+				v.stickyMu.Lock()
 				if mi > 0 {
-					// 降级成功:记录在案(Judgment.Model 呈现实际模型)
-					return out, nil
+					v.stickyIdx, v.stickyUntil = mi, time.Now().Add(visionStickyCooldown)
+				} else {
+					v.stickyIdx, v.stickyUntil = 0, time.Time{}
 				}
+				v.stickyMu.Unlock()
 				return out, nil
 			}
 			lastErr = err

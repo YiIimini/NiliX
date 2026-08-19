@@ -61,6 +61,8 @@ type manjuCtx struct {
 	draftJudge   bool    // 智能模式草稿预审:审片返工轮用缩放分辨率草稿,全部通过后全分辨率定稿重渲
 	draftScale   float64 // 草稿缩放(0.2-0.95,默认 0.5;0.5 ≈ 1/4 像素量)
 	forceAttempt int     // 定点返工等外部路径传入的重试序号(seed 策略用它换 seed;0=首渲)
+	visionOnce   sync.Once
+	vision       *agent.VisionClient // 每 run 共享(粘性降级状态跨镜头保留)
 }
 
 func manjuToFloat(v any) (float64, bool) {
