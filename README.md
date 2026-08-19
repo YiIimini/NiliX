@@ -16,7 +16,7 @@
 | **渲染升级** | 分辨率档位（416P 草稿 / 768P 标准 / 1088P 高清）· 草稿预审（审片轮半分辨率→定稿全分辨率零返工）· seed 重试策略 · SageAttention 加速 · 渲染检查点崩溃恢复（查 ComfyUI history 免重渲）· 产物时效清单（stale 自动重渲） |
 | **云端 2K 定稿** | ☁️ 本地 768×1344/24fps/17k+5 帧产物与 MiniMax `/v2/video_regeneration` 预校验即插即用：本地 GPU 零负担云端升 2K，产物落 `clips/<ep>/2k/` |
 | **成片表现** | 转场（硬切/闪黑/叠化，MotionContext 接缝镜自动硬切）· BGM 混音（对白自动闪避）· faststart · 字幕烧录/打码 · 📦 剪映草稿导出（视频+字幕轨可继续编辑，pyJianYingDraft）· 多切点长镜（experimental，`[Shot N] At MM:SS.mmm` 单次生成多机位） |
-| **智能体调度** | 🤖 智能一条龙：剧本师复核 → 审片官逐镜 VLM 判分（八维度对齐 H3 官方能力）→ 修复师自动改写提示词定点返工 → 微信升级通知；LLM/VLM token 用量记账 |
+| **智能体调度** | 🤖 AI 一条龙：剧本师复核 → 审片官逐镜 VLM 判分（八维度对齐 H3 官方能力）→ 修复师自动改写提示词定点返工 → 微信升级通知；LLM/VLM token 用量记账 |
 | **系统监测** | 托盘 + 灵动岛悬浮窗（CPU/内存/GPU/磁盘/网络 + ComfyUI/Kb/ZCode/Bot 服务管控） |
 
 ## 快速开始

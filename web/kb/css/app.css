@@ -1359,8 +1359,8 @@ body.view-dir-active .top-search { display: none; }
   position: relative;
   display: flex;
   align-items: center;
-  justify-content: flex-end; /* 工具组靠右,标题绝对居中 */
-  gap: 12px;
+  flex-wrap: wrap; /* 窄屏:工具组换行到第二行,不与标题挤压 */
+  gap: 12px 16px;
   flex-shrink: 0;
   padding-bottom: 14px;
   margin-bottom: 8px;
@@ -1377,28 +1377,42 @@ body.view-dir-active .top-search { display: none; }
   background: linear-gradient(90deg, var(--accent), transparent);
   box-shadow: 0 0 10px var(--glow);
 }
-.reader-title {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: 58%;
+/* 标题组靠左:书名 + 元信息副行(章节/字数),不再绝对居中(窄屏与工具组不再重叠) */
+.reader-title-wrap {
   min-width: 0;
-  font-size: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.reader-title {
+  min-width: 0;
+  max-width: 30vw;
+  font-size: 19px;
   font-weight: 700;
-  letter-spacing: 1px;
-  text-align: center;
+  letter-spacing: 0.5px;
+  line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-shadow: 0 0 18px var(--glow);
 }
-/* 头部工具:目录显隐开关 + 关闭按钮(关闭按钮在弹窗内回归流式布局,避免与目录按钮重合) */
+.reader-sub {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 头部工具:搜索框居中伸展(占中间弹性空间)+ 按钮组靠右;关闭按钮独立成组突出 */
 .reader-tools {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-shrink: 0;
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-end;
 }
+.reader-tools .reader-search { flex: 0 1 300px; margin-right: auto; }
 .reader-tools .detail-close,
 .reader-head > .detail-close {
   position: static;
@@ -3520,9 +3534,9 @@ pre, code { border-radius: 6px; }
 
 
 
-/* ---- 漫剧智能体:智能一条龙按钮 + 审片报告面板 + 审片详情弹窗 ---- */
+/* ---- 漫剧智能体:AI 一条龙按钮 + 审片报告面板 + 审片详情弹窗 ---- */
 
-/* 智能一条龙按钮(紫罗兰渐变,与一条龙主按钮区分) */
+/* AI 一条龙按钮(紫罗兰渐变,与一条龙主按钮区分) */
 .hrs-btn.hrs-btn-agent {
   flex: 1;
   background: linear-gradient(135deg, #7c5cff, #b45cff 55%, #ff5c8a);
@@ -4205,24 +4219,38 @@ select option { text-align: center; }
 .mj-ag-chat-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .mj-ag-chat-quick .hrs-btn { padding: 3px 10px; font-size: 11px; }
 
-/* 项目体检弹窗 */
+/* 项目体检弹窗(滚动收敛在 modal-body 单一容器;条目两行式,详情/提示可换行不被裁) */
 .mj-health-load { padding: 14px; text-align: center; color: var(--muted); font-size: 13px; }
-.mj-health-head { font-size: 13px; margin-bottom: 12px; }
-.mj-hb-bad { color: #f87171; }
-.mj-hb-warn { color: #fbbf24; }
-.mj-health-items { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto; }
+.mj-health { display: flex; flex-direction: column; gap: 10px; }
+.mj-health-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--panel-border); background: color-mix(in srgb, var(--bg) 40%, transparent);
+}
+.mj-hh-title { font-size: 13px; font-weight: 700; margin-right: 2px; }
+.mj-hh-pill {
+  font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid transparent; line-height: 1.4;
+}
+.mj-hh-pill.bad { color: #f87171; border-color: color-mix(in srgb, #f87171 40%, transparent); background: color-mix(in srgb, #f87171 8%, transparent); }
+.mj-hh-pill.warn { color: #fbbf24; border-color: color-mix(in srgb, #fbbf24 36%, transparent); background: color-mix(in srgb, #fbbf24 7%, transparent); }
+.mj-hh-pill.ok { color: var(--ok, #34d399); border-color: color-mix(in srgb, var(--ok, #34d399) 32%, transparent); background: color-mix(in srgb, var(--ok, #34d399) 7%, transparent); }
+.mj-health-items { display: flex; flex-direction: column; gap: 7px; }
 .mj-health-item {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 9px 12px; border-radius: 10px; font-size: 12.5px;
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 10px 12px; border-radius: 10px; font-size: 12.5px;
   border: 1px solid var(--panel-border); background: color-mix(in srgb, var(--bg) 40%, transparent);
 }
 .mj-health-item.bad { border-color: color-mix(in srgb, #f87171 45%, transparent); background: color-mix(in srgb, #f87171 7%, transparent); }
 .mj-health-item.warn { border-color: color-mix(in srgb, #fbbf24 40%, transparent); background: color-mix(in srgb, #fbbf24 6%, transparent); }
-.mj-hi-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.mj-hi-ic { flex: none; }
-.mj-hi-detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mj-hi-hint { flex: none; font-size: 11px; color: var(--muted); max-width: 40%; text-align: right; }
-.mj-hi-fix { flex: none; padding: 4px 12px; font-size: 12px; }
+.mj-hi-ic { flex: none; line-height: 1.5; }
+.mj-hi-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mj-hi-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.mj-hi-top b { font-size: 12.5px; }
+.mj-hi-detail { color: var(--muted); line-height: 1.55; overflow-wrap: anywhere; }
+.mj-hi-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; }
+.mj-hi-fix { flex: none; padding: 3px 12px; font-size: 11.5px; }
+.mj-health-foot { font-size: 11.5px; color: var(--muted); padding: 2px 2px 0; }
 
 /* 审片详情弹窗 */
 .manju-judge { display: flex; flex-direction: column; gap: 10px; }
@@ -4425,7 +4453,7 @@ select option { text-align: center; }
 .manju-style-tag { font-size: 11px; color: var(--muted); padding: 0 10px 10px; }
 @media (max-width: 900px) { .manju-style-grid { grid-template-columns: repeat(2, 1fr); } }
 
-/* 智能一条龙:深度分析确认框(是/否) */
+/* AI 一条龙:深度分析确认框(是/否) */
 .manju-confirm { padding: 4px 6px; }
 .manju-confirm .mc-q { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.6; margin: 0 0 8px; }
 .manju-confirm .mc-d { font-size: 12.5px; color: var(--muted); line-height: 1.8; margin: 0; }

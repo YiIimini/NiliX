@@ -491,15 +491,22 @@ func manjuStyleAnalyzeRun(configPath, episode, chapters, novel string) (map[stri
 		return nil, fmt.Errorf("小说内容太少,无法深度分析")
 	}
 	old := str(ctx.cfg["style"])
-	sys := `你是漫剧(竖屏短剧)渲染风格分析师,根据小说章节内容判断最匹配的渲染风格。
-【分析要点】题材类型(古装/现代/玄幻/科幻/都市/悬疑…)、叙事基调(热血/治愈/暗黑/甜宠…)、场景与美术特征、目标观众画风偏好。
-【输出 JSON(严格)】{"style": "...", "reason": "..."}
+	sys := `你是漫剧(竖屏短剧)渲染风格与参数分析师,根据小说章节内容判断最匹配的渲染风格与渲染参数。
+【分析要点】题材类型(古装/现代/玄幻/科幻/都市/悬疑…)、叙事基调(热血/治愈/暗黑/甜宠…)、场景与美术特征、目标观众画风偏好、节奏密度(对话交锋/转场频率)。
+【输出 JSON(严格)】{"style": "...", "reason": "...", "params": {...}}
 style 取值规则(多维组合,禁止只给单一预设):
 - 主体画风:预设 key 2.5d(2.5D动漫半写实) / real(写实真人电影) / 3d(3D CG) / anime(二次元) / handdrawn(手绘) / papercraft(纸艺) / clay(粘土) / ink(水墨),最多 2 个
 - 累加题材元素词(取材于小说内容,英文短语):时代/文化氛围(如 ancient Chinese aesthetic / cyberpunk / steampunk)、美术质感(如 watercolor / oil painting / film grain)、光影气质(如 moody cinematic lighting / bright pastel);2-3 个
 - 整体用 + 连接(如 ink+ancient Chinese aesthetic+watercolor / 2.5d+cyberpunk+neon lighting),总元素 3-5 个,语义冲突的组合不要
 - 所有题材元素词必须是英文(H3 提示词直接使用),中文风格词自行翻译
-reason: 不超过 100 字中文,说明题材/基调与各风格元素的匹配理由。`
+params 取值规则(渲染优化参数,按题材节奏判断,全部给出):
+{"res_tier": "standard", "draft_judge": true, "seed_policy": "increment", "transition": "cut", "shots_per_take": 1}
+- res_tier 分辨率档位:常规成片 standard;快速试片/预告优先 draft(约 1/3 像素量);高清大片质感 fhd
+- draft_judge 草稿预审:审片返工轮半分辨率草稿、通过后全分辨率定稿(审片轮提速约 3/4),常规推荐 true
+- seed_policy 返工 seed 策略:increment=每轮返工换 seed 更有效(推荐);fixed=全剧严格同 seed
+- transition 镜头转场:快节奏打脸/爽点短剧 cut(硬切利落);连续叙事/情感递进 dissolve(叠化);古风/意境/回忆 fade(闪黑)
+- shots_per_take 多切点长镜(实验特性):保守 1;同场景对话交锋密集、镜头多机位切换的可给 2
+reason: 不超过 100 字中文,说明题材/基调与各风格元素、参数的匹配理由。`
 	user := "当前渲染风格: " + old + "\n需渲染章节: " + ctx.chapters + " / 集 " + ctx.episode + "\n\n小说章节内容(节选):\n" + truncate(text, 12000)
 	out, err := ctx.llm.chatJSON(sys, user, 0.3)
 	if err != nil {
@@ -517,6 +524,43 @@ reason: 不超过 100 字中文,说明题材/基调与各风格元素的匹配�
 		reason += notes
 	}
 	ctx.cfg["style"] = style
+	// 参数建议:合法值校验后写 render 节(AI 一条龙全权:渲染参数一并分析落库,启动日志明示)
+	params := map[string]any{}
+	if pm, ok := out["params"].(map[string]any); ok {
+		RN, _ := ctx.cfg["render"].(map[string]any)
+		if RN == nil {
+			RN = map[string]any{}
+			ctx.cfg["render"] = RN
+		}
+		if t := str(pm["res_tier"]); t != "" {
+			if _, ok2 := manjuResTiers[t]; ok2 {
+				RN["res_tier"] = t
+				params["档位"] = t
+			}
+		}
+		if v, ok2 := pm["draft_judge"].(bool); ok2 {
+			RN["draft_judge"] = v
+			if v {
+				params["草稿预审"] = "开"
+			} else {
+				params["草稿预审"] = "关"
+			}
+		}
+		if sp := str(pm["seed_policy"]); sp != "" && manjuSeedPolicies[sp] {
+			RN["seed_policy"] = sp
+			params["seed策略"] = sp
+		}
+		if tr := str(pm["transition"]); tr != "" && manjuTransitions[tr] {
+			RN["transition"] = tr
+			params["转场"] = tr
+		}
+		if n, ok2 := manjuToInt(pm["shots_per_take"]); ok2 && n >= 1 && n <= 3 {
+			RN["shots_per_take"] = n
+			if n > 1 {
+				params["长镜"] = fmt.Sprintf("%d镜/组", n)
+			}
+		}
+	}
 	if err := writeManjuConfig(configPath, ctx.cfg); err != nil {
 		return nil, fmt.Errorf("写入渲染配置失败: %w", err)
 	}
@@ -529,11 +573,11 @@ reason: 不超过 100 字中文,说明题材/基调与各风格元素的匹配�
 	}
 	saveAgentStateLocked(ctx.project, stc)
 	manjuAgentMu.Unlock()
-	return map[string]any{"ok": true, "style": style, "old": old, "reason": reason}, nil
+	return map[string]any{"ok": true, "style": style, "old": old, "reason": reason, "params": params}, nil
 }
 
-// manjuAgentStyleAnalyze 深度分析小说章节 → LLM 推荐渲染风格 → 写入 config.json(主要调整风格项)。
-// 返回旧/新风格与推荐理由,由前端决定是否继续走智能一条龙。
+// manjuAgentStyleAnalyze 深度分析小说章节 → LLM 推荐渲染风格与参数 → 写入 config.json。
+// 返回旧/新风格、推荐理由与参数变更,由前端决定是否继续走 AI 一条龙。
 func manjuAgentStyleAnalyze(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -932,7 +976,7 @@ func topAgentIssues(project string, n int) []string {
 	return out
 }
 
-// agentRenderPipeline 智能一条龙 render 阶段主体(替代整段渲完再统一审):
+// agentRenderPipeline AI 一条龙 render 阶段主体(替代整段渲完再统一审):
 // 逐镜「渲染→机械质检+ASR 台词核对+视觉判分」;不合格镜头当场由修复师改写 H3 提示词,
 // 删产物进重渲队列(每镜预算 acfg.MaxRetries 轮);预算耗尽升级待人拍板;全部通过后
 // 由 qc 阶段收尾汇总、assemble 统一合成成片。
@@ -964,13 +1008,26 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 		jw2, jh2 = ctx.draftDims()
 		_ = os.MkdirAll(judgeDir, 0755)
 	}
-	lg.logf(fmt.Sprintf("🤖 Agent 流水线启动: %d 镜 · 渲染与审片并行(渲完即后台判分,ASR 按轮批量) · 不合格修复提示词排队重渲(预算 %d 轮)%s",
+	lg.logf(fmt.Sprintf("🤖 Agent 流水线启动: %d 镜 · 渲染与审片并行(渲完即后台判分,ASR 与审片并行) · 不合格修复提示词排队重渲(预算 %d 轮)%s",
 		len(selected), acfg.MaxRetries, func() string {
 			if draftMode {
 				return fmt.Sprintf("\n📐 草稿预审: 审片轮 %d×%d 草稿 → 落定后 %d×%d 定稿重渲", jw2, jh2, ctx.w, ctx.h)
 			}
 			return ""
 		}()))
+	// 生效参数总览(渲染配置全量可见:档位/步数/seed策略/转场/BGM/长镜/SageAttn)
+	bgmDesc := "无"
+	if b := strings.TrimSpace(str(ctx.R["bgm"])); b != "" {
+		bgmDesc = filepath.Base(b)
+	}
+	sageDesc := ""
+	if b, _ := ctx.R["sage_attention"].(bool); b {
+		sageDesc = " · ⚡SageAttn"
+	}
+	seedPolicyCN := map[string]string{"fixed": "固定", "increment": "重试递增", "random": "重试随机"}[orDefault(ctx.seedPolicy, "fixed")]
+	lg.logf(fmt.Sprintf("⚙️ 生效参数: 档位 %s(%d×%d@%dfps) · %d 步 · seed %d(%s) · 转场 %s · BGM %s · 长镜 %d 镜/组%s",
+		orDefault(ctx.resTier, "手动"), ctx.w, ctx.h, ctx.fps, ctx.steps, ctx.seed, seedPolicyCN,
+		orDefault(str(ctx.R["transition"]), "cut"), bgmDesc, ctx.shotsPerTake(), sageDesc))
 
 	queue := selected
 	queueIsFirst := true
@@ -1708,7 +1765,7 @@ func resolveEscalation(project, episode string, shotID int, action string) {
 // ---- HTTP 端点 ----
 
 func registerAgentRoutes(mux *http.ServeMux) {
-	// 深度分析小说内容 → 推荐并更新渲染风格(智能一条龙「是」分支)
+	// 深度分析小说内容 → 推荐并更新渲染风格(AI 一条龙「是」分支)
 	mux.HandleFunc("POST /api/manju/agent/style", manjuAgentStyleAnalyze)
 	// 项目体检 / 一键修复 / 自然语言指令
 	mux.HandleFunc("GET /api/manju/agent/health", manjuHealth)

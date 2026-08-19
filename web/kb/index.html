@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=20260819c1">
-<link rel="stylesheet" href="/css/themes.css?v=20260819c1">
-<link rel="stylesheet" href="/css/materials.css?v=20260819c1">
-<link rel="stylesheet" href="/css/app.css?v=20260819c1">
+<link rel="icon" type="image/png" href="/icon.png?v=20260819d1">
+<link rel="stylesheet" href="/css/themes.css?v=20260819d1">
+<link rel="stylesheet" href="/css/materials.css?v=20260819d1">
+<link rel="stylesheet" href="/css/app.css?v=20260819d1">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -75,7 +75,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260819c1" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260819d1" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -322,7 +322,7 @@
                 <option value="random">重试随机</option>
               </select>
               <label class="manju-check" title="SageAttention 注意力加速补丁(需 ComfyUI-KJNodes 的 PatchSageAttentionKJ;RTX 50 系白捡提速),环境自检会校验节点"><input id="manju-sage" type="checkbox">SageAttn</label>
-              <label class="manju-check" title="智能一条龙:审片返工轮用缩放分辨率草稿(约1/4像素量),全部落定后自动全分辨率定稿重渲(零返工)"><input id="manju-draft-judge" type="checkbox">草稿预审</label>
+              <label class="manju-check" title="AI 一条龙:审片返工轮用缩放分辨率草稿(约1/4像素量),全部落定后自动全分辨率定稿重渲(零返工)"><input id="manju-draft-judge" type="checkbox">草稿预审</label>
               <span class="manju-label">缩放</span><input id="manju-draft-scale" class="manju-input manju-num" type="number" min="0.2" max="0.95" step="0.05" title="草稿预审的分辨率缩放(0.2-0.95,默认 0.5)">
               <span class="manju-label">长镜</span>
               <select id="manju-take" class="manju-input" title="多切点长镜(experimental):相邻同场景镜头合并为一次生成,组内 [Shot N] At MM:SS.mmm 多机位切点;关闭=一镜一渲+接缝">
@@ -445,7 +445,7 @@
                 <button class="hrs-btn hrs-btn-primary" data-phase="all">一条龙</button>
               </div>
               <div class="manju-row manju-stage-row">
-                <button id="manju-agent-run" class="hrs-btn hrs-btn-agent" title="智能体调度：剧本师复核 → 渲染 → 审片官逐镜判分 → 未达标自动修复重渲染(预算封顶) → 剩余例外推送微信待拍板">🤖 智能一条龙</button>
+                <button id="manju-agent-run" class="hrs-btn hrs-btn-agent" title="智能体调度：剧本师复核 → 渲染 → 审片官逐镜判分 → 未达标自动修复重渲染(预算封顶) → 剩余例外推送微信待拍板">🤖 AI 一条龙</button>
               </div>
             </div>
           </div><!-- /manju-pipeline-col -->
@@ -511,7 +511,10 @@
   <div id="reader" class="reader" aria-hidden="true">
     <div class="reader-inner">
       <div class="reader-head">
-        <h3 id="reader-title" class="reader-title"></h3>
+        <div class="reader-title-wrap">
+          <h3 id="reader-title" class="reader-title"></h3>
+          <div id="reader-sub" class="reader-sub"></div>
+        </div>
         <div class="reader-tools">
           <div class="reader-search" id="reader-search-wrap">
             <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
@@ -762,11 +765,11 @@
       </div>
     </div>
   </div>
-  <script src="/js/i18n.js?v=20260819c1"></script>
-  <script src="/js/markdown.js?v=20260819c1"></script>
-  <script src="/js/app.js?v=20260819c1"></script>
-  <script src="/js/comfy.js?v=20260819c1"></script>
-  <script src="/js/dirview.js?v=20260819c1"></script>
-  <script src="/js/manju.js?v=20260819c1"></script>
+  <script src="/js/i18n.js?v=20260819d1"></script>
+  <script src="/js/markdown.js?v=20260819d1"></script>
+  <script src="/js/app.js?v=20260819d1"></script>
+  <script src="/js/comfy.js?v=20260819d1"></script>
+  <script src="/js/dirview.js?v=20260819d1"></script>
+  <script src="/js/manju.js?v=20260819d1"></script>
 </body>
 </html>

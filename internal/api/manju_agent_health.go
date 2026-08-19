@@ -100,7 +100,7 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 	}
 	// 7. 审片官
 	if loadAgentCfg(ctx).VisionModel == "" {
-		items = append(items, manjuHealthItem{Key: "agent", Label: "审片官", Status: "warn", Detail: "未配置视觉模型,智能一条龙只做机械质检不判分", FixHint: "设置 → 智能体调度 → 选视觉模型"})
+		items = append(items, manjuHealthItem{Key: "agent", Label: "审片官", Status: "warn", Detail: "未配置视觉模型,AI 一条龙只做机械质检不判分", FixHint: "设置 → 智能体调度 → 选视觉模型"})
 	} else {
 		items = append(items, ok("agent", "视觉模型就绪"))
 	}
@@ -109,12 +109,37 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 	if b, err := os.ReadFile(stPath); err == nil {
 		var st manjuAgentState
 		if json.Unmarshal(b, &st) != nil {
-			items = append(items, manjuHealthItem{Key: "agent_state", Label: "审片状态文件", Status: "bad", Detail: "agent_state.json 损坏", FixHint: "删除该文件后重跑智能一条龙(审片记忆将重置)"})
+			items = append(items, manjuHealthItem{Key: "agent_state", Label: "审片状态文件", Status: "bad", Detail: "agent_state.json 损坏", FixHint: "删除该文件后重跑 AI 一条龙(审片记忆将重置)"})
 		} else {
 			items = append(items, ok("agent_state", fmt.Sprintf("记忆 %d 次运行 / %d 镜判分 / %d 次返工", st.Memory.RunCount, st.Memory.JudgedShots, st.Memory.ReworkCount)))
 		}
 	} else {
-		items = append(items, manjuHealthItem{Key: "agent_state", Label: "审片状态文件", Status: "warn", Detail: "尚无审片记录", FixHint: "跑一次「智能一条龙」后自动生成"})
+		items = append(items, manjuHealthItem{Key: "agent_state", Label: "审片状态文件", Status: "warn", Detail: "尚无审片记录", FixHint: "跑一次「AI 一条龙」后自动生成"})
+	}
+	// 9. 渲染升级参数联动检查(草稿预审/转场/BGM/SageAttention/长镜)
+	if dj, _ := R["draft_judge"].(bool); dj {
+		if loadAgentCfg(ctx).VisionModel == "" {
+			items = append(items, manjuHealthItem{Key: "draft_judge", Label: "草稿预审", Status: "warn", Detail: "已开启但未配置视觉模型——AI 一条龙不判分时草稿预审不会生效", FixHint: "设置 → 智能体调度 → 选视觉模型,或在渲染参数里关闭草稿预审"})
+		} else {
+			items = append(items, ok("draft_judge", "已开启(审片返工轮半分辨率,通过后全分辨率定稿)"))
+		}
+	}
+	if bgm := strings.TrimSpace(str(R["bgm"])); bgm != "" {
+		if !fileExists(bgm) {
+			items = append(items, manjuHealthItem{Key: "bgm", Label: "BGM", Status: "bad", Detail: "文件不存在: " + bgm, FixHint: "修正 render.bgm 路径(合成对坏 BGM 会静默忽略)"})
+		} else {
+			items = append(items, ok("bgm", "就绪 "+filepath.Base(bgm)+"(对白自动闪避)"))
+		}
+	}
+	if b, _ := R["sage_attention"].(bool); b {
+		if _, cerr := ctx.comfy.online(); cerr == nil && !ctx.comfy.hasNode("PatchSageAttentionKJ") {
+			items = append(items, manjuHealthItem{Key: "sage", Label: "SageAttention", Status: "bad", Detail: "已开启但 ComfyUI 缺 PatchSageAttentionKJ 节点,渲染提交会失败", FixHint: "安装 ComfyUI-KJNodes,或在渲染参数里关闭 SageAttn"})
+		} else if cerr == nil {
+			items = append(items, ok("sage", "已开启(节点可用)"))
+		}
+	}
+	if n, _ := manjuToInt(R["shots_per_take"]); n >= 2 {
+		items = append(items, ok("long_take", fmt.Sprintf("多切点长镜 %d 镜/组(实验特性;相邻同场景镜头一次生成多机位切点)", n)))
 	}
 	return items
 }
@@ -317,7 +342,7 @@ func manjuAgentChat(w http.ResponseWriter, r *http.Request) {
 		}
 		esc = len(anyArr(sum["escalations"]))
 		if len(shots) == 0 {
-			reply = "还没有审片记录。跑一次「🤖 智能一条龙」后,我会逐镜判分并给出报告。"
+			reply = "还没有审片记录。跑一次「🤖 AI 一条龙」后,我会逐镜判分并给出报告。"
 		} else {
 			reply = fmt.Sprintf("📊 审片报告:共审 %d 镜 — ✅ %d 通过 / ⚠️ %d 待处理%s。点右上「审片报告」面板可看每镜维度详情与升级卡。",
 				len(shots), pass, failed, map[bool]string{true: fmt.Sprintf(" / 🚨 %d 待拍板", esc)}[esc > 0])
@@ -444,7 +469,7 @@ func manjuMemorySummary(project string) string {
 	st := loadAgentState(project)
 	m := st.Memory
 	if m.RunCount == 0 && len(m.ScoreTrend) == 0 && len(m.StyleChoices) == 0 && len(m.IssueStats) == 0 {
-		return "我还没有学习记录。跑一次「智能一条龙」或「深度分析风格」后,我会积累审片问题、分数趋势与风格选择经验。"
+		return "我还没有学习记录。跑一次「AI 一条龙」或「深度分析风格」后,我会积累审片问题、分数趋势与风格选择经验。"
 	}
 	var b strings.Builder
 	if m.RunCount > 0 {

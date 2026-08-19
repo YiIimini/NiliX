@@ -365,6 +365,14 @@ class DirView {
     this._searchSeq = 0;
     const reader = document.getElementById("reader");
     document.getElementById("reader-title").textContent = p.name;
+    // 头部元信息副行:章节/设定/字数(详情页顶部信息一目了然)
+    const sub = document.getElementById("reader-sub");
+    if (sub) {
+      const wan = ((p.words || 0) / 10000).toFixed(1);
+      sub.textContent = `📖 ${chapters.length}${I18N.t("book.ch")}` +
+        (extras.length ? ` · ${extras.length} ${I18N.t("book.extras")}` : "") +
+        ` · ${(p.words || 0).toLocaleString()} ${I18N.t("dir.words")}（${wan} 万）`;
+    }
     this.renderToc();
     // 目录显隐:窄屏默认隐藏,桌面记忆用户选择
     const saved = localStorage.getItem("kbw-reader-toc");

@@ -101,8 +101,8 @@
       "镜头 ⋮ 菜单支持<b>单镜云端 2K</b>；<b>⚠️ 已过期</b>徽标 = 提示词/定妆照已变，下次渲染自动删旧重渲",
     ] },
     { ic: "🤖", t: "智能体调度", ps: [
-      "点<b>🤖 智能一条龙</b>先弹窗询问：<b>「是」</b>= Agent 深度分析小说内容，自动推荐并更新渲染风格（可组合叠加，如 2.5D+水墨）后走全流程；<b>「否」</b>= 按当前渲染配置直接走智能一条龙",
-      "智能一条龙 = 一条龙 + 智能体：渲染完成后<b>审片官逐镜判分</b>（八维度，对齐 H3 官方能力）",
+      "点<b>🤖 AI 一条龙</b>先弹窗询问：<b>「是」</b>= Agent 深度分析小说内容，自动推荐并更新渲染风格（可组合叠加，如 2.5D+水墨）后走全流程；<b>「否」</b>= 按当前渲染配置直接走AI 一条龙",
+      "AI 一条龙 = 一条龙 + 智能体：渲染完成后<b>审片官逐镜判分</b>（八维度，对齐 H3 官方能力）",
       "<b>🔍 项目体检</b>：一键诊断 配置/小说/LLM/ComfyUI/模型/渲染参数/审片官，可修复项（步数/种子/帧率/时长）一键写回 config",
       "<b>💬 右栏可对智能体说话</b>：体检 / 推荐风格 / 审片报告 / 总结 / 修复，支持快捷指令按钮",
       "<b>🧠 学习档案</b>：跨次运行记忆——运行次数、审片均分趋势、高频问题、最近风格选择；阶段失败自动<b>智能诊断</b>给出原因与修复建议",
@@ -134,7 +134,7 @@
       "<b>步数</b>默认 20；<b>Turbo步</b>默认 8（8 步 ≈ 20 步画质、约 2.9 倍提速）",
       "<b>seed</b> 全剧固定保证跨镜头一致；<b>seed策略</b>控制返工：固定（默认）/ 重试递增（第 N 次返工 seed+N）/ 重试随机（返工换新随机）——返工仍抽同一 seed 等于重抽同一命运的卡",
       "<b>SageAttn</b>：SageAttention 注意力加速补丁（需 ComfyUI-KJNodes），RTX 50 系白捡提速；开启后「环境自检」会校验节点是否可用",
-      "<b>草稿预审</b>（智能一条龙）：审片返工轮用缩放分辨率草稿（默认 0.5 ≈ 1/4 像素量，可调 0.2-0.95），全部落定后自动<b>全分辨率定稿重渲</b>——审片轮 GPU 时间约降 3/4，定稿零返工",
+      "<b>草稿预审</b>（AI 一条龙）：审片返工轮用缩放分辨率草稿（默认 0.5 ≈ 1/4 像素量，可调 0.2-0.95），全部落定后自动<b>全分辨率定稿重渲</b>——审片轮 GPU 时间约降 3/4，定稿零返工",
       "<b>时长</b> min/max 4–15s，大模型逐镜时长在此区间自动 clamp",
     ] },
     { ic: "🔗", t: "模型与一致性", ps: [
@@ -751,7 +751,7 @@
                 <input id="manju-ag-mmkey" class="manju-input manju-mono" type="password" placeholder="${ag.hasMinimaxKey ? "已保存(" + esc(ag.minimaxKeyMasked || "") + "),留空沿用" : "MiniMax 平台 API Key(产物区「☁️ 2K」按钮用)"}" spellcheck="false" autocomplete="off">
               </div>
               <div class="manju-set-status">本地 768×1344 / 24fps / 17k+5 帧网格产物与官方 /v2/video_regeneration 预校验完全兼容:提交前本地体检(32 整除/面积/帧率/帧网格/音轨/50MB),2K 产物落 clips/集/2k/。国内平台在项目 config.render.minimax_base_url 填 https://api.minimaxi.com</div>
-              <div class="manju-set-status">审片八维度对齐 MiniMax H3 官方能力：主体/场景一致性(Ref2VA 参考保持)、动作/运镜符合(多模态指令遵循)、可见性(近黑防线)、技术质量(畸变/水印)、风格、口型对白。低分镜头由修复师改写 H3 提示词后自动定点重渲染（「🤖 智能一条龙」走全流程）。点「🤖 智能一条龙」会先询问是否让 Agent 深度分析小说内容并更新渲染风格（是=分析后更新；否=按当前配置直接跑）。</div>
+              <div class="manju-set-status">审片八维度对齐 MiniMax H3 官方能力：主体/场景一致性(Ref2VA 参考保持)、动作/运镜符合(多模态指令遵循)、可见性(近黑防线)、技术质量(畸变/水印)、风格、口型对白。低分镜头由修复师改写 H3 提示词后自动定点重渲染（「🤖 AI 一条龙」走全流程）。点「🤖 AI 一条龙」会先询问是否让 Agent 深度分析小说内容并更新渲染风格（是=分析后更新；否=按当前配置直接跑）。</div>
               ${(() => {
                 const g = ag.globalDefaults || {};
                 if (!g.visionModel && !g.hasVisionKey && !g.enabled) return "";
@@ -1497,15 +1497,15 @@
       }).then(() => { this.poll(); }).catch((e) => this.setErr(e.message));
     },
 
-    /* 智能一条龙:先询问是否让 Agent 深度分析小说并更新渲染配置(主要是风格),再走全流程 */
+    /* AI 一条龙:先询问是否让 Agent 深度分析小说并更新渲染配置(主要是风格),再走全流程 */
     runAgent() {
       if (!this.project) { this.setErr("请先选择项目"); return; }
       if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
       this.setErr("");
-      this.openModal("🤖 智能一条龙",
+      this.openModal("🤖 AI 一条龙",
         `<div class="manju-confirm">
-          <p class="mc-q">Agent 会自动检测小说内容深度分析，调整更新渲染配置参数？</p>
-          <p class="mc-d">「是」：Agent 深度分析本章节内容，自动推荐并更新渲染风格（支持预设组合，如 2.5D+水墨），随后走渲染流程；<br>「否」：按当前渲染配置直接走智能一条龙（剧本复核 → 渲染 → 审片判分 → 自动返工）。</p>
+          <p class="mc-q">Agent 深度分析小说内容，自动更新渲染配置？</p>
+          <p class="mc-d">「是」：Agent 分析本章节题材与节奏，自动更新<b>渲染风格</b>（支持组合，如 2.5D+水墨）与<b>渲染参数</b>（分辨率档位 / 草稿预审 / seed 策略 / 转场 / 长镜），随后走渲染流程；<br>「否」：按当前渲染配置直接走 AI 一条龙（剧本复核 → 渲染 → 审片判分 → 自动返工）。</p>
           <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
             <button id="mc-yes" class="hrs-btn hrs-btn-primary">是</button>
             <button id="mc-no" class="hrs-btn">否</button>
@@ -1527,22 +1527,25 @@
       });
     },
 
-    /* 「是」分支:深度分析 → 更新渲染风格 → 走智能一条龙 */
+    /* 「是」分支:深度分析 → 更新渲染风格+渲染参数 → 走 AI 一条龙 */
     agentStyleThenRun() {
-      $("manju-log").textContent = "(🤖 深度分析小说内容，推荐并更新渲染风格 ...)";
+      $("manju-log").textContent = "(🤖 深度分析小说内容，推荐并更新渲染风格与渲染参数 ...)";
       this.styleAnalyze().then((r) => {
+        const ps = r.params && Object.keys(r.params).length
+          ? " · 参数: " + Object.entries(r.params).map(([k, v]) => k + "=" + v).join(" / ") : "";
         $("manju-log").textContent = "(🤖 风格已更新：" + this.styleLabel(r.old) + " → " + this.styleLabel(r.style) +
-          (r.reason ? "，" + r.reason : "") + "，走渲染流程 ...)";
+          (r.reason ? "，" + r.reason : "") + ps + "，走渲染流程 ...)";
+        this.loadProject(); // 参数已写入 config,回填表单与 chips
         this.runAgentFlow();
       }).catch((e) => this.setErr("深度分析失败：" + e.message));
     },
 
-    /* 智能一条龙本体:一条龙 + 智能体调度(剧本复核 → 渲染 → 审片判分 → 自动返工 → 例外升级) */
+    /* AI 一条龙本体:一条龙 + 智能体调度(剧本复核 → 渲染 → 审片判分 → 自动返工 → 例外升级) */
     runAgentFlow() {
       if (!this.project) { this.setErr("请先选择项目"); return; }
       if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
       this.setErr("");
-      $("manju-log").textContent = "(🤖 智能一条龙启动: 剧本复核 → 渲染 → 审片官判分 → 未达标自动返工 ...)";
+      $("manju-log").textContent = "(🤖 AI 一条龙启动: 剧本复核 → 渲染 → 审片官判分 → 未达标自动返工 ...)";
       post("/api/manju/run", {
         config: this.project, chapters: this.chapters, episode: this.episode,
         phase: "all", only: this.only, novel: this.novel, agent: true,
@@ -1563,20 +1566,27 @@
         items.forEach((it) => n[it.status]++);
         const ic = { ok: "✅", warn: "⚠️", bad: "❌" };
         const body = `<div class="mj-health">
-          <div class="mj-health-head">🤖 智能体检 · <b class="mj-hb-bad">${n.bad} 项异常</b> / <b class="mj-hb-warn">${n.warn} 项建议</b> / ${n.ok} 项正常</div>
+          <div class="mj-health-head">
+            <span class="mj-hh-title">🤖 智能体检</span>
+            <span class="mj-hh-pill bad">❌ 异常 ${n.bad}</span>
+            <span class="mj-hh-pill warn">⚠️ 建议 ${n.warn}</span>
+            <span class="mj-hh-pill ok">✅ 正常 ${n.ok}</span>
+          </div>
           <div class="mj-health-items">
             ${items.map((it) => `
             <div class="mj-health-item ${it.status}">
-              <div class="mj-hi-main">
-                <span class="mj-hi-ic">${ic[it.status] || "•"}</span>
-                <b>${esc(it.label)}</b>
-                <span class="mj-hi-detail">${esc(it.detail)}</span>
+              <span class="mj-hi-ic">${ic[it.status] || "•"}</span>
+              <div class="mj-hi-body">
+                <div class="mj-hi-top">
+                  <b>${esc(it.label)}</b>
+                  ${it.fixable ? `<button class="hrs-btn hrs-btn-primary mj-hi-fix" data-fix="${esc(it.key)}">一键修复</button>` : ""}
+                </div>
+                <div class="mj-hi-detail">${esc(it.detail)}</div>
+                ${(!it.fixable && it.fixHint) ? `<div class="mj-hi-hint">💡 ${esc(it.fixHint)}</div>` : ""}
               </div>
-              ${it.fixable ? `<button class="hrs-btn hrs-btn-primary mj-hi-fix" data-fix="${esc(it.key)}">一键修复</button>` : ""}
-              ${(!it.fixable && it.fixHint) ? `<span class="mj-hi-hint">${esc(it.fixHint)}</span>` : ""}
             </div>`).join("")}
           </div>
-          <div class="manju-meta" style="margin-top:10px">体检为本地秒查(不调用模型);「一键修复」直接写回 config.json 渲染配置。</div>
+          <div class="mj-health-foot">体检为本地秒查(不调用模型);「一键修复」直接写回 config.json 渲染配置。</div>
         </div>`;
         if (showModal) this.openModal("🔍 项目体检", body, true);
         this._health = items;
