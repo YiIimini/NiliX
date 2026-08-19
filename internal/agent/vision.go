@@ -184,7 +184,7 @@ func (v *VisionClient) doChatOnce(body map[string]any) (string, error) {
 		Choices []struct {
 			FinishReason string `json:"finish_reason"`
 			Message      struct {
-				Content string `json:"message"`
+				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
