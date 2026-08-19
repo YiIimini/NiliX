@@ -1578,6 +1578,7 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/manju/render", manjuSaveRender)
 	mux.HandleFunc("GET /api/manju/style", manjuStyleInfo)
 	mux.HandleFunc("POST /api/manju/create", manjuCreate)
+	mux.HandleFunc("POST /api/manju/delete", manjuDeleteProject)
 	mux.HandleFunc("GET /api/manju/settings", manjuSettingsGet)
 	mux.HandleFunc("POST /api/manju/settings", manjuSettingsPost)
 	mux.HandleFunc("GET /api/manju/novel", manjuNovelInfo)

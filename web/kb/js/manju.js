@@ -371,6 +371,7 @@
 
       // 右栏产物区折叠/展开
       this.bindOutputsFold();
+      this.bindProjectMenu();
     },
 
     /* 右栏产物区折叠/展开:仅折叠「产物」主体,运行状态区不受影响,状态记忆 localStorage */
@@ -2094,6 +2095,58 @@
       }).catch((e) => {
         btns.forEach((b) => { if (b) b.disabled = false; });
         this.setErr(e.message);
+      });
+    },
+
+    /* 产物区「项目 ⋮」菜单:开关/删除项目(整个目录) */
+    bindProjectMenu() {
+      const btn = $("manju-project-menu");
+      const pop = $("manju-project-menu-pop");
+      if (!btn || !pop || pop.dataset.bound) return;
+      pop.dataset.bound = "1";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        pop.classList.toggle("hidden");
+      });
+      document.addEventListener("click", () => pop.classList.add("hidden"));
+      pop.addEventListener("click", (e) => e.stopPropagation());
+      $("manju-project-del").addEventListener("click", () => this.deleteProject());
+    },
+
+    /* 删除项目:确认弹窗 → 后端删整个项目目录 → 刷新项目列表 */
+    deleteProject() {
+      if (!this.project) { this.setErr("请先选择项目"); return; }
+      const name = this.info && this.info.name ? this.info.name : this.project.split(/[\\/]/).pop();
+      $("manju-project-menu-pop").classList.add("hidden");
+      this.openModal("🗑 删除项目",
+        `<div class="manju-confirm">
+          <p class="mc-q">确定删除项目「${esc(name)}」？</p>
+          <p class="mc-d">将删除该项目<b>整个完整目录</b>(方案/定妆照/场景图/镜头/成片/审片记录/学习记忆)，<b>不可恢复</b>。请确认！</p>
+          <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+            <button id="pj-del-confirm" class="hrs-btn hrs-btn-danger">确认删除</button>
+            <button id="pj-del-cancel" class="hrs-btn">取消</button>
+          </div>
+        </div>`);
+      $("pj-del-cancel").addEventListener("click", () => this.closeModal());
+      $("pj-del-confirm").addEventListener("click", () => {
+        const b = $("pj-del-confirm");
+        b.disabled = true;
+        b.textContent = "删除中…";
+        post("/api/manju/delete", { config: this.project }).then((r) => {
+          this.closeModal();
+          $("manju-log").textContent = "(🗑 项目已删除:" + (r.removed || "") + ")";
+          // 清空当前项目状态并刷新列表
+          this.project = "";
+          ls("project", "");
+          this.info = null;
+          this.style = "";
+          this.renderStyle();
+          this.loadProjects("");
+        }).catch((e) => {
+          b.disabled = false;
+          b.textContent = "确认删除";
+          this.setErr(e.message);
+        });
       });
     },
 
