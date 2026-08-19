@@ -97,7 +97,9 @@ func loadAgentCfg(ctx *manjuCtx) agent.Config {
 	return acfg
 }
 
-// visionClient 按配置构造视觉客户端(地址/Key 缺省回退项目文本 LLM 的)
+// visionClient 按配置构造视觉客户端(地址/Key 缺省回退项目文本 LLM 的)。
+// Key 解析顺序(glm-vision 技能):项目 agent 节 → 项目 LLM Key → 环境变量 GLM_VISION_API_KEY;
+// 模型支持逗号链(如 "glm-4.6v-flash,glm-4v-flash"),单模型自动补内置降级链,429 重试耗尽自动降级。
 func (ctx *manjuCtx) visionClient(acfg agent.Config) *agent.VisionClient {
 	base := strings.TrimSpace(acfg.VisionBaseURL)
 	if base == "" {
@@ -106,6 +108,9 @@ func (ctx *manjuCtx) visionClient(acfg agent.Config) *agent.VisionClient {
 	key := strings.TrimSpace(acfg.VisionAPIKey)
 	if key == "" {
 		key = ctx.llm.apiKey
+	}
+	if key == "" {
+		key = agent.EnvAPIKey() // 环境变量兜底(GLM_VISION_API_KEY)
 	}
 	return agent.NewVisionClient(base, key, strings.TrimSpace(acfg.VisionModel), 180*time.Second)
 }

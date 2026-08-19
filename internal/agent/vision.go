@@ -1,5 +1,7 @@
 // 视觉模型客户端:OpenAI 兼容 chat/completions,content 为多模态数组(文本 + image_url base64)。
 // 兼容 GLM-4.xV / Qwen-VL / GPT 系等一切 OpenAI 格式的视觉接口。
+// 模型链兜底(glm-vision 技能逻辑):主模型 429/过载按 4s/10s/20s 退避重试,
+// 仍失败自动降级链上备模型;key 解析顺序:配置 → 环境变量 GLM_VISION_API_KEY。
 package agent
 
 import (
@@ -15,34 +17,72 @@ import (
 	"time"
 )
 
-// VisionClient OpenAI 兼容视觉模型客户端
+// visionFallbackChain 内置降级链(智谱免费档,glm-vision 技能同款:主模型高峰 429 常过载,
+// 降级上一代免费 flash)。数据驱动,新增链只改这里。
+var visionFallbackChain = map[string]string{
+	"glm-4.6v-flash": "glm-4v-flash",
+}
+
+// visionBackoffs 429/过载退避节奏(glm-vision 技能:4s/10s/20s 三次)
+var visionBackoffs = []time.Duration{4 * time.Second, 10 * time.Second, 20 * time.Second}
+
+// VisionClient OpenAI 兼容视觉模型客户端(支持模型链)
 type VisionClient struct {
 	BaseURL string
 	APIKey  string
-	Model   string
+	Model   string   // 主模型
+	Models  []string // 模型链:主模型在前,失败降级依次尝试
 	Timeout time.Duration
 	client  *http.Client
-	// RetryMax 视觉调用最大重试次数(429/5xx/网络错误自动退避重试;0=不重试)
-	RetryMax int
+	// LastUsedModel 最近一次成功调用实际使用的模型(降级时≠Model,Judgment 记录用)
+	LastUsedModel string
 }
 
 // NewVisionClient 构造(超时缺省 180s:审片一次带多图,慢模型也要等得起)。
 // baseURL 兼容三种写法:根地址 / 带 /chat/completions 的完整端点 / 带尾斜杠。
+// model 支持"主模型,备模型"逗号链(自定义降级);单模型自动查内置降级表补链。
 func NewVisionClient(baseURL, apiKey, model string, timeout time.Duration) *VisionClient {
 	if timeout <= 0 {
 		timeout = 180 * time.Second
 	}
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	base = strings.TrimSuffix(base, "/chat/completions")
-	return &VisionClient{
+	var models []string
+	seen := map[string]bool{}
+	for _, m := range strings.Split(model, ",") {
+		m = strings.TrimSpace(m)
+		if m != "" && !seen[m] {
+			seen[m] = true
+			models = append(models, m)
+		}
+	}
+	if len(models) == 1 {
+		// 单模型:自动补内置降级链(如 glm-4.6v-flash → glm-4v-flash)
+		cur := models[0]
+		for {
+			next, ok := visionFallbackChain[cur]
+			if !ok || seen[next] {
+				break
+			}
+			seen[next] = true
+			models = append(models, next)
+			cur = next
+		}
+	}
+	vc := &VisionClient{
 		BaseURL:  base,
 		APIKey:   apiKey,
-		Model:    model,
+		Model:    models[0],
+		Models:   models,
 		Timeout:  timeout,
 		client:   &http.Client{Timeout: timeout},
-		RetryMax: 4,
 	}
+	vc.LastUsedModel = vc.Model
+	return vc
 }
+
+// EnvAPIKey 环境变量兜底 key(glm-vision 技能:GLM_VISION_API_KEY)
+func EnvAPIKey() string { return strings.TrimSpace(os.Getenv("GLM_VISION_API_KEY")) }
 
 // imageDataURI 读图片文件转 base64 data URI(JPEG/PNG 均可)
 func imageDataURI(path string) (string, error) {
@@ -61,7 +101,8 @@ func imageDataURI(path string) (string, error) {
 }
 
 // chatImage 多模态单轮:system + user 文本 + 图片(imagePaths 按顺序附加)。
-// 返回 content 文本。响应不做 response_format 约束(部分视觉网关不支持 json_object,靠提示词约束 + 剥围栏)。
+// 模型链逐个尝试:每个模型按 4s/10s/20s 退避重试 429/网络类错误,重试耗尽且链上有
+// 备模型则自动降级继续;全链失败返回聚合错误(不再空转——免费档整链过载时明确告知稍后再试)。
 func (v *VisionClient) chatImage(system, user string, imagePaths []string, temperature float64) (string, error) {
 	content := []map[string]any{{"type": "text", "text": user}}
 	for _, p := range imagePaths {
@@ -74,34 +115,51 @@ func (v *VisionClient) chatImage(system, user string, imagePaths []string, tempe
 			"image_url": map[string]string{"url": uri},
 		})
 	}
-	body := map[string]any{
-		"model":       v.Model,
-		"temperature": temperature,
-		"max_tokens":  4096,
-		"messages": []map[string]any{
-			{"role": "system", "content": system},
-			{"role": "user", "content": content},
-		},
-		"stream": false,
-	}
-	var lastErr error
-	maxTry := v.RetryMax + 1
-	for attempt := 1; attempt <= maxTry; attempt++ {
-		if attempt > 1 {
-			// 指数退避:2s→4s→8s→16s;429/5xx/网络类错误均可重试
-			backoff := time.Duration(1<<uint(attempt-1)) * 2 * time.Second
-			time.Sleep(backoff)
+	var errs []string
+	for mi, model := range v.Models {
+		body := map[string]any{
+			"model":       model,
+			"temperature": temperature,
+			"max_tokens":  4096,
+			"messages": []map[string]any{
+				{"role": "system", "content": system},
+				{"role": "user", "content": content},
+			},
+			"stream": false,
 		}
-		out, err := v.doChatOnce(body)
-		if err == nil {
-			return out, nil
+		var lastErr error
+		for attempt := 0; attempt <= len(visionBackoffs); attempt++ {
+			if attempt > 0 {
+				time.Sleep(visionBackoffs[attempt-1])
+			}
+			out, err := v.doChatOnce(body)
+			if err == nil {
+				v.LastUsedModel = model
+				if mi > 0 {
+					// 降级成功:记录在案(Judgment.Model 呈现实际模型)
+					return out, nil
+				}
+				return out, nil
+			}
+			lastErr = err
+			if !retryable(err) {
+				break // 4xx(除429)/解析类错误:换模型也救不了,但换链无妨——直接跳出重试
+			}
 		}
-		lastErr = err
-		if !retryable(err) || attempt == maxTry {
+		errs = append(errs, model+": "+lastErr.Error())
+		if !retryable(lastErr) || mi == len(v.Models)-1 {
 			break
 		}
+		// 可重试类错误且链上还有备模型 → 降级继续
 	}
-	return "", lastErr
+	if len(errs) == 0 {
+		errs = append(errs, "无可用视觉模型")
+	}
+	joined := strings.Join(errs, " | ")
+	if strings.Contains(joined, "429") {
+		joined += "(免费档高峰整链过载,建议稍后再试或更换视觉模型)"
+	}
+	return "", fmt.Errorf("视觉模型链失败: %s", truncateStr(joined, 400))
 }
 
 // doChatOnce 单次视觉请求(无重试)
@@ -126,7 +184,7 @@ func (v *VisionClient) doChatOnce(body map[string]any) (string, error) {
 		Choices []struct {
 			FinishReason string `json:"finish_reason"`
 			Message      struct {
-				Content string `json:"content"`
+				Content string `json:"message"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -139,8 +197,8 @@ func (v *VisionClient) doChatOnce(body map[string]any) (string, error) {
 	return r.Choices[0].Message.Content, nil
 }
 
-// retryable 判断错误是否可重试:HTTP 429/5xx、网络错误、连接类错误可重试;
-// 4xx(除429)与解析类错误不可重试(重试无意义)。
+// retryable 判断错误是否可重试(可重试=可降级):HTTP 429/5xx、网络错误、连接类错误;
+// 4xx(除429)与解析类错误不可重试。
 func retryable(err error) bool {
 	if err == nil {
 		return false

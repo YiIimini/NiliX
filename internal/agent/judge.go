@@ -79,7 +79,7 @@ func Judge(vc *VisionClient, meta ShotMeta, frames, refImages []string, passScor
 	if err != nil {
 		return nil, err
 	}
-	j := &Judgment{Model: vc.Model, JudgedAt: time.Now().Unix()}
+	j := &Judgment{Model: vc.LastUsedModel, JudgedAt: time.Now().Unix()} // 记实际使用模型(链降级时为备模型)
 	dims := map[string]float64{}
 	if raw, ok := out["dimensions"].(map[string]any); ok {
 		for _, d := range Dims {
