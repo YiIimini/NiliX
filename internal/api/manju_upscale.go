@@ -20,6 +20,56 @@ import (
 )
 
 // manjuMinimaxDefaults 云端重生成服务缺省(国内平台为 api.minimaxi.com,可在 config.render.minimax_base_url 覆盖)
+// manjuUpscalePricePerSec 云端 2K 单价(元/秒,预估展示用;数据驱动,调整只改这里)
+var manjuUpscalePricePerSec = 0.80
+
+// manjuUpscaleEstimate 整集/指定镜头 2K 费用预估:总时长(秒)×单价
+func (ctx *manjuCtx) manjuUpscaleEstimate(shots string) map[string]any {
+	plan, _, err := ctx.loadPlan()
+	totalSec := 0.0
+	count := 0
+	if err == nil {
+		want := map[int]bool{}
+		if shots != "" && shots != "all" {
+			for _, p := range strings.Split(shots, ",") {
+				if n, e := strconv.Atoi(strings.TrimSpace(p)); e == nil {
+					want[n] = true
+				}
+			}
+		}
+		for _, x := range anyArr(plan["shots"]) {
+			if m, ok := x.(map[string]any); ok {
+				id, _ := manjuToInt(m["shot_id"])
+				if len(want) > 0 && !want[id] {
+					continue
+				}
+				d, _ := manjuToFloat(m["duration"])
+				if d <= 0 {
+					d = 5
+				}
+				totalSec += d
+				count++
+			}
+		}
+	}
+	if count == 0 {
+		if entries, e := os.ReadDir(filepath.Join(ctx.clipsDir, ctx.episode)); e == nil {
+			for _, en := range entries {
+				if !en.IsDir() && strings.HasSuffix(strings.ToLower(en.Name()), ".mp4") {
+					count++
+					totalSec += 8
+				}
+			}
+		}
+	}
+	cost := totalSec * manjuUpscalePricePerSec
+	return map[string]any{"shots": count, "durationSec": int(totalSec), "costCNY": round1(cost)}
+}
+
+func round1(v float64) float64 {
+	return float64(int(v*10+0.5)) / 10
+}
+
 const (
 	manjuMinimaxDefaultBase = "https://api.minimax.io"
 	manjuMinimaxModel       = "MiniMax-H3"
@@ -373,6 +423,21 @@ func manjuUpscaleRun(w http.ResponseWriter, configPath, episode, shots string) {
 // registerUpscaleRoutes 云端 2K + 剪映导出路由
 func registerUpscaleRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/manju/jianying", manjuJianyingExport)
+	mux.HandleFunc("GET /api/manju/upscale2k/estimate", func(w http.ResponseWriter, r *http.Request) {
+		configPath := r.URL.Query().Get("config")
+		episode := orDefault(r.URL.Query().Get("episode"), "EP01")
+		shots := r.URL.Query().Get("shots")
+		if configPath == "" {
+			writeErr(w, http.StatusBadRequest, "missing config")
+			return
+		}
+		ctx, err := newManjuCtx(configPath, episode, "", "", "")
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, ctx.manjuUpscaleEstimate(shots))
+	})
 	mux.HandleFunc("POST /api/manju/upscale2k", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)

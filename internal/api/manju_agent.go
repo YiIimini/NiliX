@@ -610,6 +610,25 @@ func manjuAgentStyleAnalyze(w http.ResponseWriter, r *http.Request) {
 
 // ---- 机械质检(JSON 报告) ----
 
+// whisperModelReady faster-whisper small 是否已缓存(HuggingFace hub 目录)
+func whisperModelReady() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	for _, pat := range []string{"faster-whisper-small", "faster-whisper-base"} {
+		p := filepath.Join(home, ".cache", "huggingface", "hub", "models--Systran--"+pat)
+		if fileExists(filepath.Join(p, "refs", "main")) {
+			return true
+		}
+		entries, err := os.ReadDir(p)
+		if err == nil && len(entries) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // runASRCheck ASR 台词核对(本地 faster-whisper):有台词镜头转写比对,不符 → 汇入 qcBad 触发返工。
 // 全本地 CPU small 模型;无台词镜头跳过;脚本/模型不可用时静默降级(不影响判分流程)。
 func (ctx *manjuCtx) runASRCheck(lg *manjuLogger, clipsEp string, shots []manjuShot, planPath string) map[int][]string {
@@ -622,7 +641,12 @@ func (ctx *manjuCtx) runASRCheck(lg *manjuLogger, clipsEp string, shots []manjuS
 	if len(spoken) == 0 {
 		return nil
 	}
-	lg.logf(fmt.Sprintf("🎤 ASR 台词核对: %d 个有台词镜头(本地 small 模型,首次运行需下载)", len(spoken)))
+	// whisper 首次下载提示:模型未缓存时明确告知(460MB 需几分钟且无进度),避免用户以为卡死
+	if !whisperModelReady() {
+		lg.logf(fmt.Sprintf("🎤 ASR 台词核对: %d 个有台词镜头——⚠️ faster-whisper small 模型尚未下载(约 460MB,首次运行需几分钟,下载期间无进度条,请耐心等待;之后全离线)", len(spoken)))
+	} else {
+		lg.logf(fmt.Sprintf("🎤 ASR 台词核对: %d 个有台词镜头(whisper small 已就绪)", len(spoken)))
+	}
 	ids := make([]string, 0, len(spoken))
 	for _, s := range spoken {
 		ids = append(ids, strconv.Itoa(s.ID))

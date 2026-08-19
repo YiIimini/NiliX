@@ -281,6 +281,34 @@
       el.classList.toggle("hidden", !msg);
     },
 
+    /* 中断续跑提示:上次任务被中断/失败且未运行中 → 状态区显示「一键续跑」横幅
+       (管线幂等+渲染检查点已具备自动续跑能力,只差入口) */
+    renderInterruptTip() {
+      const tip = $("manju-interrupt-tip");
+      if (!tip) return;
+      const s = this.status || {};
+      const interrupted = !s.running && (s.stopped || (s.rc !== null && s.rc !== undefined && s.rc !== 0));
+      if (!interrupted || !this.project) { tip.hidden = true; return; }
+      const st = s.currentStage ? ("上次中断于「" + s.currentStage + "」阶段") : "检测到上次运行中断";
+      tip.hidden = false;
+      tip.innerHTML = `<span class="mi-tip-t">⚠️ ${esc(st)} — 可一键续跑(幂等跳过已完成)</span><button id="mi-tip-resume" class="hrs-btn hrs-btn-primary">▶ 续跑</button>`;
+      const btn = $("mi-tip-resume");
+      if (btn) btn.addEventListener("click", () => { tip.hidden = true; this.runResume(); });
+    },
+
+    /* 一键诊断导出:后端打包 zip(配置 Key 打码),浏览器直接下载 */
+    downloadDiagnose() {
+      if (!this.project) { this.setErr("请先选择项目"); return; }
+      const a = document.createElement("a");
+      a.href = "/api/manju/diagnose?config=" + encodeURIComponent(this.project);
+      a.download = "diagnose.zip";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      this.setErr("🧰 诊断包已导出(反馈问题时直接贴包)");
+      setTimeout(() => this.setErr(""), 4000);
+    },
+
     /* ---- 运行日志:竖向时间轴渲染 ----
        阶段行=大节点(发光主色),普通行按类型着色(成功/失败/升级/警告/审片/镜头进度),
        缩进行为子条目(无点弱化);超过 300 行折叠前置;内容未变跳过;用户贴底时自动跟随滚动 */
@@ -440,6 +468,8 @@
       $("manju-resume").addEventListener("click", () => this.runResume());
       $("manju-agent-run").addEventListener("click", () => this.runAgent());
       $("manju-health").addEventListener("click", () => this.openHealth());
+      const diagBtn = $("manju-diagnose");
+      if (diagBtn) diagBtn.addEventListener("click", () => this.downloadDiagnose());
       $("manju-env").addEventListener("click", () => this.doEnv());
       $("manju-stop").addEventListener("click", () => this.stop());
       $("manju-clear-log").addEventListener("click", () => { this.logNote("(就绪)"); });
@@ -466,12 +496,15 @@
       if (!head || !body) return;
       head.addEventListener("click", (e) => {
         if (e.target.closest("#manju-trailer")) return; // 预告片按钮不触发折叠
+        if (e.target.closest("#manju-cleanup")) return; // 清理按钮不触发折叠
         this._setOutputsFold(!body.classList.contains("is-folded"));
       });
       if (localStorage.getItem("manju-out-collapsed") === "1") this._setOutputsFold(true);
       // 预告片:按审片分数自动剪辑高分镜头
       const tr = $("manju-trailer");
       if (tr) tr.addEventListener("click", () => this.makeTrailer());
+      const cleanBtn = $("manju-cleanup");
+      if (cleanBtn) cleanBtn.addEventListener("click", () => this.openCleanup());
     },
 
     /* 预告片自动剪辑:高分镜头掐头去尾拼接 30s(音量归一+字幕),产物落工作目录 */
@@ -1930,6 +1963,7 @@
       if (s.logTail !== undefined && s.logTail !== log.dataset.last) {
         this.renderLog(s.logTail || "");
       }
+      this.renderInterruptTip();
       this.renderProgress();
       this.renderFlow();
       this.renderAgent();
@@ -2334,14 +2368,33 @@
     },
 
     /* 云端 2K 定稿:整集(shots 空)或指定镜头;后台任务,进度走运行日志 */
+    /* 云端 2K 定稿:先请求费用预估,弹出准入确认(总时长/费用/产物落点),确认后提交 */
     startUpscale(ep, shots) {
       if (!this.project) { this.setErr("请先选择项目"); return; }
       if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
       this.setErr("");
-      this.logNote("(☁️ 云端 2K 定稿提交中 ...)");
-      post("/api/manju/upscale2k", {
-        config: this.project, episode: ep || this.episode, shots: shots || "",
-      }).then(() => { this.poll(); })
+      const cfg = this.project, ep2 = ep || this.episode, shots2 = shots || "";
+      get("/api/manju/upscale2k/estimate?config=" + encodeURIComponent(cfg) +
+        "&episode=" + encodeURIComponent(ep2) + "&shots=" + encodeURIComponent(shots2))
+        .then((e) => {
+          const n = e.shots || 0, sec = e.durationSec || 0, cost = e.costCNY || 0;
+          this.openModal("☁️ 云端 2K 定稿",
+            `<div class="manju-confirm">
+              <p class="mc-q">确认提交云端 2K 重生成?</p>
+              <p class="mc-d">本地定稿镜头 ${n} 个 · 预计总时长 ${sec}s · 估算费用 <b>¥${cost}</b><br>每镜 2-8 分钟,整集可能 1-2 小时;产物落 <code>clips/${esc(ep2)}/2k/</code>,本地 GPU 零负担</p>
+              <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+                <button id="up2k-yes" class="hrs-btn hrs-btn-primary">确认提交</button>
+                <button id="up2k-no" class="hrs-btn">取消</button>
+              </div>
+            </div>`);
+          $("up2k-yes").addEventListener("click", () => {
+            this.closeModal();
+            this.logNote("(☁️ 云端 2K 定稿提交中 ...)");
+            post("/api/manju/upscale2k", { config: cfg, episode: ep2, shots: shots2 })
+              .then(() => { this.poll(); }).catch((e2) => this.setErr(e2.message));
+          });
+          $("up2k-no").addEventListener("click", () => this.closeModal());
+        })
         .catch((e) => this.setErr(e.message));
     },
 
@@ -2384,6 +2437,42 @@
         btns.forEach((b) => { if (b) b.disabled = false; });
         this.setErr(e.message);
       });
+    },
+
+    /* 产物清理:展示三类可再生成产物占用,勾选后一键清理(定妆照/定稿/成片不动) */
+    openCleanup() {
+      if (!this.project) { this.setErr("请先选择项目"); return; }
+      get("/api/manju/cleanup/sizes?config=" + encodeURIComponent(this.project)).then((sizes) => {
+        const fmtB = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB";
+        const row = (key, label, hint) => {
+          const s = (sizes || {})[key] || {};
+          return `<label class="manju-check" style="padding:4px 0"><input type="checkbox" id="cl-${key}" checked> ${label} <span class="manju-meta">(${s.files || 0} 个 · ${fmtB(s.bytes || 0)})</span><span class="manju-meta">${hint}</span></label>`;
+        };
+        this.openModal("🧹 清理产物",
+          `<div class="manju-confirm">
+            <p class="mc-q">选择要清理的产物(均可重新生成):</p>
+            ${row("gacha", "抽卡候选 _gacha", "已采纳的定妆照不受影响")}
+            ${row("frames", "审片抽帧 _frames", "每次审片自动重抽")}
+            ${row("2k", "云端 2K 产物", "重新提交即再生")}
+            <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+              <button id="cl-go" class="hrs-btn hrs-btn-primary">清理选中</button>
+              <button id="cl-cancel" class="hrs-btn">取消</button>
+            </div>
+          </div>`);
+        $("cl-cancel").addEventListener("click", () => this.closeModal());
+        $("cl-go").addEventListener("click", () => {
+          const targets = ["gacha", "frames", "2k"].filter((k) => $("cl-" + k) && $("cl-" + k).checked);
+          if (!targets.length) { this.closeModal(); return; }
+          post("/api/manju/cleanup", { config: this.project, targets })
+            .then((r) => {
+              this.closeModal();
+              const parts = (r.cleaned || []).map((c) => `${c.target} ${c.files}个`);
+              this.setErr("🧹 已清理: " + (parts.join("、") || "无"));
+              setTimeout(() => this.setErr(""), 5000);
+              this.refreshOutputs();
+            }).catch((e) => this.setErr(e.message));
+        });
+      }).catch((e) => this.setErr(e.message));
     },
 
     /* 图片预览(灯箱,上一张/下一张 分列图片左右两侧,参考侧栏收起按钮风格) */

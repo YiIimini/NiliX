@@ -225,6 +225,7 @@
               </div>
               <div class="manju-row manju-health-row">
                 <button id="manju-health" class="hrs-btn" title="🤖 项目体检：配置/小说/LLM/ComfyUI/模型/渲染参数一键诊断，可修复项一键处理">🔍 项目体检</button>
+                <button id="manju-diagnose" class="hrs-btn" title="导出诊断包(run.log/状态JSON/配置Key打码/环境自检)zip,反馈问题时直接贴包">🧰 诊断</button>
               </div>
               <div id="manju-chips-title" class="manju-sub-title" hidden>参数</div>
               <div id="manju-chips" class="manju-chips"></div>
@@ -464,6 +465,7 @@
               <span id="manju-badge" class="manju-badge manju-badge-idle">空闲</span>
               <button id="manju-clear-log" class="hrs-btn manju-right">清空日志</button>
             </div>
+            <div id="manju-interrupt-tip" class="manju-interrupt-tip" hidden></div>
             <div id="manju-progress-wrap" class="manju-progress-wrap" hidden>
               <div class="manju-progress-label"><span id="manju-progress-text">…</span><span id="manju-progress-pct">0%</span></div>
               <div class="manju-progress"><div id="manju-progress-bar" class="manju-progress-bar"></div></div>
@@ -473,6 +475,7 @@
           </div>
           <div class="manju-side-head manju-fold-head" id="manju-out-fold" title="点击折叠/展开产物">
             <span class="manju-side-title">产物 · <span id="manju-outputs-ep">EP01</span></span>
+            <button id="manju-cleanup" class="hrs-btn" title="清理抽卡候选/审片抽帧/云端 2K 等可再生成产物,释放磁盘(定妆照/镜头定稿/成片不动)">🧹 清理</button>
             <button id="manju-trailer" class="hrs-btn" title="按审片分数自动剪辑高分镜头,合成 30 秒预告片(音量归一+字幕)">🎬 预告片</button>
             <button id="manju-out-fold-btn" class="manju-side-fold-btn" title="折叠/展开产物" aria-label="折叠/展开产物">▾</button>
           </div>

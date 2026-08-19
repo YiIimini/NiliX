@@ -137,3 +137,72 @@ func TestAtomicWrite(t *testing.T) {
 		}
 	}
 }
+
+// TestManjuUpscaleEstimate 2K 费用预估:有方案按方案时长×单价;无方案按目录镜头粗估
+func TestManjuUpscaleEstimate(t *testing.T) {
+	proj := "zz_estimate_test"
+	dir := filepath.Join(manjuRoot, proj)
+	_ = os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+	_ = os.MkdirAll(filepath.Join(dir, "analysis"), 0755)
+	_ = os.MkdirAll(filepath.Join(dir, "clips", "EP01"), 0755)
+	_ = os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"paths":{"workdir":"`+filepath.ToSlash(dir)+`","clips":"`+filepath.ToSlash(filepath.Join(dir, "clips"))+`","analysis":"`+filepath.ToSlash(filepath.Join(dir, "analysis"))+`"}}`), 0644)
+	// 有方案:3 镜(5+8+4=17s)
+	_ = os.WriteFile(filepath.Join(dir, "analysis", "EP01_direct_plan.json"),
+		[]byte(`{"shots":[{"shot_id":1,"duration":5},{"shot_id":2,"duration":8},{"shot_id":3,"duration":4}]}`), 0644)
+	ctx, _ := newManjuCtx(filepath.Join(dir, "config.json"), "EP01", "", "", "")
+	e := ctx.manjuUpscaleEstimate("")
+	if e["shots"] != 3 || e["durationSec"] != 17 || e["costCNY"] != 13.6 {
+		t.Fatalf("有方案预估异常: %v", e)
+	}
+	// 指定镜头 only=1 → 5s × 0.8 = 4
+	e2 := ctx.manjuUpscaleEstimate("1")
+	if e2["shots"] != 1 || e2["costCNY"] != 4.0 {
+		t.Fatalf("指定镜头预估异常: %v", e2)
+	}
+	// 无方案:目录 2 个 mp4 → 2×8s=16s
+	_ = os.Remove(filepath.Join(dir, "analysis", "EP01_direct_plan.json"))
+	_ = os.WriteFile(filepath.Join(dir, "clips", "EP01", "01.mp4"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "clips", "EP01", "02.mp4"), []byte("x"), 0644)
+	ctx2, _ := newManjuCtx(filepath.Join(dir, "config.json"), "EP01", "", "", "")
+	e3 := ctx2.manjuUpscaleEstimate("")
+	if e3["shots"] != 2 || e3["durationSec"] != 16 {
+		t.Fatalf("无方案粗估异常: %v", e3)
+	}
+}
+
+// TestManjuCleanup 产物清理:只删目标子目录,定妆照/定稿不动
+func TestManjuCleanup(t *testing.T) {
+	proj := "zz_cleanup_test"
+	dir := filepath.Join(manjuRoot, proj)
+	_ = os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+	mk := func(p string) { _ = os.MkdirAll(p, 0755) }
+	mk(filepath.Join(dir, "assets", "characters", "_gacha"))
+	mk(filepath.Join(dir, "analysis", "_frames"))
+	mk(filepath.Join(dir, "clips", "EP01", "2k"))
+	mk(filepath.Join(dir, "assets", "characters"))
+	mk(filepath.Join(dir, "clips", "EP01"))
+	_ = os.WriteFile(filepath.Join(dir, "assets", "characters", "_gacha", "c_s1.png"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "analysis", "_frames", "f.jpg"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "clips", "EP01", "2k", "01.mp4"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "assets", "characters", "c.png"), []byte("keep"), 0644) // 定妆照
+	_ = os.WriteFile(filepath.Join(dir, "clips", "EP01", "01.mp4"), []byte("keep"), 0644)       // 定稿
+	_ = os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"paths":{"workdir":"`+filepath.ToSlash(dir)+`"}}`), 0644)
+
+	w, res := doReq(t, "POST", "/api/manju/cleanup", map[string]any{
+		"config": filepath.Join(dir, "config.json"), "targets": []any{"gacha", "frames", "2k"},
+	})
+	if w.Code != 200 || res["ok"] != true {
+		t.Fatalf("清理失败: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "assets", "characters", "_gacha", "c_s1.png")); err == nil {
+		t.Errorf("gacha 未清理")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "assets", "characters", "c.png")); err != nil {
+		t.Errorf("定妆照被误删")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "clips", "EP01", "01.mp4")); err != nil {
+		t.Errorf("镜头定稿被误删")
+	}
+}

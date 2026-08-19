@@ -1799,4 +1799,6 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	})
 	registerUpscaleRoutes(mux)
 	registerAgentRoutes(mux)
+	registerDiagnoseRoute(mux)
+	registerCleanupRoute(mux)
 }
