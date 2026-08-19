@@ -2924,6 +2924,9 @@ select.manju-input {
 .manju-settings .manju-set-card:nth-child(2) { grid-column: 1; }       /* 微信通知:左 */
 .manju-settings .manju-set-card:nth-child(4) { grid-column: 2; }       /* 配置管理:右(与微信通知并排) */
 .manju-settings .manju-set-card:nth-child(3) { grid-column: 1 / -1; }  /* 目录与部署:整行(微信通知正下方) */
+/* 配置管理卡与微信通知并排(窄卡):内部网格改单列竖排,避免 3 列挤压 */
+.manju-settings .manju-set-card:nth-child(4) .manju-set-grid { grid-template-columns: 1fr; gap: 10px; }
+.manju-settings .manju-set-card:nth-child(4) .manju-set-item { padding: 10px 12px; }
 .manju-set-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .manju-set-grid-2 { grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .manju-set-item {
