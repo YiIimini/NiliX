@@ -2161,7 +2161,7 @@
         const arts = Object.keys(ep.artifacts || {});
         const secKey = "video-" + (ep.episode || "");
         let h = `<div class="manju-out-sec${this._secFolded(secKey) ? " is-folded" : ""}" data-sec="${secKey}">`;
-        h += `<div class="manju-out-title"><span class="manju-sec-foldbtn">${this._secFolded(secKey) ? "▸" : "▾"}</span>🎬 ${esc(ep.episode)} <span class="manju-out-count">${clips.length} 镜头${final ? " · 成片" : ""}${ups.length ? " · ☁️2K×" + ups.length : ""}</span>${clips.length ? `<button class="hrs-btn manju-up2k-btn" data-up2k="${esc(ep.episode || "")}" title="云端 2K 定稿:本地定稿镜提交 MiniMax 升 2K(需在设置里填 MiniMax Key),产物落 clips/${esc(ep.episode || "")}/2k/">☁️ 2K</button>` : ""}</div>`;
+        h += `<div class="manju-out-title"><span class="manju-sec-foldbtn">${this._secFolded(secKey) ? "▸" : "▾"}</span>🎬 ${esc(ep.episode)} <span class="manju-out-count">${clips.length} 镜头${final ? " · 成片" : ""}${ups.length ? " · ☁️2K×" + ups.length : ""}</span>${clips.length ? `<button class="hrs-btn manju-up2k-btn" data-up2k="${esc(ep.episode || "")}" title="云端 2K 定稿:本地定稿镜提交 MiniMax 升 2K(需在设置里填 MiniMax Key),产物落 clips/${esc(ep.episode || "")}/2k/">☁️ 2K</button><button class="hrs-btn manju-up2k-btn" data-jy="${esc(ep.episode || "")}" title="导出剪映草稿:视频轨+字幕轨(不烧录,可在剪映继续编辑);需 venv 安装 pyJianYingDraft">📦 剪映</button>` : ""}</div>`;
         h += `<div class="manju-sec-body">`;
         h += `<div class="manju-vids">${vids.map((v) => {
           const isFinal = v === final;
@@ -2210,12 +2210,37 @@
           this.openDeleteMenu(btn.dataset.menu, btn.dataset.ep, btn.dataset.isfinal === "1");
         })
       );
-      $("manju-outputs").querySelectorAll(".manju-up2k-btn").forEach((btn) =>
+      $("manju-outputs").querySelectorAll(".manju-up2k-btn[data-up2k]").forEach((btn) =>
         btn.addEventListener("click", (e) => {
           e.stopPropagation();
           this.startUpscale(btn.dataset.up2k, "");
         })
       );
+      $("manju-outputs").querySelectorAll(".manju-up2k-btn[data-jy]").forEach((btn) =>
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.exportJianying(btn.dataset.jy);
+        })
+      );
+    },
+
+    /* 剪映草稿导出(同步):视频轨+字幕轨,返回草稿路径;未装 pyJianYingDraft 时透出安装指引 */
+    exportJianying(ep) {
+      if (!this.project) { this.setErr("请先选择项目"); return; }
+      const log = $("manju-log");
+      if (log) log.textContent = "(📦 剪映草稿导出中 ...)";
+      post("/api/manju/jianying", { config: this.project, episode: ep || this.episode })
+        .then((r) => {
+          if (r.ok) {
+            this.openModal("📦 剪映草稿已导出",
+              `<div class="manju-confirm"><p class="mc-d">草稿目录:<br><b>${esc(r.draft || "")}</b></p>` +
+              (r.copiedTo ? `<p class="mc-d">已自动复制到剪映草稿目录:<br>${esc(r.copiedTo)}</p>` : `<p class="mc-d">把该目录复制到剪映草稿位置(剪映设置可查)即可打开继续编辑;在项目 config.render.jianying_dir 填草稿目录可自动复制</p>`) +
+              `</div>`);
+          } else {
+            this.openModal("📦 导出失败", `<div class="manju-confirm"><p class="mc-d" style="white-space:pre-wrap">${esc(r.error || "未知错误")}</p></div>`);
+          }
+          if (log) log.textContent = "";
+        }).catch((e) => { this.setErr(e.message); if (log) log.textContent = ""; });
     },
 
     /* 云端 2K 定稿:整集(shots 空)或指定镜头;后台任务,进度走运行日志 */

@@ -370,8 +370,9 @@ func manjuUpscaleRun(w http.ResponseWriter, configPath, episode, shots string) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// registerUpscaleRoutes 云端 2K 路由
+// registerUpscaleRoutes 云端 2K + 剪映导出路由
 func registerUpscaleRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/manju/jianying", manjuJianyingExport)
 	mux.HandleFunc("POST /api/manju/upscale2k", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -388,4 +389,84 @@ func registerUpscaleRoutes(mux *http.ServeMux) {
 		}
 		manjuUpscaleRun(w, configPath, episode, shots)
 	})
+}
+
+// manjuJianyingExport 剪映草稿导出(同步,无 GPU 依赖):视频轨+字幕轨(不烧录,可继续编辑)。
+// 依赖 venv 安装 pyJianYingDraft(未装时脚本 exit 2 + 安装指引,本接口原样透出)。
+// render.jianying_dir 配置剪映草稿目录时导出后自动复制进去(数据驱动,可选)。
+func manjuJianyingExport(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	configPath := str(body["config"])
+	episode := orDefault(str(body["episode"]), "EP01")
+	if configPath == "" {
+		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+		return
+	}
+	ctx, err := newManjuCtx(configPath, episode, "", "", "")
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		return
+	}
+	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
+	if !hasTopLevelClips(clipsEp) {
+		http.Error(w, `{"error":"该集没有已渲染镜头,先跑渲染"}`, http.StatusBadRequest)
+		return
+	}
+	outDir := filepath.Join(ctx.workdir, "剪映草稿")
+	name := ctx.episode + "_NiliX"
+	args := []string{"jianying", "--clips-dir", clipsEp, "--out-dir", outDir, "--name", name,
+		"--fps", strconv.Itoa(ctx.fps), "--plan", filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")}
+	if trans := orDefault(str(ctx.R["transition"]), "cut"); manjuTransitions[trans] {
+		args = append(args, "--transition", trans)
+		if hc := ctx.seamHardCuts(); hc != "" {
+			args = append(args, "--hard-cuts", hc)
+		}
+	}
+	out, err := ctx.runMediaOut(args...)
+	if err != nil {
+		msg := strings.TrimSpace(out)
+		if i := strings.LastIndex(msg, "\n"); i > 0 && len(msg)-i < 400 {
+			msg = msg[i+1:] // 末行通常是最要紧的指引
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": truncate(orDefault(msg, err.Error()), 400)})
+		return
+	}
+	res := parseJSONLine(out)
+	draft := ""
+	if res != nil {
+		draft = str(res["draft"])
+	}
+	// 自动复制进剪映草稿目录(可选配置)
+	copied := ""
+	if jyDir := strings.TrimSpace(str(ctx.R["jianying_dir"])); jyDir != "" && draft != "" {
+		if err := copyTree(draft, filepath.Join(jyDir, filepath.Base(draft))); err == nil {
+			copied = filepath.Join(jyDir, filepath.Base(draft))
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "draft": draft, "copiedTo": copied})
+}
+
+// copyTree 递归复制目录(剪映草稿自动入库用)
+func copyTree(src, dst string) error {
+	st, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if !st.IsDir() {
+		return copyFile(src, dst)
+	}
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }

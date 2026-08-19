@@ -86,7 +86,7 @@ var manjuRenderStrFields = []string{
 	"comfy_url", "neg_prompt", "unet_fl2va", "unet_ref2va", "clip", "vae_video", "vae_audio",
 	"z_image_unet", "z_image_clip", "z_image_vae", "turbo_lora", "turbo_lora_r2v", "animagine_ckpt",
 	"chapters", "episode", "shots",
-	"minimax_api_key", "minimax_base_url",
+	"minimax_api_key", "minimax_base_url", "jianying_dir",
 }
 
 // manjuRenderBoolFields 渲染参数布尔字段(SageAttention 加速/草稿预审开关)

@@ -11,6 +11,9 @@
   facecrop --src <png> --dst <png>       正脸特写参考:切上部居中头肩区域并放大(身份锁定用)
   probe --file <mp4>                     探测视频参数(宽高/帧率/帧数/音轨/编码/大小,云端2K预校验数据源),
                                          末行输出 JSON {"width":..,"height":..,"fps":..,"frames":..,"hasAudio":..,...}
+  jianying --clips-dir <d> --out-dir <parent> --name <draft> [--fps 24] [--plan <p>] [--transition cut]
+                                         剪映草稿导出:视频轨(可选转场)+ 字幕轨(台词/旁白,不烧录,可继续编辑);
+                                         需 venv 安装 pyJianYingDraft(未装时打印安装指引并 exit 2)
 """
 import argparse
 import json
@@ -997,6 +1000,100 @@ def cmd_probe(args):
     print(json.dumps(info, ensure_ascii=False))
 
 
+def cmd_jianying(args):
+    """剪映(JianYing)草稿导出:视频轨 + 字幕轨(台词/旁白按镜头时间轴,可继续编辑)。
+    参考 ArcReel jianying_draft_service 的 pyJianYingDraft 序列化方式;
+    字幕时序复用 assemble 的窗口分配(镜头内 12%-92%,按字数加权),但以 TextSegment
+    轨呈现而非烧录。未安装 pyJianYingDraft 时打印安装指引并 exit 2(优雅降级)。
+    """
+    try:
+        import pyJianYingDraft as draft
+        from pyJianYingDraft import ClipSettings, TextBorder, TextSegment, TextShadow, TextStyle, TrackType, TransitionType, VideoMaterial, VideoSegment, trange
+    except ImportError as e:
+        print(f"❌ pyJianYingDraft 未安装({e})")
+        print("   安装: <ComfyUI venv>/Scripts/pip.exe install pyJianYingDraft")
+        print("   (导出剪映草稿需要;不影响其它功能)")
+        sys.exit(2)
+
+    import av
+    files = sorted(f for f in os.listdir(args.clips_dir) if f.lower().endswith(".mp4"))
+    if not files:
+        print("❌ 无镜头可导出: " + args.clips_dir)
+        sys.exit(1)
+    cues = _load_subtitle_cues(args.plan)
+    hard_cuts = set()
+    if args.hard_cuts:
+        for x in args.hard_cuts.split(","):
+            x = x.strip()
+            if x.isdigit():
+                hard_cuts.add(int(x))
+    trans_map = {"fade": TransitionType.闪黑, "dissolve": TransitionType.叠化}
+
+    # 画布尺寸取首镜头(竖屏 9:16 → 1080x1920;横屏 → 1920x1080,与 ArcReel 同规则)
+    c0 = av.open(os.path.join(args.clips_dir, files[0]))
+    v0 = c0.streams.video[0]
+    portrait = v0.height > v0.width
+    c0.close()
+    width, height = (1080, 1920) if portrait else (1920, 1080)
+
+    os.makedirs(args.out_dir, exist_ok=True)  # DraftFolder 要求根目录已存在
+    os.makedirs(args.out_dir, exist_ok=True)  # DraftFolder 要求根目录已存在
+    folder = draft.DraftFolder(args.out_dir)
+    script = folder.create_draft(args.name, width=width, height=height, fps=args.fps, allow_replace=True)
+    # 轨道 API 新旧版兼容:新版 append_track+TrackSpec,旧版 add_track(ArcReel 参考实现)
+    def _add_track(tt, name=None):
+        try:
+            script.append_track(draft.TrackSpec(tt, name))
+        except AttributeError:
+            script.add_track(tt, name)
+    _add_track(TrackType.video)
+    has_subs = any(cues[i] for i in range(min(len(cues), len(files))))
+    if has_subs:
+        _add_track(TrackType.text, "字幕")
+    text_style = TextStyle(
+        size=12.0 if portrait else 8.0, color=(1.0, 1.0, 1.0), align=1, bold=True,
+        auto_wrapping=True, max_line_width=0.82 if portrait else 0.6,
+    )
+    text_border = TextBorder(color=(0.0, 0.0, 0.0), width=30.0)
+    text_shadow = TextShadow(color=(0.0, 0.0, 0.0), alpha=0.7, diffuse=8.0, distance=3.0, angle=-45.0)
+    sub_pos = ClipSettings(transform_y=-0.75 if portrait else -0.8)
+
+    print(f"📦 剪映草稿: {len(files)} 镜 → {os.path.join(args.out_dir, args.name)} ({width}x{height}, 字幕{'on' if has_subs else 'off'}, 转场:{args.transition})")
+    offset_us = 0
+    film_sec = 0.0
+    for i, name in enumerate(files):
+        path = os.path.join(args.clips_dir, name)
+        c = av.open(path)
+        v = c.streams.video[0]
+        frames = sum(1 for _ in c.decode(v))
+        c.close()
+        dur = frames / args.fps
+        dur_us = int(dur * 1_000_000)
+        vm = VideoMaterial(path)
+        seg = VideoSegment(vm, trange(offset_us, dur_us), source_timerange=trange(0, dur_us), volume=1.0)
+        # 转场(seam 接缝镜硬切;最后一镜无下一边界)
+        if args.transition in trans_map and i + 1 < len(files):
+            next_sid = _shot_no(files[i + 1])
+            sid = _shot_no(name)
+            if next_sid not in hard_cuts and sid not in hard_cuts:
+                seg.add_transition(trans_map[args.transition])
+        script.add_segment(seg)
+        # 字幕轨(与 assemble 相同的窗口分配,TextSegment 不烧录)
+        if i < len(cues) and cues[i]:
+            for sa, sb, txt in _assign_subtitle_windows(cues[i], dur, film_sec):
+                script.add_segment(TextSegment(
+                    text=txt, timerange=trange(int(sa * 1_000_000), int((sb - sa) * 1_000_000)),
+                    style=text_style, border=text_border, shadow=text_shadow, clip_settings=sub_pos,
+                ), "字幕")
+        offset_us += dur_us
+        film_sec += dur
+    script.save()
+    draft_path = os.path.join(args.out_dir, args.name)
+    print(f"  ✅ 草稿已写入 {draft_path}")
+    print(f"  ℹ️ 复制到剪映草稿目录即可在剪映打开(剪映设置里可查草稿位置);末行 JSON:")
+    print(json.dumps({"ok": True, "draft": draft_path, "width": width, "height": height}, ensure_ascii=False))
+
+
 def main():
     ap = argparse.ArgumentParser(description="manju media helper")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1030,6 +1127,14 @@ def main():
     f.add_argument("--dst", required=True)
     pr = sub.add_parser("probe")
     pr.add_argument("--file", required=True)
+    jy = sub.add_parser("jianying")
+    jy.add_argument("--clips-dir", required=True)
+    jy.add_argument("--out-dir", required=True, help="草稿父目录(其下创建 <name> 草稿文件夹)")
+    jy.add_argument("--name", required=True, help="草稿名(剪映里显示)")
+    jy.add_argument("--fps", type=int, default=24)
+    jy.add_argument("--plan", default="")
+    jy.add_argument("--transition", default="cut", choices=["cut", "fade", "dissolve"])
+    jy.add_argument("--hard-cuts", default="")
     sr = sub.add_parser("asr")
     sr.add_argument("--dir", required=True)
     sr.add_argument("--plan", default="")
@@ -1055,6 +1160,8 @@ def main():
         cmd_facecrop(args)
     elif args.cmd == "probe":
         cmd_probe(args)
+    elif args.cmd == "jianying":
+        cmd_jianying(args)
     elif args.cmd == "asr":
         cmd_asr(args)
     elif args.cmd == "trailer":
