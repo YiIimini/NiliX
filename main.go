@@ -149,63 +149,22 @@ func defaultMainWinSize() (int, int) {
 	return w, h
 }
 
-// fitMainWindow 把窗口设为 calcMainWinSize()(有记忆=记忆尺寸,无=16:9 默认)。
-// Edge App 会忽略 --window-size(复用进程时按自己记忆开)且 SetWindowPos 对运行中的
-// msedge 窗口无效——尺寸不符时关旧窗重新创建(新进程参数生效);用户之后手动缩放由
-// saveWinLoop 更新记忆,下次启动按新记忆设置——记忆闭环。
-func fitMainWindow() {
-	h := findMainWindow()
-	if h == 0 {
-		return
-	}
-	x, y, w, hgt := calcMainWinSize()
+// winSizeMatches 判断窗口当前尺寸是否等于期望(±8px 容差)
+func winSizeMatches(h uintptr, w, hgt int) bool {
 	var r w32RECT
 	procGetWindowRect.Call(h, uintptr(unsafe.Pointer(&r)))
 	curW, curH := int(r.Right-r.Left), int(r.Bottom-r.Top)
-	if curW == 0 || curH == 0 || (curW == w && curH == hgt) {
-		return // 已符合期望(或读不到,不干预)
+	if curW == 0 || curH == 0 {
+		return false
 	}
-	// 先试 SetWindowPos(部分环境有效);无效则关旧开新
-	_, _, _ = procSetWindowPos.Call(h, 0, uintptr(x), uintptr(y), uintptr(w), uintptr(hgt), 0x0004)
-	time.Sleep(800 * time.Millisecond)
-	procGetWindowRect.Call(h, uintptr(unsafe.Pointer(&r)))
-	if int(r.Right-r.Left) != w || int(r.Bottom-r.Top) != hgt {
-		log.Printf("主窗口尺寸不符(当前 %dx%d,期望 %dx%d),关旧开新", curW, curH, w, hgt)
-		_, _, _ = procWinClose.Call(h, 0x0010, 0, 0)
-		time.Sleep(600 * time.Millisecond)
-		runMainWindowForSize(w, hgt)
-	}
+	return absInt(curW-w) <= 8 && absInt(curH-hgt) <= 8
 }
 
-// runMainWindowForSize 以指定尺寸创建主窗口(新进程 --window-size 参数生效;
-// fit 关旧开新专用,复用 runMainWindow 主体但传尺寸)
-func runMainWindowForSize(w, h int) {
-	url := "http://127.0.0.1:8787"
-	edge := msedgePath()
-	if edge == "" {
-		openBrowser(url)
-		return
+func absInt(n int) int {
+	if n < 0 {
+		return -n
 	}
-	sw, _, _ := procGetSysMetrics.Call(16)
-	sh, _, _ := procGetSysMetrics.Call(17)
-	if sw == 0 || sh == 0 {
-		sw, sh = 1920, 1040
-	}
-	x := (int(sw) - w) / 2
-	y := (int(sh) - h) / 2
-	if x < 0 {
-		x = 0
-	}
-	if y < 0 {
-		y = 0
-	}
-	cmd := exec.Command(edge, "--app="+url,
-		fmt.Sprintf("--window-size=%d,%d", w, h),
-		fmt.Sprintf("--window-position=%d,%d", x, y))
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
-	if err := cmd.Start(); err != nil {
-		log.Printf("主窗口重建失败: %v", err)
-	}
+	return n
 }
 
 // w32RECT GetWindowRect 输出
@@ -250,20 +209,18 @@ func runMainWindow(url string) {
 	}
 	log.Printf("主窗口(Edge App)打开: %s", url)
 	x, y, w, h := calcMainWinSize()
-	cmd := exec.Command(edge, "--app="+url,
+	// 独立 user-data-dir 启动:不与日常 Edge 共用实例(默认实例有常驻后台进程,
+	// 复用后忽略 --window-size 按记忆尺寸开,造成"先错后对"的跳变);独立实例
+	// 窗口关闭即整体退出,每次启动都是新进程,参数必生效——窗口首次出现即正确尺寸。
+	ud := filepath.Join(os.Getenv("AppData"), "NiliX-edge")
+	cmd := exec.Command(edge, "--user-data-dir="+ud, "--app="+url,
 		fmt.Sprintf("--window-size=%d,%d", w, h),
 		fmt.Sprintf("--window-position=%d,%d", x, y))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 	if err := cmd.Start(); err != nil {
 		log.Printf("主窗口启动失败: %v(回退系统浏览器)", err)
 		openBrowser(url)
-		return
 	}
-	// 窗口起来后兜底校正 16:9+居中(等 Edge 完成窗口初始化)
-	go func() {
-		time.Sleep(1800 * time.Millisecond)
-		fitMainWindow()
-	}()
 }
 
 var (
