@@ -2026,6 +2026,12 @@
         setT("mem", m.temp ? temp(m.temp, m.hasTemp) : "--");
         set("gpu", g.present ? pct(g.usage) : "N/A", g.present ? (g.usage >= 95 ? "hot" : "") : "");
         setT("gpu", g.present ? temp(g.temp, g.temp > 0) : "--", g.temp >= 85 ? "crit" : g.temp >= 70 ? "hot" : "");
+        // ComfyUI 服务状态灯(视频管理页顶部:ComfyUI · 运行中/已停止)
+        const cfy = r.comfy || {};
+        const cDot = document.querySelector("#manju-cfy-status .hrs-dot");
+        const cTxt = $("manju-cfy-txt");
+        if (cDot) cDot.className = "hrs-dot " + (cfy.online ? "on" : "off");
+        if (cTxt) cTxt.textContent = "ComfyUI · " + (cfy.online ? "运行中" : "已停止");
       }).catch(() => {});
     },
 
