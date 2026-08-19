@@ -4532,27 +4532,6 @@ select option { text-align: center; }
 .manju-health-row { margin-top: 8px; }
 .manju-health-row .hrs-btn { flex: 1; justify-content: center; }
 
-/* 产物区「项目 ⋮」菜单:相对定位容器 + 下拉弹层 */
-.manju-side-menu { position: relative; margin-left: auto; }
-.manju-side-head { gap: 8px; }
-.manju-side-head .hrs-btn { flex: none; }
-.manju-menu-pop {
-  position: absolute; right: 0; top: calc(100% + 6px); z-index: 120;
-  min-width: 200px;
-  background: color-mix(in srgb, var(--panel) 96%, transparent);
-  border: 1px solid var(--panel-border); border-radius: 10px;
-  box-shadow: 0 12px 30px rgba(0,0,0,.35);
-  padding: 6px; display: flex; flex-direction: column; gap: 2px;
-}
-.manju-menu-pop.hidden { display: none; }
-.manju-menu-item {
-  display: block; width: 100%; text-align: left;
-  padding: 9px 12px; font-size: 13px; color: var(--text);
-  background: transparent; border: none; border-radius: 7px; cursor: pointer;
-}
-.manju-menu-item:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.manju-menu-item.danger { color: #f87171; }
-.manju-menu-item.danger:hover { background: rgba(248,113,113,.12); }
 
 /* 卡片菜单:删除项目(红色警示) */
 .cm-item.danger { color: #f87171; }
