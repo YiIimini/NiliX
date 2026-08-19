@@ -94,7 +94,7 @@
       "<b>🧠 学习档案</b>：跨次运行记忆——运行次数、审片均分趋势、高频问题、最近风格选择；阶段失败自动<b>智能诊断</b>给出原因与修复建议",
       "未达标镜头<b>自动返工</b>：修复师按审片意见改写 H3 提示词 → 删缓存定点重渲染（预算默认 2 轮，防无限重试）",
       "预算耗尽仍不达标 → <b>推送微信</b> + 右栏「审片报告」升级卡，点「重试此镜 / 忽略」人工拍板",
-      "视觉模型在<b>设置 → 智能体调度</b> 配置（OpenAI 兼容；推荐智谱 <b>glm-4.6v-flash</b> 免费）；Key 留空用项目 DeepSeek",
+      "视觉模型在<b>设置 → 智能体调度</b> 配置（OpenAI 兼容；推荐智谱 <b>glm-4.6v-flash</b> 免费，<b>429 高峰自动退避重试并降级 glm-4v-flash</b>，自定义可填逗号链）；Key 顺序:项目配置 → 项目 DeepSeek → 环境变量 GLM_VISION_API_KEY",
       "「测试视觉模型」<b>随时可点</b>：没有定妆照时自动用合成测试图验证连通（约 5-10s）",
       "未配置视觉模型时自动降级：仅机械质检（黑屏/无声）+ 升级，不判分不返工",
       "<b>剧本师复核</b>在方案阶段给出节奏/台词/爽点评议（低于 60 分推送提醒），只报告不改动方案",
@@ -665,7 +665,7 @@
               </div>
               <div class="manju-field-row" id="manju-ag-model-custom-row" ${isCustom ? "" : 'style="display:none"'}>
                 <label>模型 ID</label>
-                <input id="manju-ag-model-custom" class="manju-input manju-mono" value="${esc(isCustom ? ag.visionModel : "")}" placeholder="自定义模型 ID（OpenAI 兼容）" spellcheck="false">
+                <input id="manju-ag-model-custom" class="manju-input manju-mono" value="${esc(isCustom ? ag.visionModel : "")}" placeholder="模型 ID,支持逗号降级链如 glm-4.6v-flash,glm-4v-flash" spellcheck="false" title="主模型 429 过载时按 4/10/20s 退避重试,耗尽自动降级备模型继续判分;单模型自动补内置链(智谱免费档)">
               </div>
               <div class="manju-field-row" id="manju-ag-url-row" ${isCustom ? "" : 'style="display:none"'}>
                 <label>API 地址</label>
@@ -822,8 +822,8 @@
       $("manju-ag-model-custom-row").style.display = custom ? "" : "none";
       $("manju-ag-url-row").style.display = custom ? "" : "none";
       $("manju-ag-key-hint").textContent = preset
-        ? "自动使用 " + preset.url + "｜" + preset.hint
-        : custom ? "自定义模式：填模型 ID、API 地址与对应 Key" : "选好模型后只填 API Key 即可，接口地址自动带出";
+        ? "自动使用 " + preset.url + "｜" + preset.hint + "｜高峰 429 自动退避并降级 glm-4v-flash"
+        : custom ? "自定义模式：填模型 ID(可逗号降级链)、API 地址与对应 Key" : "选好模型后只填 API Key 即可，接口地址自动带出；Key 留空时按 项目配置 → 项目 LLM Key → 环境变量 GLM_VISION_API_KEY 顺序兜底";
     },
     visionFormValues() {
       const sel = $("manju-ag-model").value;
