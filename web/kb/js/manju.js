@@ -1189,7 +1189,8 @@
     renderChips() {
       const el = $("manju-chips");
       const tt = $("manju-chips-title");
-      if (!this.info) { el.innerHTML = ""; if (tt) tt.hidden = true; return; }
+      const hideAll = () => { el.innerHTML = ""; el.hidden = true; if (tt) tt.hidden = true; };
+      if (!this.info) { hideAll(); return; }
       const R = this.info.render || {};
       const model = (this.info.llm || {}).model;
       const items = [
@@ -1206,8 +1207,10 @@
         R.bgm && "🎵BGM",
         R.shots_per_take && R.shots_per_take > 1 && "🎥长镜×" + R.shots_per_take,
       ].filter(Boolean);
+      if (items.length === 0) { hideAll(); return; } // 无数据:整个参数卡(含边框)都不显示
+      el.hidden = false;
       el.innerHTML = items.map((c) => `<span class="manju-chip">${esc(c)}</span>`).join("");
-      if (tt) tt.hidden = items.length === 0; // 无参数可示(未选项目/字段全空)时隐藏标题
+      if (tt) tt.hidden = false;
     },
 
     /* ---- 表单回填 ---- */
