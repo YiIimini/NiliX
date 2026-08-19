@@ -87,6 +87,8 @@ var (
 	procSetWindowPos     = user32Lazy.NewProc("SetWindowPos")
 	procWinClose         = user32Lazy.NewProc("PostMessageW")
 	procGetWindowRect    = user32Lazy.NewProc("GetWindowRect")
+	procLoadImageW       = user32Lazy.NewProc("LoadImageW")
+	procSendMessageW     = user32Lazy.NewProc("SendMessageW")
 )
 
 // msedgePath 定位 Edge 浏览器(系统自带;WebView2 运行时本就依赖同一 Edge)
@@ -222,6 +224,32 @@ func runMainWindow(url string) {
 	}
 }
 
+// setMainWinIcon 加载内嵌 icon.ico 并设置窗口图标(左上角 + Alt-Tab + 任务栏小图标)
+func setMainWinIcon(hwnd uintptr) {
+	if hwnd == 0 || len(iconICO) == 0 {
+		return
+	}
+	tmp := filepath.Join(os.TempDir(), "nilix_icon.ico")
+	if err := os.WriteFile(tmp, iconICO, 0644); err != nil {
+		return
+	}
+	defer os.Remove(tmp)
+	p, err := syscall.UTF16PtrFromString(tmp)
+	if err != nil {
+		return
+	}
+	const lrLoadFromFile = 0x00000010
+	big, _, _ := procLoadImageW.Call(0, uintptr(unsafe.Pointer(p)), 1 /*IMAGE_ICON*/, 32, 32, lrLoadFromFile)
+	small, _, _ := procLoadImageW.Call(0, uintptr(unsafe.Pointer(p)), 1, 16, 16, lrLoadFromFile)
+	const wmSetIcon = 0x0080
+	if big != 0 {
+		procSendMessageW.Call(hwnd, wmSetIcon, 1 /*ICON_BIG*/, big)
+	}
+	if small != 0 {
+		procSendMessageW.Call(hwnd, wmSetIcon, 0 /*ICON_SMALL*/, small)
+	}
+}
+
 // runMainWindowWebView 子进程(--mainwin)入口:创建 WebView2 管理窗口并运行。
 // 阻塞至窗口关闭(用户点 X)→ 子进程退出。
 func runMainWindowWebView() {
@@ -246,6 +274,7 @@ func runMainWindowWebView() {
 	w.Navigate("http://127.0.0.1:8787")
 	// WebView2 控制器初始化完成后可能重置窗口尺寸——延迟再强制一次(物理像素+居中)
 	hw := uintptr(w.Window())
+	setMainWinIcon(hw) // 窗口图标(NiliX icon.ico):左上角 + Alt-Tab
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
 		_, _, _ = procSetWindowPos.Call(hw, 0, uintptr(x), uintptr(y), uintptr(ww), uintptr(wh), 0x0004)
