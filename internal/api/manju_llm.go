@@ -25,16 +25,17 @@ type manjuLLM struct {
 	client      *http.Client
 }
 
-// manjuLLMFromCfg 从 config.json 构造 LLM 客户端
+// manjuLLMFromCfg 从 config.json 构造 LLM 客户端(服务/模型缺省时回退到存为默认的服务,再回退 DeepSeek)
 func manjuLLMFromCfg(cfg map[string]any) *manjuLLM {
 	L, _ := cfg["llm"].(map[string]any)
+	defBase, defModel := manjuDefaultLLMService()
 	baseURL := strings.TrimRight(str(L["base_url"]), "/")
 	if baseURL == "" {
-		baseURL = "https://api.deepseek.com"
+		baseURL = defBase
 	}
 	model := str(L["model"])
 	if model == "" {
-		model = "deepseek-chat"
+		model = defModel
 	}
 	temp := 0.4
 	if v, ok := manjuToFloat(L["temperature"]); ok {
@@ -57,6 +58,23 @@ func manjuLLMFromCfg(cfg map[string]any) *manjuLLM {
 		timeout:     to,
 		client:      &http.Client{Timeout: to},
 	}
+}
+
+// manjuDefaultLLMService 读「存为默认」的服务配置(settings.json),缺省回退 DeepSeek
+func manjuDefaultLLMService() (baseURL, model string) {
+	baseURL, model = "https://api.deepseek.com", "deepseek-chat"
+	if b, err := os.ReadFile(manjuSettingsFile); err == nil {
+		var def map[string]any
+		if json.Unmarshal(b, &def) == nil {
+			if u := strings.TrimRight(str(def["base_url"]), "/"); u != "" {
+				baseURL = u
+			}
+			if m := str(def["model"]); m != "" {
+				model = m
+			}
+		}
+	}
+	return baseURL, model
 }
 
 // errLLMTruncated LLM 输出达到 max_tokens 被截断(JSON 必然残缺,可精简重试)

@@ -735,10 +735,20 @@ func manjuSettingsGet(w http.ResponseWriter, r *http.Request) {
 		masked = key[:5] + "…" + key[len(key)-4:]
 	}
 	res := map[string]any{"hasKey": key != "", "masked": masked}
-	// 附带当前项目的 key 状态(设置弹窗展示,提示是否会导致 LLM 401)
+	// 默认服务(地址/模型,供设置弹窗回填)
+	if b, err := os.ReadFile(manjuSettingsFile); err == nil {
+		var def map[string]any
+		if json.Unmarshal(b, &def) == nil {
+			res["defaultBaseUrl"] = str(def["base_url"])
+			res["defaultModel"] = str(def["model"])
+		}
+	}
+	// 附带当前项目的 key/服务状态(设置弹窗展示,提示是否会导致 LLM 401)
 	if cfgPath := r.URL.Query().Get("config"); cfgPath != "" {
 		if cfg, err := readManjuConfig(cfgPath); err == nil {
 			if L, ok := cfg["llm"].(map[string]any); ok {
+				res["projectBaseUrl"] = str(L["base_url"])
+				res["projectModel"] = str(L["model"])
 				if pk := str(L["api_key"]); pk != "" {
 					pm := pk
 					if len(pm) > 9 {
@@ -761,16 +771,42 @@ func manjuSettingsPost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": true})
 		return
 	}
-	if apiKey := strings.TrimSpace(str(body["apiKey"])); apiKey != "" {
-		_ = writeManjuSettings(map[string]any{"api_key": apiKey})
-		// 可选:同时把 key 写入指定项目的 config(设置弹窗「应用到此项目」)
+	apiKey := strings.TrimSpace(str(body["apiKey"]))
+	baseURL := strings.TrimSpace(str(body["baseUrl"]))
+	model := strings.TrimSpace(str(body["model"]))
+	if apiKey != "" || baseURL != "" || model != "" {
+		// 存为默认:API Key + 服务地址/模型(项目未配置时 manjuLLMFromCfg 回退使用)。
+		// settings.json 同时是全局智能体默认(agent 节)的存放处,须合并写入,不能整体覆盖
+		def := map[string]any{}
+		if b, err := os.ReadFile(manjuSettingsFile); err == nil {
+			_ = json.Unmarshal(b, &def)
+		}
+		if apiKey != "" {
+			def["api_key"] = apiKey
+		}
+		if baseURL != "" {
+			def["base_url"] = baseURL
+		}
+		if model != "" {
+			def["model"] = model
+		}
+		_ = writeManjuSettings(def)
+		// 应用到指定项目:写项目 config.llm(api_key/base_url/model,非空覆盖)
 		if cfgPath := str(body["config"]); cfgPath != "" {
 			if cfg, err := readManjuConfig(cfgPath); err == nil {
 				L, _ := cfg["llm"].(map[string]any)
 				if L == nil {
 					L = map[string]any{}
 				}
-				L["api_key"] = apiKey
+				if apiKey != "" {
+					L["api_key"] = apiKey
+				}
+				if baseURL != "" {
+					L["base_url"] = baseURL
+				}
+				if model != "" {
+					L["model"] = model
+				}
 				cfg["llm"] = L
 				_ = writeManjuConfig(cfgPath, cfg)
 			}

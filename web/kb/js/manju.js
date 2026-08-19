@@ -12,6 +12,14 @@
     { id: "qwen-vl-plus", url: "https://dashscope.aliyuncs.com/compatible-mode/v1", label: "通义 qwen-vl-plus", hint: "阿里云百炼 Key：bailian.console.aliyun.com" },
   ];
 
+  /* 文本模型服务预设(方案生成/剧本师/修复师):选服务自动带出接口地址+模型 ID,自定义兜底(OpenAI 兼容) */
+  const LLM_PRESETS = [
+    { id: "deepseek", url: "https://api.deepseek.com", model: "deepseek-chat", label: "DeepSeek（默认·推荐）", hint: "Key：platform.deepseek.com → API Keys" },
+    { id: "glm", url: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-flash", label: "智谱 GLM-4-Flash（免费）", hint: "Key：open.bigmodel.cn 控制台 → API 密钥" },
+    { id: "qwen", url: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus", label: "通义千问 qwen-plus", hint: "Key：bailian.console.aliyun.com" },
+    { id: "kimi", url: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k", label: "Kimi moonshot-v1", hint: "Key：platform.moonshot.cn" },
+  ];
+
   /* 画幅预设(官方 6 档) → 宽×高 */
   const RATIOS = {
     "21:9": [1344, 576],
@@ -642,13 +650,42 @@
             </div>
             <div class="manju-set-body">
               <div class="manju-set-sub">🧠 文本模型 · 方案生成 / 剧本师 / 修复师</div>
+              ${(() => {
+                /* 回填当前服务:按 项目 base_url+model → 匹配预设;匹配不到且有值 → 自定义 */
+                const curUrl = (n.projectBaseUrl || "").replace(/\/+$/, "");
+                const curModel = n.projectModel || "";
+                const llmHit = LLM_PRESETS.find((p) => p.url.replace(/\/+$/, "") === curUrl && p.model === curModel);
+                const llmCustom = !llmHit && (curUrl || curModel);
+                const llmSel = llmHit ? llmHit.id : (llmCustom ? "__custom__" : "");
+                const defSvc = (n.defaultBaseUrl && n.defaultModel)
+                  ? n.defaultBaseUrl + " / " + n.defaultModel
+                  : "https://api.deepseek.com / deepseek-chat";
+                return `
               <div class="manju-field-row">
-                <label>DeepSeek Key</label>
+                <label>服务商</label>
+                <select id="manju-llm-svc" class="manju-input">
+                  <option value="" ${llmSel ? "" : "selected"}>未配置（默认 DeepSeek）</option>
+                  ${LLM_PRESETS.map((p) => `<option value="${p.id}" ${llmSel === p.id ? "selected" : ""}>${p.label}</option>`).join("")}
+                  <option value="__custom__" ${llmCustom ? "selected" : ""}>自定义（OpenAI 兼容）…</option>
+                </select>
+              </div>
+              <div class="manju-field-row" id="manju-llm-url-row" ${llmCustom ? "" : 'style="display:none"'}>
+                <label>接口地址</label>
+                <input id="manju-llm-baseurl" class="manju-input manju-mono" value="${esc(llmCustom ? curUrl : "")}" placeholder="如 https://api.deepseek.com 或 https://…/v1" spellcheck="false">
+              </div>
+              <div class="manju-field-row" id="manju-llm-model-row" ${llmCustom ? "" : 'style="display:none"'}>
+                <label>模型 ID</label>
+                <input id="manju-llm-model" class="manju-input manju-mono" value="${esc(llmCustom ? curModel : "")}" placeholder="如 deepseek-chat" spellcheck="false">
+              </div>
+              <div class="manju-field-row">
+                <label>API Key</label>
                 <input id="manju-apikey" class="manju-input manju-mono" type="password" placeholder="sk-…（留空则用已保存的默认 Key）" spellcheck="false" autocomplete="off">
                 <button id="manju-apikey-apply" class="hrs-btn hrs-btn-primary">应用到项目</button>
                 <button id="manju-apikey-save" class="hrs-btn">存为默认</button>
               </div>
-              <div id="manju-apikey-status" class="manju-set-status">${keyStatus}</div>
+              <div class="manju-set-status" id="manju-llm-svc-hint"></div>
+              <div id="manju-apikey-status" class="manju-set-status">${keyStatus}</div>`;
+              })()}
 
               <div class="manju-set-sub">👁 视觉模型 · 审片官（未配置时仅机械质检，不判分不返工）</div>
               ${(() => {
@@ -768,11 +805,14 @@
         </div>`, true);
       $("manju-apikey-save").addEventListener("click", () => this.saveApiKey(false));
       $("manju-apikey-apply").addEventListener("click", () => this.saveApiKey(true));
+      $("manju-llm-svc").addEventListener("change", () => this.syncLLMForm());
       $("manju-ag-save").addEventListener("click", () => this.saveAgentCfg());
       $("manju-ag-test").addEventListener("click", () => this.testVision());
       $("manju-ag-global").addEventListener("click", () => this.saveAgentCfgGlobal());
       $("manju-ag-model").addEventListener("change", () => this.syncVisionForm());
       this.syncVisionForm();
+      this._llmDefSvc = defSvc;   // 供「未配置」提示展示真实默认服务(存为默认的地址/模型)
+      this.syncLLMForm();
       // 智能模式开关:切换即时保存(勾选后刷新不再回落)
       $("manju-ag-enabled").addEventListener("change", () => {
         const msg = $("manju-ag-msg");
@@ -798,17 +838,47 @@
       $("mc-import-file").addEventListener("change", (e) => this.importConfig(e.target.files[0]));
       $("mc-reset").addEventListener("click", () => this.resetConfig());
     },
+    /* 文本模型表单联动:预设自动带出接口地址+模型 ID 并提示 Key 去处,自定义时展开地址/模型输入 */
+    syncLLMForm() {
+      const sel = $("manju-llm-svc");
+      if (!sel) return;
+      const custom = sel.value === "__custom__";
+      $("manju-llm-url-row").style.display = custom ? "" : "none";
+      $("manju-llm-model-row").style.display = custom ? "" : "none";
+      const hint = $("manju-llm-svc-hint");
+      if (custom) {
+        hint.textContent = "自定义模式：填 OpenAI 兼容接口地址与模型 ID（如本地 Ollama/LM Studio/中转站），再填对应 Key";
+      } else if (sel.value) {
+        const preset = LLM_PRESETS.find((p) => p.id === sel.value);
+        hint.textContent = "自动使用 " + preset.url + " / " + preset.model + "｜" + preset.hint;
+      } else {
+        hint.textContent = "未配置：使用默认服务（" + this._llmDefSvc + "）；Key 留空按 项目配置 → 默认 Key 顺序兜底";
+      }
+    },
+    llmFormValues() {
+      const sel = $("manju-llm-svc").value;
+      if (sel === "__custom__") {
+        return { baseUrl: $("manju-llm-baseurl").value.trim(), model: $("manju-llm-model").value.trim() };
+      }
+      const preset = LLM_PRESETS.find((p) => p.id === sel);
+      return { baseUrl: preset ? preset.url : "", model: preset ? preset.model : "" };
+    },
     saveApiKey(applyToProject) {
       const st = $("manju-apikey-status");
       const key = $("manju-apikey").value.trim();
-      if (!key) { st.textContent = "请先粘贴 API Key"; return; }
+      const v = this.llmFormValues();
+      if (!key && !v.baseUrl && !v.model) { st.textContent = "请先粘贴 API Key 或选择服务"; return; }
+      if (applyToProject && !this.project) { st.textContent = "请先选择项目再应用到项目"; return; }
       st.textContent = "保存中…";
       const btns = [$("manju-apikey-save"), $("manju-apikey-apply")];
       btns.forEach((b) => { b.disabled = true; }); // 防连点重复提交
       const body = { apiKey: key };
+      if (v.baseUrl) body.baseUrl = v.baseUrl;
+      if (v.model) body.model = v.model;
       if (applyToProject) body.config = this.project;
       post("/api/manju/settings", body).then(() => {
-        st.textContent = applyToProject ? "✅ 已保存为默认 Key 并写入当前项目" : "✅ 已保存为默认 Key";
+        const svc = v.baseUrl ? "（含服务 " + v.model + "）" : "";
+        st.textContent = applyToProject ? "✅ 已写入当前项目" + svc : "✅ 已保存为默认" + svc;
         if (applyToProject) this.loadProject();
       }).catch((e) => { st.textContent = "❌ " + e.message; })
         .finally(() => { btns.forEach((b) => { b.disabled = false; }); });
