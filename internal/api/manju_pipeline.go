@@ -233,6 +233,8 @@ func (l *manjuLogger) logf(line string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	state := l.state
+	// 每行带时间戳(前端时间轴展示 + run.log 排障;阶段/镜头进度正则均为子串匹配,不受前缀影响)
+	line = "[" + time.Now().Format("15:04:05") + "] " + line
 	state.mu.Lock()
 	state.log += "\n" + line
 	if len(state.log) > 300000 {
@@ -307,7 +309,7 @@ func manjuFinish(rc int) {
 	state := manjuState
 	state.mu.Lock()
 	if state.stopped {
-		state.log += "\n\n⏹ 任务已被手动停止。已完成镜头保留,可直接再点同按钮续跑。"
+		state.log += "\n\n[" + time.Now().Format("15:04:05") + "] ⏹ 任务已被手动停止。已完成镜头保留,可直接再点同按钮续跑。"
 		rc = 0
 	}
 	state.rc = &rc

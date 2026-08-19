@@ -1110,7 +1110,7 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	autoEps, aerr := manjuAutoEpisodes(ctx, chapters)
 	if aerr != nil {
 		manjuState.mu.Lock()
-		manjuState.log += "\n⚠️ 自动分集失败: " + aerr.Error() + "，按单集运行"
+		manjuState.log += "\n[" + time.Now().Format("15:04:05") + "] ⚠️ 自动分集失败: " + aerr.Error() + "，按单集运行"
 		manjuState.mu.Unlock()
 		autoEps = nil
 	}

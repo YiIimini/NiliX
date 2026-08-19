@@ -273,6 +273,61 @@
       el.classList.toggle("hidden", !msg);
     },
 
+    /* ---- 运行日志:竖向时间轴渲染 ----
+       阶段行=大节点(发光主色),普通行按类型着色(成功/失败/升级/警告/审片/镜头进度),
+       缩进行为子条目(无点弱化);超过 300 行折叠前置;内容未变跳过;用户贴底时自动跟随滚动 */
+    renderLog(text) {
+      const log = $("manju-log");
+      if (!log) return;
+      const src = String(text || "");
+      this._logSrc = src;
+      if (log.dataset.last === src) return;
+      const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+      const wasEmpty = !log.dataset.last;
+      log.dataset.last = src;
+      const stageCN = { env: "环境自检", plan: "方案", assets: "资产", encode: "编码", render: "渲染", qc: "质检", assemble: "合成", upscale: "云端 2K" };
+      const lines = src.split("\n");
+      const MAX = 300;
+      const view = lines.length > MAX ? lines.slice(-MAX) : lines;
+      const rows = [];
+      for (const raw of view) {
+        let t = raw;
+        let time = "";
+        const m = raw.match(/^\[(\d{2}:\d{2}:\d{2})\]\s?/);
+        if (m) { time = m[1]; t = raw.slice(m[0].length); }
+        if (!t.trim()) continue;
+        const st = t.match(/^━━━ 阶段 (\w+) ━━━/);
+        if (st) {
+          rows.push(`<div class="mj-tl-row stage"><span class="mj-tl-time">${time}</span><span class="mj-tl-main"><b>${stageCN[st[1]] || esc(st[1])}</b><i>${esc(st[1])}</i></span></div>`);
+          continue;
+        }
+        const isSub = /^\s{2,}/.test(t);
+        const tt = t.trim(); // 类型按去缩进后的行首判定(缩进的 ✅/⚠️ 同样着色)
+        let cls = "info";
+        if (/^❌/.test(tt)) cls = "err";
+        else if (/^🚨/.test(tt)) cls = "esc";
+        else if (/^⚠️/.test(tt)) cls = "warn";
+        else if (/^✅|^🎉/.test(tt)) cls = "ok";
+        else if (/^🤖|^🧠|^📖|^✏️|^🔧|⤵️已降级/.test(tt)) cls = "agent";
+        else if (/^\[\d+\/\d+\]/.test(tt)) cls = "shot";
+        const body = esc(tt);
+        if (isSub) rows.push(`<div class="mj-tl-row sub ${cls}"><span class="mj-tl-main">${body}</span></div>`);
+        else rows.push(`<div class="mj-tl-row ${cls}"><span class="mj-tl-time">${time}</span><span class="mj-tl-main">${body}</span></div>`);
+      }
+      const head = lines.length > MAX ? `<div class="mj-tl-fold">… 前方 ${lines.length - MAX} 行已折叠(完整日志见项目目录 run.log)</div>` : "";
+      log.innerHTML = `<div class="mj-tl">${head}${rows.join("")}</div>`;
+      if (nearBottom || wasEmpty) log.scrollTop = log.scrollHeight;
+    },
+
+    /* 一次性提示(启动/提交中等瞬时文案):下次 poll 会用时间轴接管 */
+    logNote(msg) {
+      const log = $("manju-log");
+      if (!log) return;
+      log.textContent = msg;
+      delete log.dataset.last;
+      this._logSrc = "";
+    },
+
     /* ---- 初始化绑定 ---- */
     bind() {
       if (this._bound) return;
@@ -377,7 +432,7 @@
       $("manju-health").addEventListener("click", () => this.openHealth());
       $("manju-env").addEventListener("click", () => this.doEnv());
       $("manju-stop").addEventListener("click", () => this.stop());
-      $("manju-clear-log").addEventListener("click", () => { $("manju-log").textContent = "(就绪)"; });
+      $("manju-clear-log").addEventListener("click", () => { this.logNote("(就绪)"); });
 
       // 弹窗
       $("manju-modal-close").addEventListener("click", () => this.closeModal());
@@ -417,7 +472,7 @@
       btn.textContent = "剪辑中…";
       post("/api/manju/trailer", { config: this.project, episode: this.episode, target: 30 }).then((r) => {
         this.setErr("");
-        $("manju-log").textContent = "(🎬 预告片已生成: " + r.file + "(选 " + r.shots + " 个高分镜头) → 工作目录 " + this.episode + "_预告片.mp4)";
+        this.logNote("(🎬 预告片已生成: " + r.file + "(选 " + r.shots + " 个高分镜头) → 工作目录 " + this.episode + "_预告片.mp4)");
         this.refreshOutputs();
       }).catch((e) => this.setErr(e.message))
         .finally(() => { btn.disabled = false; btn.textContent = "🎬 预告片"; });
@@ -1476,7 +1531,7 @@
       if (!this.project) { this.setErr("请先选择项目"); return; }
       if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
       this.setErr("");
-      $("manju-log").textContent = "(启动 " + phase + " ...)";
+      this.logNote("(启动 " + phase + " ...)");
       post("/api/manju/run", {
         config: this.project, chapters: this.chapters, episode: this.episode,
         phase: phase, only: this.only, novel: this.novel,
@@ -1490,7 +1545,7 @@
       this.setErr("");
       const last = this.status && this.status.currentStage ? this.status.currentStage : "";
       const hint = last ? "，上次中断于「" + last + "」阶段" : "";
-      $("manju-log").textContent = "(▶ 续跑启动" + hint + "，幂等跳过已完成阶段 ...)";
+      this.logNote("(▶ 续跑启动" + hint + "，幂等跳过已完成阶段 ...)");
       post("/api/manju/run", {
         config: this.project, chapters: this.chapters, episode: this.episode,
         phase: "all", only: this.only, novel: this.novel,
@@ -1529,12 +1584,12 @@
 
     /* 「是」分支:深度分析 → 更新渲染风格+渲染参数 → 走 AI 一条龙 */
     agentStyleThenRun() {
-      $("manju-log").textContent = "(🤖 深度分析小说内容，推荐并更新渲染风格与渲染参数 ...)";
+      this.logNote("(🤖 深度分析小说内容，推荐并更新渲染风格与渲染参数 ...)");
       this.styleAnalyze().then((r) => {
         const ps = r.params && Object.keys(r.params).length
           ? " · 参数: " + Object.entries(r.params).map(([k, v]) => k + "=" + v).join(" / ") : "";
-        $("manju-log").textContent = "(🤖 风格已更新：" + this.styleLabel(r.old) + " → " + this.styleLabel(r.style) +
-          (r.reason ? "，" + r.reason : "") + ps + "，走渲染流程 ...)";
+        this.logNote("(🤖 风格已更新：" + this.styleLabel(r.old) + " → " + this.styleLabel(r.style) +
+          (r.reason ? "，" + r.reason : "") + ps + "，走渲染流程 ...");
         this.loadProject(); // 参数已写入 config,回填表单与 chips
         this.runAgentFlow();
       }).catch((e) => this.setErr("深度分析失败：" + e.message));
@@ -1545,7 +1600,7 @@
       if (!this.project) { this.setErr("请先选择项目"); return; }
       if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
       this.setErr("");
-      $("manju-log").textContent = "(🤖 AI 一条龙启动: 剧本复核 → 渲染 → 审片官判分 → 未达标自动返工 ...)";
+      this.logNote("(🤖 AI 一条龙启动: 剧本复核 → 渲染 → 审片官判分 → 未达标自动返工 ...)");
       post("/api/manju/run", {
         config: this.project, chapters: this.chapters, episode: this.episode,
         phase: "all", only: this.only, novel: this.novel, agent: true,
@@ -1792,7 +1847,7 @@
       post("/api/manju/kill", {}).then((r) => {
         btn.textContent = "停止";
         this.stopping = false;
-        $("manju-log").textContent += "\n⏹ 已发送停止，正在结束进程树…";
+        this.renderLog((this._logSrc || "") + "\n⏹ 已发送停止，正在结束进程树…");
         this.poll();
       }).catch((e) => {
         btn.textContent = "停止";
@@ -1856,9 +1911,7 @@
         }
       }
       if (s.logTail !== undefined && s.logTail !== log.dataset.last) {
-        log.textContent = s.logTail || "(就绪)";
-        log.dataset.last = s.logTail;
-        log.scrollTop = log.scrollHeight;
+        this.renderLog(s.logTail || "");
       }
       this.renderProgress();
       this.renderFlow();
@@ -2248,8 +2301,7 @@
     /* 剪映草稿导出(同步):视频轨+字幕轨,返回草稿路径;未装 pyJianYingDraft 时透出安装指引 */
     exportJianying(ep) {
       if (!this.project) { this.setErr("请先选择项目"); return; }
-      const log = $("manju-log");
-      if (log) log.textContent = "(📦 剪映草稿导出中 ...)";
+      this.logNote("(📦 剪映草稿导出中 ...)");
       post("/api/manju/jianying", { config: this.project, episode: ep || this.episode })
         .then((r) => {
           if (r.ok) {
@@ -2269,7 +2321,7 @@
       if (!this.project) { this.setErr("请先选择项目"); return; }
       if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
       this.setErr("");
-      $("manju-log").textContent = "(☁️ 云端 2K 定稿提交中 ...)";
+      this.logNote("(☁️ 云端 2K 定稿提交中 ...)");
       post("/api/manju/upscale2k", {
         config: this.project, episode: ep || this.episode, shots: shots || "",
       }).then(() => { this.poll(); })
@@ -2309,7 +2361,7 @@
         config: this.project, scope, path, episode: ep || this.episode,
       }).then((r) => {
         this.closeModal();
-        $("manju-log").textContent = "(🗑 已删除:" + (r.removed || []).join("、") + ")";
+        this.logNote("(🗑 已删除:" + (r.removed || []).join("、") + ")");
         this.refreshOutputs();
       }).catch((e) => {
         btns.forEach((b) => { if (b) b.disabled = false; });
