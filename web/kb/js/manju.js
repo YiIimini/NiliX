@@ -1135,7 +1135,8 @@
 
     renderChips() {
       const el = $("manju-chips");
-      if (!this.info) { el.innerHTML = ""; return; }
+      const tt = $("manju-chips-title");
+      if (!this.info) { el.innerHTML = ""; if (tt) tt.hidden = true; return; }
       const R = this.info.render || {};
       const model = (this.info.llm || {}).model;
       const items = [
@@ -1153,6 +1154,7 @@
         R.shots_per_take && R.shots_per_take > 1 && "🎥长镜×" + R.shots_per_take,
       ].filter(Boolean);
       el.innerHTML = items.map((c) => `<span class="manju-chip">${esc(c)}</span>`).join("");
+      if (tt) tt.hidden = items.length === 0; // 无参数可示(未选项目/字段全空)时隐藏标题
     },
 
     /* ---- 表单回填 ---- */
