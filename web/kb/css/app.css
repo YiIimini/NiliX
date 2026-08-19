@@ -2922,6 +2922,7 @@ select.manju-input {
 .manju-settings .manju-set-card:nth-child(2) { grid-column: span 1; }
 .manju-settings .manju-set-card:nth-child(3) { grid-column: 1 / -1; }
 .manju-set-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.manju-set-grid-2 { grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .manju-set-item {
   border: 1px dashed var(--panel-border);
   border-radius: 10px;

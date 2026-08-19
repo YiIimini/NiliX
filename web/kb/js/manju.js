@@ -806,8 +806,8 @@
             </div>
             <pre id="ci-log" class="manju-log hidden" style="max-height:160px;overflow:auto;margin-top:6px;font-size:10.5px;white-space:pre-wrap"></pre>`
           : "";
-        return `<div class="manju-meta">换电脑/迁移:把整个 NiliX 目录(含 comfyui/ novel/ manju/ skills/)拷走即用。路径留空=自动解析(优先 exe 目录自包含子目录,其次旧位置);ComfyUI 放 <code>NiliX/comfyui/ComfyUI</code> + 模型放 <code>NiliX/comfyui/shared/</code> 即可被自动发现。</div>
-          <div class="manju-set-grid">${rows}</div>
+        return `<div class="manju-meta">换电脑/迁移:把整个 NiliX 目录(含 comfyui/ novel/ manju/ skills/)拷走即用。路径留空=自动解析(优先 exe 目录子目录,其次旧位置)。</div>
+          <div class="manju-set-grid manju-set-grid-2">${rows}</div>
           <div class="manju-set-actions" style="margin-top:10px">
             <button id="mp-save" class="hrs-btn hrs-btn-primary">保存路径配置</button>
             ${sk.isGit ? `<button id="mp-skill-update" class="hrs-btn">🔄 更新技能(git pull)</button>` : ""}
@@ -974,6 +974,15 @@
           </div>
           <div class="manju-set-card">
             <div class="manju-set-head">
+              <span class="manju-set-icon">🗂️</span>
+              <span class="manju-set-title">目录与部署</span>
+            </div>
+            <div class="manju-set-body">
+              ${pathsHTML}
+            </div>
+          </div>
+          <div class="manju-set-card">
+            <div class="manju-set-head">
               <span class="manju-set-icon">📦</span>
               <span class="manju-set-title">配置管理</span>
             </div>
@@ -1004,15 +1013,6 @@
                 </div>
               </div>
             </div>
-          <div class="manju-set-card">
-            <div class="manju-set-head">
-              <span class="manju-set-icon">🗂️</span>
-              <span class="manju-set-title">目录与部署</span>
-            </div>
-            <div class="manju-set-body">
-              ${pathsHTML}
-            </div>
-          </div>
           </div>
         </div>`, true);
       // ComfyUI 一键安装:启动 + 轮询进度 + 停止
