@@ -37,6 +37,9 @@
   ];
   const STYLE_CN = Object.fromEntries(STYLE_PRESETS);
 
+  /* 分辨率档位中文名(chips 展示;key 与后端 manjuResTiers 一致) */
+  const RES_TIER_CN = { draft: "416P 草稿", standard: "768P 标准", fhd: "1088P 高清" };
+
   const INT_KEYS = ["width", "height", "fps", "steps", "turbo_steps", "seed", "min_shot_seconds", "max_shot_seconds"];
   const STR_KEYS = ["comfy_url", "unet_fl2va", "unet_ref2va", "clip", "vae_video", "vae_audio",
     "z_image_unet", "z_image_clip", "z_image_vae", "turbo_lora",
@@ -47,6 +50,7 @@
     "manju-width": 768, "manju-height": 1344, "manju-fps": 24,
     "manju-steps": 20, "manju-turbo": 8, "manju-seed": 1688,
     "manju-minsec": 4, "manju-maxsec": 12, "manju-mosaic-level": 16,
+    "manju-draft-scale": 0.5,
   };
 
   /* 负面提示词默认值(与后端 manjuNegPrompt 一致;配置缺省/为空时回填展示) */
@@ -124,8 +128,11 @@
     ] },
     { ic: "📐", t: "渲染参数", ps: [
       "<b>画幅</b>官方 6 档：21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16，竖屏短剧推荐 <b>9:16（768×1344）</b>",
+      "<b>档位</b>快捷切换分辨率：416P 草稿（快速试片）→ 768P 标准（默认）→ 1088P 高清，按画幅等比换算并对齐 32；选「手动宽高」则直接用上面的宽高值",
       "<b>步数</b>默认 20；<b>Turbo步</b>默认 8（8 步 ≈ 20 步画质、约 2.9 倍提速）",
-      "<b>seed</b> 全剧固定保证跨镜头一致；换 seed 重渲染走新随机",
+      "<b>seed</b> 全剧固定保证跨镜头一致；<b>seed策略</b>控制返工：固定（默认）/ 重试递增（第 N 次返工 seed+N）/ 重试随机（返工换新随机）——返工仍抽同一 seed 等于重抽同一命运的卡",
+      "<b>SageAttn</b>：SageAttention 注意力加速补丁（需 ComfyUI-KJNodes），RTX 50 系白捡提速；开启后「环境自检」会校验节点是否可用",
+      "<b>草稿预审</b>（智能一条龙）：审片返工轮用缩放分辨率草稿（默认 0.5 ≈ 1/4 像素量，可调 0.2-0.95），全部落定后自动<b>全分辨率定稿重渲</b>——审片轮 GPU 时间约降 3/4，定稿零返工",
       "<b>时长</b> min/max 4–15s，大模型逐镜时长在此区间自动 clamp",
     ] },
     { ic: "🔗", t: "模型与一致性", ps: [
@@ -321,10 +328,14 @@
       );
       $("manju-width").addEventListener("input", () => { this.renderRatio(); this.saveDraft(); });
       $("manju-height").addEventListener("input", () => { this.renderRatio(); this.saveDraft(); });
-      // 渲染配置其余字段:变化即本地记忆
-      this.renderInputIds().forEach((id) =>
-        $(id).addEventListener("input", () => this.saveDraft())
-      );
+      // 渲染配置其余字段:变化即本地记忆(input 覆盖输入框,change 覆盖下拉/复选框)
+      this.renderInputIds().forEach((id) => {
+        $(id).addEventListener("input", () => this.saveDraft());
+        $(id).addEventListener("change", () => this.saveDraft());
+      });
+      $("manju-mosaic-enabled").addEventListener("change", () => this.saveDraft());
+      $("manju-sage").addEventListener("change", () => this.saveDraft());
+      $("manju-draft-judge").addEventListener("change", () => this.saveDraft());
 
       // 高级模型折叠
       $("manju-adv-toggle").addEventListener("click", () => {
@@ -1054,8 +1065,11 @@
         model && "LLM：" + model,
         R.comfy_url && "ComfyUI：" + R.comfy_url,
         R.width && R.height && R.fps && "画幅：" + R.width + "×" + R.height + " @" + R.fps + "fps",
+        R.res_tier && R.res_tier !== "custom" && "档位：" + (RES_TIER_CN[R.res_tier] || R.res_tier),
         R.steps && (R.turbo_lora ? "步数：" + R.steps + " → Turbo " + R.turbo_steps : "步数：" + R.steps),
-        R.seed !== undefined && R.seed !== null && R.seed !== "" && "seed：" + R.seed,
+        R.seed !== undefined && R.seed !== null && R.seed !== "" && "seed：" + R.seed + (R.seed_policy && R.seed_policy !== "fixed" ? "(" + (R.seed_policy === "increment" ? "重试递增" : "重试随机") + ")" : ""),
+        R.sage_attention && "⚡SageAttn",
+        R.draft_judge && "📐草稿预审",
       ].filter(Boolean);
       el.innerHTML = items.map((c) => `<span class="manju-chip">${esc(c)}</span>`).join("");
     },
@@ -1066,7 +1080,7 @@
         "manju-minsec", "manju-maxsec", "manju-comfy-url", "manju-neg-prompt", "manju-unet-fl2va", "manju-unet-ref2va",
         "manju-clip", "manju-vae-video", "manju-vae-audio", "manju-zimage-unet", "manju-zimage-clip",
         "manju-zimage-vae", "manju-turbo-lora", "manju-turbo-lora-r2v", "manju-char-male", "manju-char-female", "manju-animagine",
-        "manju-banned-words", "manju-mosaic-level"];
+        "manju-banned-words", "manju-mosaic-level", "manju-res-tier", "manju-seed-policy", "manju-draft-scale"];
     },
     draftKey() { return "render-" + (this.project || ""); },
     /* 渲染配置草稿记忆:未点「保存参数」的编辑也随刷新保留,按项目隔离 */
@@ -1075,6 +1089,8 @@
       const d = { style: this.style };
       this.renderInputIds().forEach((id) => { d[id] = $(id).value; });
       d.mosaicEnabled = $("manju-mosaic-enabled").checked;
+      d.sageEnabled = $("manju-sage").checked;
+      d.draftJudge = $("manju-draft-judge").checked;
       try { localStorage.setItem("manju-" + this.draftKey(), JSON.stringify(d)); } catch (e) {}
     },
     loadDraft() {
@@ -1090,6 +1106,9 @@
       this.renderInputIds().forEach((id) => { $(id).value = NUM_DEFAULTS[id] !== undefined ? NUM_DEFAULTS[id] : ""; });
       $("manju-neg-prompt").value = NEG_PROMPT_DEFAULT;
       $("manju-mosaic-enabled").checked = false;
+      $("manju-sage").checked = false;
+      $("manju-draft-judge").checked = false;
+      $("manju-seed-policy").value = "fixed";
     },
 
     fillForm() {
@@ -1126,12 +1145,20 @@
       set("manju-banned-words", Array.isArray(MOD.banned_words) ? MOD.banned_words.join("\n") : "");
       $("manju-mosaic-enabled").checked = !!MOD.mosaic_enabled;
       set("manju-mosaic-level", MOD.mosaic_level != null ? MOD.mosaic_level : 16);
+      // 渲染升级项:档位/seed策略/SageAttention/草稿预审
+      set("manju-res-tier", R.res_tier || "");
+      set("manju-seed-policy", R.seed_policy || "fixed");
+      $("manju-sage").checked = !!R.sage_attention;
+      $("manju-draft-judge").checked = !!R.draft_judge;
+      num("manju-draft-scale", R.draft_scale != null && R.draft_scale !== "" ? R.draft_scale : 0.5);
       // 未保存编辑优先:用草稿覆盖 config.json 的回填值
       if (draft) {
         this.renderInputIds().forEach((id) => {
           if (draft[id] !== undefined && draft[id] !== "") $(id).value = draft[id];
         });
         if (draft.mosaicEnabled !== undefined) $("manju-mosaic-enabled").checked = !!draft.mosaicEnabled;
+        if (draft.sageEnabled !== undefined) $("manju-sage").checked = !!draft.sageEnabled;
+        if (draft.draftJudge !== undefined) $("manju-draft-judge").checked = !!draft.draftJudge;
       }
       this.renderStyle();
       this.renderRatio();
@@ -1275,7 +1302,7 @@
     intVal(id) { const v = $(id).value; return v === "" ? undefined : parseInt(v, 10); },
     strVal(id) { return $(id).value.trim(); },
 
-    /* 收集当前渲染配置(含风格/数值/模型/审核) */
+    /* 收集当前渲染配置(含风格/数值/模型/审核/渲染升级项) */
     collectRenderConfig() {
       const body = { style: this.style };
       INT_KEYS.forEach((k) => { const v = this.mapInt(k); if (v !== undefined) body[k] = v; });
@@ -1284,6 +1311,12 @@
       body.banned_words = this.strVal("manju-banned-words").split("\n").map((s) => s.trim()).filter(Boolean);
       body.mosaic_enabled = $("manju-mosaic-enabled").checked;
       body.mosaic_level = this.intVal("manju-mosaic-level");
+      body.res_tier = this.strVal("manju-res-tier");
+      body.seed_policy = this.strVal("manju-seed-policy") || "fixed";
+      body.sage_attention = $("manju-sage").checked;
+      body.draft_judge = $("manju-draft-judge").checked;
+      const ds = parseFloat($("manju-draft-scale").value);
+      if (!isNaN(ds)) body.draft_scale = ds;
       return body;
     },
 
@@ -1314,6 +1347,11 @@
       set("manju-banned-words", Array.isArray(MOD.banned_words) ? MOD.banned_words.join("\n") : "");
       $("manju-mosaic-enabled").checked = !!MOD.mosaic_enabled;
       set("manju-mosaic-level", MOD.mosaic_level);
+      set("manju-res-tier", R.res_tier || "");
+      set("manju-seed-policy", R.seed_policy || "fixed");
+      $("manju-sage").checked = !!R.sage_attention;
+      $("manju-draft-judge").checked = !!R.draft_judge;
+      set("manju-draft-scale", R.draft_scale != null && R.draft_scale !== "" ? R.draft_scale : 0.5);
       this.renderStyle();
       this.renderRatio();
     },

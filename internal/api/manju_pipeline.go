@@ -54,6 +54,11 @@ type manjuCtx struct {
 	seed         int
 	minSec       int
 	maxSec       int
+	seedPolicy   string  // seed 重试策略:fixed(默认全剧固定)/increment(重试 seed+N)/random(重试换随机)
+	resTier      string  // 分辨率档位(空/custom=手动宽高;draft/standard/fhd 见 manjuResTiers)
+	draftJudge   bool    // 智能模式草稿预审:审片返工轮用缩放分辨率草稿,全部通过后全分辨率定稿重渲
+	draftScale   float64 // 草稿缩放(0.2-0.95,默认 0.5;0.5 ≈ 1/4 像素量)
+	forceAttempt int     // 定点返工等外部路径传入的重试序号(seed 策略用它换 seed;0=首渲)
 }
 
 func manjuToFloat(v any) (float64, bool) {
@@ -155,7 +160,54 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 			ctx.steps = turboLoRASpecOf(str(R["turbo_lora"])).Steps
 		}
 	}
+	// seed 重试策略(fixed 默认;非法值回退 fixed)
+	ctx.seedPolicy = "fixed"
+	if s := str(R["seed_policy"]); s == "increment" || s == "random" {
+		ctx.seedPolicy = s
+	}
+	// 分辨率档位:非 custom 时覆盖手动宽高(等比缩放对齐 32)
+	ctx.resTier = str(R["res_tier"])
+	if t := ctx.resTier; t != "" && t != "custom" {
+		if tw, th, ok := manjuResTierDims(t, ctx.w, ctx.h); ok {
+			ctx.w, ctx.h = tw, th
+		}
+	}
+	ctx.draftScale = 0.5
+	if v, ok := manjuToFloat(R["draft_scale"]); ok && v >= 0.2 && v <= 0.95 {
+		ctx.draftScale = v
+	}
+	ctx.draftJudge, _ = R["draft_judge"].(bool)
 	return ctx, nil
+}
+
+// seedFor 重试 seed 策略:fixed=恒定(跨镜一致基线);increment=第 N 次重试 seed+N;
+// random=重试换新随机(首渲仍用配置 seed 保持全剧基线)。attempt=0 表示首次渲染。
+func (ctx *manjuCtx) seedFor(attempt int) int {
+	switch ctx.seedPolicy {
+	case "increment":
+		return ctx.seed + attempt
+	case "random":
+		if attempt > 0 {
+			return randSeed()
+		}
+	}
+	return ctx.seed
+}
+
+// draftDims 草稿预审分辨率:定稿画幅 × draftScale 对齐 32(判分与分辨率弱相关,
+// 0.5 缩放的像素量约为定稿 1/4,审片返工轮 GPU 时间等比下降)
+func (ctx *manjuCtx) draftDims() (int, int) {
+	sc := ctx.draftScale
+	if sc <= 0 || sc >= 1 {
+		sc = 0.5
+	}
+	return manjuAlign32(int(float64(ctx.w)*sc + 0.5)), manjuAlign32(int(float64(ctx.h)*sc + 0.5))
+}
+
+// draftDir 草稿预审产物目录(clips/<ep>/_draft,与定稿同集隔离;合成/集清单不读,
+// 定稿轮完成后整目录清除)
+func (ctx *manjuCtx) draftDir() string {
+	return filepath.Join(ctx.clipsDir, ctx.episode, "_draft")
 }
 
 // ---- 运行日志(写入内存状态 + run.log,检测阶段切换通知) ----
@@ -1189,17 +1241,27 @@ func (ctx *manjuCtx) assetsFingerprint() string {
 const manjuCacheVer = "v2"
 
 func (ctx *manjuCtx) shotCacheName(s manjuShot) string {
+	return ctx.shotCacheNameAt(s, ctx.w, ctx.h)
+}
+
+// shotCacheNameAt 指定宽高的缓存名(草稿/定稿分辨率各自独立缓存,互不挤占)
+func (ctx *manjuCtx) shotCacheNameAt(s manjuShot, w, h int) string {
 	proj := reNonWord.ReplaceAllString(ctx.project, "_")
-	return fmt.Sprintf("%s_%s_c%s", proj, manjuCacheVer, ctx.shotCondFingerprint(s))
+	return fmt.Sprintf("%s_%s_c%s", proj, manjuCacheVer, ctx.shotCondFingerprintAt(s, w, h))
 }
 
 // shotCondFingerprint 镜头条件指纹:决定缓存是否可复用的全部输入
 func (ctx *manjuCtx) shotCondFingerprint(s manjuShot) string {
-	h := md5.New()
-	fmt.Fprintf(h, "p=%s|w=%d|h=%d|len=%d|chars=%s|scene=%s|prompt=%s",
-		s.H3Prompt, ctx.w, ctx.h, h3Length(s.Duration, ctx.fps),
+	return ctx.shotCondFingerprintAt(s, ctx.w, ctx.h)
+}
+
+// shotCondFingerprintAt 指定宽高的条件指纹(草稿/定稿分开记账)
+func (ctx *manjuCtx) shotCondFingerprintAt(s manjuShot, w, h int) string {
+	hh := md5.New()
+	fmt.Fprintf(hh, "p=%s|w=%d|h=%d|len=%d|chars=%s|scene=%s|prompt=%s",
+		s.H3Prompt, w, h, h3Length(s.Duration, ctx.fps),
 		strings.Join(s.Characters, ","), s.Scene, s.H3Prompt)
-	sum := fmt.Sprintf("%x", h.Sum(nil))
+	sum := fmt.Sprintf("%x", hh.Sum(nil))
 	if len(sum) > 10 {
 		sum = sum[:10]
 	}
@@ -1209,11 +1271,16 @@ func (ctx *manjuCtx) shotCondFingerprint(s manjuShot) string {
 // ---- 预编码 ----
 
 func (ctx *manjuCtx) ensureEncoded(s manjuShot, cacheName string, lg *manjuLogger) error {
+	return ctx.ensureEncodedAt(s, cacheName, ctx.w, ctx.h, lg)
+}
+
+// ensureEncodedAt 指定宽高的预编码(草稿/定稿各自的条件缓存)
+func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg *manjuLogger) error {
 	if fileExists(h3CachePath(ctx.sharedModels, cacheName)) {
 		return nil
 	}
 	lg.logf("  预编码提交...")
-	wf := h3EncWorkflow(ctx.R, s.H3Prompt, ctx.w, ctx.h, h3Length(s.Duration, ctx.fps),
+	wf := h3EncWorkflow(ctx.R, s.H3Prompt, w, h, h3Length(s.Duration, ctx.fps),
 		ctx.charRefNames(s), ctx.sceneRefName(s), cacheName, len(s.Characters) > 0)
 	pid, err := ctx.comfy.submit(wf)
 	if err != nil {
@@ -1411,37 +1478,53 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 	return nil
 }
 
-// renderSingleShot 渲染单个镜头(编码→提交→等待→取回;中断自动重试一次)。
-// stageRender 与 Agent 流水线(单镜渲完即审)共用;fresh=true 时独立生成不接缝
-// (返工重渲镜:其首渲的接缝 latent 已被本次覆盖,且下游镜基于旧 latent,再接缝只会放大跳变)。
+// renderSingleShot 渲染单个镜头到定稿目录(定稿分辨率)。
 func (ctx *manjuCtx) renderSingleShot(s manjuShot, idx int, fresh bool, lg *manjuLogger) error {
-	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
-	dst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
-	cacheName := ctx.shotCacheName(s)
-	if err := ctx.ensureEncoded(s, cacheName, lg); err != nil {
+	return ctx.renderShotTo(s, idx, fresh, filepath.Join(ctx.clipsDir, ctx.episode), ctx.w, ctx.h, ctx.forceAttempt, lg)
+}
+
+// renderShotTo 渲染单个镜头(编码→提交→等待→取回;中断自动重试一次)。
+// stageRender 与 Agent 流水线(单镜渲完即审)共用;dstDir/w/h/attempt 支持
+// 草稿预审(半分辨率草稿)与 seed 重试策略(非 fixed 策略按 attempt 换 seed)。
+// fresh=true 时独立生成不接缝(返工重渲镜:其首渲的接缝 latent 已被本次覆盖,
+// 且下游镜基于旧 latent,再接缝只会放大跳变)。
+func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir string, w, h, attempt int, lg *manjuLogger) error {
+	if err := os.MkdirAll(dstDir, 0755); err != nil {
+		return err
+	}
+	dst := filepath.Join(dstDir, fmt.Sprintf("%02d.mp4", s.ID))
+	cacheName := ctx.shotCacheNameAt(s, w, h)
+	if err := ctx.ensureEncodedAt(s, cacheName, w, h, lg); err != nil {
 		return fmt.Errorf("镜头 %d 预编码失败: %w", s.ID, err)
 	}
 	chained := !fresh && idx > 1 && fileExists(h3ContextLatentPath(ctx.comfyOutput, idx-1))
 	if fresh {
 		lg.logf("  ♻️ 镜头 " + strconv.Itoa(s.ID) + " 返工重渲:独立生成(不接缝)")
 	}
-	wf := h3RenderWorkflow(ctx.R, ctx.seed, ctx.w, ctx.h, h3Length(s.Duration, ctx.fps),
-		ctx.steps, cacheName, len(s.Characters) > 0, chained, idx-1, idx)
-	pid, err := ctx.comfy.submit(wf)
+	submit := func() (string, error) {
+		seed := ctx.seedFor(attempt)
+		if attempt > 0 && ctx.seedPolicy != "fixed" {
+			lg.logf(fmt.Sprintf("  🎲 镜头 %d 第 %d 次尝试 seed=%d(策略 %s)", s.ID, attempt+1, seed, ctx.seedPolicy))
+		}
+		wf := h3RenderWorkflow(ctx.R, seed, w, h, h3Length(s.Duration, ctx.fps),
+			ctx.steps, cacheName, len(s.Characters) > 0, chained, idx-1, idx)
+		return ctx.comfy.submit(wf)
+	}
+	pid, err := submit()
 	if err != nil {
 		return fmt.Errorf("镜头 %d 提交失败: %w", s.ID, err)
 	}
 	lg.logf("  渲染提交 " + pid[:8] + "...")
 	t0 := time.Now()
 	if err := ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second); err != nil {
-		// 中断(网页取消/重启 ComfyUI)自动重试一次
+		// 中断(网页取消/重启 ComfyUI)自动重试一次(同 attempt 同 seed:任务未完成,重抽无意义)
 		if strings.Contains(err.Error(), "interrupt") || strings.Contains(err.Error(), "中断") {
 			lg.logf("  ⚠️ 渲染被中断,5 秒后自动重试...")
 			time.Sleep(5 * time.Second)
 			if lg.stopped() {
 				return fmt.Errorf("已停止")
 			}
-			pid, err = ctx.comfy.submit(wf)
+			pid, err = submit()
 			if err != nil {
 				return fmt.Errorf("镜头 %d 重试提交失败: %w", s.ID, err)
 			}
@@ -1488,9 +1571,23 @@ func (ctx *manjuCtx) runMedia(lg *manjuLogger, args ...string) error {
 	return cmd.Wait()
 }
 
+// hasTopLevelClips 集目录是否有顶层镜头 mp4(排除 _draft/2k 等工作子目录)
+func hasTopLevelClips(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".mp4") {
+			return true
+		}
+	}
+	return false
+}
+
 func stageQC(ctx *manjuCtx, lg *manjuLogger) error {
 	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
-	if entries, err := os.ReadDir(clipsEp); err != nil || len(entries) == 0 {
+	if !hasTopLevelClips(clipsEp) {
 		// 该集无镜头(如全本自动分集下尚未渲染的集):无事可检,跳过而非报错
 		lg.logf("  ⏭ 该集无镜头可质检，跳过")
 		return nil
@@ -1505,8 +1602,8 @@ func stageQC(ctx *manjuCtx, lg *manjuLogger) error {
 
 func stageAssemble(ctx *manjuCtx, lg *manjuLogger) error {
 	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
-	if entries, err := os.ReadDir(clipsEp); err != nil || len(entries) == 0 {
-		// 该集无镜头(如全本自动分集下尚未渲染的集):无事可合成,跳过而非报错
+	if !hasTopLevelClips(clipsEp) {
+		// 该集无镜头(如全本自动分集下尚未渲染的集):无事可合成,跳过
 		lg.logf("  ⏭ 该集无镜头可合成，跳过")
 		return nil
 	}
@@ -1623,6 +1720,15 @@ func manjuEnvCheck(configPath string) string {
 	b.WriteString(check("vae", str(ctx.R["vae_audio"])))
 	if l := str(ctx.R["turbo_lora"]); l != "" {
 		b.WriteString(check("loras", l))
+	}
+	if b2, _ := ctx.R["sage_attention"].(bool); b2 {
+		b.WriteString("⚡ SageAttention 加速(已开启):\n")
+		if ctx.comfy.hasNode("PatchSageAttentionKJ") {
+			b.WriteString("  ✅ ComfyUI 节点 PatchSageAttentionKJ 可用(KJNodes)\n")
+		} else {
+			b.WriteString("  ❌ ComfyUI 缺少 PatchSageAttentionKJ 节点(安装 ComfyUI-KJNodes,或在渲染参数里关闭 SageAttention)\n")
+			ok = false
+		}
 	}
 	b.WriteString(check("diffusion_models", str(ctx.R["z_image_unet"])))
 	b.WriteString(check("text_encoders", str(ctx.R["z_image_clip"])))

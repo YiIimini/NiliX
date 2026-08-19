@@ -88,6 +88,17 @@ var manjuRenderStrFields = []string{
 	"chapters", "episode", "shots",
 }
 
+// manjuRenderBoolFields 渲染参数布尔字段(SageAttention 加速/草稿预审开关)
+var manjuRenderBoolFields = []string{"sage_attention", "draft_judge"}
+
+// manjuRenderFloatFields 渲染参数浮点字段 + 取值范围 [min,max]
+var manjuRenderFloatFields = map[string][2]float64{
+	"draft_scale": {0.2, 0.95},
+}
+
+// manjuSeedPolicies 合法 seed 重试策略
+var manjuSeedPolicies = map[string]bool{"fixed": true, "increment": true, "random": true}
+
 // ---- 任务状态(线程安全) ----
 
 type manjuTask struct {
@@ -594,6 +605,47 @@ func manjuSaveRender(w http.ResponseWriter, r *http.Request) {
 				R[k] = s
 			}
 		}
+	}
+	// 分辨率档位(空=手动宽高;custom 或档位表内取值)
+	if v, present := body["res_tier"]; present {
+		s := strings.TrimSpace(str(v))
+		if s != "" && s != "custom" {
+			if _, ok := manjuResTiers[s]; !ok {
+				http.Error(w, `{"error":"res_tier 非法(可选 draft/standard/fhd 或留空手动)"}`, http.StatusBadRequest)
+				return
+			}
+		}
+		R["res_tier"] = s
+	}
+	// seed 重试策略
+	if v, present := body["seed_policy"]; present {
+		s := strings.TrimSpace(str(v))
+		if !manjuSeedPolicies[s] {
+			http.Error(w, `{"error":"seed_policy 非法(可选 fixed/increment/random)"}`, http.StatusBadRequest)
+			return
+		}
+		R["seed_policy"] = s
+	}
+	// 布尔字段(SageAttention/草稿预审开关)
+	for _, k := range manjuRenderBoolFields {
+		if v, present := body[k]; present {
+			if b, ok := v.(bool); ok {
+				R[k] = b
+			}
+		}
+	}
+	// 浮点字段(草稿缩放等)
+	for k, lim := range manjuRenderFloatFields {
+		v, present := body[k]
+		if !present || !manjuHas(v) {
+			continue
+		}
+		f, ok := manjuToFloat(v)
+		if !ok || f < lim[0] || f > lim[1] {
+			http.Error(w, fmt.Sprintf(`{"error":"字段 %s 非法(需 %g-%g)"}`, k, lim[0], lim[1]), http.StatusBadRequest)
+			return
+		}
+		R[k] = f
 	}
 	// 人物一致性:char_models(男/女 checkpoint,非写实风格定妆照用)
 	setCharModel := func(key, g string) {
@@ -1289,7 +1341,8 @@ func listManjuEpisodes(P map[string]any) []string {
 	}
 	if entries, err := os.ReadDir(filepath.Join(str(P["clips"]))); err == nil {
 		for _, e := range entries {
-			if e.IsDir() {
+			// 跳过非集目录:草稿预审 _draft / 云端 2K 定稿 2k(产物工作区,不是集)
+			if e.IsDir() && !strings.HasPrefix(e.Name(), "_") && e.Name() != "2k" {
 				add(e.Name())
 			}
 		}

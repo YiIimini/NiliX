@@ -308,6 +308,25 @@
             </div>
 
             <div class="manju-row">
+              <span class="manju-label">档位</span>
+              <select id="manju-res-tier" class="manju-input" title="按配置画幅等比换算短边(对齐32);「手动宽高」=直接用上面的宽高值">
+                <option value="">手动宽高</option>
+                <option value="draft">416P 草稿</option>
+                <option value="standard">768P 标准</option>
+                <option value="fhd">1088P 高清</option>
+              </select>
+              <span class="manju-label">seed策略</span>
+              <select id="manju-seed-policy" class="manju-input" title="固定=全剧同一 seed;重试递增=第N次返工 seed+N;重试随机=返工换新随机">
+                <option value="fixed">固定</option>
+                <option value="increment">重试递增</option>
+                <option value="random">重试随机</option>
+              </select>
+              <label class="manju-check" title="SageAttention 注意力加速补丁(需 ComfyUI-KJNodes 的 PatchSageAttentionKJ;RTX 50 系白捡提速),环境自检会校验节点"><input id="manju-sage" type="checkbox">SageAttn</label>
+              <label class="manju-check" title="智能一条龙:审片返工轮用缩放分辨率草稿(约1/4像素量),全部落定后自动全分辨率定稿重渲(零返工)"><input id="manju-draft-judge" type="checkbox">草稿预审</label>
+              <span class="manju-label">缩放</span><input id="manju-draft-scale" class="manju-input manju-num" type="number" min="0.2" max="0.95" step="0.05" title="草稿预审的分辨率缩放(0.2-0.95,默认 0.5)">
+            </div>
+
+            <div class="manju-row">
               <span class="manju-label">ComfyUI</span>
               <input id="manju-comfy-url" class="manju-input manju-wide" placeholder="http://127.0.0.1:8190" spellcheck="false">
             </div>

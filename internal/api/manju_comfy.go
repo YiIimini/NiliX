@@ -29,6 +29,17 @@ func newComfyClient(base string) *comfyClient {
 	return &comfyClient{base: strings.TrimRight(base, "/"), client: &http.Client{Timeout: 30 * time.Second}}
 }
 
+// hasNode 查询 ComfyUI 是否装有某自定义节点(/object_info/<name>,200=有)
+func (c *comfyClient) hasNode(name string) bool {
+	resp, err := c.client.Get(c.base + "/object_info/" + name)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	return resp.StatusCode == 200
+}
+
 func (c *comfyClient) online() (string, error) {
 	resp, err := c.client.Get(c.base + "/system_stats")
 	if err != nil {
@@ -328,6 +339,32 @@ func turboLoRASpecOf(name string) turboLoRASpec {
 	return turboLoRASpec{Strength: 0.8, Sampler: "res_multistep", Scheduler: "simple", Steps: 8}
 }
 
+// manjuResTiers 数据驱动分辨率档位:tier → 短边像素(对齐 minimax-h3-starter 的 416P/768P 分层理念)。
+// 档位按配置画幅等比换算,两边都对齐 32(H3 VAE 32× 下采样网格;1080 非 32 倍数,fhd 用 1088);
+// 未配置/custom = 直接用 width×height 手动值。新增档位只改这张表(数据驱动,不加代码分支)。
+var manjuResTiers = map[string]int{"draft": 416, "standard": 768, "fhd": 1088}
+
+// manjuAlign32 对齐到最近的 32 倍数(至少 32)
+func manjuAlign32(n int) int {
+	if n < 32 {
+		return 32
+	}
+	return (n + 16) / 32 * 32
+}
+
+// manjuResTierDims 档位 × 画幅 → 实际宽高(保持宽高比,短边=档位值,另一边对齐 32);
+// tier 无效返回原值 + false(调用方保持手动宽高)。
+func manjuResTierDims(tier string, w, h int) (int, int, bool) {
+	short, ok := manjuResTiers[tier]
+	if !ok || w <= 0 || h <= 0 {
+		return w, h, false
+	}
+	if w <= h { // 竖屏:宽为短边
+		return manjuAlign32(short), manjuAlign32(h * short / w), true
+	}
+	return manjuAlign32(w * short / h), manjuAlign32(short), true
+}
+
 // h3RenderWorkflow 采样渲染工作流:CondLoad 加载条件缓存(跳过重复 Qwen3-VL 编码)
 // + EmptyMiniMaxH3LatentAV 空 AV latent + Turbo LoRA + 可选 MotionContext 接缝。
 // 有角色用 ref2va 模型,空镜用 fl2va;接缝时 LoadLatent(prevIdx) → MotionContext → Trim,
@@ -360,6 +397,14 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 	}
 	if loraName != "" {
 		model = wfAdd(wf, "LoraLoaderModelOnly", map[string]any{"model": refOf(model), "lora_name": loraName, "strength_model": spec.Strength})
+	}
+	// SageAttention 加速补丁(KJNodes PatchSageAttentionKJ,starter 官方工作流同款):
+	// 长序列注意力量化加速,RTX 50 系白捡提速。默认关;未装 KJNodes 时 ComfyUI 校验会明确报节点缺失,
+	// 环境自检(manjuEnvCheck)也会提前提示。
+	if b, _ := R["sage_attention"].(bool); b {
+		model = wfAdd(wf, "PatchSageAttentionKJ", map[string]any{
+			"model": refOf(model), "sage_attention": "auto", "allow_compile": false,
+		})
 	}
 	vae := wfAdd(wf, "VAELoader", map[string]any{"vae_name": str(R["vae_video"])})
 	audioVae := wfAdd(wf, "VAELoader", map[string]any{"vae_name": str(R["vae_audio"])})

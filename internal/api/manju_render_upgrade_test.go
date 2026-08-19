@@ -1,0 +1,173 @@
+package api
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// TestResTierDims 分辨率档位换算:等比缩放 + 对齐 32 + 竖/横屏短边判定 + 无效档位回退
+func TestResTierDims(t *testing.T) {
+	cases := []struct {
+		tier       string
+		w, h       int
+		ew, eh     int
+		ok         bool
+	}{
+		{"draft", 768, 1344, 416, 736, true},   // 竖屏 9:16 → 短边 416
+		{"standard", 768, 1344, 768, 1344, true},
+		{"fhd", 768, 1344, 1088, 1920, true},   // 1344*1088/768=1904 → 对齐 32 → 1920
+		{"draft", 1344, 768, 736, 416, true},   // 横屏:高为短边
+		{"custom", 768, 1344, 768, 1344, false}, // custom/未知档位 → 原值
+		{"nope", 100, 200, 100, 200, false},
+	}
+	for _, c := range cases {
+		w, h, ok := manjuResTierDims(c.tier, c.w, c.h)
+		if w != c.ew || h != c.eh || ok != c.ok {
+			t.Errorf("tier=%s %dx%d → %dx%d(ok=%v),期望 %dx%d(ok=%v)", c.tier, c.w, c.h, w, h, ok, c.ew, c.eh, c.ok)
+		}
+		if ok && (w%32 != 0 || h%32 != 0) {
+			t.Errorf("tier=%s 结果未对齐 32: %dx%d", c.tier, w, h)
+		}
+	}
+}
+
+// TestDraftDims 草稿预审缩放:0.5 → 像素量约 1/4,两边对齐 32
+func TestDraftDims(t *testing.T) {
+	ctx := &manjuCtx{w: 768, h: 1344, draftScale: 0.5}
+	dw, dh := ctx.draftDims()
+	if dw != 384 || dh != 672 {
+		t.Errorf("draftDims = %dx%d,期望 384x672", dw, dh)
+	}
+	// 缩放非法值回退 0.5
+	ctx.draftScale = 0
+	if dw2, _ := ctx.draftDims(); dw2 != 384 {
+		t.Errorf("draftScale=0 未回退 0.5: %d", dw2)
+	}
+}
+
+// TestSeedFor seed 重试策略:fixed 恒定 / increment 递增 / random 首渲仍用配置 seed
+func TestSeedFor(t *testing.T) {
+	ctx := &manjuCtx{seed: 1688, seedPolicy: "fixed"}
+	if s := ctx.seedFor(3); s != 1688 {
+		t.Errorf("fixed 策略应恒定: %d", s)
+	}
+	ctx.seedPolicy = "increment"
+	if s := ctx.seedFor(2); s != 1690 {
+		t.Errorf("increment 策略第 2 次应 seed+2: %d", s)
+	}
+	if s := ctx.seedFor(0); s != 1688 {
+		t.Errorf("increment 首渲应等于 seed: %d", s)
+	}
+	ctx.seedPolicy = "random"
+	if s := ctx.seedFor(0); s != 1688 {
+		t.Errorf("random 首渲应等于 seed: %d", s)
+	}
+	if s := ctx.seedFor(1); s == 1688 {
+		t.Errorf("random 重试应换新随机(碰巧等于配置 seed 的概率可忽略)")
+	}
+}
+
+// TestH3RenderWorkflowSage SageAttention 开关:开=插入 PatchSageAttentionKJ,关=无
+func TestH3RenderWorkflowSage(t *testing.T) {
+	base := map[string]any{
+		"unet_ref2va": "u.safetensors", "unet_fl2va": "f.safetensors",
+		"vae_video": "v.safetensors", "vae_audio": "a.safetensors",
+	}
+	hasPatch := func(wf map[string]any) bool {
+		for _, n := range wf {
+			if m, ok := n.(map[string]any); ok && m["class_type"] == "PatchSageAttentionKJ" {
+				return true
+			}
+		}
+		return false
+	}
+	on := map[string]any{}
+	for k, v := range base {
+		on[k] = v
+	}
+	on["sage_attention"] = true
+	if wf := h3RenderWorkflow(on, 1, 768, 1344, 107, 8, "cache", false, false, 0, 1); !hasPatch(wf) {
+		t.Errorf("sage_attention=true 未插入 PatchSageAttentionKJ")
+	}
+	if wf := h3RenderWorkflow(base, 1, 768, 1344, 107, 8, "cache", false, false, 0, 1); hasPatch(wf) {
+		t.Errorf("未配置 sage_attention 不应插入补丁节点")
+	}
+}
+
+// TestSaveRenderUpgradeFields 渲染参数新字段保存与校验:档位/seed策略/布尔/浮点 + 非法值拒绝
+func TestSaveRenderUpgradeFields(t *testing.T) {
+	proj := "zz_render_upgrade_test"
+	dir := filepath.Join(manjuRoot, proj)
+	_ = os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+	_ = os.MkdirAll(dir, 0755)
+	cfgPath := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(cfgPath, []byte(`{"render":{"width":768,"height":1344}}`), 0644)
+
+	w, out := doReq(t, "POST", "/api/manju/render", map[string]any{
+		"config": cfgPath, "res_tier": "draft", "seed_policy": "increment",
+		"sage_attention": true, "draft_judge": true, "draft_scale": 0.6,
+	})
+	if w.Code != 200 || out["ok"] != true {
+		t.Fatalf("保存 HTTP %d: %s", w.Code, w.Body.String())
+	}
+	cfg, _ := readManjuConfig(cfgPath)
+	R, _ := cfg["render"].(map[string]any)
+	if R["res_tier"] != "draft" || R["seed_policy"] != "increment" {
+		t.Errorf("档位/策略未保存: %v", R)
+	}
+	if R["sage_attention"] != true || R["draft_judge"] != true {
+		t.Errorf("布尔开关未保存: %v", R)
+	}
+	if ds, _ := manjuToFloat(R["draft_scale"]); ds != 0.6 {
+		t.Errorf("draft_scale 未保存: %v", R["draft_scale"])
+	}
+
+	// 非法值拒绝
+	for _, bad := range []map[string]any{
+		{"config": cfgPath, "res_tier": "4k"},
+		{"config": cfgPath, "seed_policy": "shuffle"},
+		{"config": cfgPath, "draft_scale": 0.05},
+		{"config": cfgPath, "draft_scale": 1.5},
+	} {
+		wb, _ := doReq(t, "POST", "/api/manju/render", bad)
+		if wb.Code != 400 {
+			t.Errorf("非法值 %v 应 400,得到 %d", bad["res_tier"], wb.Code)
+		}
+	}
+
+	// 档位生效:newManjuCtx 后宽高等比缩放
+	R["fps"] = 24
+	_ = os.WriteFile(cfgPath, mustJSON(cfg), 0644)
+	ctx, err := newManjuCtx(cfgPath, "EP01", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.w != 416 || ctx.h != 736 {
+		t.Errorf("draft 档位未生效: %dx%d", ctx.w, ctx.h)
+	}
+	if ctx.seedPolicy != "increment" || !ctx.draftJudge {
+		t.Errorf("策略/草稿开关未生效: %v %v", ctx.seedPolicy, ctx.draftJudge)
+	}
+}
+
+// TestListManjuEpisodesSkipsWorkDirs 集清单排除 _draft / 2k 工作子目录
+func TestListManjuEpisodesSkipsWorkDirs(t *testing.T) {
+	clips := t.TempDir()
+	for _, d := range []string{"EP01", "EP02", "_draft", "2k"} {
+		_ = os.MkdirAll(filepath.Join(clips, d), 0755)
+	}
+	eps := listManjuEpisodes(map[string]any{"clips": clips})
+	if len(eps) != 2 || eps[0] != "EP01" || eps[1] != "EP02" {
+		t.Errorf("集清单应只有 EP01/EP02,得到 %v", eps)
+	}
+	_ = strings.TrimSpace("")
+}
+
+func mustJSON(v any) []byte {
+	b, _ := json.MarshalIndent(v, "", "  ")
+	return b
+}
