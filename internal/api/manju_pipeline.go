@@ -1274,12 +1274,19 @@ func (ctx *manjuCtx) characterCkpt(char map[string]any) string {
 	return "sd_xl_base_1.0.safetensors"
 }
 
-// portraitWF 定妆照工作流按风格分流:含写实元素用 Z-Image(真人级),其余用 SDXL checkpoint
-func (ctx *manjuCtx) portraitWF(prompt string, seed, w, h int, prefix string, char map[string]any) map[string]any {
+// manjuPortraitW/H 定妆照固定尺寸(SDXL 原生最佳 1024×1024):
+// 定妆照必须与项目画幅/分辨率档位完全解耦——同一角色在横屏/竖屏/不同档位项目里
+// 若按各自 ctx.w×ctx.h 生成,构图比例与细节密度漂移,H3 参考图内容随之变化导致角色不一致。
+// 固定尺寸后同角色跨项目同 prompt 同尺寸 → 形象唯一稳定。
+const manjuPortraitW, manjuPortraitH = 1024, 1024
+
+// portraitWF 定妆照工作流按风格分流:含写实元素用 Z-Image(真人级),其余用 SDXL checkpoint。
+// 尺寸固定为标准 1024×1024(与项目画幅无关);正脸参考(ensureFaceCrop)再从该图按视频比例裁切。
+func (ctx *manjuCtx) portraitWF(prompt string, seed int, prefix string, char map[string]any) map[string]any {
 	if manjuStyleHas(ctx.style, "real") {
-		return wfZImage(prompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), seed, w, h, prefix, ctx.negPrompt())
+		return wfZImage(prompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt())
 	}
-	return wfSDXL(prompt, ctx.characterCkpt(char), seed, w, h, prefix, ctx.negPrompt())
+	return wfSDXL(prompt, ctx.characterCkpt(char), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt())
 }
 
 // comfyGenImage 提交图片工作流并复制结果到 dst,返回输出文件相对路径
@@ -1341,7 +1348,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		dst := filepath.Join(ctx.assetsDir, "characters", cid+".png")
 		if !fileExists(dst) {
 			lg.logf("🎨 角色定妆照: " + cid + " ...")
-			wf := ctx.portraitWF(str(m["image_prompt"]), 7000+i, ctx.w, ctx.h, "manju_asset", m)
+			wf := ctx.portraitWF(str(m["image_prompt"]), 7000+i, "manju_asset", m)
 			if err := ctx.comfyGenImage(wf, dst, lg, "角色 "+cid); err != nil {
 				return fmt.Errorf("角色 %s 定妆照失败: %w", cid, err)
 			}
@@ -2324,7 +2331,7 @@ func manjuGachaDraw(configPath, episode, char string) (map[string]any, int, erro
 	seed := randSeed()
 	// 抽卡候选与正式定妆照同款模型:写实→Z-Image,其余→SDXL checkpoint
 	charInfo := map[string]any{"gender": ctx.gachaCharGender(char)}
-	wf := ctx.portraitWF(charPromptFor(ctx, char), seed, ctx.w, ctx.h, "manju_gacha", charInfo)
+	wf := ctx.portraitWF(charPromptFor(ctx, char), seed, "manju_gacha", charInfo)
 	dst := filepath.Join(ctx.assetsDir, "characters", "_gacha", fmt.Sprintf("%s_s%d.png", char, seed))
 	lg := &manjuLogger{state: manjuState}
 	if err := ctx.comfyGenImage(wf, dst, lg, "角色 "+char); err != nil {
