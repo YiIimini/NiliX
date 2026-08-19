@@ -457,14 +457,21 @@ func onReady(url string) func() {
 	}
 }
 
-// closeMainWindow 关闭管理主窗口(Edge App 独立进程,需发消息让其退出)
+// closeMainWindow 关闭管理主窗口(子进程 WebView2)。用 FindWindowW 精确匹配标题
+// (主窗口 title 恒为 "NiliX",灵动岛为 "NiliX HUD")——不用 EnumWindows 枚举:
+// 在 systray 退出回调里枚举会跨进程 GetWindowTextW,偶发挂起导致"点 X 卡住"(托盘图标已删、进程不退)。
 func closeMainWindow() {
-	if h := findMainWindow(); h != 0 {
+	t, err := syscall.UTF16PtrFromString(mainWinTitle)
+	if err != nil {
+		return
+	}
+	if h, _, _ := procWinFind.Call(0, uintptr(unsafe.Pointer(t))); h != 0 {
 		_, _, _ = procWinClose.Call(h, 0x0010, 0, 0) // WM_CLOSE=0x10
 	}
 }
 
 func onExit() {
+	log.Println("onExit: 开始退出")
 	closeMainWindow() // 全退(灵动岛 X / 托盘结束应用):一并关闭管理主窗口
 	log.Println("NiliX 已退出")
 }
