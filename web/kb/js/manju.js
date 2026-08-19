@@ -357,8 +357,8 @@
         if (!t.trim()) continue;
         const st = t.match(/^━━━ 阶段 (\w+) ━━━/);
         if (st) {
-          // 大节点:时间在时间轴最左侧,阶段名在内容区
-          rows.push(`<div class="mj-tl-row stage" title="${esc(st[1])}"><span class="mj-tl-time">${time}</span><span class="mj-tl-dot"></span><span class="mj-tl-main"><b>${stageCN[st[1]] || esc(st[1])}</b><i>${esc(st[1])}</i></span></div>`);
+          // 大节点:阶段名在时间轴左侧沟槽,时间在右侧(普通行的时间才在左列)
+          rows.push(`<div class="mj-tl-row stage" title="${esc(st[1])}"><span class="mj-tl-side"><b>${stageCN[st[1]] || esc(st[1])}</b><i>${esc(st[1])}</i></span><span class="mj-tl-dot"></span><span class="mj-tl-main"></span><span class="mj-tl-time">${time}</span></div>`);
           continue;
         }
         const isSub = /^\s{2,}/.test(t);

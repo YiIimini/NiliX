@@ -4581,27 +4581,29 @@ select option { text-align: center; }
 .manju-vid-2k .manju-vid-name { color: var(--accent); }
 .manju-stale-tag { font-size: 10px; color: #e3b341; margin-right: 2px; white-space: nowrap; cursor: help; }
 
-/* 运行日志:竖向时间轴——时间在轴最左列,内容居右,阶段名在轴左侧内容区 */
+/* 运行日志:竖向时间轴——普通行时间在轴最左列(右对齐贴轴),内容居右;
+   阶段大节点(方案/资产/编码/渲染/质检/合成)阶段名在左沟槽、时间在最右列 */
 .mj-tl { position: relative; display: flex; flex-direction: column; white-space: normal; font-size: 11.5px; line-height: 1.45; }
 .mj-tl::before {
   content: ""; position: absolute; left: 62px; top: 6px; bottom: 6px; width: 2px;
   border-radius: 2px; background: color-mix(in srgb, var(--muted) 22%, transparent);
 }
-.mj-tl-row { display: grid; grid-template-columns: 54px 16px 1fr; align-items: start; padding: 1.5px 0; }
+.mj-tl-row { display: grid; grid-template-columns: 54px 16px 1fr 54px; align-items: start; padding: 1.5px 0; }
+.mj-tl-side { text-align: right; padding-right: 8px; min-width: 0; }
 .mj-tl-dot {
   width: 9px; height: 9px; margin: 4px auto 0; border-radius: 50%;
   background: var(--muted); box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 14%, transparent);
 }
 .mj-tl-main { min-width: 0; overflow-wrap: anywhere; padding-right: 8px; }
 .mj-tl-time {
-  text-align: right; padding-right: 8px; font-size: 9.5px; color: var(--muted); opacity: .8;
+  text-align: right; font-size: 9.5px; color: var(--muted); opacity: .8;
   font-variant-numeric: tabular-nums; line-height: 1.6; align-self: start;
 }
-/* 阶段大节点:阶段名(中文名+英文 tag 两行)在时间轴内容区,轴上发光大点,右侧细分隔线 */
+/* 阶段大节点:名称在左沟槽(中文名+英文 tag 两行),时间在最右列,轴上发光大点,右侧细分隔线 */
 .mj-tl-row.stage { margin-top: 8px; }
-.mj-tl-row.stage .mj-tl-main { display: flex; flex-direction: column; gap: 1px; }
-.mj-tl-row.stage .mj-tl-main b { font-size: 13px; font-weight: 800; letter-spacing: 1px; }
-.mj-tl-row.stage .mj-tl-main i { font-style: normal; font-size: 9.5px; color: var(--muted); letter-spacing: .5px; }
+.mj-tl-row.stage .mj-tl-side { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.mj-tl-row.stage .mj-tl-side b { font-size: 13px; font-weight: 800; letter-spacing: 1px; }
+.mj-tl-row.stage .mj-tl-side i { font-style: normal; font-size: 9.5px; color: var(--muted); letter-spacing: .5px; }
 .mj-tl-row.stage .mj-tl-dot {
   width: 14px; height: 14px; margin-top: 2px; background: var(--accent);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent), 0 0 14px var(--glow);
@@ -4628,9 +4630,9 @@ select option { text-align: center; }
 .mj-tl-row.sub.ok .mj-tl-main { color: color-mix(in srgb, var(--ok, #34d399) 65%, var(--text)); opacity: 1; }
 .mj-tl-fold { padding: 2px 0 8px 62px; color: var(--muted); font-size: 10.5px; opacity: .8; }
 @media (max-width: 560px) {
-  .mj-tl-row { grid-template-columns: 44px 14px 1fr; }
+  .mj-tl-row { grid-template-columns: 44px 14px 1fr 42px; }
   .mj-tl::before { left: 51px; }
-  .mj-tl-row.stage .mj-tl-main b { font-size: 11.5px; }
+  .mj-tl-row.stage .mj-tl-side b { font-size: 11.5px; }
   .mj-tl-fold { padding-left: 58px; }
 }
 
