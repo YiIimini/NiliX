@@ -675,23 +675,39 @@ def cmd_assemble(args):
 
 
 def cmd_facecrop(args):
-    """从定妆照切出完整正脸/头肩特写,放大到短边 768 作为 R2V 参考。
+    """从定妆照切出完整正脸/头肩特写,作为 R2V 参考。
 
     H3 人脸 token 极少(视觉 VAE 32× 下采样),全身立绘脸占比小、锁定弱;
-    用正脸特写可让脸部占满参考帧,身份锁定大幅增强。ref_image_size=match 只缩不放,
-    所以这里主动放大。
-    裁剪范围覆盖完整头部+肩部(垂直 0-55%,水平居中 70%),确保正脸完整——
-    含发顶/额头/下巴/肩,避免只裁到"半张脸"导致与渲染视频对不上。
+    用正脸特写可让脸部占满参考帧,身份锁定大幅增强。
+    关键:输出按渲染同比例(默认 1344x768,可用 --ratio 覆盖)——ref_image_size=match
+    会把参考图缩放/裁剪到输出尺寸,比例不一致会被压扁变形,脸部遵循直接劣化;
+    同比例 + 紧凑脸区(垂直 8%-52% 额头到肩,水平居中同比例窗口)保证脸部占满且不变形。
+    裁剪范围覆盖完整头部(发顶/额头/下巴)+ 少量肩,避免只裁到"半张脸"。
     """
     from PIL import Image
     im = Image.open(args.src).convert("RGB")
     w, h = im.size
-    left, right = int(w * 0.15), int(w * 0.85)   # 水平居中 70%
-    top, bot = int(h * 0.00), int(h * 0.55)      # 上部 55%:完整头部+肩部
-    crop = im.crop((left, top, right, bot))
-    short = min(crop.size)
-    if short < 768:
-        scale = 768 / short
+    tw, th = 1344, 768
+    if args.ratio and "x" in args.ratio:
+        try:
+            tw, th = map(int, args.ratio.split("x", 1))
+        except Exception:
+            pass
+    if tw <= 0 or th <= 0:
+        tw, th = 1344, 768
+    ratio = tw / th
+    top, bot = int(h * 0.08), int(h * 0.52)  # 垂直 8%-52%:发顶到肩,裁掉地面/远景
+    ch = bot - top
+    cw = int(ch * ratio)
+    if cw > w:  # 目标窗口超宽(竖图定妆照):限宽后按比例缩高
+        cw = w
+        ch = int(cw / ratio)
+        bot = top + ch
+    left = (w - cw) // 2
+    crop = im.crop((left, top, left + cw, bot))
+    # 放大到目标分辨率(只放不放缩,放大后脸部占满参考帧)
+    scale = min(th / crop.height, tw / crop.width)
+    if scale > 1:
         crop = crop.resize((int(crop.width * scale), int(crop.height * scale)), Image.LANCZOS)
     os.makedirs(os.path.dirname(args.dst), exist_ok=True)
     crop.save(args.dst)
@@ -1233,6 +1249,7 @@ def main():
     f = sub.add_parser("facecrop")
     f.add_argument("--src", required=True)
     f.add_argument("--dst", required=True)
+    f.add_argument("--ratio", default="")  # 目标宽x高(默认 1344x768,与渲染同比例防变形)
     pr = sub.add_parser("probe")
     pr.add_argument("--file", required=True)
     ins = sub.add_parser("inspect")

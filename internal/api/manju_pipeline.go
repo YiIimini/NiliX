@@ -2031,7 +2031,7 @@ func (ctx *manjuCtx) ensureFaceCrop(cid string, lg *manjuLogger) error {
 	if fileExists(faceP) && !filesEqual(faceP, mainP) {
 		return nil // 已有独立正脸
 	}
-	if err := ctx.runMedia(lg, "facecrop", "--src", mainP, "--dst", faceP); err != nil {
+	if err := ctx.runMedia(lg, "facecrop", "--src", mainP, "--dst", faceP, "--ratio", fmt.Sprintf("%dx%d", ctx.w, ctx.h)); err != nil {
 		return fmt.Errorf("角色 %s 正脸裁剪失败: %w", cid, err)
 	}
 	return nil

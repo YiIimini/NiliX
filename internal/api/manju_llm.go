@@ -434,7 +434,7 @@ const manjuRef2vaTpl = `【Ref2VA 六段式(有角色,锁人物),严格此顺序
 subject_definitions:
 <Subject 1> is the character in <Picture 1> with [完整外观：逐字引用角色卡 appearance；服装 costume 全字段；【性别强化】女=feminine facial structure, soft delicate features, long hair（禁男性化），男=masculine jawline, strong brow, broad shoulders（禁女性化）]
 [多角色镜:每个登场角色一行 <Subject N> is the character in <Picture N>…,与参考图顺序一致(角色在前场景在后);画面里谁先出现谁 Subject 号靠前]
-[参考图纪律·强制:只有输入中 ref_available 名单里的角色才写 in <Picture N>;名单外的登场角色(本镜参考图不足)写 <Subject N> is [角色名] with 外观描述(不引用任何 Picture),并保持与参考角色不串脸]
+[参考图纪律·强制:ref_available 名单的顺序就是参考图传入顺序;<Picture 1..N> 严格对应名单第 1..N 个角色,Subject 编号与之一一对应(Subject 1=名单第 1 个角色,依次),禁止调换/跳过/合并;名单外的登场角色(本镜参考图不足)写 <Subject N> is [角色名] with 外观描述(不引用任何 Picture),并保持与参考角色不串脸]
 <Subject N+1> is the [场景名] environment in <Picture N+1>, with [空间结构/材质/光线客观描述，引用场景卡]
 [关键道具：<Subject M> is the [道具名] in <Picture M>, with 外观描述；说明与角色互动]
 
