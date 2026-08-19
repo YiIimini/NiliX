@@ -16,3 +16,8 @@ rsrc_windows_386.syso
 *.bak
 .DS_Store
 __pycache__/
+
+# 窗口尺寸运行时状态(用户拖动落盘,勿入库)
+mainwin.json
+# 热替换编译备份
+NiliX.exe~
