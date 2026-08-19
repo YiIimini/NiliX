@@ -357,8 +357,8 @@
         if (!t.trim()) continue;
         const st = t.match(/^━━━ 阶段 (\w+) ━━━/);
         if (st) {
-          // 大节点:阶段名放时间轴左侧沟槽,时间放右侧
-          rows.push(`<div class="mj-tl-row stage" title="${esc(st[1])}"><span class="mj-tl-side"><b>${stageCN[st[1]] || esc(st[1])}</b><i>${esc(st[1])}</i></span><span class="mj-tl-dot"></span><span class="mj-tl-main"></span><span class="mj-tl-time">${time}</span></div>`);
+          // 大节点:时间在时间轴最左侧,阶段名在内容区
+          rows.push(`<div class="mj-tl-row stage" title="${esc(st[1])}"><span class="mj-tl-time">${time}</span><span class="mj-tl-dot"></span><span class="mj-tl-main"><b>${stageCN[st[1]] || esc(st[1])}</b><i>${esc(st[1])}</i></span></div>`);
           continue;
         }
         const isSub = /^\s{2,}/.test(t);
@@ -371,9 +371,9 @@
         else if (/^🤖|^🧠|^📖|^✏️|^🔧|⤵️已降级/.test(tt)) cls = "agent";
         else if (/^\[\d+\/\d+\]/.test(tt)) cls = "shot";
         const body = esc(tt);
-        // 普通行:内容在时间轴右侧,时间列统一放最右;子条目无点弱化
-        if (isSub) rows.push(`<div class="mj-tl-row sub ${cls}"><span class="mj-tl-side"></span><span class="mj-tl-dot"></span><span class="mj-tl-main">${body}</span><span class="mj-tl-time">${time}</span></div>`);
-        else rows.push(`<div class="mj-tl-row ${cls}"><span class="mj-tl-side"></span><span class="mj-tl-dot"></span><span class="mj-tl-main">${body}</span><span class="mj-tl-time">${time}</span></div>`);
+        // 普通行:时间在时间轴最左侧,内容在右;子条目无点弱化
+        if (isSub) rows.push(`<div class="mj-tl-row sub ${cls}"><span class="mj-tl-time">${time}</span><span class="mj-tl-dot"></span><span class="mj-tl-main">${body}</span></div>`);
+        else rows.push(`<div class="mj-tl-row ${cls}"><span class="mj-tl-time">${time}</span><span class="mj-tl-dot"></span><span class="mj-tl-main">${body}</span></div>`);
       }
       const head = lines.length > MAX ? `<div class="mj-tl-fold">… 前方 ${lines.length - MAX} 行已折叠(完整日志见项目目录 run.log)</div>` : "";
       log.innerHTML = `<div class="mj-tl">${head}${rows.join("")}</div>`;
