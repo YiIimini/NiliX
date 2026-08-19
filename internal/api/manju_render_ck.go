@@ -41,9 +41,7 @@ func (ctx *manjuCtx) renderCKLoad() *manjuRenderCK {
 }
 
 func (ctx *manjuCtx) renderCKSave(ck *manjuRenderCK) {
-	_ = os.MkdirAll(filepath.Dir(ctx.renderCKPath()), 0755)
-	b, _ := json.MarshalIndent(ck, "", "  ")
-	_ = os.WriteFile(ctx.renderCKPath(), b, 0644)
+	_ = atomicWriteJSON(ctx.renderCKPath(), ck)
 }
 
 func (ctx *manjuCtx) renderCKSet(key, pid string) {

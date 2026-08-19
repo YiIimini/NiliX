@@ -2,6 +2,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io/fs"
@@ -19,20 +20,20 @@ import (
 
 // Server 持有配置存储与内存态。
 type Server struct {
-	mu        sync.RWMutex
-	store     *config.Store
-	cfg       *config.Settings
-	indexHTML []byte
-	renderMgr *render.Manager
-	sysmon    *sysmon.Collector
-	kbStore   *kb_work.Store
-	kbGraphMu     sync.RWMutex
-	kbGraphJSON   []byte
-	kbGraphGen    time.Time
-	kbRoot    string
-	kbFS      fs.FS
-	islandFS  fs.FS
-	outDir    string
+	mu          sync.RWMutex
+	store       *config.Store
+	cfg         *config.Settings
+	indexHTML   []byte
+	renderMgr   *render.Manager
+	sysmon      *sysmon.Collector
+	kbStore     *kb_work.Store
+	kbGraphMu   sync.RWMutex
+	kbGraphJSON []byte
+	kbGraphGen  time.Time
+	kbRoot      string
+	kbFS        fs.FS
+	islandFS    fs.FS
+	outDir      string
 }
 
 // NewServer 构造服务。
@@ -41,6 +42,13 @@ func NewServer(store *config.Store, cfg *config.Settings, indexHTML []byte, rend
 }
 
 // Routes 返回路由。
+// sessionToken 会话令牌(启动随机生成,注入前端):所有非 GET 请求校验 X-NiliX-Token,
+// 防本机浏览器跨站/恶意页面/顺手 curl 触发写操作(读操作 GET 不校验——真正的读保护由 fs 白名单承担)。
+var sessionToken string
+
+// SetSessionToken 注入会话令牌(main 启动时调用)
+func SetSessionToken(t string) { sessionToken = t }
+
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
@@ -86,7 +94,20 @@ func (s *Server) Routes() http.Handler {
 	if s.kbFS != nil {
 		mux.Handle("/", noCacheHTML(http.FileServer(http.FS(s.kbFS))))
 	}
-	return mux
+	return s.auth(mux)
+}
+
+// auth 非 GET 请求校验会话 token(静态资源/读接口 GET 放行)
+func (s *Server) auth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && sessionToken != "" {
+			if r.Header.Get("X-NiliX-Token") != sessionToken {
+				http.Error(w, `{"error":"会话失效,请刷新页面"}`, http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // noCacheHTML 全部本地静态资源 no-cache(回源校验,ETag 未变走 304):
@@ -116,7 +137,12 @@ type testResponse struct {
 
 func (s *Server) handleManage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(s.indexHTML)
+	out := s.indexHTML
+	// 注入会话令牌(前端 window.NILIX_TOKEN + localStorage),供所有 API 写请求带 X-NiliX-Token
+	if sessionToken != "" {
+		out = bytes.Replace(out, []byte("/*__NILIX_TOKEN__*/"), []byte(sessionToken), 1)
+	}
+	_, _ = w.Write(out)
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {

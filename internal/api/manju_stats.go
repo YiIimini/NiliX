@@ -64,9 +64,7 @@ func manjuStatsAdd(project, model string, u agent.Usage) {
 	st.Calls++
 	st.Total += u.TotalTokens
 	st.UpdatedAt = time.Now().Unix()
-	b, _ := json.MarshalIndent(st, "", "  ")
-	_ = os.MkdirAll(filepath.Dir(manjuStatsPath(project)), 0755)
-	_ = os.WriteFile(manjuStatsPath(project), b, 0644)
+	_ = atomicWriteJSON(manjuStatsPath(project), st)
 }
 
 // manjuStatsLoad 读项目记账(无文件返回空结构)

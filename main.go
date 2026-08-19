@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -384,6 +386,13 @@ func main() {
 	kbStore := kb_work.NewStore(*kbRoot)
 	kbSub, _ := fs.Sub(kbFS, "web/kb")
 	islandSub, _ := fs.Sub(islandFS, "web/island")
+	// 安全:会话令牌(随机 32 hex)注入所有写请求鉴权;fs 根目录白名单(知识库/漫剧/小说/Comfy 目录)
+	tok := make([]byte, 16)
+	if _, rerr := rand.Read(tok); rerr == nil {
+		api.SetSessionToken(hex.EncodeToString(tok))
+	}
+	api.SetFSRoots(*kbRoot, `C:\Mi\Ai\WorkBench
+ovel`, cfg.Paths.ComfyInput, cfg.Paths.ComfyOutput)
 	srv := api.NewServer(store, cfg, []byte(indexHTML), renderMgr, sysmonCol, kbStore, *kbRoot, kbSub, islandSub, outDir)
 	addr := "127.0.0.1:" + *port
 	url := "http://" + addr

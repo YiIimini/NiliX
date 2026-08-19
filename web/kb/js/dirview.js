@@ -9,6 +9,18 @@ const numIn = (v, d, min, max) => {
   const n = parseFloat(v);
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : d;
 };
+/* 会话令牌(与 manju.js/app.js 同源):写请求带 X-NiliX-Token 防跨站 */
+function nilixTok() {
+  const t = window.NILIX_TOKEN;
+  if (t && t.length > 8) return t;
+  try { return localStorage.getItem("nilix_token") || ""; } catch (e) { return ""; }
+}
+function tokHeaders(h) {
+  const t = nilixTok();
+  if (!t) return h || {};
+  return Object.assign({}, h || {}, { "X-NiliX-Token": t });
+}
+
 class DirView {
   constructor(key, opts) {
     this.key = key; // "novel" | "manju"
@@ -190,7 +202,7 @@ class DirView {
     document.getElementById("pj-del-yes").addEventListener("click", () => {
       const b = document.getElementById("pj-del-yes");
       b.disabled = true; b.textContent = "删除中…";
-      fetch("/api/manju/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+      fetch("/api/manju/delete", { method: "POST", headers: tokHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ config: cfgPath }) })
         .then((r) => r.json())
         .then((d) => {
@@ -712,7 +724,7 @@ class DirView {
       this._nvPolling = false;
       const t = $("nv-title").value.trim();
       try {
-        await fetch("/api/novel/auto/stop", { method: "POST", headers: { "Content-Type": "application/json" },
+        await fetch("/api/novel/auto/stop", { method: "POST", headers: tokHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({ title: t }) });
       } catch (e) { /* 停止失败也要恢复 UI */ }
       const b = $("nv-auto"), nb = $("nv-next");
@@ -793,7 +805,7 @@ class DirView {
       if (el) el.textContent = "大纲生成中… 已 " + Math.round((Date.now() - t0) / 1000) + "s(章数越多越久,请勿关弹窗)";
     }, 1000);
     try {
-      const r = await fetch("/api/novel/create", { method: "POST", headers: { "Content-Type": "application/json" },
+      const r = await fetch("/api/novel/create", { method: "POST", headers: tokHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ title, genre: $("nv-genre").value.trim(), style: $("nv-style").value.trim(), chapters: parseInt($("nv-count").value, 10) || 56 }),
         signal: ac.signal });
       const j = await r.json();
@@ -854,7 +866,7 @@ class DirView {
     box.classList.remove("hidden");
     box.innerHTML = '<div class="nv-state busy">🤖 策划分析中(约 10-30s)…</div>';
     try {
-      const r = await fetch("/api/novel/analyze", { method: "POST", headers: { "Content-Type": "application/json" },
+      const r = await fetch("/api/novel/analyze", { method: "POST", headers: tokHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ genre: ($("nv-genre").value || "").trim(), style: ($("nv-style").value || "").trim() }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
@@ -881,7 +893,7 @@ class DirView {
     box.classList.remove("hidden");
     box.innerHTML = '<div class="nv-state busy">🤖 审稿中(8 维评分,约 10-30s)…</div>';
     try {
-      const r = await fetch("/api/novel/review", { method: "POST", headers: { "Content-Type": "application/json" },
+      const r = await fetch("/api/novel/review", { method: "POST", headers: tokHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ title: this._nvTitle, no }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
@@ -917,7 +929,7 @@ class DirView {
         if (el) el.textContent = `第 ${next} 章写作中… 已 ${Math.round((Date.now() - t0) / 1000)}s`;
       }, 1000);
       try {
-        const r = await fetch("/api/novel/chapter", { method: "POST", headers: { "Content-Type": "application/json" },
+        const r = await fetch("/api/novel/chapter", { method: "POST", headers: tokHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({ title: this._nvTitle, no: next }), signal: ac.signal });
         const j = await r.json();
         if (!r.ok) { const el = prog(); if (el) el.textContent = "❌ 第" + next + "章: " + (j.error || r.status); }
@@ -932,7 +944,7 @@ class DirView {
     }
     // 自动连写:交给后台后台任务(弹窗关闭也继续),前端轮询进度
     try {
-      await fetch("/api/novel/auto", { method: "POST", headers: { "Content-Type": "application/json" },
+      await fetch("/api/novel/auto", { method: "POST", headers: tokHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ title: this._nvTitle }) });
     } catch (e) { const el = prog(); if (el) el.textContent = "❌ 启动失败 " + e.message; return; }
     const st = $("nv-state");

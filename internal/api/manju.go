@@ -161,9 +161,7 @@ func writeManjuDiskState(project string, ds *manjuDiskState) {
 	if project == "" {
 		return
 	}
-	_ = os.MkdirAll(filepath.Dir(manjuRunStatePath(project)), 0755)
-	b, _ := json.Marshal(ds)
-	_ = os.WriteFile(manjuRunStatePath(project), b, 0644)
+	_ = atomicWriteJSON(manjuRunStatePath(project), ds)
 }
 
 func loadManjuDiskState(project string) *manjuDiskState {
@@ -378,11 +376,7 @@ func readManjuConfig(path string) (map[string]any, error) {
 }
 
 func writeManjuConfig(path string, cfg map[string]any) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
+	return atomicWriteJSON(path, cfg)
 }
 
 // writeManjuRunParams 把章节/集号/镜头写入 config.render(新管线从 render 读取运行参数)
@@ -462,12 +456,32 @@ func manjuDefaultAPIKey() string {
 }
 
 func writeManjuSettings(s map[string]any) error {
-	_ = os.MkdirAll(filepath.Dir(manjuSettingsFile), 0755)
-	data, err := json.MarshalIndent(s, "", "  ")
+	return atomicWriteJSON(manjuSettingsFile, s)
+}
+
+// ---- 原子落盘(崩溃半写防线) ----
+// 状态/配置类 JSON 统一「同目录临时文件 + os.Rename」原子替换:进程崩溃/断电不会留下半写文件,
+// 此前 os.WriteFile 直写,崩溃时 run_state/agent_state/manifest/render_ck 等可能损坏——
+// 读取方大多"静默当空"(检查点丢失 → 重复提交重复烧 GPU)。
+
+func atomicWrite(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	tmp := filepath.Join(dir, fmt.Sprintf(".%s.tmp%d", filepath.Base(path), time.Now().UnixNano()))
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func atomicWriteJSON(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(manjuSettingsFile, data, 0644)
+	return atomicWrite(path, b)
 }
 
 // ---- 同步子进程(create / env 自检) ----
@@ -960,19 +974,19 @@ func manjuNovelSave(w http.ResponseWriter, r *http.Request) {
 
 // manjuModelDirs 各模型字段对应的 ComfyUI 模型子目录（依次查找，取第一个非空）。
 var manjuModelDirs = map[string][]string{
-	"unet_fl2va":   {"diffusion_models", "unet"},
-	"unet_ref2va":  {"diffusion_models", "unet"},
-	"z_image_unet": {"diffusion_models", "unet"},
-	"clip":         {"text_encoders", "clip"},
-	"z_image_clip": {"text_encoders", "clip"},
-	"vae_video":    {"vae"},
-	"vae_audio":    {"vae"},
-	"z_image_vae":  {"vae"},
-	"turbo_lora":      {"loras"},
-	"turbo_lora_r2v":  {"loras"},
-	"char_male":    {"checkpoints"},
-	"char_female":  {"checkpoints"},
-	"animagine":    {"checkpoints"},
+	"unet_fl2va":     {"diffusion_models", "unet"},
+	"unet_ref2va":    {"diffusion_models", "unet"},
+	"z_image_unet":   {"diffusion_models", "unet"},
+	"clip":           {"text_encoders", "clip"},
+	"z_image_clip":   {"text_encoders", "clip"},
+	"vae_video":      {"vae"},
+	"vae_audio":      {"vae"},
+	"z_image_vae":    {"vae"},
+	"turbo_lora":     {"loras"},
+	"turbo_lora_r2v": {"loras"},
+	"char_male":      {"checkpoints"},
+	"char_female":    {"checkpoints"},
+	"animagine":      {"checkpoints"},
 }
 
 // manjuModels 返回各模型字段的可选模型列表(从 ComfyUI 模型目录读取),供前端下拉选择。
@@ -1033,7 +1047,7 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	phase := str(body["phase"])
 	only := str(body["only"])
 	novel := str(body["novel"])
-	fresh, _ := body["fresh"].(bool) // 重跑:先清空项目旧产物(方案/镜头/成片/缓存)
+	fresh, _ := body["fresh"].(bool)     // 重跑:先清空项目旧产物(方案/镜头/成片/缓存)
 	agentMode, _ := body["agent"].(bool) // 智能体调度:剧本复核 + 审片官判分 + 自动返工 + 例外升级
 
 	if configPath == "" {
@@ -1616,8 +1630,11 @@ func sanitizeFileName(s string) string {
 
 // manjuGachaUpload 上传角色图并直接采纳为正式定妆照(覆盖 → 指纹失效 → 后续渲染以它为身份参考)
 func manjuGachaUpload(w http.ResponseWriter, r *http.Request) {
+	// 真上限:MaxBytesReader 限制整个请求体(此前 64MB 只是 ParseMultipartForm 内存阈值,
+	// 更大的文件会 spool 落盘,io.Copy 无限制可被灌满磁盘)
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<20)
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		writeErr(w, http.StatusBadRequest, "解析上传失败: "+err.Error())
+		writeErr(w, http.StatusBadRequest, "上传过大或解析失败: "+err.Error())
 		return
 	}
 	configPath := r.FormValue("config")
@@ -1673,12 +1690,20 @@ func manjuGachaUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if _, err := io.Copy(out, file); err != nil {
+	// 单文件 20MB 上限(LimitReader+1 探测越界)
+	n, err := io.Copy(out, io.LimitReader(file, 20<<20+1))
+	if err != nil {
 		out.Close()
+		_ = os.Remove(saved)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out.Close()
+	if n > 20<<20 {
+		_ = os.Remove(saved)
+		writeErr(w, http.StatusBadRequest, "文件超过 20MB 上限")
+		return
+	}
 	if err := manjuAdoptGacha(configPath, episode, char, saved); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "采纳失败: " + err.Error()})
 		return

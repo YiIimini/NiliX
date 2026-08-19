@@ -147,7 +147,11 @@ func (s *Store) Load() (*Settings, error) {
 	cfg := Default()
 	if b, err := os.ReadFile(s.Path); err == nil {
 		if err := json.Unmarshal(b, cfg); err != nil {
-			return nil, err
+			// 配置文件损坏自愈:备份坏文件(.bad),以默认配置继续——此前直接 return err,
+			// main log.Fatalf 整个服务起不来;其余设置靠用户重填,坏文件保留供排查
+			_ = os.WriteFile(s.Path+".bad", b, 0600)
+			_ = os.Remove(s.Path)
+			cfg = Default()
 		}
 	}
 	// 解密失败(主密钥丢失/损坏/被清理工具删除):备份原文件、重建密钥、以空 key 启动,
@@ -209,7 +213,12 @@ func (s *Store) Save(cfg *Settings) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.Path, b, 0600)
+	// 原子写:同目录临时文件 + rename,防保存途中崩溃留下半写配置(损坏配置会让服务起不来)
+	tmp := s.Path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.Path)
 }
 
 // loadOrCreateKey 读取或生成 32 字节主密钥。

@@ -237,9 +237,7 @@ func loadAgentStateLocked(project string) *manjuAgentState {
 
 func saveAgentStateLocked(project string, st *manjuAgentState) {
 	st.UpdatedAt = time.Now().Unix()
-	b, _ := json.MarshalIndent(st, "", "  ")
-	_ = os.MkdirAll(filepath.Dir(manjuAgentStatePath(project)), 0755)
-	_ = os.WriteFile(manjuAgentStatePath(project), b, 0644)
+	_ = atomicWriteJSON(manjuAgentStatePath(project), st)
 }
 
 // agentStatusSummary status 接口附带的审片摘要(前端审片报告面板数据源)

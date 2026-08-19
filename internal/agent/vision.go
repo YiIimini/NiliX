@@ -88,15 +88,22 @@ func NewVisionClient(baseURL, apiKey, model string, timeout time.Duration) *Visi
 		}
 	}
 	vc := &VisionClient{
-		BaseURL:  base,
-		APIKey:   apiKey,
-		Model:    models[0],
-		Models:   models,
-		Timeout:  timeout,
-		client:   &http.Client{Timeout: timeout},
+		BaseURL: base,
+		APIKey:  apiKey,
+		Model:   models[0],
+		Models:  models,
+		Timeout: timeout,
+		client:  &http.Client{Timeout: timeout},
 	}
 	vc.LastUsedModel = vc.Model
 	return vc
+}
+
+// LastUsed 线程安全读取实际使用模型(判分并发时与写入互斥)
+func (v *VisionClient) LastUsed() string {
+	v.stickyMu.Lock()
+	defer v.stickyMu.Unlock()
+	return v.LastUsedModel
 }
 
 // EnvAPIKey 环境变量兜底 key(glm-vision 技能:GLM_VISION_API_KEY)
@@ -161,9 +168,10 @@ func (v *VisionClient) chatImage(system, user string, imagePaths []string, tempe
 			}
 			out, err := v.doChatOnce(body)
 			if err == nil {
-				v.LastUsedModel = model
-				// 粘性记账:备模型成功 → 冷却窗内直连;主模型成功 → 清粘性(已恢复)
+				// 粘性记账 + 实际使用模型:一并入锁(LastUsedModel 被判分并发 goroutine 共享读写,
+				// 裸字段在 -race 下必炸,审片报告模型归属也会错乱)
 				v.stickyMu.Lock()
+				v.LastUsedModel = model
 				if mi > 0 {
 					v.stickyIdx, v.stickyUntil = mi, time.Now().Add(visionStickyCooldown)
 				} else {

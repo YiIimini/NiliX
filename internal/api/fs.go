@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -446,6 +447,70 @@ func walkMedia(root, dir string, cats map[string]*mediaCat, mtime *string, cover
 	}
 }
 
+// ---- fs 根目录白名单(安全护栏) ----
+// 所有 /api/fs/* 的 path/dir 必须位于已注册根目录(或其子路径)内——
+// 此前任意绝对路径可读(.secret.key / server/settings.json 明文 key 实测可读),必须收敛。
+// 注册源:启动注入(知识库/漫剧/小说/Comfy 目录)+ 运行时动态(用户目录选择器选中的目录、
+// 项目 config.json paths 里的目录),见 SetFSRoots / addFSRoot / registerCtxRoots。
+
+var (
+	fsRootsMu sync.RWMutex
+	fsRoots   []string
+)
+
+// SetFSRoots 全量设置允许根目录(启动时注入)
+func SetFSRoots(roots ...string) {
+	fsRootsMu.Lock()
+	defer fsRootsMu.Unlock()
+	seen := map[string]bool{}
+	fsRoots = fsRoots[:0]
+	for _, r := range roots {
+		if r = filepath.Clean(strings.TrimSpace(r)); r != "" && !seen[strings.ToLower(r)] {
+			seen[strings.ToLower(r)] = true
+			fsRoots = append(fsRoots, r)
+		}
+	}
+	// 漫剧项目根恒允许(api 包内部)
+	if r := filepath.Clean(strings.TrimSpace(manjuRoot)); r != "" && !seen[strings.ToLower(r)] {
+		fsRoots = append(fsRoots, r)
+	}
+}
+
+// addFSRoot 动态注册一个允许根(去重)
+func addFSRoot(p string) {
+	if p = filepath.Clean(strings.TrimSpace(p)); p == "" {
+		return
+	}
+	fsRootsMu.Lock()
+	defer fsRootsMu.Unlock()
+	lp := strings.ToLower(p)
+	for _, r := range fsRoots {
+		if strings.EqualFold(r, p) {
+			return
+		}
+		_ = lp
+	}
+	fsRoots = append(fsRoots, p)
+}
+
+// fsPathAllowed path 必须位于某已注册根目录内(含根本身)
+func fsPathAllowed(p string) bool {
+	if p = filepath.Clean(strings.TrimSpace(p)); p == "" {
+		return false
+	}
+	fsRootsMu.RLock()
+	defer fsRootsMu.RUnlock()
+	lp := strings.ToLower(p)
+	sep := string(filepath.Separator)
+	for _, r := range fsRoots {
+		lr := strings.ToLower(r)
+		if lp == lr || strings.HasPrefix(lp, lr+sep) {
+			return true
+		}
+	}
+	return false
+}
+
 // ---- fs API handlers ----
 
 // fileCreateUnix 返回文件/目录创建时间(Unix 秒);Windows 从文件属性取创建时间,失败回退修改时间
@@ -464,6 +529,10 @@ func (s *Server) handleFSList(w http.ResponseWriter, r *http.Request) {
 	dir := r.URL.Query().Get("dir")
 	if dir == "" {
 		writeErr(w, http.StatusBadRequest, "missing dir")
+		return
+	}
+	if !fsPathAllowed(dir) {
+		writeErr(w, http.StatusForbidden, "目录不在允许的管理范围内")
 		return
 	}
 	entries, err := os.ReadDir(dir)
@@ -507,6 +576,10 @@ func (s *Server) handleFSAnalyze(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing dir")
 		return
 	}
+	if !fsPathAllowed(dir) {
+		writeErr(w, http.StatusForbidden, "目录不在允许的管理范围内")
+		return
+	}
 	writeJSON(w, http.StatusOK, analyzeDir(dir))
 }
 
@@ -516,6 +589,7 @@ func (s *Server) handleFSSelect(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	addFSRoot(p) // 用户主动选择的管理目录动态放行
 	writeJSON(w, http.StatusOK, map[string]any{"dir": p})
 }
 
@@ -523,6 +597,10 @@ func (s *Server) handleFSRead(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Query().Get("path")
 	if p == "" {
 		writeErr(w, http.StatusBadRequest, "missing path")
+		return
+	}
+	if !fsPathAllowed(p) {
+		writeErr(w, http.StatusForbidden, "文件不在允许的管理范围内")
 		return
 	}
 	info, err := os.Stat(p)
@@ -542,6 +620,10 @@ func (s *Server) handleFSFile(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Query().Get("path")
 	if p == "" {
 		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	if !fsPathAllowed(p) {
+		http.Error(w, "文件不在允许的管理范围内", http.StatusForbidden)
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(p))
@@ -565,6 +647,10 @@ func (s *Server) handleFSMedia(w http.ResponseWriter, r *http.Request) {
 	dir := r.URL.Query().Get("dir")
 	if dir == "" {
 		writeErr(w, http.StatusBadRequest, "missing dir")
+		return
+	}
+	if !fsPathAllowed(dir) {
+		writeErr(w, http.StatusForbidden, "目录不在允许的管理范围内")
 		return
 	}
 	writeJSON(w, http.StatusOK, analyzeMedia(dir))

@@ -48,9 +48,7 @@ func (ctx *manjuCtx) manifestLoad() *manjuManifest {
 }
 
 func (ctx *manjuCtx) manifestSave(m *manjuManifest) {
-	_ = os.MkdirAll(filepath.Dir(ctx.manifestPath()), 0755)
-	b, _ := json.MarshalIndent(m, "", "  ")
-	_ = os.WriteFile(ctx.manifestPath(), b, 0644)
+	_ = atomicWriteJSON(ctx.manifestPath(), m)
 }
 
 // shotRenderFingerprint 渲染输入全指纹 = 条件指纹(提示词/角色/场景/画幅/帧数) + 资产指纹(定妆照/场景图)

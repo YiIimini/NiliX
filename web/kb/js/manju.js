@@ -208,8 +208,16 @@
     return v.toFixed(i ? 2 : 0) + " " + u[i];
   }
 
+  function nilixTok() {
+    const t = window.NILIX_TOKEN;
+    if (t && t.length > 8) return t;
+    try { return localStorage.getItem("nilix_token") || ""; } catch (e) { return ""; }
+  }
   async function api(path, opts) {
-    const r = await fetch(path, Object.assign({ cache: "no-store" }, opts || {}));
+    const o = Object.assign({ cache: "no-store" }, opts || {});
+    const tok = nilixTok();
+    if (tok) { o.headers = Object.assign({}, o.headers || {}); o.headers["X-NiliX-Token"] = tok; }
+    const r = await fetch(path, o);
     if (!r.ok) {
       let msg = "HTTP " + r.status;
       try { const b = await r.json(); if (b && b.error) msg = b.error; } catch (e) {}

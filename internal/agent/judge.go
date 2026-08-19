@@ -16,18 +16,18 @@ import (
 
 // ShotMeta 审片输入的镜头元数据(由管线从 direct_plan 组装)
 type ShotMeta struct {
-	ShotID      int
-	Scene       string
-	SceneDesc   string
-	Characters  []string
-	CharDesc    string // 主要角色外观(方案 appearance/costume 拼接)
-	ShotSize    string
-	Camera      string
-	Action      string
-	Dialogue    string
-	Narration   string
-	StyleDesc   string // 风格英文描述(与渲染时同款措辞)
-	HasChar     bool   // 有角色=R2V(参考定妆照);空镜=FL2VA(参考场景图)
+	ShotID     int
+	Scene      string
+	SceneDesc  string
+	Characters []string
+	CharDesc   string // 主要角色外观(方案 appearance/costume 拼接)
+	ShotSize   string
+	Camera     string
+	Action     string
+	Dialogue   string
+	Narration  string
+	StyleDesc  string // 风格英文描述(与渲染时同款措辞)
+	HasChar    bool   // 有角色=R2V(参考定妆照);空镜=FL2VA(参考场景图)
 }
 
 // judgeSystem 审片官系统提示词
@@ -79,7 +79,7 @@ func Judge(vc *VisionClient, meta ShotMeta, frames, refImages []string, passScor
 	if err != nil {
 		return nil, err
 	}
-	j := &Judgment{Model: vc.LastUsedModel, JudgedAt: time.Now().Unix()} // 记实际使用模型(链降级时为备模型)
+	j := &Judgment{Model: vc.LastUsed(), JudgedAt: time.Now().Unix()} // 记实际使用模型(链降级时为备模型)
 	dims := map[string]float64{}
 	if raw, ok := out["dimensions"].(map[string]any); ok {
 		for _, d := range Dims {

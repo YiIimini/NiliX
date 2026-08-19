@@ -406,8 +406,14 @@ const App = {
     tt.style.top = y + "px";
   },
 
+  nilixTok() {
+    const t = window.NILIX_TOKEN;
+    if (t && t.length > 8) return t;
+    try { return localStorage.getItem("nilix_token") || ""; } catch (e) { return ""; }
+  },
   async api(path) {
-    const r = await fetch(path);
+    const tok = this.nilixTok();
+    const r = await fetch(path, tok ? { headers: { "X-NiliX-Token": tok } } : {});
     if (!r.ok) throw new Error(path + " -> " + r.status);
     return r.json();
   },

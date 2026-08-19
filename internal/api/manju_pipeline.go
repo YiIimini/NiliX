@@ -125,6 +125,13 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	ctx.assetsDir = filepath.Join(ctx.workdir, "assets")
 	ctx.analysisDir = filepath.Join(ctx.workdir, "analysis")
 	ctx.clipsDir = filepath.Join(ctx.workdir, "clips")
+	// fs 白名单:项目 config paths 里的绝对路径动态注册(小说/工作目录/Comfy 目录等,
+	// 前端经 /api/fs/* 预览产物/封面才不会被白名单拦截)
+	for _, k := range []string{"novel", "novel_dir", "workdir", "analysis", "assets", "clips", "comfy_input", "comfy_output"} {
+		if v := strings.TrimSpace(str(P[k])); v != "" && filepath.IsAbs(v) {
+			addFSRoot(v)
+		}
+	}
 	ctx.llm = manjuLLMFromCfg(cfg)
 	ctx.llm.onUsage = func(model string, u agent.Usage) { manjuStatsAdd(ctx.project, model, u) }
 	ctx.comfy = newComfyClient(str(R["comfy_url"]))
@@ -963,8 +970,7 @@ func (ctx *manjuCtx) writePlan(plan map[string]any) error {
 			plan["novel_fp"] = fp
 		}
 	}
-	data, _ := json.MarshalIndent(plan, "", "  ")
-	return os.WriteFile(filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json"), data, 0644)
+	return atomicWriteJSON(filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json"), plan)
 }
 
 // writeCharactersJSON 抽卡/主页角色列表(无 shots)
@@ -973,8 +979,7 @@ func (ctx *manjuCtx) writeCharactersJSON(plan map[string]any) {
 	chars, _ := plan["characters"].([]any)
 	scenes, _ := plan["scenes"].([]any)
 	out := map[string]any{"characters": chars, "scenes": scenes}
-	data, _ := json.MarshalIndent(out, "", "  ")
-	_ = os.WriteFile(filepath.Join(ctx.analysisDir, ctx.episode+"_characters.json"), data, 0644)
+	_ = atomicWriteJSON(filepath.Join(ctx.analysisDir, ctx.episode+"_characters.json"), out)
 }
 
 // genShotPrompts 逐镜补全 h3_prompt(缺失才生成,进度落盘 _shots_prompts.json)
@@ -1046,9 +1051,7 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 	for k, v := range prompts {
 		pm[k] = v
 	}
-	if b, err := json.MarshalIndent(pm, "", "  "); err == nil {
-		_ = os.WriteFile(promptsPath, b, 0644)
-	}
+	_ = atomicWriteJSON(promptsPath, pm)
 	return ctx.writePlan(plan)
 }
 
