@@ -62,10 +62,18 @@ def check_video(path, threshold=0.5):
 
 
 def cmd_qc(args):
-    files = sorted(f for f in os.listdir(args.dir) if f.lower().endswith(".mp4"))
-    if not files:
-        print("❌ 目录无 mp4: " + args.dir)
-        sys.exit(1)
+    # --file 单文件质检(成片终检:时长/黑屏/静音;不按目录扫)
+    if args.file:
+        if not os.path.exists(args.file):
+            print("❌ 文件不存在: " + args.file)
+            sys.exit(1)
+        args.dir = os.path.dirname(os.path.abspath(args.file))
+        files = [os.path.basename(args.file)]
+    else:
+        files = sorted(f for f in os.listdir(args.dir) if f.lower().endswith(".mp4"))
+        if not files:
+            print("❌ 目录无 mp4: " + args.dir)
+            sys.exit(1)
     # --shots 单镜过滤(Agent 流水线逐镜审片只检当前镜头,如 "3" 或 "1,3";自动兼容 03.mp4 补零名)
     if args.shots:
         wanted = set()
@@ -781,10 +789,11 @@ def main():
     ap = argparse.ArgumentParser(description="manju media helper")
     sub = ap.add_subparsers(dest="cmd", required=True)
     q = sub.add_parser("qc")
-    q.add_argument("--dir", required=True)
+    q.add_argument("--dir", default="")
     q.add_argument("--threshold", type=float, default=0.5)
     q.add_argument("--json", default="")
     q.add_argument("--shots", default="", help="只质检指定镜头(如 3 或 1,3;空=全部)")
+    q.add_argument("--file", default="", help="单文件质检(成片终检;与 --dir 二选一)")
     fr = sub.add_parser("frames")
     fr.add_argument("--video", required=True)
     fr.add_argument("--out-dir", required=True)

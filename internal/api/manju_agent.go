@@ -319,6 +319,9 @@ func manjuAgentPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
 			err = agentJudgeRemaining(ctx, lg, acfg)
 		case "assemble":
 			err = stageAssemble(ctx, lg)
+			if err == nil {
+				agentAssembleCheck(ctx, lg) // 成片终检:时长/黑屏/静音(报告性质,不阻断)
+			}
 		}
 		if err != nil {
 			lg.logf("❌ 阶段 " + st + " 失败: " + err.Error())
@@ -875,6 +878,30 @@ func (ctx *manjuCtx) updateShotPrompt(s manjuShot, newPrompt string) error {
 
 // ---- Agent 全权流水线:单镜渲染 → 即时审片 → 不合格修复提示词排队重渲 → 统一收尾 ----
 
+// topAgentIssues 项目历史高频审片问题 topN(学习记忆 → 提示词生成反哺;无记录返回空)
+func topAgentIssues(project string, n int) []string {
+	st := loadAgentState(project)
+	type kv struct {
+		k string
+		v int
+	}
+	var arr []kv
+	for k, v := range st.Memory.IssueStats {
+		if k = strings.TrimSpace(k); k != "" && v >= 2 {
+			arr = append(arr, kv{k, v})
+		}
+	}
+	sort.Slice(arr, func(i, j int) bool { return arr[i].v > arr[j].v })
+	if len(arr) > n {
+		arr = arr[:n]
+	}
+	out := make([]string, 0, len(arr))
+	for _, it := range arr {
+		out = append(out, fmt.Sprintf("%s×%d", it.k, it.v))
+	}
+	return out
+}
+
 // agentRenderPipeline 智能一条龙 render 阶段主体(替代整段渲完再统一审):
 // 逐镜「渲染→机械质检+ASR 台词核对+视觉判分」;不合格镜头当场由修复师改写 H3 提示词,
 // 删产物进重渲队列(每镜预算 acfg.MaxRetries 轮);预算耗尽升级待人拍板;全部通过后
@@ -901,6 +928,7 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 		len(selected), acfg.MaxRetries))
 
 	queue := selected
+	queueIsFirst := true
 	passed := 0
 	escCount := 0
 	for len(queue) > 0 && !lg.stopped() {
@@ -910,10 +938,11 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 				return fmt.Errorf("已停止")
 			}
 			dst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
+			firstRound := queueIsFirst // 首轮=正常渲(接缝);返工轮=独立生成(不接缝,防旧 latent 污染)
 			if fileExists(dst) {
 				lg.logf(fmt.Sprintf("♻️ 镜头 %d 已有产物,直接进入审片", s.ID))
 			} else {
-				if err := ctx.renderSingleShot(s, idxOf[s.ID], lg); err != nil {
+				if err := ctx.renderSingleShot(s, idxOf[s.ID], !firstRound, lg); err != nil {
 					return err
 				}
 			}
@@ -963,8 +992,9 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 			redo = append(redo, s)
 			lg.logf(fmt.Sprintf("  🔁 镜头 %d 排队重渲(第 %d/%d 轮)", s.ID, jd.Retries+1, acfg.MaxRetries))
 		}
-		queue = redo
-	}
+			queue = redo
+			queueIsFirst = false
+		}
 	if lg.stopped() {
 		return fmt.Errorf("已停止")
 	}
@@ -974,6 +1004,28 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 		lg.logf(fmt.Sprintf("🎉 审片全部通过:%d 镜(含返工通过)", passed))
 	}
 	return nil
+}
+
+// agentAssembleCheck 成片终检:对合成后的成片跑单文件机械质检(时长/近黑帧/静音/音轨),
+// 结果写日志(镜头级问题已由流水线逐镜审过,此处为成片级兜底报告)。
+func agentAssembleCheck(ctx *manjuCtx, lg *manjuLogger) {
+	final := filepath.Join(ctx.workdir, ctx.episode+"_成片.mp4")
+	if !fileExists(final) {
+		return
+	}
+	// qc 发现问题时 exit 1(不等于执行失败),stdout 仍带完整报告——只看输出内容
+	out, _ := ctx.runMediaOut("qc", "--file", final)
+	for _, ln := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(ln)
+		if t == "" || strings.HasPrefix(t, "质检") {
+			continue
+		}
+		if strings.Contains(t, "✅") {
+			lg.logf("🎞 成片终检: " + t)
+		} else if strings.Contains(t, "⚠️") || strings.Contains(t, "❌") {
+			lg.logf("⚠️ 成片终检发现问题: " + t)
+		}
+	}
 }
 
 // agentJudgeOneShot 单镜即时审片:质检(--shots 单镜) + ASR(--shots 单镜) + 视觉判分,
@@ -1006,6 +1058,42 @@ func agentJudgeRemaining(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 		return err
 	}
 	selected := ctx.selectedShots(shots)
+	// 合成前终检:全目录机械质检兜底(流水线逐镜审过,此处抓漏网:产物被手动替换/ASR 库中途不可用等)
+	// 发现"有产物、有判分记录、但最新记录未含当前质检问题"的镜头 → 重审一次;仍失败直接升级(收尾阶段不再返工)
+	finalBad, _ := ctx.runQCJSON(lg, clipsEp, "")
+	if len(finalBad) > 0 {
+		var needRejudge []manjuShot
+		for _, s := range selected {
+			flags, hit := finalBad[s.ID]
+			if !hit || !fileExists(filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))) {
+				continue
+			}
+			jd := loadAgentStateShot(ctx.project, s.ID)
+			known := strings.Join(jd.QCFlags, ";")
+			newIssue := false
+			for _, f := range flags {
+				if !strings.Contains(known, f) {
+					newIssue = true
+					break
+				}
+			}
+			if newIssue {
+				needRejudge = append(needRejudge, s)
+			}
+		}
+		if len(needRejudge) > 0 {
+			lg.logf(fmt.Sprintf("🔍 终检发现 %d 个镜头有新机械质检问题,重审", len(needRejudge)))
+			failed := ctx.judgeShots(lg, acfg, plan, needRejudge, finalBad)
+			for _, id := range failed {
+				jd := loadAgentStateShot(ctx.project, id)
+				reason := strings.Join(append(jd.QCFlags, jd.Issues...), ";")
+				escalateShot(ctx, lg, id, jd.Score, orDefault(reason, "终检未过"), acfg)
+			}
+			if len(failed) > 0 {
+				lg.logf(fmt.Sprintf("🚨 终检 %d 镜未过,已升级待人拍板", len(failed)))
+			}
+		}
+	}
 	// 补审:有产物但无判分记录的镜头(流水线被中断后续跑)
 	st := loadAgentState(ctx.project)
 	var missed []manjuShot
@@ -1051,7 +1139,7 @@ func agentJudgeRemaining(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 				}
 				ctx.clearShotArtifacts(s)
 				bumpAgentRetries(ctx.project, s.ID)
-				if err := ctx.renderSingleShot(s, 0, lg); err != nil {
+				if err := ctx.renderSingleShot(s, 0, true, lg); err != nil {
 					lg.logf("  ⚠️ 补审重渲失败: " + err.Error())
 					continue
 				}

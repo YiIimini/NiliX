@@ -1000,9 +1000,12 @@ func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map
 		}
 	}
 	// 用户负面提示词随镜传入:H3 无原生负面通道,由写作规范转译成正面排除句注入提示词
+	// 用户负面提示词随镜传入:H3 无原生负面通道,由写作规范转译成正面排除句注入提示词
+	// 学习记忆反哺:本项目历史高频审片问题(如 面部扭曲×8)注入,提示词生成时针对性正面规避
 	ctxData, _ := json.Marshal(map[string]any{
 		"shot": shotObj, "characters": chars, "scene": sceneMap[s.Scene],
 		"negative_prompt": ctx.negPrompt(),
+		"known_issues":    topAgentIssues(ctx.project, 3),
 	})
 	out, err := ctx.llm.chatJSON(sys, string(ctxData), 0.3)
 	if err != nil {
@@ -1394,7 +1397,7 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 				}()
 			}
 		}
-		if err := ctx.renderSingleShot(s, idxOf[s.ID], lg); err != nil {
+		if err := ctx.renderSingleShot(s, idxOf[s.ID], false, lg); err != nil {
 			preWg.Wait()
 			return err
 		}
@@ -1409,15 +1412,19 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 }
 
 // renderSingleShot 渲染单个镜头(编码→提交→等待→取回;中断自动重试一次)。
-// stageRender 与 Agent 流水线(单镜渲完即审)共用。
-func (ctx *manjuCtx) renderSingleShot(s manjuShot, idx int, lg *manjuLogger) error {
+// stageRender 与 Agent 流水线(单镜渲完即审)共用;fresh=true 时独立生成不接缝
+// (返工重渲镜:其首渲的接缝 latent 已被本次覆盖,且下游镜基于旧 latent,再接缝只会放大跳变)。
+func (ctx *manjuCtx) renderSingleShot(s manjuShot, idx int, fresh bool, lg *manjuLogger) error {
 	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
 	dst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
 	cacheName := ctx.shotCacheName(s)
 	if err := ctx.ensureEncoded(s, cacheName, lg); err != nil {
 		return fmt.Errorf("镜头 %d 预编码失败: %w", s.ID, err)
 	}
-	chained := idx > 1 && fileExists(h3ContextLatentPath(ctx.comfyOutput, idx-1))
+	chained := !fresh && idx > 1 && fileExists(h3ContextLatentPath(ctx.comfyOutput, idx-1))
+	if fresh {
+		lg.logf("  ♻️ 镜头 " + strconv.Itoa(s.ID) + " 返工重渲:独立生成(不接缝)")
+	}
 	wf := h3RenderWorkflow(ctx.R, ctx.seed, ctx.w, ctx.h, h3Length(s.Duration, ctx.fps),
 		ctx.steps, cacheName, len(s.Characters) > 0, chained, idx-1, idx)
 	pid, err := ctx.comfy.submit(wf)
