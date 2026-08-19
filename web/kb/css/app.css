@@ -2917,9 +2917,13 @@ select.manju-input {
   overflow: hidden;
 }
 /* 宽弹窗:API Key 与 微信通知 并排两列,配置管理独占一行三列 */
-/* 设置弹窗单列堆叠:卡片全宽上下排列,消除并排高度差导致的空白(微信通知下方不再空置) */
-.manju-settings { display: flex; flex-direction: column; gap: 10px; }
-.manju-settings .manju-set-card { grid-column: auto; }
+/* 设置弹窗 2 列,按卡片高度合理配对:智能体调度最高独占整行;微信通知与配置管理(均为中矮卡)并排均衡;
+   目录与部署全宽紧贴微信通知下方(内部 2 列)。消除并排高度差产生的空白。 */
+.manju-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.manju-settings .manju-set-card:nth-child(1) { grid-column: 1 / -1; }  /* 智能体调度:整行 */
+.manju-settings .manju-set-card:nth-child(2) { grid-column: 1; }       /* 微信通知:左 */
+.manju-settings .manju-set-card:nth-child(4) { grid-column: 2; }       /* 配置管理:右(与微信通知并排) */
+.manju-settings .manju-set-card:nth-child(3) { grid-column: 1 / -1; }  /* 目录与部署:整行(微信通知正下方) */
 .manju-set-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .manju-set-grid-2 { grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .manju-set-item {
