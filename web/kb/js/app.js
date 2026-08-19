@@ -511,6 +511,8 @@ const App = {
     if (y < 56) y = mr.bottom + 14;
     y = Math.max(56, Math.min(innerHeight - bh - 8, y));
     box.style.transform = "none";
+    box.style.bottom = "auto"; // 防御:确保 top+bottom 不同存,高度不被拉伸
+    box.style.right = "auto";
     box.style.left = Math.round(x) + "px";
     box.style.top = Math.round(y) + "px";
   },
@@ -533,6 +535,10 @@ const App = {
     const box = document.getElementById("ai-chat-box");
     const head = document.getElementById("ai-chat-head");
     if (!box || !head) return;
+    // 关键:清掉 CSS 兜底的 bottom——fixed 同时有 top+bottom 会拉伸高度(视口-top-bottom),
+    // top 偏大时对话框塌成一条线;定位从此全由 JS 的 top/left 控制
+    box.style.bottom = "auto";
+    box.style.right = "auto";
     try {
       const saved = JSON.parse(localStorage.getItem("kbw-ai-chat-pos") || "null");
       if (saved && saved.free) {

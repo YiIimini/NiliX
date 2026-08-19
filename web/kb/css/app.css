@@ -3812,8 +3812,9 @@ select option { text-align: center; }
 }
 /* AI 对话窗口:由气泡展开(角色正上方),内容+输入一体;闲置自动收起 */
 #ai-chat-box {
-  position: fixed; left: 50%; bottom: 172px; z-index: 91;
+  position: fixed; left: 50%; z-index: 91;
   transform: translateX(-50%);
+  /* 定位(跟随助手/自由拖动)由 JS 全权接管:bottom 勿设——与 top 并存会把高度拉伸成视口高-top-bottom 导致对话框塌成一条线 */
   width: min(400px, calc(100vw - 32px));
   max-height: 64vh; /* 状态卡(≤30vh)+聊天记录+快捷行+输入,超出各自滚动 */
   display: flex; flex-direction: column;
