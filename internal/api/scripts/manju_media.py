@@ -345,10 +345,98 @@ def _apply_gain(fr, gain, np):
     return nf
 
 
+def _count_video_frames(path):
+    import av
+    c = av.open(path)
+    v = c.streams.video[0]
+    n = 0
+    for _ in c.decode(v):
+        n += 1
+    c.close()
+    return n
+
+
+def _shot_no(name):
+    m = reASRShot.search(name)
+    return int(m.group(1)) if m else 0
+
+
+def _load_bgm(path, rate=32000):
+    """预载 BGM 为 float32 (2, N) ndarray(32k 立体声);解码失败抛异常由调用方忽略"""
+    import av
+    import numpy as np
+    c = av.open(path)
+    if not c.streams.audio:
+        c.close()
+        raise ValueError("BGM 无音轨")
+    rs = av.AudioResampler(format="fltp", layout="stereo", rate=rate)
+    chunks = []
+    for fr in c.decode(c.streams.audio[0]):
+        for f in _frame_list(rs.resample(fr)):
+            chunks.append(np.asarray(f.to_ndarray(), dtype="float32"))
+    for f in _frame_list(rs.resample(None)):
+        chunks.append(np.asarray(f.to_ndarray(), dtype="float32"))
+    c.close()
+    return np.concatenate(chunks, axis=1)
+
+
+class _BgmMixer:
+    """BGM 混音器:基础增益 + 对白闪避(字幕窗口内压低,窗口边界 0.3s 线性过渡)。
+    written 为已写出的输出音频采样数;窗口 (start, end) 为成片时间轴秒。"""
+
+    def __init__(self, bgm, gain, duck, windows, ramp=0.3):
+        self.bgm = bgm
+        self.gain = float(gain)
+        self.duck = float(duck)
+        self.windows = windows
+        self.ramp = ramp
+        self.written = 0
+
+    def _env(self, t):
+        e = 1.0
+        for a, b in self.windows:
+            if a - self.ramp <= t <= b + self.ramp:
+                # 窗口内 duck;边界 ramp 内线性过渡
+                if a <= t <= b:
+                    e = min(e, self.duck)
+                elif t < a:
+                    k = 1.0 - (a - t) / self.ramp
+                    e = min(e, 1.0 - (1.0 - self.duck) * k)
+                else:
+                    k = 1.0 - (t - b) / self.ramp
+                    e = min(e, 1.0 - (1.0 - self.duck) * k)
+        return e
+
+    def mix(self, arr, rate=32000):
+        """对输出 fltp 帧 (channels, samples) 原地叠加 BGM 片段(循环补齐,声道数对齐)"""
+        import numpy as np
+        if self.bgm is None or self.gain <= 0:
+            return arr
+        n = arr.shape[1]
+        bgm = self.bgm
+        # 声道对齐:BGM 单声道(packed 1×N)→ 双声道复制;输出单声道 → BGM 混平均
+        if bgm.shape[0] == 1 and arr.shape[0] == 2:
+            bgm = np.vstack([bgm[0], bgm[0]])
+        elif bgm.shape[0] == 2 and arr.shape[0] == 1:
+            bgm = bgm.mean(axis=0, keepdims=True)
+        pos = self.written % bgm.shape[1]
+        seg = bgm[:, pos:pos + n]
+        if seg.shape[1] < n:  # 循环补齐
+            rep = int(np.ceil((pos + n) / bgm.shape[1]))
+            seg = np.tile(bgm, (1, rep))[:, pos:pos + n]
+        env = np.array([self.gain * self._env((self.written + k) / rate) for k in range(n)],
+                       dtype="float32")
+        out = arr + seg * env[np.newaxis, :]
+        np.clip(out, -1.0, 1.0, out=out)
+        self.written += n
+        return out
+
+
 def cmd_assemble(args):
     import av
     import numpy as np
     from fractions import Fraction
+    from collections import deque
     files = sorted(f for f in os.listdir(args.clips_dir) if f.lower().endswith(".mp4"))
     if not files:
         print("❌ 无镜头可合成: " + args.clips_dir)
@@ -360,6 +448,35 @@ def cmd_assemble(args):
         os.makedirs(os.path.dirname(out), exist_ok=True)
     fps = args.fps
     cues = _load_subtitle_cues(args.plan)
+
+    # ---- 转场配置:cut(硬切,默认)/ fade(闪黑淡入淡出)/ dissolve(叠化) ----
+    # 硬切边界 = MotionContext 接缝镜头的起始处(Go 侧从 manifest 提取 seam 标记传入):
+    # 接缝镜头与上一镜画面本就连续,再叠化只会出现重影。
+    hard_cuts = set()
+    if args.hard_cuts:
+        for x in args.hard_cuts.split(","):
+            x = x.strip()
+            if x.isdigit():
+                hard_cuts.add(int(x))
+    trans_frames = max(1, int(round(args.trans_dur * fps))) if args.transition != "cut" else 0
+    # 转场生效需要预知每个剪辑的帧数(尾部处理):转场关闭时不付数帧成本
+    clip_frames = None
+    if trans_frames > 0:
+        clip_frames = {name: _count_video_frames(os.path.join(args.clips_dir, name)) for name in files}
+
+    # ---- BGM(可选):预载 + 对白闪避混音 ----
+    bgm_mixer = None
+    bgm = None
+    if args.bgm:
+        if os.path.exists(args.bgm):
+            try:
+                bgm = _load_bgm(args.bgm)
+                print(f"  🎵 BGM: {os.path.basename(args.bgm)} ({bgm.shape[1] / 32000:.0f}s, 音量 {args.bgm_gain}, 对白闪避 {args.bgm_duck})")
+            except Exception as e:
+                print(f"  ⚠️ BGM 加载失败(忽略,干声合成): {e}")
+        else:
+            print(f"  ⚠️ BGM 文件不存在(忽略): {args.bgm}")
+
     # 音量归一化:预扫各镜头音频峰值 → 全局增益(过轻整体放大、过响压限,成片音量一致)
     # 只解音频流,速度快;峰值>0.95 提前收工(已近满幅无需再扫)
     peak = 0.0
@@ -390,10 +507,9 @@ def cmd_assemble(args):
         gain = 0.85 / peak  # 近满幅压限,防爆音
     if gain != 1.0:
         print(f"  🔊 音量归一化: 峰值 {peak:.2f} → 增益 x{gain:.2f}")
-    print(f"🎬 合成 {len(files)} 个镜头 → {out} (crf18, {fps}fps, mosaic={args.mosaic}, 字幕{'on' if cues else 'off'})")
+    tname = {"cut": "硬切", "fade": "闪黑", "dissolve": "叠化"}[args.transition]
+    print(f"🎬 合成 {len(files)} 个镜头 → {out} (crf18, {fps}fps, 转场:{tname}{trans_frames and f'×{trans_frames}帧' or ''}, mosaic={args.mosaic}, 字幕{'on' if cues else 'off'}, BGM{'on' if bgm is not None else 'off'})")
 
-    # movflags=+faststart:moov 前置,网络播放/进度条拖动不卡(PyAV 重编码路径原先没有,
-    # 只有闲置的旧 ffmpeg 直拼路径有 +faststart)
     o = av.open(out, "w", options={"movflags": "+faststart"})
     vs = o.add_stream("libx264", rate=fps)
     vs.pix_fmt = "yuv420p"
@@ -410,21 +526,37 @@ def cmd_assemble(args):
     vtb = Fraction(1, fps)  # 输出视频流 time_base
     film_sec = 0.0          # 成片累计时长,字幕时间轴按实际镜头时长累加
     ci = 0
+    prev_tail = None        # dissolve:上一剪辑尾 T 帧(rgb float 缓存)
     for name in files:
         p = os.path.join(args.clips_dir, name)
         i = av.open(p)
         v = i.streams.video[0]
         a = i.streams.audio[0] if i.streams.audio else None
         dur = float(v.duration * v.time_base)
+        if clip_frames is not None:
+            dur = clip_frames[name] / fps  # 数帧结果更准(元数据 duration 偶有偏差)
+        sid = _shot_no(name)
+        # 转场边界判定:本剪辑头(与上一剪辑之间)、本剪辑尾(与下一剪辑之间)
+        head_trans = trans_frames > 0 and ci > 0 and sid not in hard_cuts
+        next_sid = _shot_no(files[ci + 1]) if ci + 1 < len(files) else 0
+        tail_trans = trans_frames > 0 and ci + 1 < len(files) and next_sid not in hard_cuts
         # 本镜头字幕窗口:镜头内 12%-92%,台词/旁白按字数占比分配窗口
         # (12% 起:台词开说即出字幕,避免延后;92% 止:给下一镜转场留白)
         subs = []
         if ci < len(cues):
             subs = _assign_subtitle_windows(cues[ci], dur, film_sec)
-        ci += 1
         film_sec += dur
+        # BGM 闪避窗口 = 字幕窗口(对白时段压 BGM);mixer 在首轮有字幕时构建
+        if bgm is not None and bgm_mixer is None and subs:
+            bgm_mixer = _BgmMixer(bgm, args.bgm_gain, args.bgm_duck, [(sa, sb) for sa, sb, _ in subs])
+        elif bgm is not None and bgm_mixer is not None and subs:
+            bgm_mixer.windows.extend([(sa, sb) for sa, sb, _ in subs])
         # 视频+音频必须交错解码(PyAV 先解完视频再解音频会拿不到音频帧)
         streams = (v, a) if a is not None else (v,)
+        cut_v = 0            # 本剪辑内已编码视频帧号(0 起)
+        total_frames = clip_frames[name] if clip_frames is not None else None
+        tail_buf = deque(maxlen=trans_frames) if tail_trans else None
+        atb = float(a.time_base) if a is not None else 0.0
         for frame in i.decode(*streams):
             if isinstance(frame, av.VideoFrame):
                 if first:  # PyAV 不自动从帧推断编码器尺寸,首个视频帧显式设定
@@ -435,6 +567,26 @@ def cmd_assemble(args):
                 frame.pts = vpts
                 frame.time_base = vtb
                 vpts += 1
+                # ---- 转场处理(dissolve/fade;硬切与关闭时零成本) ----
+                if trans_frames > 0 and total_frames is not None:
+                    arr = None
+                    if head_trans and cut_v < trans_frames:
+                        alpha = (cut_v + 1) / trans_frames
+                        arr = frame.to_ndarray(format="rgb24").astype("float32")
+                        if args.transition == "dissolve" and prev_tail is not None and cut_v < len(prev_tail):
+                            arr = arr * alpha + prev_tail[cut_v] * (1.0 - alpha)  # 叠化
+                        else:
+                            arr = arr * alpha  # 闪黑:从黑淡入
+                    elif tail_trans and total_frames - cut_v <= trans_frames and args.transition == "fade":
+                        k = total_frames - cut_v  # 距结尾帧数(1=最后一帧)
+                        arr = frame.to_ndarray(format="rgb24").astype("float32") * (k / (trans_frames + 1))
+                    if arr is not None:
+                        frame = av.VideoFrame.from_ndarray(np.clip(arr, 0, 255).astype("uint8"), format="rgb24")
+                        frame.pts = vpts - 1
+                        frame.time_base = vtb
+                    if tail_buf is not None:
+                        tail_buf.append(frame.to_ndarray(format="rgb24").astype("float32"))
+                cut_v += 1
                 if args.mosaic > 1:
                     frame = _pixelate(frame, args.mosaic)
                 if subs:
@@ -449,6 +601,25 @@ def cmd_assemble(args):
             else:
                 for fr in _frame_list(resampler.resample(frame)):
                     fr = _apply_gain(fr, gain, np)
+                    # 转场边界的音频淡入淡出(近似 acrossfade,防转场处爆音);
+                    # 衰减按帧在剪辑内的时间位置计算(dur 由数帧得到)
+                    if trans_frames > 0 and a is not None and dur > 0:
+                        t_in = (frame.pts or 0) * atb
+                        f = 1.0
+                        trans_sec = trans_frames / fps
+                        if head_trans and t_in < trans_sec:
+                            f = min(f, 0.05 + 0.95 * t_in / trans_sec)
+                        if tail_trans and t_in > dur - trans_sec:
+                            f = min(f, 0.05 + 0.95 * max(0.0, (dur - t_in) / trans_sec))
+                        if f < 1.0:
+                            fr = _apply_gain(fr, f, np)
+                    if bgm_mixer is not None:
+                        arr = np.asarray(fr.to_ndarray(), dtype="float32")
+                        fr_pts, fr_tb, fr_rate = fr.pts, fr.time_base, fr.sample_rate
+                        arr = bgm_mixer.mix(arr)
+                        nf = av.AudioFrame.from_ndarray(arr, format="fltp", layout="stereo")
+                        nf.pts, nf.time_base, nf.sample_rate = fr_pts, fr_tb, fr_rate
+                        fr = nf
                     fr.pts = None
                     for pkt in as_.encode(fr):
                         o.mux(pkt)
@@ -456,11 +627,22 @@ def cmd_assemble(args):
         # 冲洗该剪辑的音频重采样缓冲,再进下一个
         for fr in _frame_list(resampler.resample(None)):
             fr = _apply_gain(fr, gain, np)
+            if bgm_mixer is not None:
+                arr = np.asarray(fr.to_ndarray(), dtype="float32")
+                fr_pts, fr_tb, fr_rate = fr.pts, fr.time_base, fr.sample_rate
+                arr = bgm_mixer.mix(arr)
+                nf = av.AudioFrame.from_ndarray(arr, format="fltp", layout="stereo")
+                nf.pts = fr_pts
+                nf.time_base = fr_tb
+                nf.sample_rate = fr_rate
+                fr = nf
             fr.pts = None
             for pkt in as_.encode(fr):
                 o.mux(pkt)
             total_a += 1
         i.close()
+        prev_tail = list(tail_buf) if tail_buf is not None else None  # dissolve 下一剪辑头用
+        ci += 1
     for pkt in vs.encode():
         o.mux(pkt)
     for pkt in as_.encode():
@@ -836,6 +1018,13 @@ def main():
     a.add_argument("--fps", type=int, default=24)
     a.add_argument("--mosaic", type=int, default=0)
     a.add_argument("--plan", default="")
+    a.add_argument("--transition", default="cut", choices=["cut", "fade", "dissolve"],
+                   help="镜头间转场:cut=硬切 fade=闪黑 dissolve=叠化(seam 接缝镜自动硬切)")
+    a.add_argument("--trans-dur", type=float, default=0.4, help="转场时长(秒)")
+    a.add_argument("--hard-cuts", default="", help="强制硬切的镜头号(逗号分隔,seam 接缝镜)")
+    a.add_argument("--bgm", default="", help="背景音乐音频文件(循环补齐,按字幕窗口对白闪避)")
+    a.add_argument("--bgm-gain", type=float, default=0.28, help="BGM 基础音量(0-1)")
+    a.add_argument("--bgm-duck", type=float, default=0.35, help="对白时段 BGM 压低系数(0-1)")
     f = sub.add_parser("facecrop")
     f.add_argument("--src", required=True)
     f.add_argument("--dst", required=True)

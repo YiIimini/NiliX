@@ -332,6 +332,21 @@
             </div>
 
             <div class="manju-row">
+              <span class="manju-label">转场</span>
+              <select id="manju-transition" class="manju-input" title="镜头间转场;接缝镜(MotionContext 连续渲染)自动硬切防重影">
+                <option value="cut">硬切</option>
+                <option value="fade">闪黑</option>
+                <option value="dissolve">叠化</option>
+              </select>
+              <span class="manju-label">BGM音量</span><input id="manju-bgm-gain" class="manju-input manju-num" type="number" min="0" max="1" step="0.02" title="背景音乐音量(0-1);对白/字幕时段自动压低(闪避)">
+            </div>
+
+            <div class="manju-row">
+              <span class="manju-label">BGM</span>
+              <input id="manju-bgm" class="manju-input manju-wide" placeholder="背景音乐音频文件绝对路径(mp3/wav/m4a,循环补齐,对白自动闪避;留空=无 BGM)" spellcheck="false">
+            </div>
+
+            <div class="manju-row">
               <span class="manju-label">负面提示词</span>
               <textarea id="manju-neg-prompt" class="manju-input manju-textarea" rows="2" spellcheck="false" placeholder="英文逗号分隔（角色图/场景图生成用，缺省用内置默认）"></textarea>
             </div>

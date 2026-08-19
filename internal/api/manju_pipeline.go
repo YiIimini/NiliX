@@ -1651,10 +1651,50 @@ func stageAssemble(ctx *manjuCtx, lg *manjuLogger) error {
 		args = append(args, "--mosaic", strconv.Itoa(mosaic))
 	}
 	args = append(args, "--plan", filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json"))
+	// 转场 + BGM(数据驱动配置;seam 接缝镜清单传给脚本强制硬切,叠化重影防线)
+	trans := orDefault(str(ctx.R["transition"]), "cut")
+	if !manjuTransitions[trans] {
+		trans = "cut"
+	}
+	args = append(args, "--transition", trans)
+	if hc := ctx.seamHardCuts(); hc != "" {
+		args = append(args, "--hard-cuts", hc)
+	}
+	if bgm := strings.TrimSpace(str(ctx.R["bgm"])); bgm != "" {
+		args = append(args, "--bgm", bgm)
+		if g, ok := manjuToFloat(ctx.R["bgm_gain"]); ok && g > 0 {
+			args = append(args, "--bgm-gain", strconv.FormatFloat(g, 'g', -1, 64))
+		}
+		if d, ok := manjuToFloat(ctx.R["bgm_duck"]); ok && d > 0 {
+			args = append(args, "--bgm-duck", strconv.FormatFloat(d, 'g', -1, 64))
+		}
+	}
 	if err := ctx.runMedia(lg, args...); err != nil {
 		return fmt.Errorf("合成失败: %w", err)
 	}
 	return nil
+}
+
+// seamHardCuts 接缝镜头号列表(MotionContext 渲染的镜头,其起始边界画面连续,
+// 合成转场必须硬切;来源 manifest 的 seam 标记)
+func (ctx *manjuCtx) seamHardCuts() string {
+	manjuManifestMu.Lock()
+	m := ctx.manifestLoad()
+	manjuManifestMu.Unlock()
+	ids := []int{}
+	for k, e := range m.Shots {
+		if e != nil && e.Seam {
+			if n, err := strconv.Atoi(k); err == nil {
+				ids = append(ids, n)
+			}
+		}
+	}
+	sort.Ints(ids)
+	parts := make([]string, 0, len(ids))
+	for _, n := range ids {
+		parts = append(parts, strconv.Itoa(n))
+	}
+	return strings.Join(parts, ",")
 }
 
 // ---- 媒体辅助脚本 ----

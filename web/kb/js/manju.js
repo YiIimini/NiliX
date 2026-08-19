@@ -50,7 +50,7 @@
     "manju-width": 768, "manju-height": 1344, "manju-fps": 24,
     "manju-steps": 20, "manju-turbo": 8, "manju-seed": 1688,
     "manju-minsec": 4, "manju-maxsec": 12, "manju-mosaic-level": 16,
-    "manju-draft-scale": 0.5,
+    "manju-draft-scale": 0.5, "manju-bgm-gain": 0.28,
   };
 
   /* 负面提示词默认值(与后端 manjuNegPrompt 一致;配置缺省/为空时回填展示) */
@@ -1079,6 +1079,8 @@
         R.seed !== undefined && R.seed !== null && R.seed !== "" && "seed：" + R.seed + (R.seed_policy && R.seed_policy !== "fixed" ? "(" + (R.seed_policy === "increment" ? "重试递增" : "重试随机") + ")" : ""),
         R.sage_attention && "⚡SageAttn",
         R.draft_judge && "📐草稿预审",
+        R.transition && R.transition !== "cut" && "转场:" + ({ fade: "闪黑", dissolve: "叠化" }[R.transition] || R.transition),
+        R.bgm && "🎵BGM",
       ].filter(Boolean);
       el.innerHTML = items.map((c) => `<span class="manju-chip">${esc(c)}</span>`).join("");
     },
@@ -1089,7 +1091,8 @@
         "manju-minsec", "manju-maxsec", "manju-comfy-url", "manju-neg-prompt", "manju-unet-fl2va", "manju-unet-ref2va",
         "manju-clip", "manju-vae-video", "manju-vae-audio", "manju-zimage-unet", "manju-zimage-clip",
         "manju-zimage-vae", "manju-turbo-lora", "manju-turbo-lora-r2v", "manju-char-male", "manju-char-female", "manju-animagine",
-        "manju-banned-words", "manju-mosaic-level", "manju-res-tier", "manju-seed-policy", "manju-draft-scale"];
+        "manju-banned-words", "manju-mosaic-level", "manju-res-tier", "manju-seed-policy", "manju-draft-scale",
+        "manju-transition", "manju-bgm", "manju-bgm-gain"];
     },
     draftKey() { return "render-" + (this.project || ""); },
     /* 渲染配置草稿记忆:未点「保存参数」的编辑也随刷新保留,按项目隔离 */
@@ -1118,6 +1121,7 @@
       $("manju-sage").checked = false;
       $("manju-draft-judge").checked = false;
       $("manju-seed-policy").value = "fixed";
+      $("manju-transition").value = "cut";
     },
 
     fillForm() {
@@ -1160,6 +1164,9 @@
       $("manju-sage").checked = !!R.sage_attention;
       $("manju-draft-judge").checked = !!R.draft_judge;
       num("manju-draft-scale", R.draft_scale != null && R.draft_scale !== "" ? R.draft_scale : 0.5);
+      set("manju-transition", R.transition || "cut");
+      set("manju-bgm", R.bgm || "");
+      num("manju-bgm-gain", R.bgm_gain != null && R.bgm_gain !== "" ? R.bgm_gain : 0.28);
       // 未保存编辑优先:用草稿覆盖 config.json 的回填值
       if (draft) {
         this.renderInputIds().forEach((id) => {
@@ -1326,6 +1333,10 @@
       body.draft_judge = $("manju-draft-judge").checked;
       const ds = parseFloat($("manju-draft-scale").value);
       if (!isNaN(ds)) body.draft_scale = ds;
+      body.transition = this.strVal("manju-transition") || "cut";
+      body.bgm = this.strVal("manju-bgm");
+      const bg = parseFloat($("manju-bgm-gain").value);
+      if (!isNaN(bg)) body.bgm_gain = bg;
       return body;
     },
 
@@ -1361,6 +1372,9 @@
       $("manju-sage").checked = !!R.sage_attention;
       $("manju-draft-judge").checked = !!R.draft_judge;
       set("manju-draft-scale", R.draft_scale != null && R.draft_scale !== "" ? R.draft_scale : 0.5);
+      set("manju-transition", R.transition || "cut");
+      set("manju-bgm", R.bgm || "");
+      set("manju-bgm-gain", R.bgm_gain != null && R.bgm_gain !== "" ? R.bgm_gain : 0.28);
       this.renderStyle();
       this.renderRatio();
     },

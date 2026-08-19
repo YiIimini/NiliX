@@ -95,10 +95,15 @@ var manjuRenderBoolFields = []string{"sage_attention", "draft_judge"}
 // manjuRenderFloatFields 渲染参数浮点字段 + 取值范围 [min,max]
 var manjuRenderFloatFields = map[string][2]float64{
 	"draft_scale": {0.2, 0.95},
+	"bgm_gain":    {0, 1},
+	"bgm_duck":    {0, 1},
 }
 
 // manjuSeedPolicies 合法 seed 重试策略
 var manjuSeedPolicies = map[string]bool{"fixed": true, "increment": true, "random": true}
+
+// manjuTransitions 合法镜头转场(cut=硬切 / fade=闪黑 / dissolve=叠化;seam 接缝镜恒硬切)
+var manjuTransitions = map[string]bool{"cut": true, "fade": true, "dissolve": true}
 
 // ---- 任务状态(线程安全) ----
 
@@ -626,6 +631,25 @@ func manjuSaveRender(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		R["seed_policy"] = s
+	}
+	// 转场(空=硬切)
+	if v, present := body["transition"]; present {
+		s := strings.TrimSpace(str(v))
+		if !manjuTransitions[s] {
+			http.Error(w, `{"error":"transition 非法(可选 cut/fade/dissolve)"}`, http.StatusBadRequest)
+			return
+		}
+		R["transition"] = s
+	}
+	// BGM 路径(空=清除)
+	if v, present := body["bgm"]; present {
+		if s, ok := v.(string); ok {
+			if strings.TrimSpace(s) == "" {
+				delete(R, "bgm")
+			} else {
+				R["bgm"] = s
+			}
+		}
 	}
 	// 布尔字段(SageAttention/草稿预审开关)
 	for _, k := range manjuRenderBoolFields {
