@@ -80,10 +80,17 @@ type RenderSettings struct {
 	CharModels     map[string]string `json:"char_models"`
 }
 
-// PathSettings 与 ComfyUI 共享的输入/输出目录。
+// PathSettings 与 ComfyUI 共享的输入/输出目录 + 自包含部署目录。
+// 新增的根目录字段(manju_root/novel_root/comfy_root/comfy_shared/novel_skill):
+// 空 = 自动解析(exe 目录自包含子目录存在时用之,否则回退旧硬编码路径),显式填写则优先。
 type PathSettings struct {
 	ComfyInput  string `json:"comfy_input"`
 	ComfyOutput string `json:"comfy_output"`
+	ManjuRoot   string `json:"manju_root,omitempty"`
+	NovelRoot   string `json:"novel_root,omitempty"`
+	ComfyRoot   string `json:"comfy_root,omitempty"`
+	ComfyShared string `json:"comfy_shared,omitempty"`
+	NovelSkill  string `json:"novel_skill,omitempty"`
 }
 
 // Store 管理设置的加载、保存与主密钥。

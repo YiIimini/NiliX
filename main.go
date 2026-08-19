@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -373,8 +374,21 @@ func main() {
 	if err := store.Save(cfg); err != nil {
 		log.Printf("迁移加密配置失败(忽略): %v", err)
 	}
+	// 自包含部署路径解析:settings 显式值 → exe 目录自包含子目录(存在) → 旧硬编码。
+	// 必须在任何 api 路径使用前调用(ComfyUI 启动/manju 项目/技能目录/fs 白名单)。
+	exeDir, _ := filepath.Abs(".")
+	api.InitPaths(exeDir, cfg.Paths.ManjuRoot, cfg.Paths.NovelRoot, cfg.Paths.ComfyRoot, cfg.Paths.ComfyShared, cfg.Paths.NovelSkill)
+	// ComfyUI 输入/输出目录:显式配置优先,缺省跟随共享目录(随自包含迁移)
+	comfyIn := cfg.Paths.ComfyInput
+	if strings.TrimSpace(comfyIn) == "" {
+		comfyIn = filepath.Join(api.ComfySharedDir, "input")
+	}
+	comfyOut := cfg.Paths.ComfyOutput
+	if strings.TrimSpace(comfyOut) == "" {
+		comfyOut = filepath.Join(api.ComfySharedDir, "output")
+	}
 	// ComfyUI 启动参数单一数据源:settings.json → HUD 卡片 / Comfy 页面 / 实际启动命令共用。
-	api.SetComfyParams(cfg.Render.ComfyURL, cfg.Paths.ComfyInput, cfg.Paths.ComfyOutput)
+	api.SetComfyParams(cfg.Render.ComfyURL, comfyIn, comfyOut)
 	// 智能体全局默认(settings.json agent 节 → 全项目共用)与全局设置读写入口。
 	api.SetGlobalAgentCfg(cfg)
 	api.SetManjuSettingsStore(store)
@@ -391,7 +405,7 @@ func main() {
 	if _, rerr := rand.Read(tok); rerr == nil {
 		api.SetSessionToken(hex.EncodeToString(tok))
 	}
-	api.SetFSRoots(*kbRoot, `C:\Mi\Ai\WorkBench\novel`, cfg.Paths.ComfyInput, cfg.Paths.ComfyOutput)
+	api.SetFSRoots(*kbRoot, api.NovelRootDir, comfyIn, comfyOut)
 	srv := api.NewServer(store, cfg, []byte(indexHTML), renderMgr, sysmonCol, kbStore, *kbRoot, kbSub, islandSub, outDir)
 	addr := "127.0.0.1:" + *port
 	url := "http://" + addr

@@ -121,7 +121,7 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 		novel:        str(P["novel"]),
 		comfyOutput:  str(P["comfy_output"]),
 		comfyInput:   str(P["comfy_input"]),
-		sharedModels: filepath.Join(comfyShared, "models"),
+		sharedModels: filepath.Join(ComfySharedDir, "models"),
 		workdir:      str(P["workdir"]),
 	}
 	if ctx.episode == "" {
@@ -1891,7 +1891,7 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 func (ctx *manjuCtx) runMedia(lg *manjuLogger, args ...string) error {
 	script := ensureMediaHelper()
 	argv := append([]string{script}, args...)
-	cmd := exec.Command(manjuPython, argv...)
+	cmd := exec.Command(manjuPythonPath(), argv...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUNBUFFERED=1")
 	stdout, err := cmd.StdoutPipe()
@@ -2010,7 +2010,7 @@ func (ctx *manjuCtx) seamHardCuts() string {
 // ---- 媒体辅助脚本 ----
 
 func ensureMediaHelper() string {
-	dir := filepath.Join(manjuRoot, "logs", "media")
+	dir := filepath.Join(ManjuRootDir, "logs", "media")
 	_ = os.MkdirAll(dir, 0755)
 	p := filepath.Join(dir, "manju_media.py")
 	// 总是覆盖提取(内嵌脚本随 exe 版本更新)
@@ -2115,8 +2115,8 @@ func manjuEnvCheck(configPath string) string {
 	b.WriteString("🖼 SDXL checkpoint(非写实风格定妆照):\n")
 	b.WriteString(check("checkpoints", "sd_xl_base_1.0.safetensors"))
 	b.WriteString(check("checkpoints", "animagine-xl-3.1.safetensors"))
-	b.WriteString("🐍 PyAV(质检/合成): " + manjuPython + "\n")
-	if fileExists(manjuPython) {
+	b.WriteString("🐍 PyAV(质检/合成): " + manjuPythonPath() + "\n")
+	if fileExists(manjuPythonPath()) {
 		b.WriteString("  ✅ venv python\n")
 	} else {
 		b.WriteString("  ❌ venv python 缺失\n")
@@ -2148,7 +2148,7 @@ func manjuCreateProject(name, novel, apiKey string) (string, string, bool) {
 		out.WriteString("❌ 小说路径无效或未找到正文文件: " + novel + "\n[exit 1]")
 		return out.String(), "", false
 	}
-	projDir := filepath.Join(manjuRoot, clean)
+	projDir := filepath.Join(ManjuRootDir, clean)
 	if _, err := os.Stat(projDir); err == nil {
 		out.WriteString("❌ 项目已存在: " + clean + "\n[exit 1]")
 		return out.String(), "", false
@@ -2298,12 +2298,12 @@ func manjuDefaultConfig(name, novelFile, novelDir, apiKey string) map[string]any
 			"storyboard": []any{"AI视频运镜提示词模板.md", "漫剧创作规范.md"},
 		},
 		"paths": map[string]any{
-			"workdir":      filepath.Join(manjuRoot, name),
+			"workdir":      filepath.Join(ManjuRootDir, name),
 			"novel":        novelFile,
 			"novel_dir":    novelDir,
-			"analysis":     filepath.Join(manjuRoot, name, "analysis"),
-			"assets":       filepath.Join(manjuRoot, name, "assets"),
-			"clips":        filepath.Join(manjuRoot, name, "clips"),
+			"analysis":     filepath.Join(ManjuRootDir, name, "analysis"),
+			"assets":       filepath.Join(ManjuRootDir, name, "assets"),
+			"clips":        filepath.Join(ManjuRootDir, name, "clips"),
 			"comfy_input":  `C:\Users\Administrator\AppData\Local\Comfy-Desktop\ComfyUI-Shared\input`,
 			"comfy_output": `C:\Users\Administrator\AppData\Local\Comfy-Desktop\ComfyUI-Shared\output`,
 			"outline":      "", "setting": "",

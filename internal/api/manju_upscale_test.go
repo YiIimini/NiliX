@@ -129,7 +129,7 @@ func TestManjuUpscaleSubmitPoll(t *testing.T) {
 // TestManjuUpscaleRouteKeyMissing 未配置 Key:后台任务立即失败并给出指引
 func TestManjuUpscaleRouteKeyMissing(t *testing.T) {
 	proj := "zz_upscale_key_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	_ = os.MkdirAll(dir, 0755)

@@ -155,6 +155,12 @@
       "H3 为 <b>CFG-distilled 无负面词</b>：排除项（无水印/字幕）写进正文散文",
       "引擎已内置亮度护栏与运镜规范，无需手写",
     ] },
+    { ic: "🗂️", t: "换电脑迁移 / 自包含部署", ps: [
+      "整个 NiliX 目录自包含:ComfyUI 放 <code>NiliX/comfyui/ComfyUI</code> + 模型放 <code>NiliX/comfyui/shared/</code>、小说放 <code>NiliX/novel/</code>、项目放 <code>NiliX/manju/</code>、技能放 <code>NiliX/skills/shuangwen-novel/</code>,拷走即用",
+      "设置弹窗「目录与部署」:5 个路径可显式指定(留空=自动:优先 exe 目录子目录,其次旧位置);保存后即时生效(ComfyUI 需重启)",
+      "旧安装(Comfy-Desktop 版 ComfyUI / C:\Mi\Ai\WorkBench 数据)留空即自动沿用,无需改配置",
+      "小说续作技能是 git 仓库时,可在「目录与部署」点「🔄 更新技能」git pull 同步",
+    ] },
     { ic: "📦", t: "小说素材自动利用", ps: [
       "小说项目目录按约定组织(全本/正文/素材/设定集/封面),引擎<b>自动发现并全部利用</b>,素材白准备不浪费:",
       "<b>素材/人物生成提示词.md</b>(含 人物/角色 的 md) → 角色定妆照 image_prompt 必须贴合其外观/服装/气质/记忆点",
@@ -757,16 +763,51 @@
       const agP = this.project ? get("/api/manju/agent" + q).catch(() => null) : Promise.resolve(null);
       // 通知配置单独存于 notify.json,须与渲染设置合并回填,否则重开弹窗显示为空
       const notifyP = get("/api/manju/notify").catch(() => ({}));
+      const pathsP = get("/api/manju/paths").catch(() => null);
       get("/api/manju/settings" + q)
         .catch(() => ({}))
-        .then((n) => notifyP.then((nf) => agP.then((ag) => {
+        .then((n) => notifyP.then((nf) => agP.then((ag) => pathsP.then((paths) => {
           if (gen !== this._modalGen) return;   // 弹窗已被关闭/切换:放弃渲染,不弹回
-          this.renderSettings(Object.assign({}, n, nf), ag);
-        })));
+          this.renderSettings(Object.assign({}, n, nf), ag, paths);
+        }))));
     },
-    renderSettings(n, ag) {
+    renderSettings(n, ag, paths) {
       n = n || {};
       ag = ag || {};
+      // 「目录与部署」区:5 个路径输入 + 生效值 + ComfyUI/技能状态(数据来自 /api/manju/paths)
+      const _paths = paths || {};
+      const pathsHTML = (() => {
+        if (!_paths.effective) return '<div class="manju-meta">路径配置加载失败</div>';
+        const cfg = _paths.configured || {};
+        const eff = _paths.effective || {};
+        const rows = [
+          ["mp-manju-root", "manju_root", "项目目录(漫剧项目)"],
+          ["mp-novel-root", "novel_root", "小说库根目录"],
+          ["mp-comfy-root", "comfy_root", "ComfyUI 安装(含 main.py/.venv)"],
+          ["mp-comfy-shared", "comfy_shared", "ComfyUI 共享(模型/输入/输出)"],
+          ["mp-novel-skill", "novel_skill", "小说续作技能(词库/qa)"],
+        ].map(([id, key, label]) =>
+          `<div class="manju-set-item">
+            <div class="manju-set-item-title">${label}</div>
+            <input id="${id}" class="manju-input manju-mono" placeholder="自动(exe 目录/${key})" value="${esc(cfg[key] || "")}" spellcheck="false" autocomplete="off">
+            <div class="manju-meta">生效: ${esc(eff[key] || "--")}</div>
+          </div>`
+        ).join("");
+        const cfy = _paths.comfy || {};
+        const sk = _paths.skill || {};
+        const status = _paths.comfy
+          ? `🖥 ComfyUI 目录: ${cfy.exists ? "✅ 存在" : "❌ 不存在(需安装或改路径)"}${cfy.venv ? " · venv 就绪" : " · venv 缺失(需重新安装依赖)"}${sk.exists ? " · 技能库 ✅" : " · 技能库缺失"}`
+          : "";
+        return `<div class="manju-meta">换电脑/迁移:把整个 NiliX 目录(含 comfyui/ novel/ manju/ skills/)拷走即用。路径留空=自动解析(优先 exe 目录自包含子目录,其次旧位置);ComfyUI 放 <code>NiliX/comfyui/ComfyUI</code> + 模型放 <code>NiliX/comfyui/shared/</code> 即可被自动发现。</div>
+          <div class="manju-set-grid">${rows}</div>
+          <div class="manju-set-actions" style="margin-top:10px">
+            <button id="mp-save" class="hrs-btn hrs-btn-primary">保存路径配置</button>
+            ${sk.isGit ? `<button id="mp-skill-update" class="hrs-btn">🔄 更新技能(git pull)</button>` : ""}
+            <span id="mp-msg" class="manju-meta manju-set-msg"></span>
+          </div>
+          ${status ? `<div class="manju-set-status">${status}</div>` : ""}
+          <div class="manju-set-status">改路径后 ComfyUI 需重启才用新目录;项目/小说/技能目录即时生效。</div>`;
+      })();
       const ch = n.channel || "serverchan";
       const chOpts = [
         ["serverchan", "Server酱"], ["pushplus", "PushPlus"], ["wecom", "企业微信群机器人"],
@@ -954,9 +995,39 @@
                 </div>
               </div>
             </div>
+          <div class="manju-set-card">
+            <div class="manju-set-head">
+              <span class="manju-set-icon">🗂️</span>
+              <span class="manju-set-title">目录与部署</span>
+            </div>
+            <div class="manju-set-body">
+              ${pathsHTML}
+            </div>
           </div>
           </div>
         </div>`, true);
+      $("mp-save").addEventListener("click", () => {
+        const msg = $("mp-msg");
+        if (msg) msg.textContent = "保存中…";
+        post("/api/manju/paths", {
+          manju_root: $("mp-manju-root").value.trim(),
+          novel_root: $("mp-novel-root").value.trim(),
+          comfy_root: $("mp-comfy-root").value.trim(),
+          comfy_shared: $("mp-comfy-shared").value.trim(),
+          novel_skill: $("mp-novel-skill").value.trim(),
+        }).then((r) => {
+          if (msg) msg.textContent = r.ok ? "✅ 已保存并生效(ComfyUI 重启后完全生效)" : ("❌ " + (r.error || "保存失败"));
+          this.openSettings();
+        }).catch((e) => { if (msg) msg.textContent = "❌ " + e.message; });
+      });
+      const mpSkill = $("mp-skill-update");
+      if (mpSkill) mpSkill.addEventListener("click", () => {
+        const msg = $("mp-msg");
+        if (msg) msg.textContent = "git pull 中…";
+        post("/api/manju/skill/update", {}).then((r) => {
+          if (msg) msg.textContent = r.ok ? "✅ " + (r.output || "已更新") : ("❌ " + (r.error || "更新失败") + (r.output ? " " + r.output : ""));
+        }).catch((e) => { if (msg) msg.textContent = "❌ " + e.message; });
+      });
       $("manju-apikey-save").addEventListener("click", () => this.saveApiKey(false));
       $("manju-apikey-apply").addEventListener("click", () => this.saveApiKey(true));
       $("manju-llm-svc").addEventListener("change", () => this.syncLLMForm());

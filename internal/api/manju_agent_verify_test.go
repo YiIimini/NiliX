@@ -2,7 +2,7 @@ package api
 
 // Agent 全流程核验测试:体检 / 一键修复 / 聊天意图路由 / 风格规整 / 失败诊断 /
 // 记忆汇总 / 智能体设置 / 升级处理 / 深度分析(LLM mock 全链路)。
-// 用临时目录构造项目 config.json,不碰真实项目;agent_state 落在 manjuRoot 下独立
+// 用临时目录构造项目 config.json,不碰真实项目;agent_state 落在 ManjuRootDir 下独立
 // 项目名,测试结束清理。
 
 import (
@@ -523,7 +523,7 @@ func TestAgentSettingsProjectMissing(t *testing.T) {
 	store := config.NewStore(filepath.Join(t.TempDir(), "settings.json"))
 	SetManjuSettingsStore(store)
 	defer SetManjuSettingsStore(nil)
-	missing := filepath.Join(manjuRoot, "zz_missing_proj", "config.json")
+	missing := filepath.Join(ManjuRootDir, "zz_missing_proj", "config.json")
 	// GET:项目缺失 → projectMissing + globalDefaults 齐全
 	w, out := doReq(t, "GET", "/api/manju/agent?config="+filepath.ToSlash(missing), nil)
 	if w.Code != 200 {

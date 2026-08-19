@@ -24,25 +24,25 @@ import (
 // (见 manju_pipeline.go / manju_comfy.go / manju_llm.go),质检与合成复用 ComfyUI venv 的 PyAV
 // (scripts/manju_media.py 内嵌,go:embed)。日志格式契约:━━━ 阶段 X ━━━ / [i/n] 镜头。
 
-const manjuRoot = `C:\Mi\Ai\WorkBench\manju`
-const manjuPipeline = manjuRoot + `\direct_pipeline`
+// manjuPipelinePath 旧管线目录(兼容遗留;自包含部署后由 ManjuRootDir 决定)
+func manjuPipelinePath() string { return filepath.Join(ManjuRootDir, "direct_pipeline") }
 
 // manjuEngineDir NiliX 服务项目目录 = exe 所在目录（随项目整体移动零成本，取不到时兜底 manju 根）。
 var manjuEngineDir = func() string {
 	if exe, err := os.Executable(); err == nil {
 		return filepath.Dir(exe)
 	}
-	return manjuRoot + `\NiliX`
+	return filepath.Join(ManjuRootDir, "NiliX")
 }()
 
 // manjuSettingsFile 漫剧默认 DeepSeek API Key（存 NiliX 项目目录，不再放 manju/server）。
 var manjuSettingsFile = filepath.Join(manjuEngineDir, "server", "settings.json")
 
 // manjuLegacySettingsFile 旧位置（kb-workbench 原版 manju/server/settings.json），仅用于迁移。
-const manjuLegacySettingsFile = manjuRoot + `\server\settings.json`
+var manjuLegacySettingsFile = filepath.Join(ManjuRootDir, "server", "settings.json")
 
-// manjuPython 复用 Comfy Desktop 内置 venv 的 python(管线依赖 PyAV 等)
-var manjuPython = filepath.Join(comfyRoot, ".venv", "Scripts", "python.exe")
+// manjuPythonPath ComfyUI venv 的 python(管线依赖 PyAV/whisper 等);随 ComfyRootDir 动态解析
+func manjuPythonPath() string { return filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe") }
 
 // manjuSkipDirs 非项目目录(即使内部有 config.json 也跳过,如 manju_pipeline)
 var manjuSkipDirs = map[string]bool{
@@ -149,12 +149,12 @@ type manjuDiskState struct {
 
 // manjuRunStatePath 项目运行状态文件:<项目目录>/run_state.json
 func manjuRunStatePath(project string) string {
-	return filepath.Join(manjuRoot, project, "run_state.json")
+	return filepath.Join(ManjuRootDir, project, "run_state.json")
 }
 
 // manjuRunLogPath 项目运行日志:<项目目录>/run.log
 func manjuRunLogPath(project string) string {
-	return filepath.Join(manjuRoot, project, "run.log")
+	return filepath.Join(ManjuRootDir, project, "run.log")
 }
 
 func writeManjuDiskState(project string, ds *manjuDiskState) {
@@ -207,7 +207,7 @@ func isPidAlive(pid int) bool {
 
 // ---- 漫剧阶段切换通知(推送到微信,多渠道可选) ----
 
-const manjuNotifyFile = manjuRoot + `\logs\notify.json`
+var manjuNotifyFile = filepath.Join(ManjuRootDir, "logs", "notify.json")
 
 // manjuStageName 阶段 key → 中文名(通知文案)
 var manjuStageName = map[string]string{
@@ -406,7 +406,7 @@ func writeManjuRunParams(configPath, chapters, episode, shots string) error {
 
 func listManjuProjects() []map[string]any {
 	out := []map[string]any{}
-	entries, err := os.ReadDir(manjuRoot)
+	entries, err := os.ReadDir(ManjuRootDir)
 	if err != nil {
 		return out
 	}
@@ -418,7 +418,7 @@ func listManjuProjects() []map[string]any {
 		if strings.HasPrefix(name, ".") || manjuSkipDirs[name] {
 			continue
 		}
-		cfg := filepath.Join(manjuRoot, name, "config.json")
+		cfg := filepath.Join(ManjuRootDir, name, "config.json")
 		if _, err := os.Stat(cfg); err == nil {
 			out = append(out, map[string]any{"name": name, "configPath": cfg})
 		}
@@ -1007,7 +1007,7 @@ func manjuModels(w http.ResponseWriter, r *http.Request) {
 	for field, dirs := range manjuModelDirs {
 		names := []string{}
 		for _, d := range dirs {
-			dir := filepath.Join(comfyShared, "models", d)
+			dir := filepath.Join(ComfySharedDir, "models", d)
 			entries, err := os.ReadDir(dir)
 			if err != nil {
 				continue
@@ -1865,6 +1865,9 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/manju/kill", manjuKill)
 	mux.HandleFunc("GET /api/manju/outputs", manjuOutputs)
 	mux.HandleFunc("GET /api/manju/plan", manjuPlan)
+	mux.HandleFunc("GET /api/manju/paths", manjuPathsGet)
+	mux.HandleFunc("POST /api/manju/paths", manjuPathsPost)
+	mux.HandleFunc("POST /api/manju/skill/update", manjuSkillUpdate)
 	mux.HandleFunc("POST /api/manju/gacha", manjuGacha)
 	mux.HandleFunc("POST /api/manju/gacha/upload", manjuGachaUpload)
 	mux.HandleFunc("POST /api/manju/gacha/adopt", manjuGachaAdopt)

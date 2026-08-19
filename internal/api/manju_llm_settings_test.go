@@ -20,7 +20,7 @@ func TestManjuLLMSettings(t *testing.T) {
 	}()
 
 	proj := "zz_llm_settings_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	_ = os.MkdirAll(dir, 0755)

@@ -35,7 +35,7 @@ type manjuLLMStats struct {
 var manjuStatsMu sync.Mutex
 
 func manjuStatsPath(project string) string {
-	return filepath.Join(manjuRoot, project, "llm_stats.json")
+	return filepath.Join(ManjuRootDir, project, "llm_stats.json")
 }
 
 // manjuStatsAdd 累计一次调用(usage 为空/项目名为空时静默跳过)

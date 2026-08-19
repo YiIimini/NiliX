@@ -471,7 +471,7 @@ func SetFSRoots(roots ...string) {
 		}
 	}
 	// 漫剧项目根恒允许(api 包内部)
-	if r := filepath.Clean(strings.TrimSpace(manjuRoot)); r != "" && !seen[strings.ToLower(r)] {
+	if r := filepath.Clean(strings.TrimSpace(ManjuRootDir)); r != "" && !seen[strings.ToLower(r)] {
 		fsRoots = append(fsRoots, r)
 	}
 }

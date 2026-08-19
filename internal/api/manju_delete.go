@@ -27,8 +27,8 @@ func manjuDeleteProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"非法项目名"}`, http.StatusBadRequest)
 		return
 	}
-	dir := filepath.Join(manjuRoot, proj)
-	rootClean := filepath.Clean(manjuRoot)
+	dir := filepath.Join(ManjuRootDir, proj)
+	rootClean := filepath.Clean(ManjuRootDir)
 	if filepath.Clean(dir) == rootClean || !strings.HasPrefix(filepath.Clean(dir), rootClean+string(filepath.Separator)) {
 		http.Error(w, `{"error":"目标不在项目根目录内,拒绝删除"}`, http.StatusBadRequest)
 		return

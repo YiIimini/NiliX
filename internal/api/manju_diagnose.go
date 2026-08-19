@@ -14,7 +14,7 @@ import (
 
 // manjuDiagnoseDir 诊断快照固定目录(与 notify.json 同级)
 func manjuDiagnoseDir() string {
-	return filepath.Join(manjuRoot, "logs", "diagnose")
+	return filepath.Join(ManjuRootDir, "logs", "diagnose")
 }
 
 // manjuDiagnosePath 某项目诊断快照路径
@@ -64,7 +64,7 @@ func manjuWriteDiagnoseSnapshot(project, episode string) {
 	if project == "" {
 		return
 	}
-	cfgPath := filepath.Join(manjuRoot, project, "config.json")
+	cfgPath := filepath.Join(ManjuRootDir, project, "config.json")
 	ctx, err := newManjuCtx(cfgPath, episode, "", "", "")
 	if err != nil {
 		return

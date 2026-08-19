@@ -205,7 +205,7 @@ type manjuAgentState struct {
 var manjuAgentMu sync.Mutex
 
 func manjuAgentStatePath(project string) string {
-	return filepath.Join(manjuRoot, project, "agent_state.json")
+	return filepath.Join(ManjuRootDir, project, "agent_state.json")
 }
 
 func loadAgentState(project string) *manjuAgentState {
@@ -693,7 +693,7 @@ func (ctx *manjuCtx) runASRCheck(lg *manjuLogger, clipsEp string, shots []manjuS
 // runMediaOut 跑媒体辅助脚本并捕获完整 stdout(不写运行日志,供 JSON 解析)
 func (ctx *manjuCtx) runMediaOut(args ...string) (string, error) {
 	script := ensureMediaHelper()
-	cmd := exec.Command(manjuPython, append([]string{script}, args...)...)
+	cmd := exec.Command(manjuPythonPath(), append([]string{script}, args...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUNBUFFERED=1")
 	var out bytes.Buffer

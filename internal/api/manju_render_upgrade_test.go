@@ -106,7 +106,7 @@ func TestH3RenderWorkflowSage(t *testing.T) {
 // TestSaveRenderUpgradeFields 渲染参数新字段保存与校验:档位/seed策略/布尔/浮点 + 非法值拒绝
 func TestSaveRenderUpgradeFields(t *testing.T) {
 	proj := "zz_render_upgrade_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	_ = os.MkdirAll(dir, 0755)
@@ -181,7 +181,7 @@ func mustJSON(v any) []byte {
 // TestLLMStats token 用量记账:分模型累计、落盘往返、零用量跳过
 func TestLLMStats(t *testing.T) {
 	proj := "zz_llm_stats_test"
-	defer os.RemoveAll(filepath.Join(manjuRoot, proj))
+	defer os.RemoveAll(filepath.Join(ManjuRootDir, proj))
 	manjuStatsAdd(proj, "", agent.Usage{}) // 空 project/零用量:不落盘不崩
 	if _, err := os.Stat(manjuStatsPath(proj)); err == nil {
 		t.Errorf("空用量不应落盘")
@@ -202,7 +202,7 @@ func TestLLMStats(t *testing.T) {
 		t.Errorf("glm 累计异常: %v", glm)
 	}
 	// status 摘要带出记账
-	if sum := agentStatusSummary(filepath.Join(manjuRoot, proj, "config.json")); sum["llmStats"] == nil {
+	if sum := agentStatusSummary(filepath.Join(ManjuRootDir, proj, "config.json")); sum["llmStats"] == nil {
 		t.Errorf("status 摘要未带 llmStats")
 	}
 }
@@ -275,7 +275,7 @@ func TestRenderCKReclaim(t *testing.T) {
 // 无记录→unknown 兼容、clearShotArtifacts 清记录
 func TestShotManifestLifecycle(t *testing.T) {
 	proj := "zz_manifest_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	workdir := dir
@@ -439,7 +439,7 @@ func TestNormalizeEpisode(t *testing.T) {
 // TestManjuChapterEpisodes 集数=0 自动模式:每章一集(第 N 章 = 第 N 集)
 func TestManjuChapterEpisodes(t *testing.T) {
 	proj := "zz_ep_auto_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	_ = os.MkdirAll(dir, 0755)
@@ -468,7 +468,7 @@ func TestManjuChapterEpisodes(t *testing.T) {
 // TestManjuSaveRenderEpisode 保存集数:3→config.render.episode=EP03;0→删除(自动模式)
 func TestManjuSaveRenderEpisode(t *testing.T) {
 	proj := "zz_ep_save_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	_ = os.MkdirAll(dir, 0755)
@@ -499,7 +499,7 @@ func TestManjuSaveRenderEpisode(t *testing.T) {
 // TestManjuChapterTotal 章节 0 默认值:从 config 小说文件解析总章数
 func TestManjuChapterTotal(t *testing.T) {
 	proj := "zz_ch_total_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	_ = os.MkdirAll(dir, 0755)
@@ -515,7 +515,7 @@ func TestManjuChapterTotal(t *testing.T) {
 // TestManjuChapterEpisodesRange 每章一集 + 章节范围过滤:1-2 → 只生成前 2 章两集
 func TestManjuChapterEpisodesRange(t *testing.T) {
 	proj := "zz_ep_range_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	_ = os.MkdirAll(dir, 0755)

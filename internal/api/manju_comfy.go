@@ -480,6 +480,12 @@ func randSeed() int {
 	return rand.Intn(1<<31 - 1)
 }
 
+// dirExists 判断目录存在
+func dirExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
+}
+
 // fileExists 判断文件存在
 func fileExists(p string) bool {
 	st, err := os.Stat(p)

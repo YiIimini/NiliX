@@ -19,9 +19,7 @@ import (
 
 const (
 	comfyURL        = "http://127.0.0.1:8190"
-	comfyRoot       = `C:\Users\Administrator\AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI (1)\ComfyUI`
-	comfyShared     = `C:\Users\Administrator\AppData\Local\Comfy-Desktop\ComfyUI-Shared`
-	comfyLogPath    = `C:\Mi\Ai\WorkBench\comfy-server.log`
+	comfyLogPath    = `logs/comfy.log` // 相对 exe 目录(启动时已 Chdir;随自包含目录迁移)
 	comfyDesktopLog = `C:\Mi\Ai\Comfy Desktop\logs\_comfyui_server.log`
 )
 
@@ -144,32 +142,32 @@ func currentPort() string {
 func currentStartup() StartupInfo {
 	in, out := comfyParams.in, comfyParams.out
 	if in == "" {
-		in = filepath.Join(comfyShared, "input")
+		in = filepath.Join(ComfySharedDir, "input")
 	}
 	if out == "" {
-		out = filepath.Join(comfyShared, "output")
+		out = filepath.Join(ComfySharedDir, "output")
 	}
 	return StartupInfo{
-		URL: comfyParams.url, Root: comfyRoot, Shared: comfyShared,
-		Input: in, Output: out, Python: filepath.Join(comfyRoot, ".venv", "Scripts", "python.exe"),
+		URL: comfyParams.url, Root: ComfyRootDir, Shared: ComfySharedDir,
+		Input: in, Output: out, Python: filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe"),
 		Port: currentPort(),
 	}
 }
 
 func startComfy() error {
-	py := filepath.Join(comfyRoot, ".venv", "Scripts", "python.exe")
+	py := filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe")
 	if _, err := os.Stat(py); err != nil {
 		return err
 	}
 	in, out := comfyParams.in, comfyParams.out
 	if in == "" {
-		in = filepath.Join(comfyShared, "input")
+		in = filepath.Join(ComfySharedDir, "input")
 	}
 	if out == "" {
-		out = filepath.Join(comfyShared, "output")
+		out = filepath.Join(ComfySharedDir, "output")
 	}
 	args := []string{
-		filepath.Join(comfyRoot, "main.py"),
+		filepath.Join(ComfyRootDir, "main.py"),
 		"--listen", "127.0.0.1",
 		"--port", currentPort(),
 		"--disable-auto-launch",
@@ -177,7 +175,7 @@ func startComfy() error {
 		"--input-directory", in,
 	}
 	cmd := exec.Command(py, args...)
-	cmd.Dir = comfyRoot
+	cmd.Dir = ComfyRootDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	// 中文 Windows 默认 ANSI 编码(GBK):重定向 stdout 后 Python 打印 emoji 会抛
 	// UnicodeEncodeError 直接崩溃(实测 ComfyUI 启动秒死、日志全空的根因)。强制 UTF-8。

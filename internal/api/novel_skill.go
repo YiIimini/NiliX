@@ -5,6 +5,7 @@ package api
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,12 +13,11 @@ import (
 	"syscall"
 )
 
-// novelSkillRef 技能目录(违规词库/负面提示词库/章节写作规范/qa 脚本)
-const novelSkillRef = `C:\Users\Administrator\.agents\skills\shuangwen-novel`
+// NovelSkillDir 技能目录(违规词库/负面提示词库/章节写作规范/qa 脚本);见 paths.go
 
 // novelHardBanned 违规词库硬禁词(## [硬禁] 分类下词条;增删词库即生效)
 func novelHardBanned() []string {
-	b, err := os.ReadFile(filepath.Join(novelSkillRef, "wordbank", "违规词库.md"))
+	b, err := os.ReadFile(filepath.Join(NovelSkillDir, "wordbank", "违规词库.md"))
 	if err != nil {
 		return nil
 	}
@@ -45,7 +45,7 @@ var novelBannedAI = []string{"此外", "与此同时", "众所周知", "值得�
 
 // novelWritingSpec 章节写作规范.md 全文(注入写章 system,等价技能"代理动笔前读规范")
 func novelWritingSpec() string {
-	b, err := os.ReadFile(filepath.Join(novelSkillRef, "references", "章节写作规范.md"))
+	b, err := os.ReadFile(filepath.Join(NovelSkillDir, "references", "章节写作规范.md"))
 	if err != nil {
 		return ""
 	}
@@ -89,13 +89,30 @@ func novelChapterQA(content string) []string {
 // runNovelQACheck 技能阶段4 全量 QA:qa_check.py 校验文件数/每章字数/禁用词/违规词/加粗。
 // 纯标准库脚本(venv python 可跑);脚本或技能目录缺失时返回空(不阻塞)。
 func runNovelQACheck(proj string) string {
-	script := filepath.Join(novelSkillRef, "scripts", "qa_check.py")
+	script := filepath.Join(NovelSkillDir, "scripts", "qa_check.py")
 	if !fileExists(script) {
 		return ""
 	}
-	cmd := exec.Command(manjuPython, script, "--root", proj)
+	cmd := exec.Command(manjuPythonPath(), script, "--root", proj)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8")
 	out, _ := cmd.CombinedOutput()
 	return string(out)
+}
+
+// manjuSkillUpdate 小说续作技能 git 同步(技能目录是 git 仓库时 git pull;失败透出原因)。
+func manjuSkillUpdate(w http.ResponseWriter, r *http.Request) {
+	if !dirExists(filepath.Join(NovelSkillDir, ".git")) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "技能目录不是 git 仓库(先按 github 仓库克隆到目录)"})
+		return
+	}
+	cmd := exec.Command("git", "-C", NovelSkillDir, "pull", "--ff-only")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	msg := strings.TrimSpace(string(out))
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "git pull 失败: " + err.Error(), "output": msg})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "output": msg})
 }

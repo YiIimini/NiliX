@@ -7,9 +7,9 @@ import (
 )
 
 func TestManjuDeleteProject(t *testing.T) {
-	// 在 manjuRoot 下建一个真实项目(唯一名)用于删除测试
+	// 在 ManjuRootDir 下建一个真实项目(唯一名)用于删除测试
 	proj := "zz_delete_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	_ = os.MkdirAll(filepath.Join(dir, "clips", "EP01"), 0755)
@@ -24,7 +24,7 @@ func TestManjuDeleteProject(t *testing.T) {
 		{"config": `C:\Mi\Ai\WorkBench\manju\..\..\Windows\config.json`},
 	} {
 		w, _ := doReq(t, "POST", "/api/manju/delete", bad)
-		if w.Code == 200 { // 安全第一:绝不允许删成功(400/404 均可,反正目录在 manjuRoot 内不存在)
+		if w.Code == 200 { // 安全第一:绝不允许删成功(400/404 均可,反正目录在 ManjuRootDir 内不存在)
 			t.Errorf("非法输入不应删除成功: %v", bad)
 		}
 	}

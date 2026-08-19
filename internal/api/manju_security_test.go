@@ -143,7 +143,7 @@ func TestAtomicWrite(t *testing.T) {
 // TestManjuUpscaleEstimate 2K 费用预估:有方案按方案时长×单价;无方案按目录镜头粗估
 func TestManjuUpscaleEstimate(t *testing.T) {
 	proj := "zz_estimate_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	_ = os.MkdirAll(filepath.Join(dir, "analysis"), 0755)
@@ -176,7 +176,7 @@ func TestManjuUpscaleEstimate(t *testing.T) {
 // TestManjuCleanup 产物清理:只删目标子目录,定妆照/定稿不动
 func TestManjuCleanup(t *testing.T) {
 	proj := "zz_cleanup_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	mk := func(p string) { _ = os.MkdirAll(p, 0755) }

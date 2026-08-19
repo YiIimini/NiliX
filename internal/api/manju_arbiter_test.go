@@ -37,7 +37,7 @@ func TestArbiterDecide(t *testing.T) {
 // TestMarkAutoAccepted 终审接受落盘:状态 accepted + Arbiter 记录 + 既有升级自动解除
 func TestMarkAutoAccepted(t *testing.T) {
 	proj := "zz_arbiter_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	_ = os.MkdirAll(dir, 0755)
@@ -72,7 +72,7 @@ func TestMarkAutoAccepted(t *testing.T) {
 // TestAgentAutoResolveConfig auto_resolve 配置链:默认开 → 项目关 → 摘要回读
 func TestAgentAutoResolveConfig(t *testing.T) {
 	proj := "zz_arb_cfg_test"
-	dir := filepath.Join(manjuRoot, proj)
+	dir := filepath.Join(ManjuRootDir, proj)
 	_ = os.RemoveAll(dir)
 	defer os.RemoveAll(dir)
 	_ = os.MkdirAll(dir, 0755)
