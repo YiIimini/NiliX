@@ -279,6 +279,104 @@ func manjuAssetStyle(style string) string {
 	return manjuStyleDesc(style).asset
 }
 
+// manjuNovelAssets 完整解析小说目录素材(数据驱动,命名约定只改候选表):
+//  素材/人物生成提示词.md(含 角色/人物 的 md) → CharPrompt  角色定妆照提示词
+//  素材/场景*.md(含 场景 的 md)              → ScenePrompt 场景图提示词
+//  素材/其它 md                              → ExtraPrompt 道具/氛围等素材
+//  设定集/*.md(全部合并)                     → Setting     世界观/大纲/创作规范
+//  封面/封面提示词.md                        → CoverPrompt 封面提示词(参考)
+// 各段截断 8000 字,总注入受调用方总量控制。
+type manjuNovelAssets struct {
+	CharPrompt  string
+	ScenePrompt string
+	ExtraPrompt string
+	Setting     string
+	CoverPrompt string
+	Files       []string // 发现的素材文件清单(日志展示)
+}
+
+func scanNovelAssets(root string) manjuNovelAssets {
+	var out manjuNovelAssets
+	if root == "" {
+		return out
+	}
+	readTrunc := func(p string) string {
+		if !fileExists(p) {
+			return ""
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return ""
+		}
+		txt := string(b)
+		if r := []rune(txt); len(r) > 8000 {
+			txt = string(r[:8000])
+		}
+		return txt
+	}
+	add := func(name, content string) {
+		if content != "" {
+			out.Files = append(out.Files, name)
+		}
+	}
+	// 素材/ 目录:按文件名语义归类
+	if entries, err := os.ReadDir(filepath.Join(root, "素材")); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+				continue
+			}
+			low := strings.ToLower(e.Name())
+			content := readTrunc(filepath.Join(root, "素材", e.Name()))
+			switch {
+			case strings.Contains(low, "人物") || strings.Contains(low, "角色"):
+				if out.CharPrompt == "" {
+					out.CharPrompt = content
+				}
+				add(e.Name(), content)
+			case strings.Contains(low, "场景") || strings.Contains(low, "背景"):
+				if out.ScenePrompt == "" {
+					out.ScenePrompt = content
+				}
+				add(e.Name(), content)
+			default:
+				if out.ExtraPrompt == "" {
+					out.ExtraPrompt = content
+				}
+				add(e.Name(), content)
+			}
+		}
+	}
+	// 设定集/ 目录:全部合并(世界观/大纲/创作规范)
+	if entries, err := os.ReadDir(filepath.Join(root, "设定集")); err == nil {
+		var parts []string
+		total := 0
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+				continue
+			}
+			c := readTrunc(filepath.Join(root, "设定集", e.Name()))
+			if c == "" {
+				continue
+			}
+			parts = append(parts, "【"+e.Name()+"】\n"+c)
+			total += len([]rune(c))
+			out.Files = append(out.Files, "设定集/"+e.Name())
+			if total > 20000 { // 设定集总截断
+				break
+			}
+		}
+		if len(parts) > 0 {
+			out.Setting = strings.Join(parts, "\n\n")
+		}
+	}
+	// 封面提示词(参考,用于项目封面一致性)
+	if c := readTrunc(filepath.Join(root, "封面", "封面提示词.md")); c != "" {
+		out.CoverPrompt = c
+		out.Files = append(out.Files, "封面/封面提示词.md")
+	}
+	return out
+}
+
 func manjuDirectSystem(cfg map[string]any, style string) string {
 	kbChar, kbScene, kbStory := manjuKnowledgeChunks(cfg)
 	assetStyle := manjuAssetStyle(style)

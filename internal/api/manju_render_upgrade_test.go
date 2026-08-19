@@ -554,3 +554,36 @@ func TestParseChapterRange(t *testing.T) {
 		t.Fatalf("非法应不过滤")
 	}
 }
+
+// TestManjuNovelAssetPrompt 小说素材提示词读取:素材/人物生成提示词.md 命中并截断;无素材返回空
+// TestScanNovelAssets 小说素材完整解析:素材/人物/场景分类、设定集合并、封面提示词、文件清单
+func TestScanNovelAssets(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "素材"), 0755)
+	_ = os.MkdirAll(filepath.Join(dir, "设定集"), 0755)
+	_ = os.MkdirAll(filepath.Join(dir, "封面"), 0755)
+	// 无素材 → 空清单
+	if a := scanNovelAssets(dir); len(a.Files) != 0 {
+		t.Fatalf("无素材应空: %v", a.Files)
+	}
+	// 素材分类:人物/场景/其它
+	_ = os.WriteFile(filepath.Join(dir, "素材", "人物生成提示词.md"), []byte("人物:陈鱼,死鱼眼"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "素材", "场景提示词.md"), []byte("场景:青云宗山门"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "素材", "道具提示词.md"), []byte("道具:草绳"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "设定集", "设定集与大纲.md"), []byte("世界观:修仙界"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "设定集", "章节写作规范.md"), []byte("文风:轻松"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "封面", "封面提示词.md"), []byte("封面:写实电影级"), 0644)
+	a := scanNovelAssets(dir)
+	if !strings.Contains(a.CharPrompt, "陈鱼") || !strings.Contains(a.ScenePrompt, "山门") || !strings.Contains(a.ExtraPrompt, "草绳") {
+		t.Fatalf("素材分类异常: char=%q scene=%q extra=%q", a.CharPrompt, a.ScenePrompt, a.ExtraPrompt)
+	}
+	if !strings.Contains(a.Setting, "世界观") || !strings.Contains(a.Setting, "文风") {
+		t.Fatalf("设定集合并异常: %q", a.Setting)
+	}
+	if !strings.Contains(a.CoverPrompt, "写实") {
+		t.Fatalf("封面提示词异常: %q", a.CoverPrompt)
+	}
+	if len(a.Files) != 6 {
+		t.Fatalf("文件清单应 6 项: %v", a.Files)
+	}
+}

@@ -884,6 +884,26 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 	}
 	lg.logf("🤖 大模型直出 人物/场景/分镜...")
 	sys := manjuDirectSystem(ctx.cfg, ctx.style)
+	// 小说素材完整注入(通用目录约定:素材/人物生成提示词.md、素材/场景*.md、素材/其它、设定集/*.md、封面/封面提示词.md):
+	// 方案生成时全部参考——角色/场景 image_prompt 贴合素材,世界观/创作规范贴合设定集,避免「素材白准备」
+	if assets := scanNovelAssets(ctx.novelRootDir()); len(assets.Files) > 0 {
+		lg.logf("📎 已利用小说素材: " + strings.Join(assets.Files, "、"))
+		if assets.Setting != "" {
+			sys += "\n\n【小说设定集·世界观/大纲/创作规范(角色设定/场景设定/剧情线/文风必须贴合,禁止与设定冲突;未知细节以本章原文为准)】\n" + assets.Setting
+		}
+		if assets.CharPrompt != "" {
+			sys += "\n\n【小说素材·人物生成提示词(角色 image_prompt 必须贴合此文件的人物描述——外观/服装/气质/记忆点以其为准,再结合章节原文细节;不要照抄整段,提炼为可渲染英文)】\n" + assets.CharPrompt
+		}
+		if assets.ScenePrompt != "" {
+			sys += "\n\n【小说素材·场景提示词(场景 image_prompt 必须贴合此文件的场景描述,再结合本章原文)】\n" + assets.ScenePrompt
+		}
+		if assets.ExtraPrompt != "" {
+			sys += "\n\n【小说素材·其它提示词(道具/氛围等,如有相关镜头尽量贴合)】\n" + assets.ExtraPrompt
+		}
+		if assets.CoverPrompt != "" {
+			sys += "\n\n【封面提示词参考(全剧美术基调与封面一致)】\n" + assets.CoverPrompt
+		}
+	}
 	// 生成并校验:输出被截断/非 JSON/无镜头都视为无效,追加精简约束重试一次
 	plan, err = ctx.llm.chatJSON(sys, truncate(chapterText, 20000), 0.4)
 	invalid := err != nil || len(anyArr(plan["shots"])) == 0
@@ -1478,8 +1498,8 @@ func (ctx *manjuCtx) ensurePlanAndPrompts(lg *manjuLogger) (map[string]any, []ma
 		return nil, nil, err
 	}
 	shots, _ := planShots(plan)
-	ctx.ensureTakes(plan, shots, lg)   // 多切点长镜分组(experimental,默认关)
-	shots = applyTakes(plan, shots)    // 组头时长=总和,内镜标 TakeTail
+	ctx.ensureTakes(plan, shots, lg) // 多切点长镜分组(experimental,默认关)
+	shots = applyTakes(plan, shots)  // 组头时长=总和,内镜标 TakeTail
 	if err := ctx.genShotPrompts(plan, shots, lg); err != nil {
 		return nil, nil, err
 	}
