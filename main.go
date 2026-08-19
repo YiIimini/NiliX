@@ -56,6 +56,7 @@ var (
 	procWinSetForeground = user32Lazy.NewProc("SetForegroundWindow")
 	procWinFind          = user32Lazy.NewProc("FindWindowW")
 	procGetSysMetrics    = user32Lazy.NewProc("GetSystemMetrics")
+	procSetWindowPos     = user32Lazy.NewProc("SetWindowPos")
 )
 
 // msedgePath 定位 Edge 浏览器(系统自带;WebView2 运行时本就依赖同一 Edge)
@@ -77,7 +78,37 @@ func fileOK(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
-// runMainWindow 用 Edge App 模式打开管理窗口(1440×900,独立应用窗口)
+// calcMainWinSize 按屏幕工作区计算 16:9 窗口尺寸与居中坐标(宽=工作区85%≤1600;高受限反向缩宽)
+func calcMainWinSize() (x, y, w, h int) {
+	sw, _, _ := procGetSysMetrics.Call(16) // SM_CXFULLSCREEN(工作区宽)
+	sh, _, _ := procGetSysMetrics.Call(17) // SM_CYFULLSCREEN(工作区高)
+	if sw == 0 || sh == 0 {
+		sw, sh = 1920, 1040
+	}
+	w = int(float64(sw) * 0.85)
+	if w > 1600 {
+		w = 1600
+	}
+	h = w * 9 / 16
+	if maxH := int(float64(sh) * 0.88); h > maxH {
+		h = maxH
+		w = h * 16 / 9
+	}
+	return (int(sw) - w) / 2, (int(sh) - h) / 2, w, h
+}
+
+// fitMainWindow 找到主窗口后强制 16:9 尺寸+居中(Edge App 的 --window-size 在复用已有
+// Edge 进程时不生效,窗口按上次记忆尺寸打开——由本进程 SetWindowPos 兜底校正)
+func fitMainWindow() {
+	h := findMainWindow()
+	if h == 0 {
+		return
+	}
+	x, y, w, hgt := calcMainWinSize()
+	_, _, _ = procSetWindowPos.Call(h, 0, uintptr(x), uintptr(y), uintptr(w), uintptr(hgt), 0x0004) // SWP_NOZORDER
+}
+
+// runMainWindow 用 Edge App 模式打开管理窗口(独立应用窗口,开后校正 16:9)
 func runMainWindow(url string) {
 	edge := msedgePath()
 	if edge == "" {
@@ -86,29 +117,7 @@ func runMainWindow(url string) {
 		return
 	}
 	log.Printf("主窗口(Edge App)打开: %s", url)
-	// 自适应屏幕:按工作区(SM_CXFULLSCREEN/SM_CYFULLSCREEN)的 85%/88% 取尺寸,
-	// 上限 1600×960(大屏不过分铺满),小屏不超出,居中放置
-	sw, _, _ := procGetSysMetrics.Call(16) // SM_CXFULLSCREEN(工作区宽)
-	sh, _, _ := procGetSysMetrics.Call(17) // SM_CYFULLSCREEN(工作区高)
-	if sw == 0 || sh == 0 {
-		sw, sh = 1920, 1040
-	}
-	w := int(float64(sw) * 0.85)
-	h := int(float64(sh) * 0.88)
-	if w > 1600 {
-		w = 1600
-	}
-	if h > 960 {
-		h = 960
-	}
-	if w < 960 {
-		w = int(sw) - 40
-	}
-	if h < 600 {
-		h = int(sh) - 40
-	}
-	x := (int(sw) - w) / 2
-	y := (int(sh) - h) / 2
+	x, y, w, h := calcMainWinSize()
 	cmd := exec.Command(edge, "--app="+url,
 		fmt.Sprintf("--window-size=%d,%d", w, h),
 		fmt.Sprintf("--window-position=%d,%d", x, y))
@@ -116,7 +125,13 @@ func runMainWindow(url string) {
 	if err := cmd.Start(); err != nil {
 		log.Printf("主窗口启动失败: %v(回退系统浏览器)", err)
 		openBrowser(url)
+		return
 	}
+	// 窗口起来后兜底校正 16:9+居中(等 Edge 完成窗口初始化)
+	go func() {
+		time.Sleep(1800 * time.Millisecond)
+		fitMainWindow()
+	}()
 }
 
 var (
