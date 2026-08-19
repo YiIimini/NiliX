@@ -55,6 +55,9 @@ type WebView interface {
 
 	// SetTransparent makes the WebView2 background transparent (alpha = 0).
 	SetTransparent()
+	// SetBackgroundColor sets the opaque WebView2 default background color
+	// (kills the white flash while the page loads; use the site's base color).
+	SetBackgroundColor(r, g, b uint8)
 
 	// TransparentOK reports whether the transparent background is actually
 	// applied (WebView2 controller ready). Used for retry loops.

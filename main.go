@@ -12,8 +12,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/getlantern/systray"
 
@@ -39,6 +41,91 @@ var kbFS embed.FS
 
 //go:embed web/island
 var islandFS embed.FS
+
+// ---- 桌面主窗口:双击 exe 即在应用窗口内管理 ----
+// 用 Edge App 模式(msedge --app=URL)开独立应用窗口:无边栏地址栏、独立任务栏项,
+// 观感等同桌面应用。灵动岛保持进程内 WebView2(WebView2 同进程只允许一个 environment,
+// 第二个会创建卡死——实测结论,故主窗口走 Edge App 进程,互不冲突)。
+// 关闭窗口 = 驻留托盘(渲染/续写任务不中断),托盘菜单或再次双击可唤起;托盘「退出」才真正退出。
+
+const mainWinTitle = "NiliX · 我的工作台" // 管理页运行时标题(i18n 动态设置),Edge App 窗口标题与其一致(FindWindow 依据)
+
+var (
+	user32Lazy           = syscall.NewLazyDLL("user32.dll")
+	procWinShow          = user32Lazy.NewProc("ShowWindow")
+	procWinSetForeground = user32Lazy.NewProc("SetForegroundWindow")
+	procWinFind          = user32Lazy.NewProc("FindWindowW")
+)
+
+// msedgePath 定位 Edge 浏览器(系统自带;WebView2 运行时本就依赖同一 Edge)
+func msedgePath() string {
+	for _, p := range []string{
+		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
+		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+		filepath.Join(os.Getenv("LocalAppData"), `Microsoft\Edge\Application\msedge.exe`),
+	} {
+		if fileOK(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func fileOK(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
+}
+
+// runMainWindow 用 Edge App 模式打开管理窗口(1440×900,独立应用窗口)
+func runMainWindow(url string) {
+	edge := msedgePath()
+	if edge == "" {
+		log.Printf("主窗口: 未找到 Edge,回退系统浏览器")
+		openBrowser(url)
+		return
+	}
+	log.Printf("主窗口(Edge App)打开: %s", url)
+	cmd := exec.Command(edge, "--app="+url, "--window-size=1440,900")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
+	if err := cmd.Start(); err != nil {
+		log.Printf("主窗口启动失败: %v(回退系统浏览器)", err)
+		openBrowser(url)
+	}
+}
+
+var (
+	procEnumWindows = user32Lazy.NewProc("EnumWindows")
+	procGetTextW    = user32Lazy.NewProc("GetWindowTextW")
+)
+
+// findMainWindow 枚举顶层窗口按标题模糊查找管理主窗口(含"工作台"字样;
+// FindWindowW 精确匹配对不可见字符/前后缀差异不可靠)。
+func findMainWindow() uintptr {
+	var found uintptr
+	cb := syscall.NewCallback(func(h, l uintptr) uintptr {
+		buf := make([]uint16, 128)
+		n, _, _ := procGetTextW.Call(h, uintptr(unsafe.Pointer(&buf[0])), 128)
+		title := syscall.UTF16ToString(buf[:n])
+		if strings.Contains(title, "NiliX") && strings.Contains(title, "工作台") {
+			found = h
+			return 0 // 停止枚举
+		}
+		return 1
+	})
+	_, _, _ = procEnumWindows.Call(cb, 0)
+	return found
+}
+
+// showMainWindow 唤起主窗口:已存在(含最小化)则恢复前置;没有则新开。
+// 跨进程枚举窗口,兼容"再次双击 exe 唤起已运行实例的窗口"。
+func showMainWindow(url string) {
+	if h := findMainWindow(); h != 0 {
+		procWinShow.Call(h, 9) // SW_RESTORE(最小化时恢复)
+		procWinSetForeground.Call(h)
+		return
+	}
+	runMainWindow(url)
+}
 
 func main() {
 	// 切到可执行文件所在目录：开机自启(注册表 Run key)启动时工作目录可能是 System32，
@@ -67,7 +154,9 @@ func main() {
 	guard, err := watchdog.SingleInstance("NiliX")
 	if err != nil {
 		if errors.Is(err, watchdog.ErrAlreadyRunning) {
-			watchdog.Alert("小说转视频服务", "服务已在运行，请勿重复启动。")
+			watchdog.Alert("小说转视频服务", "NiliX 已在运行,已为你唤起管理窗口。")
+			// Edge App 窗口是独立进程,不随本进程退出——已开则前置,已关则直接重开
+			showMainWindow("http://127.0.0.1:8787")
 		} else {
 			log.Printf("单实例检查失败: %v", err)
 		}
@@ -110,6 +199,12 @@ func main() {
 		}
 	}()
 
+	// 桌面主窗口:启动即打开,双击 exe 直接在窗口内管理(关窗驻留托盘)
+	go func() {
+		time.Sleep(400 * time.Millisecond) // 等 HTTP listen 就绪
+		showMainWindow(url)
+	}()
+
 	// 灵动岛悬浮胶囊（WebView2）
 	go func() {
 		time.Sleep(500 * time.Millisecond)
@@ -117,7 +212,7 @@ func main() {
 			StartComfy: api.ComfyStart,
 			StopComfy:  api.ComfyStop,
 			OpenComfy:  func() { openBrowser(api.ComfyURL()) },
-			OpenKB:     func() { openBrowser(url + "#/manju") },
+			OpenKB:     func() { showMainWindow(url) },
 			StartZCode: startZCode,
 			StopZCode:  stopZCode,
 			StopBot:    stopBot,
@@ -147,13 +242,13 @@ func onReady(url string) func() {
 			for {
 				select {
 				case <-mHome.ClickedCh:
-					openBrowser(url)
+					showMainWindow(url)
 				case <-mNovel.ClickedCh:
-					openBrowser(url + "#/novel")
+					showMainWindow(url)
 				case <-mManju.ClickedCh:
-					openBrowser(url + "#/manju")
+					showMainWindow(url)
 				case <-mComfy.ClickedCh:
-					openBrowser(url + "#/comfy")
+					showMainWindow(url)
 				case <-mAuto.ClickedCh:
 					if mAuto.Checked() {
 						if autostart.Disable() == nil {

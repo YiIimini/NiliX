@@ -436,6 +436,17 @@ func (w *webview) SetTitle(title string) {
 	_, _, _ = w32.User32SetWindowTextW.Call(w.hwnd, uintptr(unsafe.Pointer(&_title[0])))
 }
 
+// SetBackgroundColor 设置 WebView2 不透明默认背景色(消除页面加载期白闪;传站点底色)。
+func (w *webview) SetBackgroundColor(r, g, b uint8) {
+	if chromium, ok := w.browser.(*edge.Chromium); ok {
+		if c := chromium.GetController(); c != nil {
+			if c2 := c.GetICoreWebView2Controller2(); c2 != nil {
+				_ = c2.PutDefaultBackgroundColor(edge.COREWEBVIEW2_COLOR{A: 255, R: r, G: g, B: b})
+			}
+		}
+	}
+}
+
 // SetTransparent 设置 WebView2 背景透明（DefaultBackgroundColor alpha=0）。
 func (w *webview) SetTransparent() {
 	if chromium, ok := w.browser.(*edge.Chromium); ok {
