@@ -289,22 +289,38 @@
       el.classList.toggle("hidden", !msg);
     },
 
-    /* 中断续跑提示:上次任务被中断/失败且未运行中 → 状态区显示「一键续跑」横幅
-       (管线幂等+渲染检查点已具备自动续跑能力,只差入口) */
+    /* 中断续跑提示:上次任务被中断/失败且日志有失败痕迹 → 动态创建「一键续跑」横幅;
+       无内容/无中断/无痕迹 → 彻底移除 DOM(静态 HTML 中不存在该元素,杜绝空提示条) */
     renderInterruptTip() {
-      const tip = $("manju-interrupt-tip");
-      if (!tip) return;
       const s = this.status || {};
       const interrupted = !s.running && (s.stopped || (s.rc !== null && s.rc !== undefined && s.rc !== 0));
-      // 无内容/无中断/日志无失败痕迹 → 绝不显示(空提示条是最丑的)
       // 失败痕迹:日志里真有 ❌/失败/手动停止/⏹ 才提示,防止 rc 残留造成「没内容也显示」
       const hasFail = s.logTail && (/❌|失败|已手动停止|⏹/).test(s.logTail);
-      if (!interrupted || !this.project || !s.logTail || !hasFail) { tip.hidden = true; return; }
+      const show = interrupted && this.project && s.logTail && hasFail;
+      const tip = $("manju-interrupt-tip");
+      if (!show) {
+        if (tip) tip.remove(); // 平时 DOM 彻底无此元素
+        return;
+      }
+      if (tip) { // 已存在:仅更新内容
+        const st = s.currentStage ? ("上次中断于「" + s.currentStage + "」阶段") : "检测到上次运行中断";
+        tip.innerHTML = `<span class="mi-tip-t">⚠️ ${esc(st)} — 可一键续跑(幂等跳过已完成)</span><button id="mi-tip-resume" class="hrs-btn hrs-btn-primary">▶ 续跑</button>`;
+        const btn = $("mi-tip-resume");
+        if (btn) btn.addEventListener("click", () => { tip.remove(); this.runResume(); });
+        return;
+      }
+      // 动态创建:插到运行状态区 badge 行(第一个 .manju-row)之后
+      const wrap = $("manju-side-body");
+      if (!wrap) return;
+      const div = document.createElement("div");
+      div.id = "manju-interrupt-tip";
+      div.className = "manju-interrupt-tip";
       const st = s.currentStage ? ("上次中断于「" + s.currentStage + "」阶段") : "检测到上次运行中断";
-      tip.hidden = false;
-      tip.innerHTML = `<span class="mi-tip-t">⚠️ ${esc(st)} — 可一键续跑(幂等跳过已完成)</span><button id="mi-tip-resume" class="hrs-btn hrs-btn-primary">▶ 续跑</button>`;
+      div.innerHTML = `<span class="mi-tip-t">⚠️ ${esc(st)} — 可一键续跑(幂等跳过已完成)</span><button id="mi-tip-resume" class="hrs-btn hrs-btn-primary">▶ 续跑</button>`;
+      const firstRow = wrap.querySelector(".manju-row");
+      wrap.insertBefore(div, firstRow ? firstRow.nextSibling : wrap.firstChild);
       const btn = $("mi-tip-resume");
-      if (btn) btn.addEventListener("click", () => { tip.hidden = true; this.runResume(); });
+      if (btn) btn.addEventListener("click", () => { div.remove(); this.runResume(); });
     },
 
 
@@ -491,9 +507,8 @@
       const head = $("manju-out-fold");
       const body = $("manju-out-body");
       if (!head || !body) return;
-      head.addEventListener("click", (e) => {
-        if (e.target.closest("#manju-trailer")) return; // 预告片按钮不触发折叠
-        if (e.target.closest("#manju-cleanup")) return; // 清理按钮不触发折叠
+      head.addEventListener("click", () => {
+        // 清理/预告片已移至产物 body 工具行,不再冒泡到头部
         this._setOutputsFold(!body.classList.contains("is-folded"));
       });
       if (localStorage.getItem("manju-out-collapsed") === "1") this._setOutputsFold(true);
