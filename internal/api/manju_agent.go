@@ -924,17 +924,22 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	for i, s := range shots {
 		idxOf[s.ID] = i + 1
 	}
-	lg.logf(fmt.Sprintf("🤖 Agent 流水线启动: %d 镜 · 单镜渲完即审(质检+ASR+判分) · 不合格修复提示词排队重渲(预算 %d 轮)",
+	lg.logf(fmt.Sprintf("🤖 Agent 流水线启动: %d 镜 · 渲染与审片并行(渲完即后台判分,ASR 按轮批量) · 不合格修复提示词排队重渲(预算 %d 轮)",
 		len(selected), acfg.MaxRetries))
 
 	queue := selected
 	queueIsFirst := true
 	passed := 0
 	escCount := 0
+	planPath := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
 	for len(queue) > 0 && !lg.stopped() {
-		var redo []manjuShot
+		// 本轮两阶段:①逐镜渲染,渲完立即后台并发审片(渲染不空等——审片期间 GPU 继续渲下一镜);
+		// ②轮末批量 ASR 台词核对(whisper 模型整轮只加载一次,原来每镜加载一次是主要变慢原因)
+		var jw sync.WaitGroup
+		judgeSem := make(chan struct{}, 2) // 视觉判分 API 并发上限
 		for _, s := range queue {
 			if lg.stopped() {
+				jw.Wait()
 				return fmt.Errorf("已停止")
 			}
 			dst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
@@ -943,18 +948,50 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 				lg.logf(fmt.Sprintf("♻️ 镜头 %d 已有产物,直接进入审片", s.ID))
 			} else {
 				if err := ctx.renderSingleShot(s, idxOf[s.ID], !firstRound, lg); err != nil {
+					jw.Wait()
 					return err
 				}
 			}
-			// 即时审片:机械质检 + ASR 台词核对 + 视觉判分(结论落 agent_state)
-			lg.logf(fmt.Sprintf("🤖 审片官接管镜头 %d ...", s.ID))
-			failed := agentJudgeOneShot(ctx, lg, acfg, plan, s)
-			if len(failed) == 0 {
+			// 后台即时审片(qc 单镜 + 视觉判分;ASR 轮末批量),结论落 agent_state
+			jw.Add(1)
+			go func(s manjuShot) {
+				defer jw.Done()
+				judgeSem <- struct{}{}
+				defer func() { <-judgeSem }()
+				lg.logf(fmt.Sprintf("🤖 审片官接管镜头 %d ...", s.ID))
+				qcBad, _ := ctx.runQCJSON(lg, clipsEp, strconv.Itoa(s.ID))
+				ctx.judgeShots(lg, acfg, plan, []manjuShot{s}, qcBad)
+			}(s)
+		}
+		jw.Wait() // 等本轮全部审片落定
+		if lg.stopped() {
+			return fmt.Errorf("已停止")
+		}
+		// 批量 ASR:本轮全部有台词镜头一次转写(一次模型加载),结果并入失败集
+		asrBad := ctx.runASRCheck(lg, clipsEp, queue, planPath)
+
+		// 汇总失败镜头(视觉判分未过 / 判分调用出错 / ASR 台词不符)→ 升级或修复重渲
+		var redo []manjuShot
+		for _, s := range queue {
+			jd := loadAgentStateShot(ctx.project, s.ID)
+			asrFlags, asrHit := asrBad[s.ID]
+			visualFailed := jd.Status == "failed" || (jd.Status == "pending" && jd.Error != "")
+			if !visualFailed && !asrHit {
 				passed++
 				continue
 			}
+			if asrHit { // ASR 意见并入该镜 QCFlags(升级原因与面板可见)
+				manjuAgentMu.Lock()
+				st := loadAgentStateLocked(ctx.project)
+				if j := st.Shots[strconv.Itoa(s.ID)]; j != nil {
+					j.QCFlags = append(j.QCFlags, asrFlags...)
+					st.Shots[strconv.Itoa(s.ID)] = j
+				}
+				saveAgentStateLocked(ctx.project, st)
+				manjuAgentMu.Unlock()
+				jd = loadAgentStateShot(ctx.project, s.ID)
+			}
 			// 失败处置:无视觉模型或预算耗尽 → 升级;否则修复师改提示词排队重渲
-			jd := loadAgentStateShot(ctx.project, s.ID)
 			if !acfg.VisionReady() {
 				reason := strings.Join(append(jd.QCFlags, "机械质检/台词未过(未配置视觉模型,不判分)"), ";")
 				escalateShot(ctx, lg, s.ID, jd.Score, reason, acfg)
@@ -992,9 +1029,9 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 			redo = append(redo, s)
 			lg.logf(fmt.Sprintf("  🔁 镜头 %d 排队重渲(第 %d/%d 轮)", s.ID, jd.Retries+1, acfg.MaxRetries))
 		}
-			queue = redo
-			queueIsFirst = false
-		}
+		queue = redo
+		queueIsFirst = false
+	}
 	if lg.stopped() {
 		return fmt.Errorf("已停止")
 	}
@@ -1028,23 +1065,6 @@ func agentAssembleCheck(ctx *manjuCtx, lg *manjuLogger) {
 	}
 }
 
-// agentJudgeOneShot 单镜即时审片:质检(--shots 单镜) + ASR(--shots 单镜) + 视觉判分,
-// 结论/返工计数落 agent_state;返回失败镜头 ID 列表(空=通过)。
-func agentJudgeOneShot(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config, plan map[string]any, s manjuShot) []int {
-	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
-	qcBad, _ := ctx.runQCJSON(lg, clipsEp, strconv.Itoa(s.ID))
-	planPath := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
-	if asrBad := ctx.runASRCheck(lg, clipsEp, []manjuShot{s}, planPath); len(asrBad) > 0 {
-		if qcBad == nil {
-			qcBad = asrBad
-		} else {
-			for id, flags := range asrBad {
-				qcBad[id] = append(qcBad[id], flags...)
-			}
-		}
-	}
-	return ctx.judgeShots(lg, acfg, plan, []manjuShot{s}, qcBad)
-}
 
 // agentJudgeRemaining qc 阶段收尾:补审漏网镜头(中断续跑等场景)+ 学习记忆汇总。
 func agentJudgeRemaining(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) error {
