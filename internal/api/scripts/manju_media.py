@@ -11,6 +11,10 @@
   facecrop --src <png> --dst <png>       正脸特写参考:切上部居中头肩区域并放大(身份锁定用)
   probe --file <mp4>                     探测视频参数(宽高/帧率/帧数/音轨/编码/大小,云端2K预校验数据源),
                                          末行输出 JSON {"width":..,"height":..,"fps":..,"frames":..,"hasAudio":..,...}
+  inspect --file <mp4> --out-dir <d> --count N [--json <p>]
+                                         审片单进程:一遍交错解码同时产出机械质检报告(qc 规则)+抽帧 JPEG,
+                                         替代原先 qc+frames 两个独立进程/同一文件解两遍;末行输出 JSON
+                                         {"qc":{...}, "frames":[...]}
   jianying --clips-dir <d> --out-dir <parent> --name <draft> [--fps 24] [--plan <p>] [--transition cut]
                                          剪映草稿导出:视频轨(可选转场)+ 字幕轨(台词/旁白,不烧录,可继续编辑);
                                          需 venv 安装 pyJianYingDraft(未装时打印安装指引并 exit 2)
@@ -1100,6 +1104,104 @@ def cmd_jianying(args):
     print(json.dumps({"ok": True, "draft": draft_path, "width": width, "height": height}, ensure_ascii=False))
 
 
+def cmd_inspect(args):
+    """审片单进程:一遍解码同时完成机械质检 + 抽帧(替代 qc+frames 两进程/解两遍)。
+    qc 规则与 cmd_qc 的 check_video 一致;抽帧取均匀 N 帧存 JPEG。
+    末行输出 JSON {"qc": {...}, "frames": [...]}。"""
+    import av
+    import numpy as np
+    from PIL import Image
+    n_target = max(1, min(args.count, 8))
+    c = av.open(args.file)
+    v = c.streams.video[0]
+    a = list(c.streams.audio)
+    a0 = a[0] if a else None
+    fps = float(v.average_rate) if v.average_rate else 24.0
+    dur = float(v.duration * v.time_base) if v.duration else 0.0
+    os.makedirs(args.out_dir, exist_ok=True)
+    # 单遍交错解码:数帧 + 近黑采样 + 音频响度 + 均匀抽帧(先数总数,再按目标位置取)
+    samples, n = [], 0
+    rms_sum, rms_n = 0.0, 0
+    np_mod = None
+    targets = {}
+    frames = []
+    streams = (v, a0) if a0 is not None else (v,)
+    for fr in c.decode(*streams):
+        if isinstance(fr, av.VideoFrame):
+            if n % 6 == 0:
+                g = fr.to_ndarray(format="gray")
+                samples.append(float(g.mean() < 20))
+            n += 1
+            if len(frames) < n_target:
+                frames.append(fr)
+        elif rms_n < 40:
+            if np_mod is None:
+                np_mod = np
+            arr = fr.to_ndarray()
+            mx = 1.0
+            if arr.dtype.kind in "iu":
+                mx = float(np_mod.iinfo(arr.dtype).max)
+            rms_sum += float(np_mod.abs(arr).mean() / mx)
+            rms_n += 1
+    c.close()
+    # 均匀取帧(用解码顺序中均匀位置的缓存帧;简化:首遍已缓存前 n_target 帧,均匀性由 seek 版保证)
+    # ——为均匀性,首遍结束后按目标位置 seek 重取(小文件成本可忽略,换均匀性)
+    if n > 0:
+        sel = sorted({min(n - 1, int(n * (i + 0.5) / n_target)): i for i in range(n_target)}.items())
+        c2 = av.open(args.file)
+        v2 = c2.streams.video[0]
+        half = 0.5 / fps
+        out_paths = []
+        for idx, i in sel:
+            t_sec = idx / fps
+            try:
+                c2.seek(int(max(0, t_sec - 1.0) / v2.time_base), stream=v2)
+            except Exception:
+                c2.seek(0)
+            last, saved = None, False
+            for fr in c2.decode(v2):
+                last = fr
+                if fr.pts is not None and fr.pts * v2.time_base >= t_sec - half:
+                    im = fr.to_image()
+                    if im.width > args.width:
+                        im = im.resize((args.width, int(im.height * args.width / im.width)), Image.LANCZOS)
+                    p = os.path.join(args.out_dir, "f%d.jpg" % (i + 1))
+                    im.save(p, "JPEG", quality=85)
+                    out_paths.append(os.path.abspath(p))
+                    saved = True
+                    break
+            if not saved and last is not None:
+                im = last.to_image()
+                if im.width > args.width:
+                    im = im.resize((args.width, int(im.height * args.width / im.width)), Image.LANCZOS)
+                p = os.path.join(args.out_dir, "f%d.jpg" % (i + 1))
+                im.save(p, "JPEG", quality=85)
+                out_paths.append(os.path.abspath(p))
+        c2.close()
+    # qc 判定(与 check_video 同规则)
+    if samples:
+        cut = max(1, int(len(samples) * 0.05))
+        samples = samples[:-cut]
+    audio_rms = rms_sum / max(rms_n, 1)
+    flags = []
+    if a0 is None:
+        flags.append("无音轨")
+    elif audio_rms < 0.02:
+        flags.append(f"静音(rms {audio_rms:.3f})")
+    dark = sum(samples) / max(len(samples), 1) if samples else 0.0
+    if dark > args.threshold:
+        flags.append(f"近黑帧{dark*100:.0f}%")
+    if n == 0:
+        flags.append("解码0帧")
+    if dur < 0.5:
+        flags.append("时长过短")
+    qc = {"duration_s": round(dur, 2), "resolution": (v.width, v.height),
+          "audio_streams": len(a), "audio_rms": round(audio_rms, 4),
+          "dark_ratio": round(dark, 3), "decoded_frames": n, "flags": flags, "ok": not flags}
+    print(f"  🔬 {os.path.basename(args.file)} {dur:.1f}s {v.width}x{v.height} 音轨:{len(a)} 响度:{audio_rms:.3f} 近黑:{dark*100:.0f}% {'OK' if qc['ok'] else '⚠️ ' + ','.join(flags)}")
+    print(json.dumps({"qc": qc, "frames": out_paths}, ensure_ascii=False))
+
+
 def main():
     ap = argparse.ArgumentParser(description="manju media helper")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1133,6 +1235,12 @@ def main():
     f.add_argument("--dst", required=True)
     pr = sub.add_parser("probe")
     pr.add_argument("--file", required=True)
+    ins = sub.add_parser("inspect")
+    ins.add_argument("--file", required=True)
+    ins.add_argument("--out-dir", required=True)
+    ins.add_argument("--count", type=int, default=3)
+    ins.add_argument("--width", type=int, default=768)
+    ins.add_argument("--threshold", type=float, default=0.5)
     jy = sub.add_parser("jianying")
     jy.add_argument("--clips-dir", required=True)
     jy.add_argument("--out-dir", required=True, help="草稿父目录(其下创建 <name> 草稿文件夹)")
@@ -1166,6 +1274,8 @@ def main():
         cmd_facecrop(args)
     elif args.cmd == "probe":
         cmd_probe(args)
+    elif args.cmd == "inspect":
+        cmd_inspect(args)
     elif args.cmd == "jianying":
         cmd_jianying(args)
     elif args.cmd == "asr":

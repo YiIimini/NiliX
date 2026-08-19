@@ -51,7 +51,14 @@ type VisionClient struct {
 	stickyMu    sync.Mutex
 	stickyIdx   int
 	stickyUntil time.Time
+	// 整链熔断:全链 429(免费档高峰)后,熔断窗内直接快速失败不重试——
+	// 否则每镜仍烧 4+10+20=34s 退避才失败,整轮审片空转;窗结束自动恢复。
+	circuitMu    sync.Mutex
+	circuitUntil time.Time
 }
+
+// visionCircuitCooldown 整链熔断窗(测试可缩短)
+var visionCircuitCooldown = 3 * time.Minute
 
 // visionStickyCooldown 粘性降级冷却窗(测试可缩短)
 var visionStickyCooldown = 15 * time.Minute
@@ -141,6 +148,14 @@ func (v *VisionClient) chatImage(system, user string, imagePaths []string, tempe
 			"image_url": map[string]string{"url": uri},
 		})
 	}
+	// 整链熔断:免费档高峰 429 后冷却窗内快速失败,不空转退避
+	v.circuitMu.Lock()
+	cb := v.circuitUntil
+	v.circuitMu.Unlock()
+	if time.Now().Before(cb) {
+		return "", fmt.Errorf("视觉模型整链熔断中(高峰过载),约 %s 后自动恢复——本镜判分跳过",
+			time.Until(cb).Round(time.Second).String())
+	}
 	// 起始模型:粘性窗口内从上次降级成功的备模型直连
 	start := 0
 	v.stickyMu.Lock()
@@ -198,6 +213,10 @@ func (v *VisionClient) chatImage(system, user string, imagePaths []string, tempe
 	if strings.Contains(joined, "429") {
 		joined += "(免费档高峰整链过载,建议稍后再试或更换视觉模型)"
 	}
+	// 全链都失败 → 熔断窗(下一次调用快速失败,不每镜重烧 34s 退避)
+	v.circuitMu.Lock()
+	v.circuitUntil = time.Now().Add(visionCircuitCooldown)
+	v.circuitMu.Unlock()
 	return "", fmt.Errorf("视觉模型链失败: %s", truncateStr(joined, 400))
 }
 

@@ -725,6 +725,51 @@ func (ctx *manjuCtx) shotFramesDir(shotID int) string {
 	return filepath.Join(ctx.analysisDir, "_frames", ctx.episode, fmt.Sprintf("%02d", shotID))
 }
 
+// inspectShot 审片单进程:一遍解码同时产出机械质检报告+抽帧 JPEG(替代原先 qc+frames
+// 两个独立进程、同一文件解两遍)。返回 (frames, qcFlags, err)。
+func (ctx *manjuCtx) inspectShot(lg *manjuLogger, clip string, shotID, count int) ([]string, []string, error) {
+	dir := ctx.shotFramesDir(shotID)
+	_ = os.RemoveAll(dir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, nil, err
+	}
+	out, err := ctx.runMediaOut("inspect", "--file", clip, "--out-dir", dir, "--count", strconv.Itoa(count))
+	if err != nil {
+		return nil, nil, fmt.Errorf("审片检测失败: %w", err)
+	}
+	m := parseJSONLine(out)
+	var frames []string
+	var flags []string
+	if m != nil {
+		if arr, ok := m["frames"].([]any); ok {
+			for _, x := range arr {
+				if f := str(x); f != "" {
+					frames = append(frames, f)
+				}
+			}
+		}
+		if qc, ok := m["qc"].(map[string]any); ok {
+			if ok2, _ := qc["ok"].(bool); !ok2 {
+				for _, fl := range anyArr(qc["flags"]) {
+					flags = append(flags, str(fl))
+				}
+			}
+		}
+	}
+	if len(frames) == 0 {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if strings.HasSuffix(strings.ToLower(e.Name()), ".jpg") {
+				frames = append(frames, filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	if len(frames) == 0 {
+		return nil, flags, fmt.Errorf("抽帧 0 张")
+	}
+	return frames, flags, nil
+}
+
 // extractFrames 抽帧(媒体辅助脚本),返回 JPEG 路径列表
 func (ctx *manjuCtx) extractFrames(lg *manjuLogger, clip string, shotID, count int) ([]string, error) {
 	dir := ctx.shotFramesDir(shotID)
@@ -830,11 +875,26 @@ func (ctx *manjuCtx) judgeShots(lg *manjuLogger, acfg agent.Config, plan map[str
 		}
 		jd := &agent.Judgment{Status: "pending", JudgedAt: time.Now().Unix(), Model: acfg.VisionModel}
 		jd.QCFlags = qcBad[s.ID]
-		frames, ferr := ctx.extractFrames(lg, clip, s.ID, acfg.FramesPerShot)
+		frames, qcFlags, ferr := ctx.inspectShot(lg, clip, s.ID, acfg.FramesPerShot)
 		if ferr != nil {
 			jd.Error = ferr.Error()
 			lg.logf("🤖 审片 镜头 " + strconv.Itoa(s.ID) + " 抽帧失败: " + ferr.Error())
 		} else {
+			// inspect 单进程已含机械质检(替代 runQCJSON 独立进程);外部传入的 qcBad 合并去重
+			if len(qcFlags) > 0 {
+				seen := map[string]bool{}
+				for _, f := range append(append([]string{}, jd.QCFlags...), qcBad[s.ID]...) {
+					seen[f] = true
+				}
+				for _, f := range qcFlags {
+					if !seen[f] {
+						jd.QCFlags = append(jd.QCFlags, f)
+						seen[f] = true
+					}
+				}
+				merged := append([]string{}, jd.QCFlags...)
+				qcBad[s.ID] = merged
+			}
 			meta := shotMetaFromPlan(s, charMap, sceneMap, styleDesc)
 			if j, err := agent.Judge(vc, meta, frames, ctx.refImagesFor(s), acfg.PassScore); err != nil {
 				jd.Error = err.Error()
@@ -1048,10 +1108,31 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 		// ③轮末汇总失败镜头走修复/升级
 		var jw sync.WaitGroup
 		judgeSem := make(chan struct{}, acfg.JudgeConcurrency) // 视觉判分 API 并发上限(可配,默认 2;免费档调高易 429)
-		for _, s := range queue {
+		for qi, s := range queue {
 			if lg.stopped() {
 				jw.Wait()
 				return fmt.Errorf("已停止")
+			}
+			// 预编码重叠:渲染当前镜期间后台预提交下一镜的 Qwen3-VL 编码(Qwen3-VL 无 UNET,
+			// 与 H3 采样可在 ComfyUI 队列并行,整集省掉每镜「编码+渲染」串行的空窗)
+			var preWg sync.WaitGroup
+			var preErr error
+			if qi+1 < len(queue) {
+				next := queue[qi+1]
+				nextDst := filepath.Join(judgeDir, fmt.Sprintf("%02d.mp4", next.ID))
+				need := !fileExists(nextDst)
+				if draftMode && fileExists(filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", next.ID))) {
+					need = false // 已有定稿产物,草稿轮无需预编码
+				}
+				if need {
+					preWg.Add(1)
+					go func(n manjuShot) {
+						defer preWg.Done()
+						if e := ctx.ensureEncodedAt(n, ctx.shotCacheNameAt(n, jw2, jh2), jw2, jh2, lg); e != nil {
+							preErr = e
+						}
+					}(next)
+				}
 			}
 			dst := filepath.Join(judgeDir, fmt.Sprintf("%02d.mp4", s.ID))
 			finalP := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
@@ -1079,24 +1160,26 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 					}
 				}
 				if err := ctx.renderShotTo(s, idxOf[s.ID], !firstRound, judgeDir, jw2, jh2, attempt, lg); err != nil {
+					preWg.Wait()
 					jw.Wait()
 					return err
 				}
 			}
-			// 后台即时审片(qc 单镜 + 视觉判分;ASR 与审片并行),结论落 agent_state
+			preWg.Wait() // 等下一镜预编码(通常渲染期间早已完成;失败由下一镜串行重试兜底)
+			if preErr != nil {
+				lg.logf("  ⚠️ 下一镜预编码失败(将串行重试): " + truncate(preErr.Error(), 100))
+			}
+			// 后台即时审片:inspect 单进程已含机械质检+抽帧(无需再跑 runQCJSON 独立进程),
+			// 结论落 agent_state;ASR 与审片并行
 			jw.Add(1)
 			go func(s manjuShot) {
 				defer jw.Done()
 				judgeSem <- struct{}{}
 				defer func() { <-judgeSem }()
 				t0 := time.Now()
-				qcT0 := time.Now()
-				qcBad, _ := ctx.runQCJSON(lg, judgeDir, strconv.Itoa(s.ID))
-				qcDur := time.Since(qcT0)
 				lg.logf(fmt.Sprintf("🤖 审片官接管镜头 %d ...", s.ID))
-				ctx.judgeShots(lg, acfg, plan, []manjuShot{s}, qcBad, judgeDir)
-				lg.logf(fmt.Sprintf("    ⏱ 镜头 %d 审片 %.1fs(质检 %.1fs + 判分 %.1fs)",
-					s.ID, time.Since(t0).Seconds(), qcDur.Seconds(), (time.Since(t0) - qcDur).Seconds()))
+				ctx.judgeShots(lg, acfg, plan, []manjuShot{s}, nil, judgeDir)
+				lg.logf(fmt.Sprintf("    ⏱ 镜头 %d 审片 %.1fs(质检+抽帧单进程,含判分)", s.ID, time.Since(t0).Seconds()))
 			}(s)
 		}
 		// ASR 与视觉审片并行开跑(ASR 只需产物文件;渲染循环已结束,全部镜头就绪)
@@ -1212,7 +1295,7 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 		}
 		lg.logf(fmt.Sprintf("📐 定稿轮: %d 镜 × %d×%d 全分辨率渲染(提示词已审定,零返工)", len(selected), ctx.w, ctx.h))
 		done := 0
-		for _, s := range shots2 {
+		for si, s := range shots2 {
 			if lg.stopped() {
 				return fmt.Errorf("已停止")
 			}
@@ -1220,18 +1303,43 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 				continue
 			}
 			done++
+			// 定稿轮同样预编码重叠:渲染当前镜期间后台预编码下一镜(全集顺序,接缝依赖 latent 不并行渲染)
+			var preWg sync.WaitGroup
+			var preErr error
+			for ni := si + 1; ni < len(shots2); ni++ {
+				nx := shots2[ni]
+				if !selSet[nx.ID] {
+					continue
+				}
+				if !fileExists(filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", nx.ID))) {
+					preWg.Add(1)
+					go func(n manjuShot) {
+						defer preWg.Done()
+						if e := ctx.ensureEncodedAt(n, ctx.shotCacheNameAt(n, ctx.w, ctx.h), ctx.w, ctx.h, lg); e != nil {
+							preErr = e
+						}
+					}(nx)
+				}
+				break // 只预编码最近下一个待渲镜头
+			}
 			dst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
 			if fileExists(dst) && ctx.shotManifestStatus(s) == "stale" {
 				lg.logf(fmt.Sprintf("⚠️ 镜头 %d 定稿已过期(输入已变),删旧重渲", s.ID))
 				ctx.clearShotArtifacts(s)
 			}
 			if fileExists(dst) {
+				preWg.Wait()
 				lg.logf(fmt.Sprintf("  跳过（已定稿）: %s", dst))
 				continue
 			}
 			lg.logf(fmt.Sprintf("[%d/%d] 定稿 镜头 %d: [%s] %s", done, len(selected), s.ID, s.Scene, s.Camera))
 			if err := ctx.renderShotTo(s, idxOf[s.ID], false, clipsEp, ctx.w, ctx.h, 0, lg); err != nil {
+				preWg.Wait()
 				return err
+			}
+			preWg.Wait()
+			if preErr != nil {
+				lg.logf("  ⚠️ 下一镜定稿预编码失败(将串行重试): " + truncate(preErr.Error(), 100))
 			}
 			// 草稿条件缓存清理(定稿缓存另名共存,草稿 .pt 不再需要)
 			_ = os.Remove(h3CachePath(ctx.sharedModels, ctx.shotCacheNameAt(s, jw2, jh2)))

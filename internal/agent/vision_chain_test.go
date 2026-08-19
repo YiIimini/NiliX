@@ -154,3 +154,41 @@ func TestVisionStickyFallback(t *testing.T) {
 		t.Fatalf("主模型恢复后不应再碰备模型: backup=%d(应 3)", bFinal)
 	}
 }
+
+// TestVisionCircuitBreaker 整链熔断:全链 429 → 熔断窗内后续调用快速失败(不重烧退避);
+// 窗结束自动恢复;单次成功不清熔断(熔断只由整链失败触发)
+func TestVisionCircuitBreaker(t *testing.T) {
+	old, oldCd := visionBackoffs, visionCircuitCooldown
+	visionBackoffs = []time.Duration{0, 0, 0}
+	visionCircuitCooldown = 80 * time.Millisecond
+	defer func() { visionBackoffs, visionCircuitCooldown = old, oldCd }()
+
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(429)
+		_, _ = w.Write([]byte(`{"error":"overloaded"}`))
+	}))
+	defer srv.Close()
+	vc := NewVisionClient(srv.URL, "k", "glm-4.6v-flash", 5*60*1e9)
+	// 第 1 次:主+备各 4 次尝试(2 模型 × 4)全 429 → 熔断置位
+	if _, err := vc.chatImage("s", "u", nil, 0.1); err == nil {
+		t.Fatal("应整链失败")
+	}
+	first := calls
+	// 熔断窗内:下一次快速失败,不再发请求
+	if _, err := vc.chatImage("s", "u", nil, 0.1); err == nil || !strings.Contains(err.Error(), "熔断") {
+		t.Fatalf("熔断窗内应快速失败: %v", err)
+	}
+	if calls != first {
+		t.Fatalf("熔断窗内不应再发请求: before=%d after=%d", first, calls)
+	}
+	// 窗结束自动恢复(再烧一轮)
+	time.Sleep(100 * time.Millisecond)
+	if _, err := vc.chatImage("s", "u", nil, 0.1); err == nil {
+		t.Fatal("恢复后应仍失败(服务端仍 429)")
+	}
+	if calls <= first {
+		t.Fatalf("熔断恢复后应重试请求: calls=%d", calls)
+	}
+}

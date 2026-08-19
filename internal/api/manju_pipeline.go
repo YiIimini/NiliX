@@ -1022,27 +1022,58 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 			sceneMap[str(m["id"])] = m
 		}
 	}
-	// 回写 h3_prompt 到 plan(保持 shot 顺序引用)
-	shotObjs, _ := plan["shots"].([]any)
-	for i, s := range shots {
+	// 逐镜提示词生成彼此无依赖(纯文本 LLM,无 429 风暴):并发上限 4 的 worker pool,
+	// 15 镜 × 10-30s 串行 → 并发后墙钟时间约 1/4;提示词按镜 ID 落 map,顺序无关
+	var todo []manjuShot
+	for _, s := range shots {
 		if s.TakeTail {
-			continue // 内镜由组头承载
-		}
-		if s.H3Prompt != "" || prompts[strconv.Itoa(s.ID)] != "" {
 			continue
 		}
-		lg.logf(fmt.Sprintf("  ▶ 镜头 %d [%s] %s %s", s.ID, s.Scene, s.ShotSize, s.Camera))
-		hp, err := ctx.genShotPrompt(s, charMap, sceneMap)
-		if err != nil {
-			return fmt.Errorf("镜头 %d 提示词失败: %w", s.ID, err)
+		if s.H3Prompt == "" && prompts[strconv.Itoa(s.ID)] == "" {
+			todo = append(todo, s)
 		}
-		prompts[strconv.Itoa(s.ID)] = hp
-		if i < len(shotObjs) {
-			if m, ok := shotObjs[i].(map[string]any); ok {
-				m["h3_prompt"] = hp
+	}
+	if len(todo) > 0 {
+		lg.logf(fmt.Sprintf("🤖 逐镜直出完整 H3 提示词（六段式/三段式,并发 %d）...", 4))
+		shotObjs, _ := plan["shots"].([]any)
+		objOf := map[int]map[string]any{}
+		for _, x := range shotObjs {
+			if m, ok := x.(map[string]any); ok {
+				if n, ok := manjuToInt(m["shot_id"]); ok {
+					objOf[n] = m
+				}
 			}
 		}
-		lg.logf(fmt.Sprintf("    ✅ 镜头 %d 提示词就绪（%d 字）", s.ID, len([]rune(hp))))
+		var mu sync.Mutex
+		var firstErr error
+		sem := make(chan struct{}, 4)
+		var wg sync.WaitGroup
+		for _, s := range todo {
+			wg.Add(1)
+			go func(s manjuShot) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				hp, err := ctx.genShotPrompt(s, charMap, sceneMap)
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil {
+					if firstErr == nil {
+						firstErr = fmt.Errorf("镜头 %d 提示词失败: %w", s.ID, err)
+					}
+					return
+				}
+				prompts[strconv.Itoa(s.ID)] = hp
+				if m := objOf[s.ID]; m != nil {
+					m["h3_prompt"] = hp
+				}
+				lg.logf(fmt.Sprintf("    ✅ 镜头 %d 提示词就绪（%d 字）", s.ID, len([]rune(hp))))
+			}(s)
+		}
+		wg.Wait()
+		if firstErr != nil {
+			return firstErr
+		}
 	}
 	if err := os.MkdirAll(ctx.analysisDir, 0755); err != nil {
 		return err
