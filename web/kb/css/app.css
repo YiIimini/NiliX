@@ -4553,3 +4553,7 @@ select option { text-align: center; }
 .manju-menu-item:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .manju-menu-item.danger { color: #f87171; }
 .manju-menu-item.danger:hover { background: rgba(248,113,113,.12); }
+
+/* 卡片菜单:删除项目(红色警示) */
+.cm-item.danger { color: #f87171; }
+.cm-item.danger:hover { background: rgba(248,113,113,.12); }

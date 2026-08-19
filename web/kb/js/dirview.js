@@ -91,7 +91,14 @@ class DirView {
     menu.innerHTML = `<button class="cm-item cm-hide">${I18N.t("book.hide")}</button>` +
       (this.mode === "book"
         ? `<button class="cm-item cm-continue">✍ 小说续作</button><button class="cm-item cm-manju">🎬 漫剧制作</button>`
-        : "");
+        : (this.id === "manju" ? `<button class="cm-item cm-del danger">🗑 删除项目</button>` : ""));
+    const del = menu.querySelector(".cm-del");
+    if (del) del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const name = this._menuName;
+      this.closeCardMenu();
+      if (name) this.deleteManjuProject(name);
+    });
     menu.querySelector(".cm-hide").addEventListener("click", (e) => {
       e.stopPropagation();
       this.hideCurrent();
@@ -163,6 +170,40 @@ class DirView {
     // 避开绿色系色相(黄绿~青 70-180),平移至蓝紫区
     if (h >= 70 && h < 180) h += 100;
     return h;
+  }
+
+  /* 删除漫剧项目(成品卡片 ⋮ 菜单):确认弹窗 → 删整个项目目录 → 刷新列表 */
+  deleteManjuProject(name) {
+    const wb = typeof ManjuWorkbench !== "undefined" ? ManjuWorkbench : null;
+    if (!wb || !wb.openModal) { alert("删除功能暂不可用(工作台未就绪)"); return; }
+    const cfgPath = this.root.replace(/\\/g, "/") + "/" + name + "/config.json";
+    wb.openModal("🗑 删除项目",
+      `<div class="manju-confirm">
+        <p class="mc-q">确定删除成品「${this.escapeHtml(name)}」？</p>
+        <p class="mc-d">将删除该项目<b>整个完整目录</b>(方案/定妆照/场景图/镜头/成片/审片记录/学习记忆)，<b>不可恢复</b>。请确认！</p>
+        <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+          <button id="pj-del-yes" class="hrs-btn hrs-btn-danger">确认删除</button>
+          <button id="pj-del-no" class="hrs-btn">取消</button>
+        </div>
+      </div>`);
+    document.getElementById("pj-del-no").addEventListener("click", () => wb.closeModal());
+    document.getElementById("pj-del-yes").addEventListener("click", () => {
+      const b = document.getElementById("pj-del-yes");
+      b.disabled = true; b.textContent = "删除中…";
+      fetch("/api/manju/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config: cfgPath }) })
+        .then((r) => r.json())
+        .then((d) => {
+          if (!d.ok) throw new Error(d.error || "删除失败");
+          wb.closeModal();
+          if (wb.project === cfgPath) { wb.project = ""; ls("project", ""); wb.info = null; wb.loadProjects(""); }
+          this.render(); // 刷新成品列表
+        })
+        .catch((e) => {
+          b.disabled = false; b.textContent = "确认删除";
+          if (wb.setErr) wb.setErr(e.message); else alert(e.message);
+        });
+    });
   }
 
   /* 卡片随机色相:每次渲染每张卡片随机取色,卡片与其按钮共用同一色相(避开绿色系) */
