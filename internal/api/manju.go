@@ -1064,9 +1064,10 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case epNum > 0:
 		episode = fmt.Sprintf("EP%02d", epNum)
-		if chapters == "" || chapters == "1-3" { // 默认章节跟随集数(第 N 章 = 第 N 集)
-			chapters = fmt.Sprintf("%d-%d", epNum, epNum)
-		}
+		// 集数决定集:第 N 集 = 第 N 章(1 章 1 集),无条件覆盖章节范围——
+		// 章节框(如 1-56)是全书章节编号范围,不是渲染范围;否则显式填 1-56 会被
+		// 当成一次渲染 56 章 9 万字(超 20000 上限误报)。集数 0 才走每章一集全渲染。
+		chapters = fmt.Sprintf("%d-%d", epNum, epNum)
 	case epNum == 0:
 		autoByChapter = true // 集数 0:按小说章节数计算
 	default:
