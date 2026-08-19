@@ -1874,7 +1874,7 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 	if dstDir == filepath.Join(ctx.clipsDir, ctx.episode) {
 		ctx.manifestMark(s, chained) // 定稿产物入清单(时效追踪;草稿不入)
 	}
-	lg.logf(fmt.Sprintf("  ✅ 镜头 %d 完成（%.1f 分）-> %s", s.ID, time.Since(t0).Minutes(), dst))
+	lg.logf(fmt.Sprintf("  ✅ 镜头 %d 完成（耗时 %.1f 分钟）-> %s", s.ID, time.Since(t0).Minutes(), dst))
 	return nil
 }
 
