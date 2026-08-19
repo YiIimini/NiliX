@@ -1267,14 +1267,13 @@
       num("manju-minsec", R.min_shot_seconds);
       num("manju-maxsec", R.max_shot_seconds);
       num("manju-take", R.shots_per_take != null && R.shots_per_take !== "" ? R.shots_per_take : 1);
-      // 章节回填:config 存的是解析后的范围(如 1-56),为空/默认 → 显示 0
-      set("manju-chapters", R.chapters && R.chapters !== "1-3" ? R.chapters : "0");
-      // 集数回填:config 存 EPxx,显示为整数(1=EP01);无/自动 → 0
-      const epR = R.episode || "";
-      const epM = String(epR).match(/^EP0*(\d+)$/i);
-      num("manju-episode", epM ? parseInt(epM[1], 10) : 0);
-      // 同步 this.episode(提交/续跑用整数集数;未回填则保持旧值)
-      this.episode = String($("manju-episode").value || this.episode || "0");
+      // 章节/集数是「每次运行的即时参数」:loadProject 恒重置为 0(0=解析小说总章数)。
+      // 不回填 config.render.chapters/episode——那是上次运行由 writeManjuRunParams 写入的
+      // 残留(如 1-1/EP01),回填会覆盖默认 0 造成「自动变成 1-1/1」的错觉。
+      set("manju-chapters", "0");
+      num("manju-episode", 0);
+      this.chapters = "0";
+      this.episode = "0";
       set("manju-comfy-url", R.comfy_url);
       set("manju-neg-prompt", R.neg_prompt || NEG_PROMPT_DEFAULT);
       set("manju-unet-fl2va", R.unet_fl2va);
