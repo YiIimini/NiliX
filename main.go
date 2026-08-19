@@ -57,6 +57,7 @@ var (
 	procWinFind          = user32Lazy.NewProc("FindWindowW")
 	procGetSysMetrics    = user32Lazy.NewProc("GetSystemMetrics")
 	procSetWindowPos     = user32Lazy.NewProc("SetWindowPos")
+	procWinClose         = user32Lazy.NewProc("PostMessageW")
 )
 
 // msedgePath 定位 Edge 浏览器(系统自带;WebView2 运行时本就依赖同一 Edge)
@@ -299,7 +300,15 @@ func onReady(url string) func() {
 	}
 }
 
+// closeMainWindow 关闭管理主窗口(Edge App 独立进程,需发消息让其退出)
+func closeMainWindow() {
+	if h := findMainWindow(); h != 0 {
+		_, _, _ = procWinClose.Call(h, 0x0010, 0, 0) // WM_CLOSE=0x10
+	}
+}
+
 func onExit() {
+	closeMainWindow() // 全退(灵动岛 X / 托盘结束应用):一并关闭管理主窗口
 	log.Println("NiliX 已退出")
 }
 
