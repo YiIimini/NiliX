@@ -1,8 +1,9 @@
 /* ============ 布局与组件:简约大气 · 未来科技感 ============ */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; }
-/* 通用隐藏(Harness 页状态按钮/离线占位等;原仅有局部 .bottom-bar.hidden 规则) */
-.hidden { display: none !important; }
+/* 通用隐藏:class="hidden" 与 hidden 属性双规则都须生效——hidden 属性会被元素的显式
+   display(flex/grid 等)覆盖,必须 !important 兜底(曾致 manju-chips 空卡显示残留) */
+.hidden, [hidden] { display: none !important; }
 body {
   font-family: var(--font-ui);
   background:
@@ -3310,9 +3311,6 @@ select.manju-input {
   width: 100%; max-width: none; min-width: 0;
 }
 /* 参数区:全部参数共用一个卡片边框(单项不加边框),每行一条「标签：值」 */
-/* hidden 属性会被本元素的 display:flex 覆盖(UA 默认 [hidden]{display:none} 不敌显式 display),
-   无数据时需整卡隐藏,必须显式补 [hidden] 规则 */
-.manju-project-col .manju-chips[hidden] { display: none; }
 .manju-project-col .manju-chips {
   margin-top: 8px;
   display: flex; flex-direction: column;
