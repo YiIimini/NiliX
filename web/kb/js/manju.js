@@ -296,7 +296,8 @@
       if (!tip) return;
       const s = this.status || {};
       const interrupted = !s.running && (s.stopped || (s.rc !== null && s.rc !== undefined && s.rc !== 0));
-      if (!interrupted || !this.project) { tip.hidden = true; return; }
+      // 无内容/无中断/无日志痕迹 → 绝不显示(空提示条是最丑的)
+      if (!interrupted || !this.project || !s.logTail) { tip.hidden = true; return; }
       const st = s.currentStage ? ("上次中断于「" + s.currentStage + "」阶段") : "检测到上次运行中断";
       tip.hidden = false;
       tip.innerHTML = `<span class="mi-tip-t">⚠️ ${esc(st)} — 可一键续跑(幂等跳过已完成)</span><button id="mi-tip-resume" class="hrs-btn hrs-btn-primary">▶ 续跑</button>`;

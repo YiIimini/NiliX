@@ -2835,8 +2835,8 @@ select.manju-input {
   background: var(--bg-code, color-mix(in srgb, #000 40%, transparent));
   border: 1px solid var(--panel-border);
   border-radius: 10px;
-  padding: 11px 13px;
-  font-size: 11.5px; line-height: 1.6;
+  padding: 8px 10px;
+  font-size: 11.5px; line-height: 1.5;
   font-family: ui-monospace, Consolas, 'Courier New', monospace;
   max-height: 260px; min-height: 60px; overflow: auto;
   white-space: pre-wrap; word-break: break-all; color: var(--text);
@@ -4581,12 +4581,12 @@ select option { text-align: center; }
 .manju-stale-tag { font-size: 10px; color: #e3b341; margin-right: 2px; white-space: nowrap; cursor: help; }
 
 /* 运行日志:竖向时间轴——阶段名在轴左侧沟槽,内容居右,时间统一在轴最右列 */
-.mj-tl { position: relative; display: flex; flex-direction: column; white-space: normal; font-size: 11.5px; line-height: 1.55; }
+.mj-tl { position: relative; display: flex; flex-direction: column; white-space: normal; font-size: 11.5px; line-height: 1.45; }
 .mj-tl::before {
-  content: ""; position: absolute; left: 73px; top: 8px; bottom: 8px; width: 2px;
+  content: ""; position: absolute; left: 71px; top: 6px; bottom: 6px; width: 2px;
   border-radius: 2px; background: color-mix(in srgb, var(--muted) 22%, transparent);
 }
-.mj-tl-row { display: grid; grid-template-columns: 64px 18px 1fr 56px; align-items: start; padding: 2.5px 0; }
+.mj-tl-row { display: grid; grid-template-columns: 62px 16px 1fr 54px; align-items: start; padding: 1.5px 0; }
 .mj-tl-side { text-align: right; padding-right: 8px; min-width: 0; }
 .mj-tl-dot {
   width: 9px; height: 9px; margin: 4px auto 0; border-radius: 50%;
@@ -4594,8 +4594,8 @@ select option { text-align: center; }
 }
 .mj-tl-main { min-width: 0; overflow-wrap: anywhere; padding-right: 8px; }
 .mj-tl-time {
-  text-align: right; font-size: 10px; color: var(--muted); opacity: .85;
-  font-variant-numeric: tabular-nums; padding-top: 1px;
+  text-align: right; font-size: 9.5px; color: var(--muted); opacity: .8;
+  font-variant-numeric: tabular-nums; line-height: 1.6; align-self: start;
 }
 /* 阶段大节点:名称在左沟槽(中文名+英文 tag 两行),轴上发光大点,右侧细分隔线 */
 .mj-tl-row.stage { margin-top: 8px; }
@@ -4658,10 +4658,11 @@ select option { text-align: center; }
 #ai-chat-box.free .ai-ch-title::after {
   content: "(自由)"; font-size: 9.5px; color: var(--muted); margin-left: 6px; font-weight: 400;
 }
-/* 中断续跑提示(琥珀色提示卡:柔和渐变底 + 琥珀图标 + 正文色文字,不再整条刺眼黄) */
+/* 中断续跑提示(琥珀色提示卡:柔和渐变底 + 琥珀图标 + 正文色文字,不再整条刺眼黄;
+   无内容不渲染(前端已守卫),显示时与下方时间轴保持间距) */
 .manju-interrupt-tip {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  margin-top: 8px; padding: 8px 12px; border-radius: 10px; font-size: 12px;
+  margin: 8px 0 12px; padding: 8px 12px; border-radius: 10px; font-size: 12px;
   border: 1px solid color-mix(in srgb, #f5b942 32%, transparent);
   background: linear-gradient(135deg, color-mix(in srgb, #f5b942 14%, transparent), color-mix(in srgb, #f5b942 3%, transparent) 70%);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
