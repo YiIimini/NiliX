@@ -41,8 +41,19 @@ var manjuSettingsFile = filepath.Join(manjuEngineDir, "server", "settings.json")
 // manjuLegacySettingsFile 旧位置（kb-workbench 原版 manju/server/settings.json），仅用于迁移。
 var manjuLegacySettingsFile = filepath.Join(ManjuRootDir, "server", "settings.json")
 
-// manjuPythonPath ComfyUI venv 的 python(管线依赖 PyAV/whisper 等);随 ComfyRootDir 动态解析
-func manjuPythonPath() string { return filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe") }
+// manjuPythonPath ComfyUI 的 python(管线依赖 PyAV/whisper 等);随 ComfyRootDir 动态解析。
+// 兼容两种安装形态:官方 portable(python_embeded)与 venv 安装(.venv)。
+func manjuPythonPath() string {
+	for _, rel := range []string{
+		filepath.Join(".venv", "Scripts", "python.exe"),
+		filepath.Join("python_embeded", "python.exe"),
+	} {
+		if p := filepath.Join(ComfyRootDir, rel); fileExists(p) {
+			return p
+		}
+	}
+	return filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe")
+}
 
 // manjuSkipDirs 非项目目录(即使内部有 config.json 也跳过,如 manju_pipeline)
 var manjuSkipDirs = map[string]bool{

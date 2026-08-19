@@ -798,6 +798,14 @@
         const status = _paths.comfy
           ? `🖥 ComfyUI 目录: ${cfy.exists ? "✅ 存在" : "❌ 不存在(需安装或改路径)"}${cfy.venv ? " · venv 就绪" : " · venv 缺失(需重新安装依赖)"}${sk.exists ? " · 技能库 ✅" : " · 技能库缺失"}`
           : "";
+        const installBtn = _paths.comfy && !cfy.exists
+          ? `<div class="manju-set-actions" style="margin-top:10px">
+              <button id="ci-install" class="hrs-btn hrs-btn-primary">🚀 一键安装 ComfyUI(自动下载程序+节点+模型)</button>
+              <button id="ci-stop" class="hrs-btn hidden">⏹ 停止</button>
+              <span id="ci-msg" class="manju-meta manju-set-msg"></span>
+            </div>
+            <pre id="ci-log" class="manju-log hidden" style="max-height:160px;overflow:auto;margin-top:6px;font-size:10.5px;white-space:pre-wrap"></pre>`
+          : "";
         return `<div class="manju-meta">换电脑/迁移:把整个 NiliX 目录(含 comfyui/ novel/ manju/ skills/)拷走即用。路径留空=自动解析(优先 exe 目录自包含子目录,其次旧位置);ComfyUI 放 <code>NiliX/comfyui/ComfyUI</code> + 模型放 <code>NiliX/comfyui/shared/</code> 即可被自动发现。</div>
           <div class="manju-set-grid">${rows}</div>
           <div class="manju-set-actions" style="margin-top:10px">
@@ -805,6 +813,7 @@
             ${sk.isGit ? `<button id="mp-skill-update" class="hrs-btn">🔄 更新技能(git pull)</button>` : ""}
             <span id="mp-msg" class="manju-meta manju-set-msg"></span>
           </div>
+          ${installBtn}
           ${status ? `<div class="manju-set-status">${status}</div>` : ""}
           <div class="manju-set-status">改路径后 ComfyUI 需重启才用新目录;项目/小说/技能目录即时生效。</div>`;
       })();
@@ -1006,6 +1015,39 @@
           </div>
           </div>
         </div>`, true);
+      // ComfyUI 一键安装:启动 + 轮询进度 + 停止
+      const ciInstall = $("ci-install");
+      if (ciInstall) ciInstall.addEventListener("click", () => {
+        const msg = $("ci-msg"), lg = $("ci-log"), stop = $("ci-stop");
+        if (msg) msg.textContent = "安装启动中…";
+        post("/api/comfy/install", {}).then((r) => {
+          if (!r.ok) { if (msg) msg.textContent = "❌ " + (r.error || "启动失败"); return; }
+          if (msg) msg.textContent = "⏳ 安装中(程序约1.5GB,模型数十GB,可后台等待)…";
+          if (lg) { lg.classList.remove("hidden"); lg.textContent = "(开始下载…)"; }
+          if (stop) stop.classList.remove("hidden");
+          this._ciTimer = setInterval(() => {
+            get("/api/comfy/install/status").then((st) => {
+              if (lg && st.log) lg.textContent = st.log;
+              if (msg) {
+                if (st.running) msg.textContent = "⏳ " + (st.item || st.step || "安装中") + " …";
+                else if (st.done) {
+                  clearInterval(this._ciTimer); this._ciTimer = null;
+                  if (stop) stop.classList.add("hidden");
+                  msg.textContent = st.rc === 0 ? "✅ 安装完成,点 ComfyUI 页「启动」即可使用" : ("❌ " + (st.err || "安装未完成"));
+                  this.openSettings(); // 刷新路径状态
+                }
+              }
+            }).catch(() => {});
+          }, 2000);
+        }).catch((e) => { if (msg) msg.textContent = "❌ " + e.message; });
+      });
+      const ciStop = $("ci-stop");
+      if (ciStop) ciStop.addEventListener("click", () => {
+        post("/api/comfy/install/stop", {}).then(() => {
+          const msg = $("ci-msg");
+          if (msg) msg.textContent = "⏹ 已请求停止";
+        });
+      });
       $("mp-save").addEventListener("click", () => {
         const msg = $("mp-msg");
         if (msg) msg.textContent = "保存中…";
