@@ -261,24 +261,25 @@ func runMainWindowWebView() {
 		}
 	}()
 	island.EnablePerMonitorDPI() // 子进程同样高 DPI 感知:GetSystemMetrics/SetWindowPos 用物理像素
-	w := webview.New(false)
+	_, _, ww, wh := calcMainWinSize()
+	// 创建即指定尺寸+居中:窗口第一帧就是正确尺寸,不做任何后续校正,杜绝"先小后大/闪退观感"
+	w := webview.NewWithOptions(webview.WebViewOptions{
+		WindowOptions: webview.WindowOptions{
+			Title:  mainWinTitle,
+			Width:  uint(ww),
+			Height: uint(wh),
+			Center: true,
+		},
+	})
 	if w == nil {
 		log.Printf("主窗口创建失败")
 		return
 	}
 	defer w.Destroy()
-	w.SetTitle(mainWinTitle)
-	x, y, ww, wh := calcMainWinSize()
-	w.SetSize(ww, wh, webview.HintNone)
 	w.SetBackgroundColor(0x0b, 0x12, 0x1f) // 站点深色底色:加载期不白闪
 	w.Navigate("http://127.0.0.1:8787")
-	// WebView2 控制器初始化完成后可能重置窗口尺寸——延迟再强制一次(物理像素+居中)
 	hw := uintptr(w.Window())
 	setMainWinIcon(hw) // 窗口图标(NiliX icon.ico):左上角 + Alt-Tab
-	go func() {
-		time.Sleep(1500 * time.Millisecond)
-		_, _, _ = procSetWindowPos.Call(hw, 0, uintptr(x), uintptr(y), uintptr(ww), uintptr(wh), 0x0004)
-	}()
 	// 记忆轮询:用户调整窗口大小后落盘(子进程持有窗口句柄)
 	go saveWinLoop()
 	w.Run()
