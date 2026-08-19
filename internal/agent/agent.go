@@ -20,12 +20,13 @@ type Config struct {
 	PassScore        float64 `json:"pass_score"`        // 及格线(加权总分,0-100)
 	MaxRetries       int     `json:"max_retries"`       // 自动返工轮数上限(每轮=修复提示词+重编码+重渲染)
 	JudgeConcurrency int     `json:"judge_concurrency"` // 视觉判分 API 并发上限(1-4,默认 2;付费 Key 可调高提速)
+	AutoResolve      bool    `json:"auto_resolve"`      // 预算耗尽 AI 终审自动拍板(接受最佳/从零重写一轮,不等人;默认开)
 	FramesPerShot    int     // 抽帧数(缺省 3,不落盘到配置)
 }
 
-// DefaultConfig 缺省配置:75 分及格、最多 2 轮返工(预算封顶,防无限重试烧 GPU)
+// DefaultConfig 缺省配置:75 分及格、最多 2 轮返工、终审自动拍板开(预算封顶,防无限重试烧 GPU)
 func DefaultConfig() Config {
-	return Config{PassScore: 75, MaxRetries: 2, JudgeConcurrency: 2, FramesPerShot: 3}
+	return Config{PassScore: 75, MaxRetries: 2, JudgeConcurrency: 2, AutoResolve: true, FramesPerShot: 3}
 }
 
 // Normalize 兜底非法取值
@@ -101,7 +102,7 @@ func DimName(k string) string {
 
 // Judgment 一个镜头的一次审片结论(状态落盘单位)
 type Judgment struct {
-	Status      string             `json:"status"`              // pass/fixed/failed/pending/skip
+	Status      string             `json:"status"`              // pass/fixed/failed/pending/accepted/skip
 	Score       float64            `json:"score"`               // 加权总分(0-100,Go 计算)
 	Dimensions  map[string]float64 `json:"dimensions,omitempty"` // 各维度 0-100
 	Issues      []string           `json:"issues,omitempty"`    // 问题清单(中文,推送/展示用)
@@ -112,6 +113,7 @@ type Judgment struct {
 	QCFlags     []string           `json:"qcFlags,omitempty"`   // PyAV 机械质检问题(无音轨/近黑…)
 	JudgedAt    int64              `json:"judgedAt"`
 	Error       string             `json:"error,omitempty"`     // 审片失败原因(视觉模型不可用等)
+	Arbiter     string             `json:"arbiter,omitempty"`   // 终审拍板记录(预算耗尽自动决策:接受/重写+理由)
 }
 
 // ToFloat 宽松数值解析(LLM 可能把数字输出成字符串,审计教训:漏维度记 0 会拉崩总分)

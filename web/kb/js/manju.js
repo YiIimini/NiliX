@@ -107,7 +107,7 @@
       "<b>💬 右栏可对智能体说话</b>：体检 / 推荐风格 / 审片报告 / 总结 / 修复，支持快捷指令按钮",
       "<b>🧠 学习档案</b>：跨次运行记忆——运行次数、审片均分趋势、高频问题、最近风格选择；阶段失败自动<b>智能诊断</b>给出原因与修复建议",
       "未达标镜头<b>自动返工</b>：修复师按审片意见改写 H3 提示词 → 删缓存定点重渲染（预算默认 2 轮，防无限重试）",
-      "预算耗尽仍不达标 → <b>推送微信</b> + 右栏「审片报告」升级卡，点「重试此镜 / 忽略」人工拍板",
+      "预算耗尽仍不达标 → <b>🤖 AI 终审自动拍板</b>(默认开):接受该镜最佳结果或按原文从零重写提示词再试一轮,无需人工介入;终审决策记录在审片报告(悬停镜头编号可看),事后可点「重试此镜」覆盖;设置里关闭「自动拍板」则恢复升级卡人工拍板",
       "视觉模型在<b>设置 → 智能体调度</b> 配置（OpenAI 兼容；推荐智谱 <b>glm-4.6v-flash</b> 免费，<b>429 高峰自动退避重试并降级 glm-4v-flash</b>，自定义可填逗号链）；Key 顺序:项目配置 → 项目 DeepSeek → 环境变量 GLM_VISION_API_KEY",
       "「测试视觉模型」<b>随时可点</b>：没有定妆照时自动用合成测试图验证连通（约 5-10s）",
       "未配置视觉模型时自动降级：仅机械质检（黑屏/无声）+ 升级，不判分不返工",
@@ -800,6 +800,7 @@
                   <label>判分并发</label><input id="manju-ag-conc" class="manju-input manju-num" type="number" min="1" max="4" value="${ag.judgeConcurrency == null ? 2 : ag.judgeConcurrency}" title="视觉判分 API 并发上限(1-4)。免费档(智谱 flash)建议 2——调高易触发 429(会自动退避+粘性降级);付费 Key 可调 3-4 提速审片"><span class="manju-set-unit">路</span>
                 </div>
               </div>
+              <label class="manju-check" style="margin-top:2px"><input type="checkbox" id="manju-ag-auto" ${ag.autoResolve === false ? "" : "checked"}> 🤖 预算耗尽 AI 终审自动拍板（接受该镜最佳结果 / 从零重写提示词再试一轮，不等人拍板；审片报告可事后重试）</label>
               <div class="manju-set-sub">☁️ 云端 2K 定稿 · MiniMax(审片通过的本地定稿镜提交云端升 2K,本地 GPU 零负担)</div>
               <div class="manju-field-row">
                 <label>API Key</label>
@@ -1005,6 +1006,7 @@
           pass_score: parseFloat($("manju-ag-pass").value) || 75,
           max_retries: parseInt($("manju-ag-retries").value, 10),
           judge_concurrency: parseInt($("manju-ag-conc").value, 10) || 2,
+          auto_resolve: $("manju-ag-auto") ? $("manju-ag-auto").checked : true,
         },
         minimax_api_key: $("manju-ag-mmkey") ? $("manju-ag-mmkey").value.trim() : "",
       }).then(() => {
@@ -1050,6 +1052,7 @@
           pass_score: parseFloat($("manju-ag-pass").value) || 75,
           max_retries: parseInt($("manju-ag-retries").value, 10),
           judge_concurrency: parseInt($("manju-ag-conc").value, 10) || 2,
+          auto_resolve: $("manju-ag-auto") ? $("manju-ag-auto").checked : true,
         },
         minimax_api_key: $("manju-ag-mmkey") ? $("manju-ag-mmkey").value.trim() : "",
       }).then(() => {
@@ -1070,6 +1073,7 @@
           pass_score: parseFloat($("manju-ag-pass").value) || 75,
           max_retries: parseInt($("manju-ag-retries").value, 10),
           judge_concurrency: parseInt($("manju-ag-conc").value, 10) || 2,
+          auto_resolve: $("manju-ag-auto") ? $("manju-ag-auto").checked : true,
         },
         minimax_api_key: $("manju-ag-mmkey") ? $("manju-ag-mmkey").value.trim() : "",
       });
@@ -1779,6 +1783,7 @@
         const tipParts = [`镜${s.id} · ${Math.round(s.score || 0)}分`];
         AGENT_DIMS.forEach(([k, name]) => { if (dims[k] !== undefined) tipParts.push(`${name} ${Math.round(dims[k])}`); });
         (s.issues || []).forEach((x) => tipParts.push("· " + x));
+        if (s.arbiter) tipParts.push("🤖 " + s.arbiter);
         if (s.retries) tipParts.push(`返工${s.retries}轮`);
         const busy = el.dataset.busy === String(s.id) ? " busy" : "";
         return `<span class="mj-ag-chip ${cls}${busy}" data-shot="${s.id}" title="${esc(tipParts.join("\n"))}">${s.id}<b>${Math.round(s.score || 0)}</b>${s.retries ? `<i>r${s.retries}</i>` : ""}</span>`;

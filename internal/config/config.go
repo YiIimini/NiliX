@@ -43,6 +43,8 @@ type AgentSettings struct {
 	VisionModel   string  `json:"vision_model,omitempty"`
 	PassScore     float64 `json:"pass_score,omitempty"`
 	MaxRetries    int     `json:"max_retries,omitempty"`
+	// AutoResolve 预算耗尽 AI 终审自动拍板(nil=未设置,用 agent 包默认 true)
+	AutoResolve *bool `json:"auto_resolve,omitempty"`
 }
 
 // LLMSettings 剧本引擎所用的大模型（OpenAI 兼容接口，当前为 DeepSeek）。

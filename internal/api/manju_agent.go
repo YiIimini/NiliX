@@ -59,6 +59,9 @@ func SetGlobalAgentCfg(cfg *config.Settings) {
 			a.PassScore = cfg.Agent.PassScore
 		}
 		a.MaxRetries = cfg.Agent.MaxRetries
+		if cfg.Agent.AutoResolve != nil {
+			a.AutoResolve = *cfg.Agent.AutoResolve
+		}
 		a.Normalize()
 	}
 	manjuGlobalAgent = a
@@ -94,6 +97,9 @@ func loadAgentCfg(ctx *manjuCtx) agent.Config {
 		}
 		if n, ok := manjuToInt(m["judge_concurrency"]); ok && n > 0 {
 			acfg.JudgeConcurrency = n
+		}
+		if b, ok := m["auto_resolve"].(bool); ok {
+			acfg.AutoResolve = b
 		}
 	}
 	acfg.Normalize()
@@ -165,13 +171,13 @@ type manjuScorePoint struct {
 
 // manjuAgentMemory 智能体跨次运行的学习记忆
 type manjuAgentMemory struct {
-	RunCount    int                `json:"runCount"`
-	JudgedShots int                `json:"judgedShots"`
-	ReworkCount int                `json:"reworkCount"`
-	IssueStats  map[string]int     `json:"issueStats,omitempty"`
-	ScoreTrend  []manjuScorePoint  `json:"scoreTrend,omitempty"`
+	RunCount     int                `json:"runCount"`
+	JudgedShots  int                `json:"judgedShots"`
+	ReworkCount  int                `json:"reworkCount"`
+	IssueStats   map[string]int     `json:"issueStats,omitempty"`
+	ScoreTrend   []manjuScorePoint  `json:"scoreTrend,omitempty"`
 	StyleChoices []manjuStyleChoice `json:"styleChoices,omitempty"`
-	LastRunAt   int64              `json:"lastRunAt"`
+	LastRunAt    int64              `json:"lastRunAt"`
 }
 
 // manjuAgentError 阶段失败诊断记录
@@ -191,7 +197,7 @@ type manjuAgentState struct {
 	PlanReview  *manjuAgentPlanReview      `json:"planReview,omitempty"`
 	Shots       map[string]*agent.Judgment `json:"shots"` // 镜头ID → 最新结论(当前集)
 	Escalations []manjuAgentEscalation     `json:"escalations,omitempty"`
-	Memory      manjuAgentMemory           `json:"memory,omitempty"`  // 学习记忆(跨次运行)
+	Memory      manjuAgentMemory           `json:"memory,omitempty"`    // 学习记忆(跨次运行)
 	LastError   *manjuAgentError           `json:"lastError,omitempty"` // 最近一次阶段失败诊断
 	UpdatedAt   int64                      `json:"updatedAt"`
 }
@@ -255,6 +261,7 @@ func agentStatusSummary(configPath string) map[string]any {
 	out["passScore"] = acfg.PassScore
 	out["maxRetries"] = acfg.MaxRetries
 	out["judgeConcurrency"] = acfg.JudgeConcurrency
+	out["autoResolve"] = acfg.AutoResolve
 	st := loadAgentState(project)
 	out["episode"] = st.Episode
 	if st.PlanReview != nil {
@@ -282,6 +289,7 @@ func agentStatusSummary(configPath string) map[string]any {
 			"id": id, "status": j.Status, "score": j.Score, "retries": j.Retries,
 			"issues": j.Issues, "dimensions": j.Dimensions, "fallback": j.Fallback,
 			"qcFlags": j.QCFlags, "error": j.Error, "judgedAt": j.JudgedAt,
+			"arbiter": j.Arbiter,
 		})
 	}
 	out["shots"] = shotsOut
@@ -1033,6 +1041,7 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	queueIsFirst := true
 	passed := 0
 	escCount := 0
+	autoAccept, autoRegen := 0, 0 // 终审自动拍板:接受/重写计数
 	planPath := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
 	for len(queue) > 0 && !lg.stopped() {
 		// 本轮三路并行:①逐镜渲染,渲完立即后台并发审片(渲染不空等——审片期间 GPU 继续渲下一镜);
@@ -1100,7 +1109,7 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 			defer asrWg.Done()
 			asrBad = ctx.runASRCheck(lg, judgeDir, queue, planPath)
 		}()
-		jw.Wait()   // 等本轮全部审片落定
+		jw.Wait()    // 等本轮全部审片落定
 		asrWg.Wait() // 等批量 ASR(与审片并行,通常早已完成)
 		if lg.stopped() {
 			return fmt.Errorf("已停止")
@@ -1135,6 +1144,16 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 				continue
 			}
 			if jd.Retries >= acfg.MaxRetries {
+				// AI 终审自动拍板(auto_resolve 默认开):接受该镜最佳结果,或按分镜原文从零重写
+				// 提示词独立重渲一轮后接受——AI 一条龙不把决策丢给人(终审失败兜底接受,绝不阻塞)
+				if acfg.AutoResolve && acfg.VisionReady() {
+					if ctx.arbiterResolve(plan, s, jd, acfg, lg, judgeDir, jw2, jh2) == "regenerate" {
+						autoRegen++
+					} else {
+						autoAccept++
+					}
+					continue
+				}
 				reason := strings.Join(jd.Issues, ";")
 				if reason == "" {
 					reason = strings.Join(jd.QCFlags, ";")
@@ -1173,8 +1192,14 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	}
 	if escCount > 0 {
 		lg.logf(fmt.Sprintf("⚠️ %d 个镜头升级待拍板(工作台「审片报告」可重试/忽略),成片继续合成", escCount))
-	} else {
+	} else if autoAccept+autoRegen == 0 {
 		lg.logf(fmt.Sprintf("🎉 审片全部通过:%d 镜(含返工通过)", passed))
+	}
+	if n := autoAccept + autoRegen; n > 0 {
+		lg.logf(fmt.Sprintf("🤖 终审拍板 %d 镜:接受 %d · 重写 %d——AI 全权决策,无需人工介入(审片报告可事后重试)", n, autoAccept, autoRegen))
+		if float64(autoAccept) > 0.3*float64(len(selected)) {
+			lg.logf(fmt.Sprintf("  💡 接受率偏高:及格线 %.0f 分可能偏严或视觉模型评分尺度偏紧,可在设置调整", acfg.PassScore))
+		}
 	}
 	// 定稿轮(草稿预审):以审定后的提示词按全集顺序全分辨率重渲(保 MotionContext 接缝),
 	// 已有定稿产物的镜头跳过(中断续跑幂等);完成后清草稿目录与草稿条件缓存。
@@ -1240,7 +1265,6 @@ func agentAssembleCheck(ctx *manjuCtx, lg *manjuLogger) {
 		}
 	}
 }
-
 
 // agentJudgeRemaining qc 阶段收尾:补审漏网镜头(中断续跑等场景)+ 学习记忆汇总。
 func agentJudgeRemaining(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) error {
@@ -1376,7 +1400,10 @@ func agentSummarizeJudging(ctx *manjuCtx, lg *manjuLogger) error {
 	}
 	// IssueStats 防膨胀:只保留 top 60
 	if len(stm.Memory.IssueStats) > 60 {
-		type kv struct{ k string; v int }
+		type kv struct {
+			k string
+			v int
+		}
 		var arr []kv
 		for k, v := range stm.Memory.IssueStats {
 			arr = append(arr, kv{k, v})
@@ -1542,7 +1569,10 @@ func agentJudgeAndRework(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	}
 	// IssueStats 防膨胀:只保留 top 60
 	if len(stm.Memory.IssueStats) > 60 {
-		type kv struct{ k string; v int }
+		type kv struct {
+			k string
+			v int
+		}
 		var arr []kv
 		for k, v := range stm.Memory.IssueStats {
 			arr = append(arr, kv{k, v})
@@ -1583,6 +1613,65 @@ func bumpAgentRetries(project string, shotID int) {
 		j.Retries++
 		saveAgentStateLocked(project, st)
 	}
+}
+
+// arbiterResolve 预算耗尽的 AI 终审拍板(auto_resolve 开启时不把决策丢给人):
+// accept=接受当前最佳(判分状态 accepted+决策记录,升级不入列);
+// regenerate=按分镜原文从零重写提示词(非增量修复),独立重渲一轮+复审后接受结果。
+// 返回决策("accept"/"regenerate");终审调用失败兜底 accept。
+func (ctx *manjuCtx) arbiterResolve(plan map[string]any, s manjuShot, jd *agent.Judgment, acfg agent.Config, lg *manjuLogger, dir string, w, h int) string {
+	charMap, sceneMap := planCharSceneMaps(plan)
+	decision, reason, err := agent.ArbiterDecide(manjuAgentLLM{ctx.llm}, shotMetaFromPlan(s, charMap, sceneMap, manjuStyleDesc(ctx.style).asset), jd, acfg.PassScore, acfg.MaxRetries)
+	if err != nil {
+		decision, reason = "accept", "终审调用失败,兜底接受("+truncate(err.Error(), 60)+")"
+	}
+	decisionCN := map[string]string{"accept": "自动接受", "regenerate": "从零重写"}[decision]
+	if decision == "regenerate" {
+		lg.logf(fmt.Sprintf("🤖 终审镜头 %d:%s(%s)→ 按分镜原文重写提示词,独立重渲一轮", s.ID, decisionCN, reason))
+		if np, ferr := ctx.genShotPrompt(s, charMap, sceneMap); ferr == nil {
+			if uerr := ctx.updateShotPrompt(s, np); uerr == nil {
+				s.H3Prompt = np
+			}
+		} else {
+			lg.logf("  ⚠️ 重写失败,接受当前产物: " + truncate(ferr.Error(), 80))
+		}
+		ctx.clearShotArtifacts(s)
+		bumpAgentRetries(ctx.project, s.ID)
+		if rerr := ctx.renderShotTo(s, 0, true, dir, w, h, loadAgentStateShot(ctx.project, s.ID).Retries, lg); rerr != nil {
+			lg.logf("  ⚠️ 终审重渲失败,保留原产物: " + truncate(rerr.Error(), 80))
+		} else {
+			ctx.judgeShots(lg, acfg, plan, []manjuShot{s}, nil, dir)
+			if nd := loadAgentStateShot(ctx.project, s.ID); nd != nil {
+				reason = fmt.Sprintf("重写后 %.0f 分,接受", nd.Score)
+			}
+		}
+		ctx.markAutoAccepted(s.ID, fmt.Sprintf("终审:从零重写(%s)", reason))
+		lg.logf(fmt.Sprintf("  ✅ 镜头 %d 终审重写完成,结果接受进成片", s.ID))
+		return "regenerate"
+	}
+	ctx.markAutoAccepted(s.ID, fmt.Sprintf("终审:%s(%s)", decisionCN, reason))
+	lg.logf(fmt.Sprintf("🤖 终审镜头 %d:%s——当前 %.0f 分已是该镜可达最佳,重渲收益低,接受进成片", s.ID, decisionCN, jd.Score))
+	return "accept"
+}
+
+// markAutoAccepted 终审接受:判分状态 accepted + 决策记录入 Judgment.Arbiter(审片报告
+// 可见),并自动解除该镜既有未处理升级(人工仍可事后点「重试此镜」覆盖)
+func (ctx *manjuCtx) markAutoAccepted(shotID int, note string) {
+	manjuAgentMu.Lock()
+	defer manjuAgentMu.Unlock()
+	st := loadAgentStateLocked(ctx.project)
+	if j := st.Shots[strconv.Itoa(shotID)]; j != nil {
+		j.Status = "accepted"
+		j.Arbiter = note
+	}
+	for i := range st.Escalations {
+		e := &st.Escalations[i]
+		if e.EP == ctx.episode && e.Shot == shotID && !e.Resolved {
+			e.Resolved = true
+			e.Action = "auto-accept"
+		}
+	}
+	saveAgentStateLocked(ctx.project, st)
 }
 
 // escalateShot 记录升级(同镜未解决的升级只更新不重复)
@@ -1778,150 +1867,156 @@ func registerAgentRoutes(mux *http.ServeMux) {
 			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 			return
 		}
-			res := agentStatusSummary(configPath)
-			if ctx, err := newManjuCtx(configPath, "", "", "", ""); err == nil {
-				acfg := loadAgentCfg(ctx)
-				masked := ""
-				if len(acfg.VisionAPIKey) > 9 {
-					masked = acfg.VisionAPIKey[:5] + "…" + acfg.VisionAPIKey[len(acfg.VisionAPIKey)-4:]
-				}
-				res["hasVisionKey"] = acfg.VisionAPIKey != ""
-				res["visionKeyMasked"] = masked
-				res["visionBaseUrl"] = acfg.VisionBaseURL
-				res["agentEnabled"] = acfg.Enabled
-				// 云端 2K Key(项目 render 节优先,回退全局 server/settings.json;掩码展示)
-				if mmKey := manjuMinimaxKey(ctx); mmKey != "" {
-					res["hasMinimaxKey"] = true
-					res["minimaxKeyMasked"] = "已配置"
-					if len(mmKey) > 9 {
-						res["minimaxKeyMasked"] = mmKey[:5] + "…" + mmKey[len(mmKey)-4:]
-					}
-				}
-			} else {
-				// 项目缺失(目录被删/未创建):不整体失败——仍返回全局默认,前端展示"项目缺失,按全局配置"
-				res["projectMissing"] = true
-				res["visionBaseUrl"] = manjuGlobalAgent.VisionBaseURL
-				res["agentEnabled"] = manjuGlobalAgent.Enabled
+		res := agentStatusSummary(configPath)
+		if ctx, err := newManjuCtx(configPath, "", "", "", ""); err == nil {
+			acfg := loadAgentCfg(ctx)
+			masked := ""
+			if len(acfg.VisionAPIKey) > 9 {
+				masked = acfg.VisionAPIKey[:5] + "…" + acfg.VisionAPIKey[len(acfg.VisionAPIKey)-4:]
 			}
-			// 全局默认(settings.json agent 节):前端展示"项目未配置时使用全局默认"(项目缺失时也返回,避免整块视觉区空白)
-			res["globalDefaults"] = map[string]any{
-				"enabled": manjuGlobalAgent.Enabled, "visionModel": manjuGlobalAgent.VisionModel,
-				"visionBaseUrl": manjuGlobalAgent.VisionBaseURL,
-				"passScore":     manjuGlobalAgent.PassScore, "maxRetries": manjuGlobalAgent.MaxRetries,
-				"hasVisionKey": manjuGlobalAgent.VisionAPIKey != "",
+			res["hasVisionKey"] = acfg.VisionAPIKey != ""
+			res["visionKeyMasked"] = masked
+			res["visionBaseUrl"] = acfg.VisionBaseURL
+			res["agentEnabled"] = acfg.Enabled
+			// 云端 2K Key(项目 render 节优先,回退全局 server/settings.json;掩码展示)
+			if mmKey := manjuMinimaxKey(ctx); mmKey != "" {
+				res["hasMinimaxKey"] = true
+				res["minimaxKeyMasked"] = "已配置"
+				if len(mmKey) > 9 {
+					res["minimaxKeyMasked"] = mmKey[:5] + "…" + mmKey[len(mmKey)-4:]
+				}
 			}
-			writeJSON(w, http.StatusOK, res)
+		} else {
+			// 项目缺失(目录被删/未创建):不整体失败——仍返回全局默认,前端展示"项目缺失,按全局配置"
+			res["projectMissing"] = true
+			res["visionBaseUrl"] = manjuGlobalAgent.VisionBaseURL
+			res["agentEnabled"] = manjuGlobalAgent.Enabled
+		}
+		// 全局默认(settings.json agent 节):前端展示"项目未配置时使用全局默认"(项目缺失时也返回,避免整块视觉区空白)
+		res["globalDefaults"] = map[string]any{
+			"enabled": manjuGlobalAgent.Enabled, "visionModel": manjuGlobalAgent.VisionModel,
+			"visionBaseUrl": manjuGlobalAgent.VisionBaseURL,
+			"passScore":     manjuGlobalAgent.PassScore, "maxRetries": manjuGlobalAgent.MaxRetries,
+			"hasVisionKey": manjuGlobalAgent.VisionAPIKey != "",
+		}
+		writeJSON(w, http.StatusOK, res)
 	})
 
-		// 保存智能体配置:默认写入项目 config.json 的 agent 节;global=true 时另存为全局默认
-		// (settings.json agent 节,所有项目共用,项目未配置时生效)
-		mux.HandleFunc("POST /api/manju/agent/settings", func(w http.ResponseWriter, r *http.Request) {
-			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			configPath := str(body["config"])
-			m, _ := body["agent"].(map[string]any)
-			// 表单值 → agent 节(非空覆盖;全局分支用同一套提取,不依赖项目 config)
-			fillAgentFields := func(A map[string]any) {
-				if m == nil {
-					return
-				}
-				if b, ok := m["enabled"].(bool); ok {
-					A["enabled"] = b
-				}
-				for _, k := range []string{"vision_base_url", "vision_api_key", "vision_model"} {
-					if v := strings.TrimSpace(str(m[k])); v != "" {
-						A[k] = v
-					}
-				}
-				if v, ok := manjuToFloat(m["pass_score"]); ok && v > 0 && v <= 100 {
-					A["pass_score"] = v
-				}
-				if n, ok := manjuToInt(m["max_retries"]); ok && n >= 0 && n <= 4 {
-					A["max_retries"] = n
-				}
-				if n, ok := manjuToInt(m["judge_concurrency"]); ok && n >= 1 && n <= 4 {
-					A["judge_concurrency"] = n
-				}
-			}
-			if str(body["global"]) == "true" {
-				// 另存为全局默认:写 settings.json 的 agent 节(Key 加密存储),并刷新内存默认。
-				// 不依赖项目 config——项目目录缺失/未创建时也能另存为全局默认(之前会 400,导致"全局默认是摆设")
-				if manjuSettingsStore == nil {
-					http.Error(w, `{"error":"全局设置存储不可用"}`, http.StatusInternalServerError)
-					return
-				}
-				A := map[string]any{}
-				fillAgentFields(A)
-				g, err := manjuSettingsStore.Load()
-				if err != nil {
-					http.Error(w, `{"error":"读取全局设置失败: `+err.Error()+`"}`, http.StatusInternalServerError)
-					return
-				}
-				ga := &config.AgentSettings{
-					Enabled:       A["enabled"] == true,
-					VisionBaseURL: str(A["vision_base_url"]),
-					VisionModel:   str(A["vision_model"]),
-				}
-				if v, ok := manjuToFloat(A["pass_score"]); ok && v > 0 {
-					ga.PassScore = v
-				}
-				if n, ok := manjuToInt(A["max_retries"]); ok {
-					ga.MaxRetries = n
-				}
-				// Key:项目已填则同步为全局默认;否则保留全局旧值(避免空值清掉已存的默认 Key)
-				if k := strings.TrimSpace(str(m["vision_api_key"])); k != "" {
-					ga.VisionAPIKey = k
-				} else if g.Agent != nil {
-					ga.VisionAPIKey = g.Agent.VisionAPIKey
-				}
-				g.Agent = ga
-				if err := manjuSettingsStore.Save(g); err != nil {
-					http.Error(w, `{"error":"保存全局默认失败: `+err.Error()+`"}`, http.StatusInternalServerError)
-					return
-				}
-				SetGlobalAgentCfg(g)
-				// 云端 2K Key 全局默认:与 DeepSeek 默认 Key 同处(server/settings.json 明文,须合并写不覆盖)
-				if k := strings.TrimSpace(str(body["minimax_api_key"])); k != "" {
-					def := map[string]any{}
-					if b, err := os.ReadFile(manjuSettingsFile); err == nil {
-						_ = json.Unmarshal(b, &def)
-					}
-					def["minimax_api_key"] = k
-					_ = writeManjuSettings(def)
-				}
-				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "global": true})
+	// 保存智能体配置:默认写入项目 config.json 的 agent 节;global=true 时另存为全局默认
+	// (settings.json agent 节,所有项目共用,项目未配置时生效)
+	mux.HandleFunc("POST /api/manju/agent/settings", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		configPath := str(body["config"])
+		m, _ := body["agent"].(map[string]any)
+		// 表单值 → agent 节(非空覆盖;全局分支用同一套提取,不依赖项目 config)
+		fillAgentFields := func(A map[string]any) {
+			if m == nil {
 				return
 			}
-			if configPath == "" {
-				http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+			if b, ok := m["enabled"].(bool); ok {
+				A["enabled"] = b
+			}
+			for _, k := range []string{"vision_base_url", "vision_api_key", "vision_model"} {
+				if v := strings.TrimSpace(str(m[k])); v != "" {
+					A[k] = v
+				}
+			}
+			if v, ok := manjuToFloat(m["pass_score"]); ok && v > 0 && v <= 100 {
+				A["pass_score"] = v
+			}
+			if n, ok := manjuToInt(m["max_retries"]); ok && n >= 0 && n <= 4 {
+				A["max_retries"] = n
+			}
+			if n, ok := manjuToInt(m["judge_concurrency"]); ok && n >= 1 && n <= 4 {
+				A["judge_concurrency"] = n
+			}
+			if b, ok := m["auto_resolve"].(bool); ok {
+				A["auto_resolve"] = b
+			}
+		}
+		if str(body["global"]) == "true" {
+			// 另存为全局默认:写 settings.json 的 agent 节(Key 加密存储),并刷新内存默认。
+			// 不依赖项目 config——项目目录缺失/未创建时也能另存为全局默认(之前会 400,导致"全局默认是摆设")
+			if manjuSettingsStore == nil {
+				http.Error(w, `{"error":"全局设置存储不可用"}`, http.StatusInternalServerError)
 				return
 			}
-			cfg, err := readManjuConfig(configPath)
-			if err != nil {
-				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
-				return
-			}
-			A, _ := cfg["agent"].(map[string]any)
-			if A == nil {
-				A = map[string]any{}
-			}
+			A := map[string]any{}
 			fillAgentFields(A)
-			cfg["agent"] = A
-			// 云端 2K Key(项目级):非空才写 render 节(空值不清已有 Key)
-			if k := strings.TrimSpace(str(body["minimax_api_key"])); k != "" {
-				RN, _ := cfg["render"].(map[string]any)
-				if RN == nil {
-					RN = map[string]any{}
-					cfg["render"] = RN
-				}
-				RN["minimax_api_key"] = k
-			}
-			if err := writeManjuConfig(configPath, cfg); err != nil {
-				http.Error(w, `{"error":"保存失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+			g, err := manjuSettingsStore.Load()
+			if err != nil {
+				http.Error(w, `{"error":"读取全局设置失败: `+err.Error()+`"}`, http.StatusInternalServerError)
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-		})
+			ga := &config.AgentSettings{
+				Enabled:       A["enabled"] == true,
+				VisionBaseURL: str(A["vision_base_url"]),
+				VisionModel:   str(A["vision_model"]),
+			}
+			if v, ok := manjuToFloat(A["pass_score"]); ok && v > 0 {
+				ga.PassScore = v
+			}
+			if n, ok := manjuToInt(A["max_retries"]); ok {
+				ga.MaxRetries = n
+			}
+			if b, ok := A["auto_resolve"].(bool); ok {
+				ga.AutoResolve = &b
+			}
+			// Key:项目已填则同步为全局默认;否则保留全局旧值(避免空值清掉已存的默认 Key)
+			if k := strings.TrimSpace(str(m["vision_api_key"])); k != "" {
+				ga.VisionAPIKey = k
+			} else if g.Agent != nil {
+				ga.VisionAPIKey = g.Agent.VisionAPIKey
+			}
+			g.Agent = ga
+			if err := manjuSettingsStore.Save(g); err != nil {
+				http.Error(w, `{"error":"保存全局默认失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+				return
+			}
+			SetGlobalAgentCfg(g)
+			// 云端 2K Key 全局默认:与 DeepSeek 默认 Key 同处(server/settings.json 明文,须合并写不覆盖)
+			if k := strings.TrimSpace(str(body["minimax_api_key"])); k != "" {
+				def := map[string]any{}
+				if b, err := os.ReadFile(manjuSettingsFile); err == nil {
+					_ = json.Unmarshal(b, &def)
+				}
+				def["minimax_api_key"] = k
+				_ = writeManjuSettings(def)
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "global": true})
+			return
+		}
+		if configPath == "" {
+			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+			return
+		}
+		cfg, err := readManjuConfig(configPath)
+		if err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
+		A, _ := cfg["agent"].(map[string]any)
+		if A == nil {
+			A = map[string]any{}
+		}
+		fillAgentFields(A)
+		cfg["agent"] = A
+		// 云端 2K Key(项目级):非空才写 render 节(空值不清已有 Key)
+		if k := strings.TrimSpace(str(body["minimax_api_key"])); k != "" {
+			RN, _ := cfg["render"].(map[string]any)
+			if RN == nil {
+				RN = map[string]any{}
+				cfg["render"] = RN
+			}
+			RN["minimax_api_key"] = k
+		}
+		if err := writeManjuConfig(configPath, cfg); err != nil {
+			http.Error(w, `{"error":"保存失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
 
 	// 手动重审一个镜头(同步返回结论)
 	mux.HandleFunc("POST /api/manju/agent/judge", func(w http.ResponseWriter, r *http.Request) {
