@@ -627,6 +627,18 @@ func manjuSaveRender(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// 集数特殊处理:空/0 → 删除 config.render.episode(自动模式,由运行时按章节数计算);
+	// 纯数字 N → 存 EPxx(与内部标识一致)
+	if v, present := body["episode"]; present {
+		es := strings.TrimSpace(str(v))
+		if es == "" || es == "0" {
+			delete(R, "episode")
+		} else if n, err := strconv.Atoi(es); err == nil && n > 0 {
+			R["episode"] = fmt.Sprintf("EP%02d", n)
+		} else if es != "" {
+			R["episode"] = es // 非数字(旧 EP01 输入)原样
+		}
+	}
 	// 分辨率档位(空=手动宽高;custom 或档位表内取值)
 	if v, present := body["res_tier"]; present {
 		s := strings.TrimSpace(str(v))
@@ -1043,8 +1055,23 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	configPath := str(body["config"])
 	chapters := orDefault(str(body["chapters"]), "1-3")
-	episode := orDefault(str(body["episode"]), "EP01")
+	episode := str(body["episode"])
 	phase := str(body["phase"])
+	// 集数语义:纯数字 N>0 → 第 N 集(第 N 章,EPxx);0 → 按章节数自动分集(每章一集);
+	// 非数字(旧 EP01 输入)原样兼容
+	epNum, _ := strconv.Atoi(strings.TrimSpace(episode))
+	autoByChapter := false
+	switch {
+	case epNum > 0:
+		episode = fmt.Sprintf("EP%02d", epNum)
+		if chapters == "" || chapters == "1-3" { // 默认章节跟随集数(第 N 章 = 第 N 集)
+			chapters = fmt.Sprintf("%d-%d", epNum, epNum)
+		}
+	case epNum == 0:
+		autoByChapter = true // 集数 0:按小说章节数计算
+	default:
+		episode = orDefault(episode, "EP01")
+	}
 	only := str(body["only"])
 	novel := str(body["novel"])
 	fresh, _ := body["fresh"].(bool)     // 重跑:先清空项目旧产物(方案/镜头/成片/缓存)
@@ -1120,8 +1147,15 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	lg := newManjuLogger(manjuState, runFile, ctx.project, ctx.episode)
 	phaseName := orDefault(phase, "all")
 
-	// 全本自动分段分集:把整本书按字数预算切成多集,逐集跑管线,免去用户手动换集号
+	// 全本自动分段分集:把整本书切成多集,逐集跑管线,免去用户手动换集号
+	// 集数 0 = 每章一集(第 N 章 = 第 N 集);否则沿用 按卷/字数打包 的自动分集
 	autoEps, aerr := manjuAutoEpisodes(ctx, chapters)
+	if autoByChapter {
+		autoEps = manjuChapterEpisodes(ctx)
+		if len(autoEps) == 0 {
+			autoEps, aerr = manjuAutoEpisodes(ctx, chapters) // 保底:无章节结构回退打包
+		}
+	}
 	if aerr != nil {
 		manjuState.mu.Lock()
 		manjuState.log += "\n[" + time.Now().Format("15:04:05") + "] ⚠️ 自动分集失败: " + aerr.Error() + "，按单集运行"

@@ -7,10 +7,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=20260819q1">
-<link rel="stylesheet" href="/css/themes.css?v=20260819q1">
-<link rel="stylesheet" href="/css/materials.css?v=20260819q1">
-<link rel="stylesheet" href="/css/app.css?v=20260819q1">
+<link rel="icon" type="image/png" href="/icon.png?v=20260819r1">
+<link rel="stylesheet" href="/css/themes.css?v=20260819r1">
+<link rel="stylesheet" href="/css/materials.css?v=20260819r1">
+<link rel="stylesheet" href="/css/app.css?v=20260819r1">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -78,7 +78,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260819q1" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260819r1" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -267,7 +267,7 @@
             <div class="manju-row">
               <span class="manju-label">章节</span><input id="manju-chapters" class="manju-input manju-num" placeholder="1-3" spellcheck="false">
               <button id="manju-wholebook" class="hrs-btn" title="覆盖全部章节，并按内容自动分段分集">全本</button>
-              <span class="manju-label">集号</span><input id="manju-episode" class="manju-input manju-num" placeholder="EP01" spellcheck="false">
+              <span class="manju-label" title="集数=整数:1=第1集(第1章内容),2=第2集…;0=按小说章节数自动分集(每章一集)">集数</span><input id="manju-episode" class="manju-input manju-num" type="number" min="0" step="1" value="0" placeholder="0=按章节数自动" title="0=按小说章节数自动分集(每章一集);1=第1集(第1章内容)…" spellcheck="false">
               <span class="manju-label">镜头(可选)</span><input id="manju-only" class="manju-input manju-num" placeholder="如 1,2" spellcheck="false">
             </div>
 
@@ -782,11 +782,11 @@
       </div>
     </div>
   </div>
-  <script src="/js/i18n.js?v=20260819q1"></script>
-  <script src="/js/markdown.js?v=20260819q1"></script>
-  <script src="/js/app.js?v=20260819q1"></script>
-  <script src="/js/comfy.js?v=20260819q1"></script>
-  <script src="/js/dirview.js?v=20260819q1"></script>
-  <script src="/js/manju.js?v=20260819q1"></script>
+  <script src="/js/i18n.js?v=20260819r1"></script>
+  <script src="/js/markdown.js?v=20260819r1"></script>
+  <script src="/js/app.js?v=20260819r1"></script>
+  <script src="/js/comfy.js?v=20260819r1"></script>
+  <script src="/js/dirview.js?v=20260819r1"></script>
+  <script src="/js/manju.js?v=20260819r1"></script>
 </body>
 </html>

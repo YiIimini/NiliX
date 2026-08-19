@@ -81,7 +81,7 @@
       "2. 顶部选择<b>项目</b>（自动扫描 manju 目录）",
       "3. <b>小说来源</b>：默认带出项目配置的小说；点「选择文件」换任意小说（运行时覆盖，不改配置）",
       "4. <b>角色管理</b>：在「渲染配置」里点「角色管理」按钮，抽卡/采纳生成定妆照",
-      "5. 填<b>章节</b>（如 1-3）与<b>集号</b>（EP01），点「一条龙」",
+      "5. 填<b>章节</b>（如 1-3）与<b>集数</b>（0=按章节数自动每章一集；1=第1集…），点「一条龙」",
       "6. 一条龙 = 方案→资产→编码→渲染→质检→合成；中断/失败后,右侧栏状态区出现<b>黄色提示条</b>(上次中断于 X 阶段),点<b>▶ 续跑</b>一键恢复(幂等跳过已完成)",
     ] },
     { ic: "🎭", t: "角色管理", ps: [
@@ -155,7 +155,7 @@
       "引擎已内置亮度护栏与运镜规范，无需手写",
     ] },
     { ic: "📚", t: "整本小说 → 多集", ps: [
-      "「全本」把章节范围设为 1-999，引擎自动分段分集，无需手动换集号",
+      "「全本」把章节范围设为 1-999，引擎自动分段分集，无需手动换集号；<b>集数填 0</b> = 按小说章节数计算（每章一集，第 N 章 = 第 N 集），自动全渲染",
       "<b>按卷分集</b>：小说目录为「正文/卷一_标题/…」卷结构时（如吞天废子），每卷自动一集（EP01=卷一、EP02=卷二…）",
       "无卷结构时按内容量分段（每集约 1.8 万字，约 2-3 章）",
       "分段为确定性规则：同一本小说每次全本运行的分集完全一致，可安全续跑；已完成的集自动跳过",
@@ -170,7 +170,7 @@
       "任何阶段中断/失败,右侧栏状态区<b>自动出现黄色提示条</b>(上次中断于 X 阶段),点「▶ 续跑」一键恢复;也可手动点「▶ 续跑」",
       "渲染中崩溃/被杀/重启:<b>渲染检查点</b>自动收回上次已提交未收的产物(查 ComfyUI history 免重渲,绝不重复烧 GPU)",
       "只重渲失败镜头：镜头框填编号（如 7）再点渲染",
-      "缓存名带「项目_集号_镜头」前缀，多项目互不串用",
+      "缓存名带「项目_集号_镜头」前缀，多项目互不串用（集号由集数自动转 EPxx）",
     ] },
     { ic: "📺", t: "运行与质检", ps: [
       "任务后台静默运行，<b>不会弹终端窗口</b>；进度看「运行状态」卡日志实时滚动",
@@ -265,7 +265,7 @@
     enter() {
       this.bind();
       this.chapters = ls("chapters") || "1-3";
-      this.episode = ls("episode") || "EP01";
+      this.episode = ls("episode") || "0"; // 集数:0=按章节数自动,1=第1集...
       this.only = ls("only");
       this.novel = ls("novel");
       $("manju-chapters").value = this.chapters;
@@ -296,8 +296,10 @@
       if (!tip) return;
       const s = this.status || {};
       const interrupted = !s.running && (s.stopped || (s.rc !== null && s.rc !== undefined && s.rc !== 0));
-      // 无内容/无中断/无日志痕迹 → 绝不显示(空提示条是最丑的)
-      if (!interrupted || !this.project || !s.logTail) { tip.hidden = true; return; }
+      // 无内容/无中断/日志无失败痕迹 → 绝不显示(空提示条是最丑的)
+      // 失败痕迹:日志里真有 ❌/失败/手动停止/⏹ 才提示,防止 rc 残留造成「没内容也显示」
+      const hasFail = s.logTail && (/❌|失败|已手动停止|⏹/).test(s.logTail);
+      if (!interrupted || !this.project || !s.logTail || !hasFail) { tip.hidden = true; return; }
       const st = s.currentStage ? ("上次中断于「" + s.currentStage + "」阶段") : "检测到上次运行中断";
       tip.hidden = false;
       tip.innerHTML = `<span class="mi-tip-t">⚠️ ${esc(st)} — 可一键续跑(幂等跳过已完成)</span><button id="mi-tip-resume" class="hrs-btn hrs-btn-primary">▶ 续跑</button>`;
@@ -1247,6 +1249,10 @@
       num("manju-minsec", R.min_shot_seconds);
       num("manju-maxsec", R.max_shot_seconds);
       num("manju-take", R.shots_per_take != null && R.shots_per_take !== "" ? R.shots_per_take : 1);
+      // 集数回填:config 存 EPxx,显示为整数(1=EP01);无/自动 → 0
+      const epR = R.episode || "";
+      const epM = String(epR).match(/^EP0*(\d+)$/i);
+      num("manju-episode", epM ? parseInt(epM[1], 10) : 0);
       set("manju-comfy-url", R.comfy_url);
       set("manju-neg-prompt", R.neg_prompt || NEG_PROMPT_DEFAULT);
       set("manju-unet-fl2va", R.unet_fl2va);

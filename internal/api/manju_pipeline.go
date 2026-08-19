@@ -85,6 +85,16 @@ func manjuToFloat(v any) (float64, bool) {
 	return 0, false
 }
 
+// normalizeEpisode 集数(纯数字)→ 集号(EPxx):1→EP01,12→EP12;非纯数字原样(兼容旧 EP01 输入)。
+// 集数 0 = 自动按章节数分集,由 manjuRun 特殊处理,不在此转 EP00。
+func normalizeEpisode(ep string) string {
+	ep = strings.TrimSpace(ep)
+	if n, err := strconv.Atoi(ep); err == nil && n > 0 {
+		return fmt.Sprintf("EP%02d", n)
+	}
+	return ep
+}
+
 func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, error) {
 	cfg, err := readManjuConfig(configPath)
 	if err != nil {
@@ -105,7 +115,7 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 		R:            R,
 		P:            P,
 		project:      filepath.Base(filepath.Dir(configPath)),
-		episode:      orDefault(episode, str(R["episode"])),
+		episode:      normalizeEpisode(orDefault(episode, str(R["episode"]))),
 		chapters:     orDefault(chapters, str(R["chapters"])),
 		only:         only,
 		novel:        str(P["novel"]),
@@ -642,6 +652,20 @@ func (ctx *manjuCtx) chapterEntries() ([]struct{ n, chars int }, error) {
 		sort.Slice(out, func(i, j int) bool { return out[i].n < out[j].n })
 	}
 	return out, nil
+}
+
+// manjuChapterEpisodes 集数=0 的自动模式:按小说章节数计算——每章一集(第 N 章 = 第 N 集)。
+// 与 manjuAutoEpisodes(按卷/字数打包)并存:集数 0 优先每章一集,保底回退自动打包。
+func manjuChapterEpisodes(ctx *manjuCtx) []manjuEpSeg {
+	chs, err := ctx.chapterEntries()
+	if err != nil || len(chs) == 0 {
+		return nil
+	}
+	out := make([]manjuEpSeg, 0, len(chs))
+	for i, c := range chs {
+		out = append(out, manjuEpSeg{Episode: fmt.Sprintf("EP%02d", i+1), Chapters: fmt.Sprintf("%d-%d", c.n, c.n)})
+	}
+	return out
 }
 
 // manjuAutoEpisodes 全本时自动分段分集:
