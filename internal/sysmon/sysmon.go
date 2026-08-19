@@ -131,6 +131,7 @@ type Collector struct {
 	gpuAt      time.Time
 	cfyCache   Comfy
 	cfyAt      time.Time
+	cfyFail    int // 连续探测失败计数(粘滞:连续失败才翻转,防状态灯抖动)
 	kbCache    KB
 	kbAt       time.Time
 	zcodeCache ZCode
@@ -242,13 +243,24 @@ func (c *Collector) comfyCached(now time.Time) Comfy {
 	if now.Sub(c.cfyAt) < 5*time.Second {
 		return c.cfyCache
 	}
-	c.cfyCache = pollComfy()
+	cur := pollComfy()
+	if cur.Online {
+		c.cfyFail = 0
+		c.cfyCache = cur
+	} else if c.cfyFail >= 2 {
+		// 连续 3 次失败才判离线(ComfyUI 加载模型/GPU 忙时响应慢会单次超时,
+		// 立即翻转会让状态灯「运行中/已停止」来回跳)
+		c.cfyCache = cur
+	} else {
+		c.cfyFail++
+		// 未达阈值:保留上次状态,不抖动
+	}
 	c.cfyAt = now
 	return c.cfyCache
 }
 
 func pollComfy() Comfy {
-	client := http.Client{Timeout: 900 * time.Millisecond}
+	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(ComfyURL + "/system_stats")
 	if err != nil {
 		return Comfy{Err: "offline"}
