@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 // TestFSPathAllowed fs 根目录白名单:根内放行/根外拒绝/大小写不敏感/动态注册
@@ -204,5 +205,45 @@ func TestManjuCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "clips", "EP01", "01.mp4")); err != nil {
 		t.Errorf("镜头定稿被误删")
+	}
+}
+
+// TestTokenInjectRootPath 根路径(kb 工作台页)FileServer 注入会话令牌:
+// HTML 替换占位符 → 真实 token;无占位符残留;静态 js 透传不缓冲
+func TestTokenInjectRootPath(t *testing.T) {
+	old := sessionToken
+	sessionToken = "tok-root"
+	defer func() { sessionToken = old }()
+
+	// 模拟 kbFS:index.html 含占位符 + 一个 js
+	fsys := fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte(`<head><script>window.NILIX_TOKEN="/*__NILIX_TOKEN__*/";</script></head><body>kb</body>`)},
+		"app.js":     &fstest.MapFile{Data: []byte(`console.log("static")`)},
+	}
+	s := &Server{kbFS: fsys}
+	h := s.tokenInject(noCacheHTML(http.FileServer(http.FS(fsys))))
+
+	// 根路径 HTML:占位符被替换
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	body := w.Body.String()
+	if !strings.Contains(body, `window.NILIX_TOKEN="tok-root"`) {
+		t.Fatalf("根页令牌未注入: %s", body)
+	}
+	if strings.Contains(body, "__NILIX_TOKEN__") {
+		t.Fatalf("占位符未替换干净")
+	}
+	// 静态 js:原样透传(不含占位符替换逻辑,内容不变)
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, httptest.NewRequest("GET", "/app.js", nil))
+	if w2.Body.String() != `console.log("static")` {
+		t.Fatalf("静态文件应原样透传: %q", w2.Body.String())
+	}
+	// sessionToken 为空:不替换(占位符保留,前端走异步兜底)
+	sessionToken = ""
+	w3 := httptest.NewRecorder()
+	h.ServeHTTP(w3, httptest.NewRequest("GET", "/", nil))
+	if !strings.Contains(w3.Body.String(), "__NILIX_TOKEN__") {
+		t.Fatalf("token 为空时不应替换")
 	}
 }

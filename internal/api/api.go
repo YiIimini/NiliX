@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"time"
@@ -92,9 +93,37 @@ func (s *Server) Routes() http.Handler {
 	}
 	mux.HandleFunc("/manage/", s.handleManage)
 	if s.kbFS != nil {
-		mux.Handle("/", noCacheHTML(http.FileServer(http.FS(s.kbFS))))
+		// 根路径(kb 工作台页)经 FileServer 直接输出静态文件,不会走 handleManage 的令牌替换——
+		// 必须包 tokenInject 把会话令牌占位符替换进 index.html,否则前端 NILIX_TOKEN 是字面占位符,
+		// 所有写请求带错误 token 被 auth 拦成 401「会话失效」
+		mux.Handle("/", noCacheHTML(s.tokenInject(http.FileServer(http.FS(s.kbFS)))))
 	}
 	return s.auth(mux)
+}
+
+// tokenInject 对 HTML 响应替换会话令牌占位符 /*__NILIX_TOKEN__*/ → 真实 token。
+// 仅 index.html(路径 / 或 *.html)走缓冲替换;媒体/脚本直接透传(不整文件缓冲)。
+func (s *Server) tokenInject(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isHTML := r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") || strings.HasSuffix(r.URL.Path, "/index.html")
+		if sessionToken == "" || !isHTML {
+			next.ServeHTTP(w, r)
+			return
+		}
+		rr := httptest.NewRecorder()
+		next.ServeHTTP(rr, r)
+		body := rr.Body.Bytes()
+		if strings.Contains(rr.Header().Get("Content-Type"), "text/html") {
+			body = bytes.Replace(body, []byte("/*__NILIX_TOKEN__*/"), []byte(sessionToken), 1)
+		}
+		for k, vs := range rr.Header() {
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(rr.Code)
+		_, _ = w.Write(body)
+	})
 }
 
 // auth 非 GET 请求校验会话 token(静态资源/读接口 GET 放行)
