@@ -2619,6 +2619,12 @@ body.view-dir-active .top-search { display: none; }
   font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums;
   color: var(--text); white-space: nowrap;
 }
+.manju-sysmon .ms-it em {
+  font-style: normal; font-size: 9.5px; font-variant-numeric: tabular-nums;
+  color: var(--muted); white-space: nowrap;
+}
+.manju-sysmon .ms-it em.hot { color: #fbbf24; }
+.manju-sysmon .ms-it em.crit { color: #f87171; }
 .manju-sysmon .ms-it b.hot { color: #fbbf24; }
 .manju-sysmon .ms-it b.crit { color: #f87171; }
 /* 收起态:保持网格占位(列宽 0),去掉边框阴影,内容 overflow 隐藏;不能用 display:none(会导致网格项前移错位) */

@@ -2004,7 +2004,7 @@
       this.pollSysmon();
     },
 
-    /* 本机系统状态(CPU/内存/GPU):每轮轮询顺带刷新(2s),不单独起计时器 */
+    /* 本机系统状态(CPU/内存/GPU 占用+温度):每轮轮询顺带刷新(2s),不单独起计时器 */
     pollSysmon() {
       const wrap = $("manju-sysmon");
       if (!wrap) return;
@@ -2014,10 +2014,18 @@
           const b = wrap.querySelector(`[data-k="${k}"] b`);
           if (b) { b.textContent = v; b.className = cls || ""; }
         };
+        const setT = (k, v, cls) => {
+          const em = wrap.querySelector(`[data-k="${k}"] em`);
+          if (em) { em.textContent = v; em.className = cls || ""; }
+        };
         const pct = (v) => (typeof v === "number" ? Math.round(v) + "%" : "--");
+        const temp = (v, has) => (has && typeof v === "number" ? Math.round(v) + "℃" : "--");
         set("cpu", pct(c.usage), c.usage >= 90 ? "crit" : c.usage >= 70 ? "hot" : "");
+        setT("cpu", temp(c.temp, c.hasTemp), c.temp >= 85 ? "crit" : c.temp >= 70 ? "hot" : "");
         set("mem", pct(m.percent), m.percent >= 90 ? "crit" : m.percent >= 75 ? "hot" : "");
+        setT("mem", m.temp ? temp(m.temp, m.hasTemp) : "--");
         set("gpu", g.present ? pct(g.usage) : "N/A", g.present ? (g.usage >= 95 ? "hot" : "") : "");
+        setT("gpu", g.present ? temp(g.temp, g.temp > 0) : "--", g.temp >= 85 ? "crit" : g.temp >= 70 ? "hot" : "");
       }).catch(() => {});
     },
 
