@@ -1253,6 +1253,8 @@
       const epR = R.episode || "";
       const epM = String(epR).match(/^EP0*(\d+)$/i);
       num("manju-episode", epM ? parseInt(epM[1], 10) : 0);
+      // 同步 this.episode(提交/续跑用整数集数;未回填则保持旧值)
+      this.episode = String($("manju-episode").value || this.episode || "0");
       set("manju-comfy-url", R.comfy_url);
       set("manju-neg-prompt", R.neg_prompt || NEG_PROMPT_DEFAULT);
       set("manju-unet-fl2va", R.unet_fl2va);

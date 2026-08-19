@@ -422,3 +422,76 @@ func TestManjuTimecode(t *testing.T) {
 		}
 	}
 }
+
+// TestNormalizeEpisode 集数 → 集号:1→EP01、12→EP12、0/空原样、旧 EP01 输入兼容
+func TestNormalizeEpisode(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"1", "EP01"}, {"12", "EP12"}, {"0", "0"}, {"", ""},
+		{"EP01", "EP01"}, {"ep03", "ep03"}, {" 5 ", "EP05"},
+	}
+	for _, c := range cases {
+		if got := normalizeEpisode(c.in); got != c.want {
+			t.Errorf("normalizeEpisode(%q)=%q,期望 %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestManjuChapterEpisodes 集数=0 自动模式:每章一集(第 N 章 = 第 N 集)
+func TestManjuChapterEpisodes(t *testing.T) {
+	proj := "zz_ep_auto_test"
+	dir := filepath.Join(manjuRoot, proj)
+	_ = os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+	_ = os.MkdirAll(dir, 0755)
+	novel := filepath.Join(dir, "book.md")
+	_ = os.WriteFile(novel, []byte("# 第1章 开篇\n内容一\n# 第3章 转折\n内容三\n# 第5章 高潮\n内容五\n"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"paths":{"novel":"`+filepath.ToSlash(novel)+`","workdir":"`+filepath.ToSlash(dir)+`"}}`), 0644)
+	ctx, err := newManjuCtx(filepath.Join(dir, "config.json"), "0", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	segs := manjuChapterEpisodes(ctx)
+	if len(segs) != 3 {
+		t.Fatalf("应每章一集共 3 集: %v", segs)
+	}
+	if segs[0].Episode != "EP01" || segs[0].Chapters != "1-1" {
+		t.Errorf("第 1 集应为 EP01/1-1: %v", segs[0])
+	}
+	if segs[1].Episode != "EP02" || segs[1].Chapters != "3-3" {
+		t.Errorf("第 2 集应为 EP02/3-3(按章节序): %v", segs[1])
+	}
+	if segs[2].Episode != "EP03" || segs[2].Chapters != "5-5" {
+		t.Errorf("第 3 集应为 EP03/5-5: %v", segs[2])
+	}
+}
+
+// TestManjuSaveRenderEpisode 保存集数:3→config.render.episode=EP03;0→删除(自动模式)
+func TestManjuSaveRenderEpisode(t *testing.T) {
+	proj := "zz_ep_save_test"
+	dir := filepath.Join(manjuRoot, proj)
+	_ = os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+	_ = os.MkdirAll(dir, 0755)
+	cfgPath := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(cfgPath, []byte(`{"render":{"width":768,"height":1344,"episode":"EP02"}}`), 0644)
+
+	w, _ := doReq(t, "POST", "/api/manju/render", map[string]any{"config": cfgPath, "episode": "3"})
+	if w.Code != 200 {
+		t.Fatalf("保存 HTTP %d: %s", w.Code, w.Body.String())
+	}
+	cfg, _ := readManjuConfig(cfgPath)
+	R, _ := cfg["render"].(map[string]any)
+	if R["episode"] != "EP03" {
+		t.Errorf("集数 3 应存 EP03: %v", R["episode"])
+	}
+	// 0 → 删除
+	w2, _ := doReq(t, "POST", "/api/manju/render", map[string]any{"config": cfgPath, "episode": "0"})
+	if w2.Code != 200 {
+		t.Fatalf("保存0 HTTP %d", w2.Code)
+	}
+	cfg2, _ := readManjuConfig(cfgPath)
+	R2, _ := cfg2["render"].(map[string]any)
+	if _, ok := R2["episode"]; ok {
+		t.Errorf("集数 0 应删除 episode: %v", R2["episode"])
+	}
+}
