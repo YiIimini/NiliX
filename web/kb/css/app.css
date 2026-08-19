@@ -4582,6 +4582,8 @@ select option { text-align: center; }
 
 /* 云端 2K 定稿:集标题按钮与产物徽标 */
 .manju-out-title .manju-up2k-btn { padding: 1px 8px; font-size: 11px; margin-left: 6px; flex: none; }
+/* 产物集标题右侧动作组(云端 2K / 剪映)右对齐 */
+.manju-out-title .manju-out-actions { margin-left: auto; display: flex; align-items: center; gap: 0; }
 .manju-vid-2k .manju-vid-name { color: var(--accent); }
 .manju-stale-tag { font-size: 10px; color: #e3b341; margin-right: 2px; white-space: nowrap; cursor: help; }
 
@@ -4691,8 +4693,9 @@ select option { text-align: center; }
 .manju-novel-head .hrs-btn-icon { width: 28px; height: 28px; }
 /* 产物区工具行(清理/预告片,自头部迁入 body 顶部,按钮靠右) */
 .manju-out-tools {
-  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  display: flex; align-items: center; justify-content: flex-start; gap: 8px;
   padding-bottom: 10px; margin-bottom: 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent);
 }
+.manju-out-ops { font-size: 11.5px; font-weight: 700; color: var(--muted); letter-spacing: 1px; margin-right: 2px; }
 .manju-out-tools .hrs-btn { padding: 3px 10px; font-size: 11.5px; }
