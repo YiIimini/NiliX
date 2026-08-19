@@ -1,66 +1,75 @@
 package api
 
-// 一键诊断导出:打包项目运行日志/状态文件/配置(Key 打码)/环境自检为 zip,
-// 用户反馈问题时直接贴包,免去手动翻多个 JSON。
+// 诊断快照自动落盘:任务结束时把项目诊断信息(config Key 打码 + 各状态文件 + 环境自检)
+// 统一汇总写到固定目录 manju/logs/diagnose/<项目>_diagnose.json——本地服务无需导出 zip,
+// 反馈问题时直接提供该文件即可。
 
 import (
-	"archive/zip"
 	"encoding/json"
-	"fmt"
-	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
-// manjuDiagnoseZip 收集项目诊断信息打包 zip,直接写响应流
-func manjuDiagnoseZip(w http.ResponseWriter, configPath string) {
-	ctx, err := newManjuCtx(configPath, "", "", "", "")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	proj := ctx.project
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-diagnose.zip"`, proj))
-	zw := zip.NewWriter(w)
-	defer zw.Close()
+// manjuDiagnoseDir 诊断快照固定目录(与 notify.json 同级)
+func manjuDiagnoseDir() string {
+	return filepath.Join(manjuRoot, "logs", "diagnose")
+}
 
-	addFile := func(name, path string, maxSize int64) {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return
-		}
-		if maxSize > 0 && int64(len(b)) > maxSize {
-			b = b[len(b)-int(maxSize):]
-		}
-		f, _ := zw.Create(name)
-		_, _ = f.Write(b)
+// manjuDiagnosePath 某项目诊断快照路径
+func manjuDiagnosePath(project string) string {
+	return filepath.Join(manjuDiagnoseDir(), project+"_diagnose.json")
+}
+
+// diagnoseSnapshot 收集项目诊断信息为单个 JSON(全部 Key 打码)
+func (ctx *manjuCtx) diagnoseSnapshot() map[string]any {
+	snap := map[string]any{
+		"project":     ctx.project,
+		"episode":     ctx.episode,
+		"generatedAt": time.Now().Format("2006-01-02 15:04:05"),
 	}
-	// 配置 Key 打码后进包
-	if b, err := os.ReadFile(configPath); err == nil {
+	// config(Key 打码)
+	if b, err := os.ReadFile(ctx.configPath); err == nil {
 		var cfg map[string]any
 		if json.Unmarshal(b, &cfg) == nil {
 			maskKeys(cfg)
-			if bb, err := json.MarshalIndent(cfg, "", "  "); err == nil {
-				f, _ := zw.Create("config.json")
-				_, _ = f.Write(bb)
-			}
+			snap["config"] = cfg
 		}
 	}
-	// 运行/审片/记账/清单/检查点/日志
-	addFile("run_state.json", manjuRunStatePath(proj), 0)
-	addFile("agent_state.json", manjuAgentStatePath(proj), 2<<20)
-	addFile("llm_stats.json", manjuStatsPath(proj), 0)
-	addFile("manifest.json", ctx.manifestPath(), 2<<20)
-	addFile("render_ck.json", ctx.renderCKPath(), 0)
-	addFile("run.log", manjuRunLogPath(proj), 512<<10)
-	// 环境自检 + 版本说明
-	env := manjuEnvCheck(configPath)
-	f, _ := zw.Create("env_check.txt")
-	_, _ = f.Write([]byte(env))
-	ver := "NiliX diagnose 2026-08-19 (审计批次:安全/性能/体验/工程化)\n"
-	f2, _ := zw.Create("README.txt")
-	_, _ = f2.Write([]byte(ver + "包含:config(Key 打码)/run_state/agent_state/llm_stats/manifest/render_ck/run.log/env_check\n"))
+	// 各状态文件(原样并入,若损坏则跳过)
+	load := func(path string) any {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		var v any
+		if json.Unmarshal(b, &v) != nil {
+			return string(b) // 非 JSON(如损坏/文本):原样字符串
+		}
+		return v
+	}
+	snap["runState"] = load(manjuRunStatePath(ctx.project))
+	snap["agentState"] = load(manjuAgentStatePath(ctx.project))
+	snap["llmStats"] = load(manjuStatsPath(ctx.project))
+	snap["manifest"] = load(ctx.manifestPath())
+	snap["renderCk"] = load(ctx.renderCKPath())
+	// 环境自检文本
+	snap["envCheck"] = manjuEnvCheck(ctx.configPath)
+	return snap
+}
+
+// manjuWriteDiagnoseSnapshot 任务结束时自动写快照(固定目录,覆盖旧快照保留最近一次)
+func manjuWriteDiagnoseSnapshot(project, episode string) {
+	if project == "" {
+		return
+	}
+	cfgPath := filepath.Join(manjuRoot, project, "config.json")
+	ctx, err := newManjuCtx(cfgPath, episode, "", "", "")
+	if err != nil {
+		return
+	}
+	_ = atomicWriteJSON(manjuDiagnosePath(project), ctx.diagnoseSnapshot())
 }
 
 // maskKeys 递归把 api_key / vision_api_key / minimax_api_key 打码
@@ -81,16 +90,4 @@ func maskKeys(v any) {
 			maskKeys(item)
 		}
 	}
-}
-
-// registerDiagnoseRoute 诊断导出路由
-func registerDiagnoseRoute(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/manju/diagnose", func(w http.ResponseWriter, r *http.Request) {
-		configPath := r.URL.Query().Get("config")
-		if configPath == "" {
-			writeErr(w, http.StatusBadRequest, "missing config")
-			return
-		}
-		manjuDiagnoseZip(w, configPath)
-	})
 }

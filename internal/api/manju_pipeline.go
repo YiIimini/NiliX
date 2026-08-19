@@ -324,6 +324,8 @@ func manjuFinish(rc int) {
 	state.running = false
 	state.cmd = nil
 	proj, ep := state.project, state.episode
+	// 任务结束自动写诊断快照到固定目录(本地服务无需导出 zip,反馈时直接提供该文件)
+	manjuWriteDiagnoseSnapshot(proj, ep)
 	logTail := state.log
 	if len(logTail) > 30000 {
 		logTail = logTail[len(logTail)-30000:]

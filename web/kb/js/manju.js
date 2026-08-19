@@ -100,7 +100,7 @@
       "产物区每集可：<b>☁️ 2K</b>（本地定稿镜提交 MiniMax 云端升 2K，设置里填 Key）/ <b>📦 剪映</b>（导出视频+字幕轨草稿，可继续编辑；需 venv 装 pyJianYingDraft）",
       "镜头 ⋮ 菜单支持<b>单镜云端 2K</b>；<b>⚠️ 已过期</b>徽标 = 提示词/定妆照已变，下次渲染自动删旧重渲",
       "产物区<b>🧹 清理</b>：清理抽卡候选/审片抽帧/云端 2K(均可重新生成,定妆照/定稿/成片不动)",
-      "项目卡片<b>🧰 诊断</b>：一键导出诊断包 zip(运行日志/状态 JSON/配置 Key 打码/环境自检),反馈问题时直接贴包即可定位",
+      "每次任务结束自动写<b>诊断快照</b>到 <code>manju/logs/diagnose/&lt;项目&gt;_diagnose.json</code>(配置 Key 打码+状态+环境自检),反馈问题时直接提供该文件即可定位",
     ] },
     { ic: "🤖", t: "智能体调度", ps: [
       "点<b>🤖 AI 一条龙</b>先弹窗询问：<b>「是」</b>= Agent 深度分析小说内容，自动推荐并更新渲染风格（可组合叠加，如 2.5D+水墨）后走全流程；<b>「否」</b>= 按当前渲染配置直接走AI 一条龙",
@@ -190,7 +190,7 @@
       "方案: <code>analysis/&lt;集&gt;_direct_plan.json</code>",
       "镜头: <code>clips/&lt;集&gt;/NN.mp4</code>",
       "成片: <code>&lt;剧名&gt;/&lt;集&gt;_成片.mp4</code>",
-      "诊断包: 项目卡片「🧰 诊断」一键导出 zip(含 run.log/状态/配置 Key 打码/环境自检)",
+      "诊断快照: <code>manju/logs/diagnose/&lt;项目&gt;_diagnose.json</code>(每次任务结束自动生成,覆盖保留最近一次;含配置 Key 打码/状态/环境自检)",
       "云端 2K: <code>clips/&lt;集&gt;/2k/NN.mp4</code>;剪映草稿: <code>&lt;剧名&gt;/剪映草稿/</code>",
     ] },
   ];
@@ -305,18 +305,6 @@
       if (btn) btn.addEventListener("click", () => { tip.hidden = true; this.runResume(); });
     },
 
-    /* 一键诊断导出:后端打包 zip(配置 Key 打码),浏览器直接下载 */
-    downloadDiagnose() {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
-      const a = document.createElement("a");
-      a.href = "/api/manju/diagnose?config=" + encodeURIComponent(this.project);
-      a.download = "diagnose.zip";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      this.setErr("🧰 诊断包已导出(反馈问题时直接贴包)");
-      setTimeout(() => this.setErr(""), 4000);
-    },
 
     /* ---- 运行日志:竖向时间轴渲染 ----
        阶段行=大节点(发光主色),普通行按类型着色(成功/失败/升级/警告/审片/镜头进度),
@@ -477,8 +465,6 @@
       $("manju-resume").addEventListener("click", () => this.runResume());
       $("manju-agent-run").addEventListener("click", () => this.runAgent());
       $("manju-health").addEventListener("click", () => this.openHealth());
-      const diagBtn = $("manju-diagnose");
-      if (diagBtn) diagBtn.addEventListener("click", () => this.downloadDiagnose());
       $("manju-env").addEventListener("click", () => this.doEnv());
       $("manju-stop").addEventListener("click", () => this.stop());
       $("manju-clear-log").addEventListener("click", () => { this.logNote("(就绪)"); });
