@@ -70,6 +70,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/novel/progress", s.handleNovelProgress)
 	mux.HandleFunc("POST /api/novel/auto", s.handleNovelAuto)
 	mux.HandleFunc("POST /api/novel/auto/stop", s.handleNovelAutoStop)
+	mux.HandleFunc("GET /api/novel/auto/status", s.handleNovelAutoStatus)
 	mux.HandleFunc("GET /api/novel/status/all", s.handleNovelStatusAll)
 	mux.HandleFunc("GET /api/script/styles", s.handleScriptStyles)
 	mux.HandleFunc("POST /api/render", s.handleRender)

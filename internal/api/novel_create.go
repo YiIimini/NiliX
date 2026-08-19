@@ -182,7 +182,7 @@ func (s *Server) handleNovelChapter(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "未配置 LLM API key")
 		return
 	}
-	res, err := writeNovelChapter(context.Background(), req.Title, req.No, cfg)
+	res, err := writeNovelChapter(context.Background(), req.Title, req.No, cfg, "")
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -312,22 +312,29 @@ func (s *Server) handleNovelReview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "读章节失败: "+err.Error())
 		return
 	}
+	s.mu.RLock()
+	cfg := *s.cfg
+	s.mu.RUnlock()
+	rv, rerr := reviewChapterCore(cfg, proj, req.Title, req.No, string(content))
+	if rerr != nil {
+		writeErr(w, http.StatusBadGateway, "评章失败: "+rerr.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "review": rv})
+}
+
+// reviewChapterCore 审稿核心(手动评章与续写自动返工共用):8 维打分 + 问题清单 + 建议,
+// 结论写创作档案(novel_state.Reviews)。
+func reviewChapterCore(cfg config.Settings, proj, title string, no int, content string) (novelChapterReview, error) {
 	// 带上大纲该章条目作为评分上下文
 	outline := ""
 	if b, err := os.ReadFile(filepath.Join(proj, "设定集", "设定集与大纲.md")); err == nil {
 		for _, line := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(line, fmt.Sprintf("- 第%03d章", req.No)) {
+			if strings.HasPrefix(line, fmt.Sprintf("- 第%03d章", no)) {
 				outline = strings.TrimPrefix(line, "- ")
 				break
 			}
 		}
-	}
-	s.mu.RLock()
-	cfg := *s.cfg
-	s.mu.RUnlock()
-	if cfg.LLM.APIKey == "" {
-		writeErr(w, http.StatusBadRequest, "未配置 LLM API key")
-		return
 	}
 	llm := backend.NewLLMClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model,
 		time.Duration(cfg.LLM.RequestTimeout)*time.Second)
@@ -338,14 +345,13 @@ func (s *Server) handleNovelReview(w http.ResponseWriter, r *http.Request) {
 %s
 严格输出 JSON:
 {"dims":{"opening":开篇暴击,"conflict":冲突张力,"satisfy":爽点密度,"pace":节奏紧凑,"dialogue":台词质量,"hook":钩子设计,"shootable":可拍性,"consistency":一致性风险(越高=越偏离设定,扣分项)},"score":加权总分0-100(可拍性×1.5、一致性按(100-风险)×1.5、其余×1,求和后归一),保留1位小数,"issues":["具体到段落的问题,最多3条"],"suggestion":"修改建议,80字内"}`,
-		req.Title, req.No, nvOrDefault(outline, "无"), len([]rune(string(content))), clip(string(content), 6000))
+		title, no, nvOrDefault(outline, "无"), len([]rune(content)), clip(content, 6000))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	raw, err := llm.Chat(ctx, []backend.ChatMessage{
 		{Role: "system", Content: sys}, {Role: "user", Content: usr}}, 3000, 0.3)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "评章失败: "+err.Error())
-		return
+		return novelChapterReview{}, err
 	}
 	var out struct {
 		Dims       map[string]float64 `json:"dims"`
@@ -354,15 +360,14 @@ func (s *Server) handleNovelReview(w http.ResponseWriter, r *http.Request) {
 		Suggestion string             `json:"suggestion"`
 	}
 	if err := json.Unmarshal([]byte(stripJSONFence(raw)), &out); err != nil || len(out.Dims) == 0 {
-		writeErr(w, http.StatusBadGateway, "评章解析失败,请重试")
-		return
+		return novelChapterReview{}, fmt.Errorf("评章解析失败,请重试")
 	}
 	rv := novelChapterReview{Score: out.Score, Dims: out.Dims, Issues: out.Issues,
 		Suggestion: out.Suggestion, At: time.Now().Format("2006-01-02 15:04")}
 	st := loadNovelState(proj)
-	st.Reviews[req.No] = rv
+	st.Reviews[no] = rv
 	saveNovelState(proj, st)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "review": rv})
+	return rv, nil
 }
 
 func findChapter(proj string, no int) (string, string) {
@@ -462,29 +467,54 @@ func renderNovelCover(proj, prompt string, cfg config.Settings) {
 	}
 }
 
-// appendToFullBook 增量合并全本(标题+目录+全文),按章号追加
+// appendToFullBook 纯追加一章进全本(O(1):不重读旧文、不重扫目录——600 章续写原来是
+// 每章整读整写+全树 Walk 的 O(n²));目录由 rebuildFullBookTOC 在续写完成/手动触发时重建。
+// 追加前去重:全本已含同章号标题则跳过(手动与自动并发写同章的护栏,写锁之外的二道防线)。
 func appendToFullBook(proj, title string, no int, chTitle, content string) {
 	fullDir := filepath.Join(proj, "全本")
 	_ = os.MkdirAll(fullDir, 0755)
 	fp := filepath.Join(fullDir, novelTitleSan.ReplaceAllString(title, "")+"·全本.md")
-	var b []byte
-	if old, err := os.ReadFile(fp); err == nil {
-		b = old
-	} else {
-		b = []byte(fmt.Sprintf("# %s(全本)\n\n> 爽文一条龙 · 每章 ≥1280 字\n\n", title))
+	head := fmt.Sprintf("第%03d章 %s", no, chTitle)
+	if b, err := os.ReadFile(fp); err == nil && strings.Contains(string(b), "\n## "+head) {
+		return // 已收录(并发/重复调用护栏)
 	}
-	// 目录占位:重建目录(收集已有章节)
-	dirLines := ""
+	f, err := os.OpenFile(fp, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() == 0 {
+		_, _ = f.WriteString(fmt.Sprintf("# %s(全本)\n\n> 爽文一条龙 · 每章 ≥1280 字\n", title))
+	}
+	_, _ = f.WriteString(fmt.Sprintf("\n\n## 第%03d章 %s\n\n%s\n", no, chTitle, content))
+}
+
+// rebuildFullBookTOC 重建全本目录(头部目录区):续写完成/手动生成后调用一次。
+func rebuildFullBookTOC(proj, title string) {
+	fp := filepath.Join(proj, "全本", novelTitleSan.ReplaceAllString(title, "")+"·全本.md")
+	b, err := os.ReadFile(fp)
+	if err != nil {
+		return
+	}
+	var ids []string
 	_ = filepath.Walk(filepath.Join(proj, "正文"), func(p string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
-			return nil
+		if err == nil && !info.IsDir() && strings.HasSuffix(info.Name(), ".md") {
+			ids = append(ids, strings.TrimSuffix(info.Name(), ".md"))
 		}
-		dirLines += "- " + strings.TrimSuffix(info.Name(), ".md") + "\n"
 		return nil
 	})
-	// 追加本章正文
-	b = append(b, []byte(fmt.Sprintf("\n\n## 第%03d章 %s\n\n%s\n", no, chTitle, content))...)
-	_ = os.WriteFile(fp, b, 0644)
+	sort.Strings(ids)
+	var b2 strings.Builder
+	b2.WriteString(fmt.Sprintf("# %s(全本)\n\n> 爽文一条龙 · 每章 ≥1280 字 · 目录 %d 章\n\n", title, len(ids)))
+	for _, id := range ids {
+		b2.WriteString("- " + id + "\n")
+	}
+	// 正文区 = 第一个 "\n\n## 第001章" 起
+	if i := strings.Index(string(b), "\n## 第"); i >= 0 {
+		b2.WriteString(string(b)[i:])
+	}
+	_ = os.WriteFile(fp, []byte(b2.String()), 0644)
 }
 
 // ================= 后台自动续写(弹窗关闭仍在后台跑) =================
@@ -494,8 +524,9 @@ type novelAutoTask struct {
 	Current int    `json:"current"`
 	Total   int    `json:"total"`
 	Done    bool   `json:"done"`
+	Err     string `json:"error,omitempty"` // 失败原因(LLM 报错/字数不足等),前端展示并指向断点续写
 	stop    chan struct{}
-	ctx     context.Context    // 停止续写时 cancel:中断在途 LLM 调用,不再烧 token
+	ctx     context.Context // 停止续写时 cancel:中断在途 LLM 调用,不再烧 token
 	cancel  context.CancelFunc
 }
 
@@ -512,7 +543,11 @@ func novelAutoStatus(title string) map[string]any {
 	if !ok {
 		return map[string]any{"title": title, "running": false, "current": 0, "total": 0, "done": false}
 	}
-	return map[string]any{"title": t.Title, "running": t.Running, "current": t.Current, "total": t.Total, "done": t.Done}
+	out := map[string]any{"title": t.Title, "running": t.Running, "current": t.Current, "total": t.Total, "done": t.Done}
+	if t.Err != "" {
+		out["error"] = t.Err
+	}
+	return out
 }
 
 // handleNovelAuto 启动后台自动续写(幂等:已运行直接返回)
@@ -581,6 +616,7 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 				novelAutoMu.Lock()
 				t.Done = true
 				novelAutoMu.Unlock()
+				rebuildFullBookTOC(proj, req.Title) // 全本目录一次性重建(逐章纯追加不维护目录)
 				return
 			}
 			select {
@@ -588,14 +624,43 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 				return
 			default:
 			}
-			res, err := writeNovelChapter(t.ctx, req.Title, next, cfg)
+			res, err := writeNovelChapter(t.ctx, req.Title, next, cfg, "")
 			novelAutoMu.Lock()
 			if err == nil && !res["exists"].(bool) {
 				t.Current = next
 			}
 			novelAutoMu.Unlock()
 			if err != nil {
-				return // 失败停(可手动重启续写)
+				novelAutoMu.Lock()
+				t.Err = err.Error()
+				novelAutoMu.Unlock()
+				return // 失败停(可手动重启续写;原因经 status 接口展示)
+			}
+			// Agent 化续写:自动审稿,低于 70 分带意见删稿重写一轮,重写稿复审归档
+			if res["exists"] == false && cfg.LLM.APIKey != "" {
+				if f, _ := findChapter(proj, next); f != "" {
+					if content, cerr := os.ReadFile(f); cerr == nil {
+						if rv, rerr := reviewChapterCore(cfg, proj, req.Title, next, string(content)); rerr == nil {
+							if rv.Score < 70 {
+								note := strings.Join(rv.Issues, ";")
+								if rv.Suggestion != "" {
+									if note != "" {
+										note += ";"
+									}
+									note += rv.Suggestion
+								}
+								_ = os.Remove(f)
+								if res2, err2 := writeNovelChapter(t.ctx, req.Title, next, cfg, note); err2 == nil && res2["exists"] == false {
+									if f2, _ := findChapter(proj, next); f2 != "" {
+										if c2, e2 := os.ReadFile(f2); e2 == nil {
+											_, _ = reviewChapterCore(cfg, proj, req.Title, next, string(c2)) // 重写稿复审(归档)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
 			}
 			select {
 			case <-t.stop:
@@ -623,6 +688,16 @@ func (s *Server) handleNovelAutoStop(w http.ResponseWriter, r *http.Request) {
 	}
 	novelAutoMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleNovelAutoStatus 查询单书续写进度(前端轮询:当前章/总章/运行中/已完成)
+func (s *Server) handleNovelAutoStatus(w http.ResponseWriter, r *http.Request) {
+	title := strings.TrimSpace(r.URL.Query().Get("title"))
+	if title == "" {
+		writeErr(w, http.StatusBadRequest, "missing title")
+		return
+	}
+	writeJSON(w, http.StatusOK, novelAutoStatus(title))
 }
 
 // handleNovelStatusAll 全量创作状态(书架信号灯:绿=全本完/蓝=续作中/黄=断点/红=未完成)
@@ -732,9 +807,30 @@ func touchNovelState(proj, title string, no int) {
 	saveNovelState(proj, st)
 }
 
+// ---- 按书写锁:手动生成与后台续写并发写同一本书时的护栏(检查→生成→落盘→全本 整段互斥) ----
+var (
+	novelWriteMu    sync.Mutex
+	novelWriteLocks = map[string]*sync.Mutex{}
+)
+
+func novelTitleLock(title string) *sync.Mutex {
+	key := filepath.Base(novelProjDir(title))
+	novelWriteMu.Lock()
+	defer novelWriteMu.Unlock()
+	m, ok := novelWriteLocks[key]
+	if !ok {
+		m = &sync.Mutex{}
+		novelWriteLocks[key] = m
+	}
+	return m
+}
+
 // writeNovelChapter 写第 no 章(幂等:已存在返回 exists),供手动与后台自动续写共用。
 // ctx 传入调用方上下文:自动续写停止时 cancel,在途 LLM 调用立即中断,不再烧 token/落盘。
-func writeNovelChapter(ctx context.Context, title string, no int, cfg config.Settings) (map[string]any, error) {
+func writeNovelChapter(ctx context.Context, title string, no int, cfg config.Settings, reviewNote string) (map[string]any, error) {
+	unlock := novelTitleLock(title)
+	unlock.Lock()
+	defer unlock.Unlock()
 	proj := novelProjDir(title)
 	b, err := os.ReadFile(filepath.Join(proj, "设定集", "设定集与大纲.md"))
 	if err != nil {
@@ -779,6 +875,9 @@ func writeNovelChapter(ctx context.Context, title string, no int, cfg config.Set
 
 硬性要求:正文 ≥1280 字(2000 字左右最佳);推进大纲事件;至少一个爽点或冲突升级。
 严格输出 {"title":"章节名","content":"正文全文"} JSON。`, title, clip(outline, 2400), no, entry, prevTail)
+	if reviewNote != "" {
+		usr += "\n\n【重写模式】上一稿审稿未达标,意见如下,重写整章修正(直接输出修正后的完整正文,不要提及审稿):\n" + reviewNote
+	}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Minute)
 	defer cancel()
 	raw, err := llm.Chat(ctx, []backend.ChatMessage{
