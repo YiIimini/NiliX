@@ -3310,6 +3310,9 @@ select.manju-input {
   width: 100%; max-width: none; min-width: 0;
 }
 /* 参数区:全部参数共用一个卡片边框(单项不加边框),每行一条「标签：值」 */
+/* hidden 属性会被本元素的 display:flex 覆盖(UA 默认 [hidden]{display:none} 不敌显式 display),
+   无数据时需整卡隐藏,必须显式补 [hidden] 规则 */
+.manju-project-col .manju-chips[hidden] { display: none; }
 .manju-project-col .manju-chips {
   margin-top: 8px;
   display: flex; flex-direction: column;
