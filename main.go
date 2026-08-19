@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -19,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/getlantern/systray"
+	webview "github.com/jchv/go-webview2"
 
 	"nilix/internal/api"
 	"nilix/internal/autostart"
@@ -200,27 +200,59 @@ func saveWinLoop() {
 }
 
 // runMainWindow 用 Edge App 模式打开管理窗口(独立应用窗口)
+// runMainWindow 以独立子进程(NiliX.exe --mainwin)打开管理窗口:
+// - 子进程内 WebView2 环境与灵动岛(主进程)互不冲突(WebView2 限制的是同进程多环境)
+// - 任务栏图标天然是 NiliX.exe 自己的图标(不再显示 Edge 图标)
+// - 窗口由我们创建,尺寸/标题/位置全部可控,无 Edge 记忆/复用问题
+// - 窗口关闭 → 子进程退出;主进程(托盘/灵动岛/后台)不受影响
 func runMainWindow(url string) {
-	edge := msedgePath()
-	if edge == "" {
-		log.Printf("主窗口: 未找到 Edge,回退系统浏览器")
+	exe, err := os.Executable()
+	if err != nil {
 		openBrowser(url)
 		return
 	}
-	log.Printf("主窗口(Edge App)打开: %s", url)
-	x, y, w, h := calcMainWinSize()
-	// 独立 user-data-dir 启动:不与日常 Edge 共用实例(默认实例有常驻后台进程,
-	// 复用后忽略 --window-size 按记忆尺寸开,造成"先错后对"的跳变);独立实例
-	// 窗口关闭即整体退出,每次启动都是新进程,参数必生效——窗口首次出现即正确尺寸。
-	ud := filepath.Join(os.Getenv("AppData"), "NiliX-edge")
-	cmd := exec.Command(edge, "--user-data-dir="+ud, "--app="+url,
-		fmt.Sprintf("--window-size=%d,%d", w, h),
-		fmt.Sprintf("--window-position=%d,%d", x, y))
+	log.Printf("主窗口(子进程 WebView2)打开: %s", url)
+	cmd := exec.Command(exe, "--mainwin")
+	// 不能 HideWindow:子进程首个窗口(WebView2 主窗口)若被创建为隐藏,
+	// WebView2 环境初始化会卡死(隐藏父窗口的历史教训);exe 为 windowsgui 无控制台,正常显示即可
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 	if err := cmd.Start(); err != nil {
 		log.Printf("主窗口启动失败: %v(回退系统浏览器)", err)
 		openBrowser(url)
 	}
+}
+
+// runMainWindowWebView 子进程(--mainwin)入口:创建 WebView2 管理窗口并运行。
+// 阻塞至窗口关闭(用户点 X)→ 子进程退出。
+func runMainWindowWebView() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("主窗口异常退出: %v", r)
+		}
+	}()
+	island.EnablePerMonitorDPI() // 子进程同样高 DPI 感知:GetSystemMetrics/SetWindowPos 用物理像素
+	w := webview.New(false)
+	if w == nil {
+		log.Printf("主窗口创建失败")
+		return
+	}
+	defer w.Destroy()
+	w.SetTitle(mainWinTitle)
+	x, y, ww, wh := calcMainWinSize()
+	w.SetSize(ww, wh, webview.HintNone)
+	w.SetBackgroundColor(0x0b, 0x12, 0x1f) // 站点深色底色:加载期不白闪
+	w.Navigate("http://127.0.0.1:8787")
+	// WebView2 控制器初始化完成后可能重置窗口尺寸——延迟再强制一次(物理像素+居中)
+	hw := uintptr(w.Window())
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		_, _, _ = procSetWindowPos.Call(hw, 0, uintptr(x), uintptr(y), uintptr(ww), uintptr(wh), 0x0004)
+	}()
+	// 记忆轮询:用户调整窗口大小后落盘(子进程持有窗口句柄)
+	go saveWinLoop()
+	w.Run()
 }
 
 var (
@@ -264,6 +296,12 @@ func main() {
 		if dir := filepath.Dir(exe); dir != "" {
 			_ = os.Chdir(dir)
 		}
+	}
+
+	// 主窗口子进程模式:独立进程跑 WebView2 管理窗口(任务栏图标=NiliX,环境不与灵动岛冲突)
+	if len(os.Args) > 1 && os.Args[1] == "--mainwin" {
+		runMainWindowWebView()
+		return
 	}
 
 	port := flag.String("port", "8787", "监听端口")
