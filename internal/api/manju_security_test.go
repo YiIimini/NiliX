@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -245,5 +246,31 @@ func TestTokenInjectRootPath(t *testing.T) {
 	h.ServeHTTP(w3, httptest.NewRequest("GET", "/", nil))
 	if !strings.Contains(w3.Body.String(), "__NILIX_TOKEN__") {
 		t.Fatalf("token 为空时不应替换")
+	}
+}
+
+// TestTokenInjectNoTruncate token 注入不得截断 HTML:占位符(21B)→token(32B)长度变化后,
+// 响应 body 必须完整(含尾部 </html>),Content-Length 不得保留旧值导致截断黑屏
+func TestTokenInjectNoTruncate(t *testing.T) {
+	old := sessionToken
+	sessionToken = strings.Repeat("a", 32)
+	defer func() { sessionToken = old }()
+
+	html := `<html><head><script>window.NILIX_TOKEN="/*__NILIX_TOKEN__*/";</script></head><body>kb</body></html>`
+	fsys := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte(html)}}
+	s := &Server{kbFS: fsys}
+	h := s.tokenInject(noCacheHTML(http.FileServer(http.FS(fsys))))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	body := w.Body.String()
+	if !strings.HasSuffix(body, "</html>") {
+		t.Fatalf("HTML 被截断(尾部缺失): %q", body[len(body)-60:])
+	}
+	if !strings.Contains(body, `window.NILIX_TOKEN="`+strings.Repeat("a", 32)+`"`) {
+		t.Fatalf("token 未正确注入")
+	}
+	if cl := w.Header().Get("Content-Length"); cl != "" && cl != fmt.Sprint(len(body)) {
+		t.Fatalf("Content-Length 与 body 长度不符: header=%s actual=%d", cl, len(body))
 	}
 }

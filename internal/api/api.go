@@ -117,6 +117,11 @@ func (s *Server) tokenInject(next http.Handler) http.Handler {
 			body = bytes.Replace(body, []byte("/*__NILIX_TOKEN__*/"), []byte(sessionToken), 1)
 		}
 		for k, vs := range rr.Header() {
+			// Content-Length 必须丢弃:占位符(21B)替换成 token(32B)后长度已变,
+			// 保留旧值会让浏览器按旧长度截断 HTML → 页面 JS 缺失 → 窗口一片黑(刚踩的坑)
+			if k == "Content-Length" {
+				continue
+			}
 			for _, v := range vs {
 				w.Header().Add(k, v)
 			}
