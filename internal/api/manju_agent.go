@@ -1615,13 +1615,18 @@ func registerAgentRoutes(mux *http.ServeMux) {
 				res["visionKeyMasked"] = masked
 				res["visionBaseUrl"] = acfg.VisionBaseURL
 				res["agentEnabled"] = acfg.Enabled
-				// 全局默认(settings.json agent 节):前端展示"项目未配置时使用全局默认"
-				res["globalDefaults"] = map[string]any{
-					"enabled": manjuGlobalAgent.Enabled, "visionModel": manjuGlobalAgent.VisionModel,
-					"visionBaseUrl": manjuGlobalAgent.VisionBaseURL,
-					"passScore":     manjuGlobalAgent.PassScore, "maxRetries": manjuGlobalAgent.MaxRetries,
-					"hasVisionKey": manjuGlobalAgent.VisionAPIKey != "",
-				}
+			} else {
+				// 项目缺失(目录被删/未创建):不整体失败——仍返回全局默认,前端展示"项目缺失,按全局配置"
+				res["projectMissing"] = true
+				res["visionBaseUrl"] = manjuGlobalAgent.VisionBaseURL
+				res["agentEnabled"] = manjuGlobalAgent.Enabled
+			}
+			// 全局默认(settings.json agent 节):前端展示"项目未配置时使用全局默认"(项目缺失时也返回,避免整块视觉区空白)
+			res["globalDefaults"] = map[string]any{
+				"enabled": manjuGlobalAgent.Enabled, "visionModel": manjuGlobalAgent.VisionModel,
+				"visionBaseUrl": manjuGlobalAgent.VisionBaseURL,
+				"passScore":     manjuGlobalAgent.PassScore, "maxRetries": manjuGlobalAgent.MaxRetries,
+				"hasVisionKey": manjuGlobalAgent.VisionAPIKey != "",
 			}
 			writeJSON(w, http.StatusOK, res)
 	})
@@ -1632,21 +1637,12 @@ func registerAgentRoutes(mux *http.ServeMux) {
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			configPath := str(body["config"])
-			if configPath == "" {
-				http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
-				return
-			}
 			m, _ := body["agent"].(map[string]any)
-			cfg, err := readManjuConfig(configPath)
-			if err != nil {
-				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
-				return
-			}
-			A, _ := cfg["agent"].(map[string]any)
-			if A == nil {
-				A = map[string]any{}
-			}
-			if m != nil {
+			// 表单值 → agent 节(非空覆盖;全局分支用同一套提取,不依赖项目 config)
+			fillAgentFields := func(A map[string]any) {
+				if m == nil {
+					return
+				}
 				if b, ok := m["enabled"].(bool); ok {
 					A["enabled"] = b
 				}
@@ -1663,11 +1659,14 @@ func registerAgentRoutes(mux *http.ServeMux) {
 				}
 			}
 			if str(body["global"]) == "true" {
-				// 另存为全局默认:写 settings.json 的 agent 节(Key 加密存储),并刷新内存默认
+				// 另存为全局默认:写 settings.json 的 agent 节(Key 加密存储),并刷新内存默认。
+				// 不依赖项目 config——项目目录缺失/未创建时也能另存为全局默认(之前会 400,导致"全局默认是摆设")
 				if manjuSettingsStore == nil {
 					http.Error(w, `{"error":"全局设置存储不可用"}`, http.StatusInternalServerError)
 					return
 				}
+				A := map[string]any{}
+				fillAgentFields(A)
 				g, err := manjuSettingsStore.Load()
 				if err != nil {
 					http.Error(w, `{"error":"读取全局设置失败: `+err.Error()+`"}`, http.StatusInternalServerError)
@@ -1699,6 +1698,20 @@ func registerAgentRoutes(mux *http.ServeMux) {
 				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "global": true})
 				return
 			}
+			if configPath == "" {
+				http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+				return
+			}
+			cfg, err := readManjuConfig(configPath)
+			if err != nil {
+				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+				return
+			}
+			A, _ := cfg["agent"].(map[string]any)
+			if A == nil {
+				A = map[string]any{}
+			}
+			fillAgentFields(A)
 			cfg["agent"] = A
 			if err := writeManjuConfig(configPath, cfg); err != nil {
 				http.Error(w, `{"error":"保存失败: `+err.Error()+`"}`, http.StatusInternalServerError)

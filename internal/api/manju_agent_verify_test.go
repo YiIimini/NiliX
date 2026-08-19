@@ -517,3 +517,43 @@ func TestAgentMemorySummary(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentSettingsProjectMissing 项目目录缺失时:GET agent 仍返回全局默认(不空白),另存为全局默认不依赖项目 config
+func TestAgentSettingsProjectMissing(t *testing.T) {
+	store := config.NewStore(filepath.Join(t.TempDir(), "settings.json"))
+	SetManjuSettingsStore(store)
+	defer SetManjuSettingsStore(nil)
+	missing := filepath.Join(manjuRoot, "zz_missing_proj", "config.json")
+	// GET:项目缺失 → projectMissing + globalDefaults 齐全
+	w, out := doReq(t, "GET", "/api/manju/agent?config="+filepath.ToSlash(missing), nil)
+	if w.Code != 200 {
+		t.Fatalf("项目缺失 GET agent HTTP %d", w.Code)
+	}
+	if out["projectMissing"] != true {
+		t.Errorf("应标记 projectMissing: %v", out)
+	}
+	gd, ok := out["globalDefaults"].(map[string]any)
+	if !ok || gd["visionModel"] == nil {
+		t.Errorf("项目缺失应返回 globalDefaults: %v", out)
+	}
+	// POST:另存为全局默认(项目不存在)应成功,并写入 settings.json agent 节
+	w2, out2 := doReq(t, "POST", "/api/manju/agent/settings", map[string]any{
+		"config": filepath.ToSlash(missing), "global": "true",
+		"agent": map[string]any{"enabled": true, "vision_model": "glm-4.6v-flash", "pass_score": 80},
+	})
+	if w2.Code != 200 || out2["global"] != true {
+		t.Fatalf("项目缺失另存为全局默认应成功, HTTP %d %s", w2.Code, w2.Body.String())
+	}
+	if manjuGlobalAgent.VisionModel != "glm-4.6v-flash" || manjuGlobalAgent.PassScore != 80 {
+		t.Errorf("全局默认未刷新: %+v", manjuGlobalAgent)
+	}
+	// 保存后 GET(项目仍缺失)应回填刚存的全局默认
+	w3, out3 := doReq(t, "GET", "/api/manju/agent?config="+filepath.ToSlash(missing), nil)
+	if w3.Code != 200 {
+		t.Fatalf("HTTP %d", w3.Code)
+	}
+	gd3, _ := out3["globalDefaults"].(map[string]any)
+	if gd3["visionModel"] != "glm-4.6v-flash" {
+		t.Errorf("保存后全局默认未回填: %v", out3)
+	}
+}

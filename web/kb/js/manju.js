@@ -689,28 +689,35 @@
 
               <div class="manju-set-sub">👁 视觉模型 · 审片官（未配置时仅机械质检，不判分不返工）</div>
               ${(() => {
-                const presetHit = VISION_PRESETS.find((p) => p.id === (ag.visionModel || ""));
-                const isCustom = ag.visionModel && !presetHit;
+                const gd = ag.globalDefaults || {};
+                // 项目缺失(config 不存在):视觉区回显全局默认(项目未配置时本就自动用全局),避免整块空白
+                const projMissing = !!ag.projectMissing;
+                const vModel = ag.visionModel || (projMissing ? gd.visionModel : "") || "";
+                const vUrl = ag.visionBaseUrl || (projMissing ? gd.visionBaseUrl : "") || "";
+                const vHasKey = ag.hasVisionKey || (projMissing ? !!gd.hasVisionKey : false);
+                const presetHit = VISION_PRESETS.find((p) => p.id === vModel);
+                const isCustom = vModel && !presetHit;
                 return `
+              ${projMissing ? '<div class="manju-set-status st-bad">⚠️ 项目 config 不存在（目录已删除/未创建），以下展示<b>全局默认</b>配置，重建项目后自动生效</div>' : ""}
               <div class="manju-field-row">
                 <label>模型</label>
                 <select id="manju-ag-model" class="manju-input">
-                  <option value="" ${ag.visionModel ? "" : "selected"}>请选择视觉模型…</option>
+                  <option value="" ${vModel ? "" : "selected"}>请选择视觉模型…</option>
                   ${VISION_PRESETS.map((p) => `<option value="${p.id}" ${presetHit && presetHit.id === p.id ? "selected" : ""}>${p.label}</option>`).join("")}
                   <option value="__custom__" ${isCustom ? "selected" : ""}>自定义…</option>
                 </select>
               </div>
               <div class="manju-field-row" id="manju-ag-model-custom-row" ${isCustom ? "" : 'style="display:none"'}>
                 <label>模型 ID</label>
-                <input id="manju-ag-model-custom" class="manju-input manju-mono" value="${esc(isCustom ? ag.visionModel : "")}" placeholder="模型 ID,支持逗号降级链如 glm-4.6v-flash,glm-4v-flash" spellcheck="false" title="主模型 429 过载时按 4/10/20s 退避重试,耗尽自动降级备模型继续判分;单模型自动补内置链(智谱免费档)">
+                <input id="manju-ag-model-custom" class="manju-input manju-mono" value="${esc(isCustom ? vModel : "")}" placeholder="模型 ID,支持逗号降级链如 glm-4.6v-flash,glm-4v-flash" spellcheck="false" title="主模型 429 过载时按 4/10/20s 退避重试,耗尽自动降级备模型继续判分;单模型自动补内置链(智谱免费档)">
               </div>
               <div class="manju-field-row" id="manju-ag-url-row" ${isCustom ? "" : 'style="display:none"'}>
                 <label>API 地址</label>
-                <input id="manju-ag-url" class="manju-input manju-mono" value="${esc(ag.visionBaseUrl || "")}" placeholder="OpenAI 兼容地址，如 https://open.bigmodel.cn/api/paas/v4" spellcheck="false">
+                <input id="manju-ag-url" class="manju-input manju-mono" value="${esc(vUrl)}" placeholder="OpenAI 兼容地址，如 https://open.bigmodel.cn/api/paas/v4" spellcheck="false">
               </div>
               <div class="manju-field-row">
                 <label>API Key</label>
-                <input id="manju-ag-key" class="manju-input manju-mono" type="password" placeholder="${ag.hasVisionKey ? "已保存(" + esc(ag.visionKeyMasked || "") + ")，留空沿用" : "粘贴所选模型对应平台的 API Key"}" spellcheck="false" autocomplete="off">
+                <input id="manju-ag-key" class="manju-input manju-mono" type="password" placeholder="${vHasKey ? (projMissing ? "全局默认已存 Key，留空沿用" : "已保存(" + esc(ag.visionKeyMasked || "") + ")，留空沿用") : "粘贴所选模型对应平台的 API Key"}" spellcheck="false" autocomplete="off">
               </div>
               <div class="manju-set-status" id="manju-ag-key-hint"></div>`;
               })()}
