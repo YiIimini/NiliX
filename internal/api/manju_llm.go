@@ -397,7 +397,7 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
     {
       "shot_id": 1,
       "scene": "场景id",
-      "characters": ["角色id"],
+      "characters": ["角色id(该镜实际登场的全部角色:说话人+同时出镜者,缺一不可;未列出的角色一律不得入画)"],
       "shot_size": "特写/近景/中景/全景/远景",
       "camera": "运镜（类型+幅度+速度，如：缓慢推近）",
       "action": "画面动作描述",
@@ -407,7 +407,11 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
     }
   ]
 }
-【时长硬约束】duration 由台词/动作量决定:中文台词约 4 字/秒(20 字台词≈5 秒;60 字≈12 秒),台词长于时长容纳量必须加时长(4-15)或拆镜;旁白同速折算。台词被截断=废镜。`
+【时长硬约束】duration 由台词/动作量决定:中文台词约 4 字/秒(20 字台词≈5 秒;60 字≈12 秒),台词长于时长容纳量必须加时长(4-15)或拆镜;旁白同速折算。台词被截断=废镜。
+【分镜纪律·强制】:
+- shots[].characters 必须列全该镜实际在场的全部角色(说话人+同时出镜者,缺一不可);未列出的角色(长老/弟子/路人/群众)一律不得入画,如需氛围只允许无面部细节的远景虚化
+- 有台词的说话人必须是该镜的视觉中心主体(景别/机位优先对准说话人),其他登场角色不得遮挡或抢占画面中心
+- 同一角色在整集所有镜头中形象必须完全一致(外观/服装逐字复用其 characters 卡,禁止同角色换装/换写法)`
 	if kbChar != "" {
 		s += "\n\n【知识库角色模板参考（仅作设定参考，贴合本剧）】\n" + kbChar
 	}
@@ -430,6 +434,7 @@ const manjuRef2vaTpl = `【Ref2VA 六段式(有角色,锁人物),严格此顺序
 subject_definitions:
 <Subject 1> is the character in <Picture 1> with [完整外观：逐字引用角色卡 appearance；服装 costume 全字段；【性别强化】女=feminine facial structure, soft delicate features, long hair（禁男性化），男=masculine jawline, strong brow, broad shoulders（禁女性化）]
 [多角色镜:每个登场角色一行 <Subject N> is the character in <Picture N>…,与参考图顺序一致(角色在前场景在后);画面里谁先出现谁 Subject 号靠前]
+[参考图纪律·强制:只有输入中 ref_available 名单里的角色才写 in <Picture N>;名单外的登场角色(本镜参考图不足)写 <Subject N> is [角色名] with 外观描述(不引用任何 Picture),并保持与参考角色不串脸]
 <Subject N+1> is the [场景名] environment in <Picture N+1>, with [空间结构/材质/光线客观描述，引用场景卡]
 [关键道具：<Subject M> is the [道具名] in <Picture M>, with 外观描述；说明与角色互动]
 
@@ -473,7 +478,9 @@ const manjuShotWritingRules = `
 7. 排除项/可见文字用英文双引号原文；H3 为 CFG-distilled 无负面词，禁堆叠负面词。
    输入中的 negative_prompt(用户负面提示词)必须逐概念转译为正面排除句,合并写入 detailed_description 末尾散文(如 bad hands→no distorted hands;text→no text overlays, no watermark;flickering→no flickering frames);语义与既有排除项重复的合并,不重复罗列
 8. 画面禁情绪化形容词（只写机位/光影/动作/构图），音效只写现场声，BGM 只写乐器与节奏
-9. 输入中的 known_issues 是本项目历史高频审片问题:针对每个问题在 detailed_description 写一句正面规避描述(如 面部扭曲→face and hands anatomy must be natural and well-formed;近黑帧→主体带明确光源;水印文字→clean frame, no text overlays),不堆负面词不逐字罗列`
+9. 输入中的 known_issues 是本项目历史高频审片问题:针对每个问题在 detailed_description 写一句正面规避描述(如 面部扭曲→face and hands anatomy must be natural and well-formed;近黑帧→主体带明确光源;水印文字→clean frame, no text overlays),不堆负面词不逐字罗列
+10. 【角色纪律·强制】画面中只允许出现该镜 characters 列出的登场角色;未列出的角色(长老/弟子/路人/群众)一律不得入画——如需氛围只能以无面部细节的远景剪影/虚化背景出现,禁止特写/近景/中心构图
+11. 【主角中心·强制】说话人/动作主角必须是该镜的视觉中心主体(居中/近景/构图优先),其他登场角色不得抢占画面中心或遮挡主角;主角形象与其参考图完全一致(face, hairstyle, costume)`
 
 func manjuShotPromptSystem(hasChar bool, style string) string {
 	sys := "你是 MiniMax H3 视频生成模型的提示词专家。基于给定镜头的分镜信息与角色/场景卡，直出该镜【完整】H3 提示词（英文主体、中文台词/旁白原文）。\n\n输出严格 JSON：{\"h3_prompt\": \"提示词全文\"}\n\n"

@@ -1202,6 +1202,7 @@ func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map
 		"shot": shotObj, "characters": chars, "scene": sceneMap[s.Scene],
 		"negative_prompt": ctx.negPrompt(),
 		"known_issues":    topAgentIssues(ctx.project, 3),
+		"ref_available":   ctx.shotRefRoles(s),
 	}
 	// 多切点长镜:附加规范 + 组内各镜字段与切点时间(take_shots 供 LLM 直引,不必自算)
 	if len(s.TakeGroup) > 1 {
@@ -1643,6 +1644,27 @@ func (ctx *manjuCtx) selectedShots(shots []manjuShot) []manjuShot {
 		if all || sel[s.ID] {
 			out = append(out, s)
 		}
+	}
+	return out
+}
+
+// shotRefRoles 该镜实际有参考图的登场角色(顺序=characters 顺序,≤3 与 charRefNames 同限):
+// 供逐镜提示词生成判断哪些角色可写 <Picture N> 引用——名单外的登场角色只写外观描述,
+// 防止 Subject 引用不存在的参考图导致 H3 自由发挥出"无参考角色"喧宾夺主。
+func (ctx *manjuCtx) shotRefRoles(s manjuShot) []string {
+	var out []string
+	for i, cid := range s.Characters {
+		if i >= 3 {
+			break
+		}
+		rel := "characters/" + cid + "_face.png"
+		if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
+			rel = "characters/" + cid + ".png"
+			if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
+				continue
+			}
+		}
+		out = append(out, cid)
 	}
 	return out
 }
