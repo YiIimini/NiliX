@@ -497,12 +497,117 @@ const App = {
     }
   },
 
-  /* 点击助手:由气泡展开/收起对话窗口;Esc 或闲置(设置可配)自动收起 */
+  /* 对话框跟随小助手:吸回模式(默认)实时锚定助手身边——上方优先,顶部空间不足转下方,
+     全程出视口则贴边;助手被拖走/漫步时 150ms 跟随循环保持吸附 */
+  aiChatSync() {
+    const box = document.getElementById("ai-chat-box");
+    const m = document.getElementById("ai-mascot");
+    if (!box || !m || box.classList.contains("hidden") || this._aiChatFree) return;
+    const mr = m.getBoundingClientRect();
+    const bw = box.offsetWidth, bh = box.offsetHeight;
+    let x = mr.left + mr.width / 2 - bw / 2;
+    x = Math.max(8, Math.min(innerWidth - bw - 8, x));
+    let y = mr.top - bh - 14;
+    if (y < 56) y = mr.bottom + 14;
+    y = Math.max(56, Math.min(innerHeight - bh - 8, y));
+    box.style.transform = "none";
+    box.style.left = Math.round(x) + "px";
+    box.style.top = Math.round(y) + "px";
+  },
+  aiChatFollowStart() {
+    clearInterval(this._aiChatFollowT);
+    this._aiChatFollowT = setInterval(() => {
+      const box = document.getElementById("ai-chat-box");
+      if (!box || box.classList.contains("hidden") || this._aiChatFree) {
+        clearInterval(this._aiChatFollowT);
+        this._aiChatFollowT = null;
+        return;
+      }
+      this.aiChatSync();
+    }, 150);
+  },
+  /* 对话框自由拖动:按住标题栏拖离助手即自由定位(localStorage 记忆),📌 吸回恢复跟随 */
+  bindAiChatDrag() {
+    if (this._aiChatDragBound) return;
+    this._aiChatDragBound = true;
+    const box = document.getElementById("ai-chat-box");
+    const head = document.getElementById("ai-chat-head");
+    if (!box || !head) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem("kbw-ai-chat-pos") || "null");
+      if (saved && saved.free) {
+        this._aiChatFree = true;
+        box.style.transform = "none";
+        box.style.left = saved.x + "px";
+        box.style.top = saved.y + "px";
+      }
+    } catch (e) {}
+    this.aiChatDockUI();
+    let sx = 0, sy = 0, ox = 0, oy = 0, down = false, moved = false;
+    head.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button")) return; // 按钮点击不触发拖动
+      down = true; moved = false; sx = e.clientX; sy = e.clientY;
+      const b = box.getBoundingClientRect(); ox = b.left; oy = b.top;
+      try { head.setPointerCapture(e.pointerId); } catch (err) {}
+      head.classList.add("dragging");
+      e.preventDefault();
+    });
+    head.addEventListener("pointermove", (e) => {
+      if (!down) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+      if (!moved) return;
+      const bw = box.offsetWidth;
+      const x = Math.max(8, Math.min(innerWidth - bw - 8, ox + dx));
+      const y = Math.max(56, Math.min(innerHeight - 40, oy + dy));
+      box.style.transform = "none";
+      box.style.left = x + "px"; box.style.top = y + "px";
+      this._aiChatFree = true;
+      try { localStorage.setItem("kbw-ai-chat-pos", JSON.stringify({ free: true, x: Math.round(x), y: Math.round(y) })); } catch (err) {}
+      this.aiChatDockUI();
+    });
+    const up = () => {
+      if (!down) return;
+      down = false;
+      head.classList.remove("dragging");
+    };
+    head.addEventListener("pointerup", up);
+    head.addEventListener("pointercancel", up);
+    const dock = document.getElementById("ai-chat-dock");
+    if (dock) dock.addEventListener("click", () => {
+      this._aiChatFree = false;
+      try { localStorage.setItem("kbw-ai-chat-pos", JSON.stringify({ free: false })); } catch (err) {}
+      this.aiChatDockUI();
+      this.aiChatSync();
+      this.aiChatFollowStart();
+    });
+    const close = document.getElementById("ai-chat-close");
+    if (close) close.addEventListener("click", () => box.classList.add("hidden"));
+    window.addEventListener("resize", () => {
+      if (!this._aiChatFree) { this.aiChatSync(); return; }
+      const bw = box.offsetWidth;
+      const x = Math.max(8, Math.min(innerWidth - bw - 8, parseFloat(box.style.left) || 0));
+      const y = Math.max(56, Math.min(innerHeight - 40, parseFloat(box.style.top) || 56));
+      box.style.left = x + "px"; box.style.top = y + "px";
+    });
+  },
+  aiChatDockUI() {
+    const dock = document.getElementById("ai-chat-dock");
+    if (dock) dock.classList.toggle("on", !this._aiChatFree);
+    const box = document.getElementById("ai-chat-box");
+    if (box) box.classList.toggle("free", !!this._aiChatFree);
+  },
+
+  /* 点击助手:由气泡展开/收起对话窗口;Esc 或闲置(设置可配)自动收起;
+     打开即吸到助手身边并启动跟随循环(自由模式下保持记忆位置) */
   toggleAiChat() {
     const box = document.getElementById("ai-chat-box");
     if (!box) return;
     const open = box.classList.toggle("hidden") === false;
     if (open) {
+      this.bindAiChatDrag();
+      this.aiChatSync();
+      this.aiChatFollowStart();
       const inp = document.getElementById("ai-chat-input");
       if (inp) inp.focus();
     }
