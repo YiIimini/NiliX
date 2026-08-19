@@ -1054,7 +1054,15 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	configPath := str(body["config"])
-	chapters := orDefault(str(body["chapters"]), "1-3")
+	chapters := str(body["chapters"])
+	// 章节 0(默认)= 解析小说总章数作为实际值(全书范围,如 1-56)
+	if chapters == "" || chapters == "0" {
+		if n := manjuChapterTotal(configPath); n > 0 {
+			chapters = fmt.Sprintf("1-%d", n)
+		} else {
+			chapters = "1-3" // 兜底:小说不可读时用默认范围
+		}
+	}
 	episode := str(body["episode"])
 	phase := str(body["phase"])
 	// 集数语义:纯数字 N>0 → 第 N 集(第 N 章,EPxx);0 → 按章节数自动分集(每章一集);
@@ -1152,7 +1160,7 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	// 集数 0 = 每章一集(第 N 章 = 第 N 集);否则沿用 按卷/字数打包 的自动分集
 	autoEps, aerr := manjuAutoEpisodes(ctx, chapters)
 	if autoByChapter {
-		autoEps = manjuChapterEpisodes(ctx)
+		autoEps = manjuChapterEpisodes(ctx, chapters) // 章节 0 已解析为 1-总章数;具体范围(如 1-10)则范围内每章一集
 		if len(autoEps) == 0 {
 			autoEps, aerr = manjuAutoEpisodes(ctx, chapters) // 保底:无章节结构回退打包
 		}

@@ -450,7 +450,7 @@ func TestManjuChapterEpisodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	segs := manjuChapterEpisodes(ctx)
+	segs := manjuChapterEpisodes(ctx, "1-999")
 	if len(segs) != 3 {
 		t.Fatalf("应每章一集共 3 集: %v", segs)
 	}
@@ -493,5 +493,64 @@ func TestManjuSaveRenderEpisode(t *testing.T) {
 	R2, _ := cfg2["render"].(map[string]any)
 	if _, ok := R2["episode"]; ok {
 		t.Errorf("集数 0 应删除 episode: %v", R2["episode"])
+	}
+}
+
+// TestManjuChapterTotal 章节 0 默认值:从 config 小说文件解析总章数
+func TestManjuChapterTotal(t *testing.T) {
+	proj := "zz_ch_total_test"
+	dir := filepath.Join(manjuRoot, proj)
+	_ = os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+	_ = os.MkdirAll(dir, 0755)
+	novel := filepath.Join(dir, "book.md")
+	_ = os.WriteFile(novel, []byte("# 第1章 a\n# 第2章 b\n# 第3章 c\n# 第4章 d\n# 第5章 e\n"), 0644)
+	cfgPath := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(cfgPath, []byte(`{"paths":{"novel":"`+filepath.ToSlash(novel)+`"}}`), 0644)
+	if n := manjuChapterTotal(cfgPath); n != 5 {
+		t.Fatalf("总章数应 5: %d", n)
+	}
+}
+
+// TestManjuChapterEpisodesRange 每章一集 + 章节范围过滤:1-2 → 只生成前 2 章两集
+func TestManjuChapterEpisodesRange(t *testing.T) {
+	proj := "zz_ep_range_test"
+	dir := filepath.Join(manjuRoot, proj)
+	_ = os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+	_ = os.MkdirAll(dir, 0755)
+	novel := filepath.Join(dir, "book.md")
+	_ = os.WriteFile(novel, []byte("# 第1章 a\n# 第2章 b\n# 第3章 c\n# 第4章 d\n"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"paths":{"novel":"`+filepath.ToSlash(novel)+`","workdir":"`+filepath.ToSlash(dir)+`"}}`), 0644)
+	ctx, _ := newManjuCtx(filepath.Join(dir, "config.json"), "0", "1-2", "", "")
+	segs := manjuChapterEpisodes(ctx, "1-2")
+	if len(segs) != 2 || segs[0].Episode != "EP01" || segs[0].Chapters != "1-1" || segs[1].Chapters != "2-2" {
+		t.Fatalf("范围 1-2 应生成 EP01/1-1、EP02/2-2: %v", segs)
+	}
+	// 全书(章节 0 已解析 1-N):全部 4 集
+	segsAll := manjuChapterEpisodes(ctx, "1-4")
+	if len(segsAll) != 4 {
+		t.Fatalf("全书应 4 集: %v", segsAll)
+	}
+	// 全本(1-999):不过滤
+	segsFull := manjuChapterEpisodes(ctx, "1-999")
+	if len(segsFull) != 4 {
+		t.Fatalf("全本应 4 集: %v", segsFull)
+	}
+}
+
+// TestParseChapterRange 范围解析
+func TestParseChapterRange(t *testing.T) {
+	if lo, hi, ok := parseChapterRange("1-56"); !ok || lo != 1 || hi != 56 {
+		t.Fatalf("1-56 解析异常: %d %d %v", lo, hi, ok)
+	}
+	if _, _, ok := parseChapterRange("1-999"); ok {
+		t.Fatalf("全本应不过滤")
+	}
+	if _, _, ok := parseChapterRange("0"); ok {
+		t.Fatalf("0 应不过滤")
+	}
+	if _, _, ok := parseChapterRange("abc"); ok {
+		t.Fatalf("非法应不过滤")
 	}
 }

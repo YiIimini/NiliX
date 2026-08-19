@@ -81,7 +81,7 @@
       "2. 顶部选择<b>项目</b>（自动扫描 manju 目录）",
       "3. <b>小说来源</b>：默认带出项目配置的小说；点「选择文件」换任意小说（运行时覆盖，不改配置）",
       "4. <b>角色管理</b>：在「渲染配置」里点「角色管理」按钮，抽卡/采纳生成定妆照",
-      "5. 填<b>章节</b>（全书编号范围,如 1-56）与<b>集数</b>：0=每章一集自动全渲染；N=只渲染第 N 集(第 N 章,章节框仅作范围标识不参与渲染范围)",
+      "5. <b>章节</b>默认 0=解析小说总章数(可改具体范围)；<b>集数</b>默认 0=按总章数每章一集全渲染；集数 N>0 只渲染第 N 集(第 N 章)",
       "6. 一条龙 = 方案→资产→编码→渲染→质检→合成；中断/失败后,右侧栏状态区出现<b>黄色提示条</b>(上次中断于 X 阶段),点<b>▶ 续跑</b>一键恢复(幂等跳过已完成)",
     ] },
     { ic: "🎭", t: "角色管理", ps: [
@@ -155,7 +155,7 @@
       "引擎已内置亮度护栏与运镜规范，无需手写",
     ] },
     { ic: "📚", t: "整本小说 → 多集", ps: [
-      "「全本」把章节范围设为 1-999，引擎自动分段分集，无需手动换集号；<b>集数填 0</b> = 按小说章节数计算（每章一集，第 N 章 = 第 N 集），自动全渲染",
+      "章节与集数<b>默认都是 0</b>：0=解析小说总章数作为实际值——章节 0 → 全书范围，集数 0 → 每章一集全渲染（第 N 章 = 第 N 集）；也可章节填具体范围(如 1-10)限定，集数填 N 只渲染第 N 集；「全本」仍可用（1-999）",
       "<b>按卷分集</b>：小说目录为「正文/卷一_标题/…」卷结构时（如吞天废子），每卷自动一集（EP01=卷一、EP02=卷二…）",
       "无卷结构时按内容量分段（每集约 1.8 万字，约 2-3 章）",
       "分段为确定性规则：同一本小说每次全本运行的分集完全一致，可安全续跑；已完成的集自动跳过",
@@ -248,7 +248,7 @@
     project: "",
     info: null,
     style: "2.5d",
-    chapters: "", episode: "", only: "", novel: "",
+    chapters: "0", episode: "0", only: "", novel: "",
     _novelProject: "", // 当前小说来源所属的项目,切项目时据此回填该项目的默认小说
     novelInfo: null,
     status: { running: false, stage: "", rc: null, elapsedSec: 0 },
@@ -264,7 +264,7 @@
 
     enter() {
       this.bind();
-      this.chapters = ls("chapters") || "1-3";
+      this.chapters = ls("chapters") || "0"; // 章节 0=按小说总章数
       this.episode = ls("episode") || "0"; // 集数:0=按章节数自动,1=第1集...
       this.only = ls("only");
       this.novel = ls("novel");
@@ -1267,6 +1267,8 @@
       num("manju-minsec", R.min_shot_seconds);
       num("manju-maxsec", R.max_shot_seconds);
       num("manju-take", R.shots_per_take != null && R.shots_per_take !== "" ? R.shots_per_take : 1);
+      // 章节回填:config 存的是解析后的范围(如 1-56),为空/默认 → 显示 0
+      set("manju-chapters", R.chapters && R.chapters !== "1-3" ? R.chapters : "0");
       // 集数回填:config 存 EPxx,显示为整数(1=EP01);无/自动 → 0
       const epR = R.episode || "";
       const epM = String(epR).match(/^EP0*(\d+)$/i);

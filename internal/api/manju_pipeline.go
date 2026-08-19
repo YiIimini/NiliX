@@ -654,18 +654,70 @@ func (ctx *manjuCtx) chapterEntries() ([]struct{ n, chars int }, error) {
 	return out, nil
 }
 
-// manjuChapterEpisodes 集数=0 的自动模式:按小说章节数计算——每章一集(第 N 章 = 第 N 集)。
+// manjuChapterTotal 小说总章数(章节 0 默认值解析:从 config 读小说文件统计 # 第N章)
+func manjuChapterTotal(configPath string) int {
+	cfg, err := readManjuConfig(configPath)
+	if err != nil {
+		return 0
+	}
+	P, _ := cfg["paths"].(map[string]any)
+	novel := str(P["novel"])
+	if novel == "" || !fileExists(novel) {
+		return 0
+	}
+	data, err := os.ReadFile(novel)
+	if err != nil {
+		return 0
+	}
+	return len(allChapterNums(string(data)))
+}
+
+// manjuChapterEpisodes 集数=0 的自动模式:按章节数计算——每章一集(第 N 章 = 第 N 集)。
+// chapters 范围:章节 0 已解析为 1-总章数(全部);具体范围(如 1-10)则只生成范围内每章一集。
 // 与 manjuAutoEpisodes(按卷/字数打包)并存:集数 0 优先每章一集,保底回退自动打包。
-func manjuChapterEpisodes(ctx *manjuCtx) []manjuEpSeg {
+func manjuChapterEpisodes(ctx *manjuCtx, chapters string) []manjuEpSeg {
 	chs, err := ctx.chapterEntries()
 	if err != nil || len(chs) == 0 {
 		return nil
+	}
+	// 范围过滤:解析 a-b(非全本)时只保留章节号在 [a,b] 的条目
+	if lo, hi, ok := parseChapterRange(chapters); ok {
+		var filtered []struct{ n, chars int }
+		for _, c := range chs {
+			if c.n >= lo && c.n <= hi {
+				filtered = append(filtered, c)
+			}
+		}
+		if len(filtered) > 0 {
+			chs = filtered
+		}
 	}
 	out := make([]manjuEpSeg, 0, len(chs))
 	for i, c := range chs {
 		out = append(out, manjuEpSeg{Episode: fmt.Sprintf("EP%02d", i+1), Chapters: fmt.Sprintf("%d-%d", c.n, c.n)})
 	}
 	return out
+}
+
+// parseChapterRange 解析 "a-b" 章节范围(返回 lo,hi,ok);"1-999"/全本或空返回 !ok
+func parseChapterRange(s string) (int, int, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, 0, false
+	}
+	i := strings.Index(s, "-")
+	if i <= 0 {
+		return 0, 0, false
+	}
+	a, err1 := strconv.Atoi(strings.TrimSpace(s[:i]))
+	b, err2 := strconv.Atoi(strings.TrimSpace(s[i+1:]))
+	if err1 != nil || err2 != nil || a <= 0 || b < a {
+		return 0, 0, false
+	}
+	if b > 900 { // 全本:不过滤
+		return 0, 0, false
+	}
+	return a, b, true
 }
 
 // manjuAutoEpisodes 全本时自动分段分集:
