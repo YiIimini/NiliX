@@ -391,8 +391,7 @@ func main() {
 	if _, rerr := rand.Read(tok); rerr == nil {
 		api.SetSessionToken(hex.EncodeToString(tok))
 	}
-	api.SetFSRoots(*kbRoot, `C:\Mi\Ai\WorkBench
-ovel`, cfg.Paths.ComfyInput, cfg.Paths.ComfyOutput)
+	api.SetFSRoots(*kbRoot, `C:\Mi\Ai\WorkBench\novel`, cfg.Paths.ComfyInput, cfg.Paths.ComfyOutput)
 	srv := api.NewServer(store, cfg, []byte(indexHTML), renderMgr, sysmonCol, kbStore, *kbRoot, kbSub, islandSub, outDir)
 	addr := "127.0.0.1:" + *port
 	url := "http://" + addr
