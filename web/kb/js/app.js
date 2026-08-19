@@ -821,7 +821,8 @@ const App = {
     const a = s.agent || {};
     const bits = [];
     if (s.running) {
-      const st = s.stage || "处理中";
+      const sn = { env: "项目体检", plan: "方案", assets: "资产", encode: "编码", render: "渲染", qc: "质检", assemble: "合成", upscale: "云端 2K" };
+      const st = sn[s.stage || s.currentStage] || s.stage || s.currentStage || "处理中";
       const n = s.shotTotal ? " (" + s.shotCur + "/" + s.shotTotal + ")" : "";
       const t = s.elapsedSec ? " · " + (s.elapsedSec >= 60 ? Math.floor(s.elapsedSec / 60) + "分" + (s.elapsedSec % 60) + "秒" : s.elapsedSec + "秒") : "";
       bits.push(st + n + t);

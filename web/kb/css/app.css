@@ -2600,6 +2600,27 @@ body.view-dir-active .top-search { display: none; }
   flex-shrink: 0;
 }
 .manju-side-title { font-size: 13px; font-weight: 700; letter-spacing: 2px; color: var(--text); }
+/* 运行状态卡系统监测行:CPU/内存/GPU 三项对称排列(每 2 秒刷新) */
+.manju-sysmon {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 0;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--panel-border);
+  background: color-mix(in srgb, var(--muted) 4%, transparent);
+}
+.manju-sysmon .ms-it {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 0 6px;
+  border-left: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent);
+  min-width: 0;
+}
+.manju-sysmon .ms-it:first-child { border-left: none; }
+.manju-sysmon .ms-it i { font-style: normal; font-size: 9.5px; color: var(--muted); letter-spacing: 1px; }
+.manju-sysmon .ms-it b {
+  font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--text); white-space: nowrap;
+}
+.manju-sysmon .ms-it b.hot { color: #fbbf24; }
+.manju-sysmon .ms-it b.crit { color: #f87171; }
 /* 收起态:保持网格占位(列宽 0),去掉边框阴影,内容 overflow 隐藏;不能用 display:none(会导致网格项前移错位) */
 .manju-side.collapsed { border: none; box-shadow: none; background: transparent; }
 /* 收起/展开按钮:贴 manju-body 最外缘(左按钮贴左缘、右按钮贴右缘),在侧栏之外 */

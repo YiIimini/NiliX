@@ -327,6 +327,7 @@ func manjuAgentPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
 			lg.logf("⏹ 任务已被手动停止。已完成产物保留,可直接再点同按钮续跑。")
 			return 0
 		}
+		manjuSetStage(st) // 实时阶段推进:运行状态/气泡显示当前步骤(agent 模式同)
 		lg.logStage(st)
 		var err error
 		switch st {

@@ -297,6 +297,7 @@ func manjuPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
 			lg.logf("⏹ 任务已被手动停止。已完成产物保留,可直接再点同按钮续跑。")
 			return 0
 		}
+		manjuSetStage(st) // 实时阶段推进:运行状态/气泡显示当前步骤(此前启动后恒为 all)
 		lg.logStage(st)
 		var err error
 		switch st {
@@ -319,6 +320,13 @@ func manjuPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
 		}
 	}
 	return 0
+}
+
+// manjuSetStage 推进实时阶段(内存状态;前端运行状态/气泡据此显示当前步骤)
+func manjuSetStage(st string) {
+	manjuState.mu.Lock()
+	manjuState.stage = st
+	manjuState.mu.Unlock()
 }
 
 // manjuFinish 收尾:更新内存/磁盘状态(项目目录 run_state.json) + 结束通知

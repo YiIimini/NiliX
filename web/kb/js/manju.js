@@ -2001,6 +2001,30 @@
         if (!s.running && s.done) this.refreshOutputs();
         this.reportMascot(s);
       }).catch(() => {});
+      this.pollSysmon();
+    },
+
+    /* 本机系统状态(CPU/内存/GPU):每轮轮询顺带刷新(2s),不单独起计时器 */
+    pollSysmon() {
+      const wrap = $("manju-sysmon");
+      if (!wrap) return;
+      get("/api/stats").then((r) => {
+        const c = r.cpu || {}, m = r.mem || {}, g = r.gpu || {};
+        const set = (k, v, cls) => {
+          const b = wrap.querySelector(`[data-k="${k}"] b`);
+          if (b) { b.textContent = v; b.className = cls || ""; }
+        };
+        const pct = (v) => (typeof v === "number" ? Math.round(v) + "%" : "--");
+        set("cpu", pct(c.usage), c.usage >= 90 ? "crit" : c.usage >= 70 ? "hot" : "");
+        set("mem", pct(m.percent), m.percent >= 90 ? "crit" : m.percent >= 75 ? "hot" : "");
+        set("gpu", g.present ? pct(g.usage) : "N/A", g.present ? (g.usage >= 95 ? "hot" : "") : "");
+      }).catch(() => {});
+    },
+
+    /* 阶段英文 key → 中文名(运行状态/气泡共用;日志时间轴另有局部表) */
+    stageCN(k) {
+      const map = { env: "项目体检", plan: "方案", assets: "资产", encode: "编码", render: "渲染", qc: "质检", assemble: "合成", upscale: "云端 2K" };
+      return map[k] || k || "准备";
     },
 
     /* 悬浮助手云朵:汇总逻辑统一在 App.mascotStatus */
@@ -2016,10 +2040,11 @@
       const log = $("manju-log");
 
       if (s.running) {
+        const stageName = this.stageCN(s.stage || s.currentStage || "");
         dot.className = "hrs-dot on";
-        txt.textContent = "运行中 · " + s.stage;
+        txt.textContent = "运行中 · " + stageName;
         badge.className = "manju-badge manju-badge-run";
-        badge.innerHTML = '<span class="manju-spinner"></span><span>' + s.stage + " 运行中 " + fmtTime(s.elapsedSec) + "</span>";
+        badge.innerHTML = '<span class="manju-spinner"></span><span>' + stageName + " 运行中 " + fmtTime(s.elapsedSec) + "</span>";
         stopBtn.disabled = false;
       } else {
         dot.className = "hrs-dot off";
