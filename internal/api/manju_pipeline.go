@@ -6,10 +6,12 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/md5"
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,6 +113,28 @@ func (ctx *manjuCtx) ensureComfyReady(lg *manjuLogger) error {
 	return fmt.Errorf("ComfyUI 启动后 120 秒内未就绪——请到灵动岛/ComfyUI 页查看启动日志,或手动启动后重试")
 }
 
+// freeComfyModels 释放 ComfyUI 已加载的模型显存(POST /free 卸载全部驻留模型)。
+// 场景:assets 阶段加载的 ZImage(7.6G)+Lumina2(11.7G) 常驻显存,而 H3 预编码需要加载
+// Qwen3-VL 32B(14.6G)——RTX 5090 24G 装不下两者,编码任务提交后 ComfyUI 加载阻塞
+// (显存不足),NiliX 侧 wait 挂起、GPU 无动静(本 BUG 根因)。编码前释放腾出显存。
+func (ctx *manjuCtx) freeComfyModels(lg *manjuLogger) {
+	body := bytes.NewBufferString(`{"unload_models": true, "free_memory": true}`)
+	req, err := http.NewRequest("POST", ctx.comfy.base+"/free", body)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := ctx.comfy.client.Do(req)
+	if err != nil {
+		lg.logf("  ⚠️ 释放 ComfyUI 显存失败(忽略,继续): " + truncate(err.Error(), 80))
+		return
+	}
+	defer resp.Body.Close()
+	// 释放后稍等模型卸载完成(大模型卸载需数秒)
+	time.Sleep(2 * time.Second)
+	lg.logf("  🧹 已释放 ComfyUI 模型显存(编码前腾出 Qwen3-VL 空间)")
+}
+
 func manjuToFloat(v any) (float64, bool) {
 	switch x := v.(type) {
 	case float64:
@@ -155,6 +179,25 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 		P = map[string]any{}
 	}
 	epEff := orDefault(episode, str(R["episode"]))
+	// ComfyUI 输入/输出目录:优先用「生效启动参数」(comfyParams.in/out,与 ComfyUI 实际
+	// 启动命令同步)——项目 config 里的 comfy_input/comfy_output 可能是旧路径(创建项目时
+	// 写入的硬编码 Desktop 共享目录),而 ComfyUI 现在按自包含目录启动,两处不一致时
+	// 任务"完成"但从错误目录读产物,报「open ... output\xxx.png: not found」。
+	// comfyParams 为空(未注入)时回退 config;config 也空则回退共享目录 output/input。
+	comfyOut := comfyParams.out
+	if comfyOut == "" {
+		comfyOut = str(P["comfy_output"])
+	}
+	if comfyOut == "" {
+		comfyOut = filepath.Join(ComfySharedDir, "output")
+	}
+	comfyIn := comfyParams.in
+	if comfyIn == "" {
+		comfyIn = str(P["comfy_input"])
+	}
+	if comfyIn == "" {
+		comfyIn = filepath.Join(ComfySharedDir, "input")
+	}
 	ctx := &manjuCtx{
 		configPath:   configPath,
 		cfg:          cfg,
@@ -166,8 +209,8 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 		chapters:     orDefault(chapters, str(R["chapters"])),
 		only:         only,
 		novel:        str(P["novel"]),
-		comfyOutput:  str(P["comfy_output"]),
-		comfyInput:   str(P["comfy_input"]),
+		comfyOutput:  comfyOut,
+		comfyInput:   comfyIn,
 		sharedModels: filepath.Join(ComfySharedDir, "models"),
 		workdir:      str(P["workdir"]),
 		qcRerender:   map[int]int{},
@@ -205,7 +248,17 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	}
 	ctx.llm = manjuLLMFromCfg(cfg)
 	ctx.llm.onUsage = func(model string, u agent.Usage) { manjuStatsAdd(ctx.project, model, u) }
+	// 停止感知:LLM 长请求(方案生成/提示词生成/审片判分)在用户点「停止」后立即放弃,
+	// 不再等 300s 超时——"停止无反应"的最后一个残留点
+	ctx.llm.SetStopped(func() bool {
+		manjuState.mu.Lock()
+		defer manjuState.mu.Unlock()
+		return manjuState.stopped
+	})
 	ctx.comfy = newComfyClient(str(R["comfy_url"]))
+	// 接缝 latent 命名空间(审计 S6):h3_context/<项目>_<集>/clip_NNNNN——此前 latent 只按镜头号
+	// 落 output/h3_context/ 全局共享,项目 B 定点重渲会接续项目 A 的画面;草稿/定稿分辨率也混用
+	ctx.R["_latent_ns"] = reNonWord.ReplaceAllString(ctx.project, "_") + "_" + reNonWord.ReplaceAllString(ctx.episode, "_")
 	if n, ok := manjuToInt(R["width"]); ok && n > 0 {
 		ctx.w = n
 	} else {
@@ -255,12 +308,24 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 			ctx.w, ctx.h = tw, th
 		}
 	}
+	// 手动/custom 宽高也强制 32 倍数(H3 VAE 32× 下采样网格;审计 S10——
+	// 此前未对齐直接进 EmptyMiniMaxH3LatentAV,非法尺寸 ComfyUI 400 或产出破损)
+	ctx.w, ctx.h = manjuAlign32(ctx.w), manjuAlign32(ctx.h)
 	ctx.draftScale = 0.5
 	if v, ok := manjuToFloat(R["draft_scale"]); ok && v >= 0.2 && v <= 0.95 {
 		ctx.draftScale = v
 	}
 	ctx.draftJudge, _ = R["draft_judge"].(bool)
 	return ctx, nil
+}
+
+// latentNS 接缝 latent 命名空间(审计 S6):<项目>_<集>,防跨项目/跨方案/草稿定稿分辨率串接
+func (ctx *manjuCtx) latentNS() string {
+	ns := strings.TrimSpace(str(ctx.R["_latent_ns"]))
+	if ns == "" {
+		return "default"
+	}
+	return ns
 }
 
 // seedFor 重试 seed 策略:fixed=恒定(跨镜一致基线);increment=第 N 次重试 seed+N;
@@ -380,6 +445,10 @@ func manjuPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
 			err = stageQC(ctx, lg)
 		case "assemble":
 			err = stageAssemble(ctx, lg)
+			if err == nil {
+				// 成片终检(与 agent 模式一致,报告性质不阻断):时长/黑屏/静音/音轨兜底
+				agentAssembleCheck(ctx, lg)
+			}
 		}
 		if err != nil {
 			lg.logf("❌ 阶段 " + st + " 失败: " + err.Error())
@@ -913,8 +982,8 @@ const manjuConciseSuffix = `
 
 【输出体积硬约束(前次输出被截断,本次必须精简)】:
 - characters 不超过 4 个、scenes 不超过 4 个、shots 不超过 16 个
-- appearance/costume/image_prompt 每项不超过 40 字,scene 的 description 不超过 30 字
-- 所有描述压缩到"可渲染"即可,禁止铺陈展开;整个 JSON 输出控制在 6000 tokens 以内`
+- appearance/costume/image_prompt 每项不超过 40 字;views 的 front/full/side/detail 每项不超过 45 个英文词,scene 的 description 不超过 30 字
+- 所有描述压缩到"可渲染"即可,禁止铺陈展开;整个 JSON 输出控制在 8000 tokens 以内`
 
 // ensurePlan 保证方案存在(有则复用,无则 LLM 直出),同时写 _characters.json(抽卡用)
 // 复用校验:方案记录了章节范围(plan.chapters)且与本次请求一致才复用;
@@ -1004,7 +1073,78 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 	scenes := len(anyArr(plan["scenes"]))
 	shots, _ := planShots(plan)
 	lg.logf(fmt.Sprintf("  ✅ %d 角色 / %d 场景 / %d 镜头", chars, scenes, len(shots)))
+	// 审计升级 P0:方案硬校验(角色卡完整性/时长-台词量/说话人纪律),不达标带意见修复重试一次——
+	// 此前只有 prompt 软约束,LLM 偶尔违规直接流到渲染烧 GPU
+	if probs := ctx.validatePlan(plan, shots); len(probs) > 0 {
+		lg.logf("  ⚠️ 方案硬校验未过(" + strconv.Itoa(len(probs)) + " 项),带意见修复重试...")
+		for _, p := range probs {
+			lg.logf("    - " + p)
+		}
+		fix := "【方案校验未过,逐条修正后重新输出完整方案】\n" + strings.Join(probs, "\n")
+		plan2, err2 := ctx.llm.chatJSON(sys+manjuConciseSuffix+"\n\n"+fix, truncate(chapterText, 20000), 0.4)
+		if err2 == nil {
+			shots2, _ := planShots(plan2)
+			if len(anyArr(plan2["shots"])) > 0 && len(ctx.validatePlan(plan2, shots2)) == 0 {
+				plan = plan2
+				shots = shots2
+				if err := ctx.writePlan(plan); err == nil {
+					ctx.writeCharactersJSON(plan)
+				}
+				lg.logf("  ✅ 方案修复通过(" + strconv.Itoa(len(shots)) + " 镜)")
+			} else {
+				lg.logf("  ⚠️ 修复后仍不达标,沿用原方案继续(渲染/质检兜底)")
+			}
+		} else {
+			lg.logf("  ⚠️ 方案修复重试失败,沿用原方案继续")
+		}
+	}
 	return plan, nil
+}
+
+// validatePlan 方案运行时硬校验(审计升级 P0):返回问题清单(空=通过)
+func (ctx *manjuCtx) validatePlan(plan map[string]any, shots []manjuShot) []string {
+	var problems []string
+	charNames := map[string]bool{}
+	for _, c := range anyArr(plan["characters"]) {
+		if m, ok := c.(map[string]any); ok {
+			if id := str(m["id"]); id != "" {
+				charNames[id] = true
+			}
+		}
+	}
+	for _, s := range shots {
+		for _, ch := range s.Characters {
+			if ch != "" && !charNames[ch] {
+				problems = append(problems, fmt.Sprintf("镜头 %d 登场角色「%s」缺少角色卡(Ref2VA 将无参考图)", s.ID, ch))
+			}
+		}
+		if s.Duration < 4 || s.Duration > 15 {
+			problems = append(problems, fmt.Sprintf("镜头 %d 时长 %d 超出 4-15 秒", s.ID, s.Duration))
+		}
+		if s.Dialogue != "" {
+			dialChars := 0
+			for _, line := range strings.Split(s.Dialogue, "\n") {
+				line = strings.TrimSpace(line)
+				if i := strings.Index(line, ":"); i >= 0 {
+					line = strings.TrimSpace(line[i+1:])
+				}
+				dialChars += len([]rune(line))
+			}
+			need := float64(dialChars) / 4.0 // 中文约 4 字/秒
+			if need > float64(s.Duration) {
+				problems = append(problems, fmt.Sprintf("镜头 %d 台词约需 %.1fs 但时长仅 %.1fs(可能截断)", s.ID, need, float64(s.Duration)))
+			}
+			for _, line := range strings.Split(s.Dialogue, "\n") {
+				if i := strings.Index(line, ":"); i > 0 {
+					speaker := strings.TrimSpace(line[:i])
+					if !charNames[speaker] {
+						problems = append(problems, fmt.Sprintf("镜头 %d 台词说话人「%s」不在登场角色内", s.ID, speaker))
+					}
+				}
+			}
+		}
+	}
+	return problems
 }
 
 // novelFingerprint 小说正文指纹(大小+mtime):方案复用校验的依据,
@@ -1127,6 +1267,13 @@ func (ctx *manjuCtx) clearEpisodeArtifacts(lg *manjuLogger) {
 			lg.logf("  🧹 已清空该集旧条件缓存 " + strconv.Itoa(n) + " 个(将自动重新编码)")
 		}
 	}
+	// 接缝 latent 随集清理(审计 S6):删本集命名空间目录,防旧方案 latent 残留串接
+	latentDir := filepath.Join(ctx.comfyOutput, "h3_context", ctx.latentNS())
+	if err := os.RemoveAll(latentDir); err == nil {
+		if _, serr := os.Stat(latentDir); os.IsNotExist(serr) {
+			lg.logf("  🧹 已清空接缝 latent: " + latentDir)
+		}
+	}
 }
 
 func (ctx *manjuCtx) writePlan(plan map[string]any) error {
@@ -1226,7 +1373,7 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 		var wg sync.WaitGroup
 		for _, s := range todo {
 			wg.Add(1)
-			go func(s manjuShot) {
+			safeGo("genprompt", lg, func() {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
@@ -1244,11 +1391,39 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 					m["h3_prompt"] = hp
 				}
 				lg.logf(fmt.Sprintf("    ✅ 镜头 %d 提示词就绪（%d 字）", s.ID, len([]rune(hp))))
-			}(s)
+			})
 		}
 		wg.Wait()
 		if firstErr != nil {
 			return firstErr
+		}
+		// 审计升级 P0:提示词结构校验——六段/三段字段齐全、<d> 台词、<Picture N> 参考标签;
+		// 不达标串行修复重试一次(坏提示词进条件缓存会污染 .pt 且难排查)
+		var repair []manjuShot
+		for _, s := range todo {
+			hp := prompts[strconv.Itoa(s.ID)]
+			if hp == "" {
+				continue
+			}
+			if probs := ctx.validateShotPrompt(s, hp); len(probs) > 0 {
+				repair = append(repair, s)
+				lg.logf(fmt.Sprintf("  ⚠️ 镜头 %d 提示词结构校验未过(%d 项),修复重试", s.ID, len(probs)))
+			}
+		}
+		if len(repair) > 0 {
+			for _, s := range repair {
+				fix := "【提示词结构校验未过,逐条修正后重新输出】\n" + strings.Join(ctx.validateShotPrompt(s, prompts[strconv.Itoa(s.ID)]), "\n")
+				hp2, err2 := ctx.genShotPromptWithFix(s, charMap, sceneMap, fix)
+				if err2 == nil && len(ctx.validateShotPrompt(s, hp2)) == 0 {
+					prompts[strconv.Itoa(s.ID)] = hp2
+					if m := objOf[s.ID]; m != nil {
+						m["h3_prompt"] = hp2
+					}
+					lg.logf(fmt.Sprintf("  ✅ 镜头 %d 提示词修复通过(%d 字)", s.ID, len([]rune(hp2))))
+				} else {
+					lg.logf(fmt.Sprintf("  ⚠️ 镜头 %d 提示词修复仍不达标,沿用原稿(渲染时注意检查)", s.ID))
+				}
+			}
 		}
 	}
 	if err := os.MkdirAll(ctx.analysisDir, 0755); err != nil {
@@ -1262,7 +1437,58 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 	return ctx.writePlan(plan)
 }
 
+// validateShotPrompt 逐镜 h3_prompt 结构校验(审计升级 P0):返回问题清单(空=通过)
+func (ctx *manjuCtx) validateShotPrompt(s manjuShot, hp string) []string {
+	var problems []string
+	hasChar := len(s.Characters) > 0
+	if hasChar {
+		for _, sec := range []string{"subject_definitions", "summary", "retention_analysis", "detailed_description", "overall_soundscape", "non_diegetic_music"} {
+			if !strings.Contains(hp, sec) {
+				problems = append(problems, "Ref2VA 缺少六段式字段 "+sec)
+			}
+		}
+	} else {
+		for _, sec := range []string{"integrated_multimodal_description", "overall_soundscape", "non_diegetic_music"} {
+			if !strings.Contains(hp, sec) {
+				problems = append(problems, "FL2VA 缺少三段式字段 "+sec)
+			}
+		}
+	}
+	if s.Dialogue != "" && !strings.Contains(hp, "<d>") {
+		problems = append(problems, "有台词但提示词无 <d> 原生对白标记")
+	}
+	if hasChar && !strings.Contains(hp, "<Picture") {
+		problems = append(problems, "有角色但提示词无 <Picture N> 参考标签")
+	}
+	if s.Dialogue != "" {
+		for _, line := range strings.Split(s.Dialogue, "\n") {
+			line = strings.TrimSpace(line)
+			if i := strings.Index(line, ":"); i >= 0 {
+				line = strings.TrimSpace(line[i+1:])
+			}
+			if line == "" {
+				continue
+			}
+			if len([]rune(line)) > 2 && !strings.Contains(hp, line) {
+				problems = append(problems, "台词「"+truncate(line, 12)+"」未出现在提示词 <d> 中")
+			}
+			break // 抽查首句防整体遗漏
+		}
+	}
+	return problems
+}
+
+// genShotPromptWithFix 带修复意见重新生成单镜提示词(校验未过修复重试用)
+func (ctx *manjuCtx) genShotPromptWithFix(s manjuShot, charMap, sceneMap map[string]map[string]any, fix string) (string, error) {
+	return ctx.genShotPromptRaw(s, charMap, sceneMap, fix)
+}
+
 func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map[string]any) (string, error) {
+	return ctx.genShotPromptRaw(s, charMap, sceneMap, "")
+}
+
+// genShotPromptRaw 生成单镜 H3 提示词;fix 非空时追加修复意见(校验未过修复重试用)
+func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]map[string]any, fix string) (string, error) {
 	hasChar := len(s.Characters) > 0
 	sys := manjuShotPromptSystem(hasChar, ctx.style)
 	shotObj := map[string]any{
@@ -1280,7 +1506,7 @@ func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map
 		"shot": shotObj, "characters": chars, "scene": sceneMap[s.Scene],
 		"negative_prompt": ctx.negPrompt(),
 		"known_issues":    topAgentIssues(ctx.project, 3),
-		"ref_available":   ctx.shotRefRoles(s),
+		"ref_available":   ctx.shotRefViews(s),
 	}
 	// 多切点长镜:附加规范 + 组内各镜字段与切点时间(take_shots 供 LLM 直引,不必自算)
 	if len(s.TakeGroup) > 1 {
@@ -1299,6 +1525,9 @@ func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map
 		data["take_shots"] = group
 	}
 	ctxData, _ := json.Marshal(data)
+	if fix != "" {
+		ctxData = []byte(string(ctxData) + "\n\n" + fix)
+	}
 	out, err := ctx.llm.chatJSON(sys, string(ctxData), 0.3)
 	if err != nil {
 		return "", err
@@ -1371,7 +1600,7 @@ func (ctx *manjuCtx) comfyGenImage(wf map[string]any, dst string, lg *manjuLogge
 		return err
 	}
 	lg.logf("  🎨 提交 " + what + " " + pid[:8] + "...")
-	if err := ctx.comfy.wait(pid, 900*time.Second, 5*time.Second); err != nil {
+	if err := ctx.comfy.wait(pid, 900*time.Second, 5*time.Second, lg.stopped); err != nil {
 		return err
 	}
 	entry := ctx.comfy.history(pid)
@@ -1437,6 +1666,26 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		if err := ctx.ensureFaceCrop(cid, lg); err != nil {
 			return err
 		}
+		// 多视图(审计升级:角色管理/一条龙共用同一套视图资产,保障人物统一):
+		// front=正脸特写(ensureFaceCrop 已生成)、full/side/detail 独立视图,
+		// 用方案角色卡 views.<view> 提示词生成;旧方案无 views 则跳过(主图+正脸兜底)。
+		vs, _ := m["views"].(map[string]any)
+		for _, view := range []string{"full", "side", "detail"} {
+			p := str(vs[view])
+			if p == "" {
+				continue
+			}
+			vDst := filepath.Join(ctx.assetsDir, "characters", cid+"_"+view+".png")
+			if !fileExists(vDst) {
+				lg.logf("🎨 角色 " + cid + " " + view + " 视图 ...")
+				wf := ctx.portraitWF(p, 7100+i*10, "manju_asset", m)
+				if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"("+view+")"); err != nil {
+					lg.logf("  ⚠️ " + view + " 视图生成失败(回退主图+正脸): " + err.Error())
+					continue
+				}
+			}
+			cmap[cid+"_"+view] = "characters/" + cid + "_" + view + ".png"
+		}
 	}
 	scenes, _ := plan["scenes"].([]any)
 	for i, sc := range scenes {
@@ -1457,6 +1706,19 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 			}
 		}
 		smap[sid] = "scenes/" + sid + ".png"
+		// FL2VA 双帧(审计升级 P1):启用 fl2va_end_frame 时生成场景尾帧(同 prompt 不同 seed +
+		// 轻微运动提示,作为空镜 FL2VA 首尾插值的尾帧锚点,场景内运动更稳);默认关闭(成本翻倍)
+		if b, _ := ctx.R["fl2va_end_frame"].(bool); b {
+			endDst := filepath.Join(ctx.assetsDir, "scenes", sid+"_end.png")
+			if !fileExists(endDst) {
+				lg.logf("🎨 场景尾帧(FL2VA): " + sid + " ...")
+				endPrompt := str(m["image_prompt"]) + ", the same scene at a slightly later moment, subtle motion of elements (leaves drifting, water rippling, light shifting), consistent layout and lighting"
+				wf := wfZImage(endPrompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), 9000+i, ctx.w, ctx.h, "manju_asset", ctx.negPrompt())
+				if err := ctx.comfyGenImage(wf, endDst, lg, "场景尾帧 "+sid); err != nil {
+					lg.logf("  ⚠️ 场景尾帧生成失败(回退单图 I2VA): " + err.Error())
+				}
+			}
+		}
 	}
 	if b, err := json.MarshalIndent(amap, "", "  "); err == nil {
 		_ = os.WriteFile(filepath.Join(ctx.assetsDir, "asset_map.json"), b, 0644)
@@ -1519,13 +1781,17 @@ func (ctx *manjuCtx) shotCondFingerprint(s manjuShot) string {
 func (ctx *manjuCtx) shotCondFingerprintAt(s manjuShot, w, h int) string {
 	hh := md5.New()
 	// 参考图指纹:预编码把角色/场景参考烧进 .pt,定妆照采纳(或重生成)后必须重编码,
-	// 否则缓存命中跳过、渲染继续用旧角色(换定妆照不生效的隐性根源)
+	// 否则缓存命中跳过、渲染继续用旧角色(换定妆照不生效的隐性根源);多视图全部计入
 	refs := []string{}
+	n := len(s.Characters)
+	if n > 3 {
+		n = 3
+	}
 	for i, cid := range s.Characters {
 		if i >= 3 {
 			break
 		}
-		if rel := ctx.refRelFor(cid); rel != "" {
+		for _, rel := range ctx.charViewRels(cid, i, n) {
 			refs = append(refs, ctx.refStamp(rel))
 		}
 	}
@@ -1550,19 +1816,69 @@ func (ctx *manjuCtx) ensureEncoded(s manjuShot, cacheName string, lg *manjuLogge
 	return ctx.ensureEncodedAt(s, cacheName, ctx.w, ctx.h, lg)
 }
 
+// manjuEncSingleflight 预编码 singleflight(审计 M2):同条件缓存并发提交只跑一次——
+// 相邻镜头同 prompt/角色/场景时,预编码 goroutine 与渲染路径的 ensureEncodedAt 同时
+// fileExists 未命中会双提交同 cacheName.pt,白白烧一次 Qwen3-VL 编码
+var manjuEncSingleflight sync.Map // cacheName → chan struct{}
+
 // ensureEncodedAt 指定宽高的预编码(草稿/定稿各自的条件缓存)
 func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg *manjuLogger) error {
 	if fileExists(h3CachePath(ctx.sharedModels, cacheName)) {
 		return nil
 	}
+	// singleflight:同 cacheName 并发去重(先到者执行,后到者等文件出现或接力)。
+	// 必须用缓冲 1 的 chan:无缓冲 chan 的发送在无接收者时永不成功,select 恒走 default,
+	// 所有调用者都在等文件、没人真正执行编码 → 1900s 后全部"等待预编码完成超时"(必挂)。
+	ch, _ := manjuEncSingleflight.LoadOrStore(cacheName, make(chan struct{}, 1))
+	gate := ch.(chan struct{})
+	acquired := false
+	for !acquired {
+		select {
+		case gate <- struct{}{}: // 拿到执行权
+			acquired = true
+		default:
+			// 执行权被占:轮询等文件出现;执行者失败释放执行权(文件未生成)则接力重试
+			deadline := time.Now().Add(1900 * time.Second)
+			for time.Now().Before(deadline) && !acquired {
+				if fileExists(h3CachePath(ctx.sharedModels, cacheName)) {
+					return nil
+				}
+				select {
+				case gate <- struct{}{}:
+					acquired = true
+				default:
+					time.Sleep(2 * time.Second)
+				}
+			}
+			if !acquired {
+				return fmt.Errorf("等待预编码完成超时: %s", cacheName)
+			}
+		}
+	}
+	defer func() {
+		<-gate
+		manjuEncSingleflight.Delete(cacheName)
+	}()
+	// 渲染输入副本(FL2VA 尾帧等每镜变量写入副本,防并发预编码 goroutine 竞态 ctx.R)
+	r2 := map[string]any{}
+	for k, v := range ctx.R {
+		r2[k] = v
+	}
+	// FL2VA 尾帧(审计升级 P1):空镜镜头 + 开关开启 → 本镜场景的 _end.png 作尾帧锚点;
+	// 有角色镜头删尾帧(Ref2VA 无此概念)
+	if len(s.Characters) == 0 {
+		if b, _ := ctx.R["fl2va_end_frame"].(bool); b {
+			r2["_scene_end"] = filepath.Join(ctx.assetsDir, "scenes", s.Scene+"_end.png")
+		}
+	}
 	lg.logf("  预编码提交...")
-	wf := h3EncWorkflow(ctx.R, s.H3Prompt, w, h, h3Length(s.Duration, ctx.fps),
+	wf := h3EncWorkflow(r2, s.H3Prompt, w, h, h3Length(s.Duration, ctx.fps),
 		ctx.charRefNames(s), ctx.sceneRefName(s), cacheName, len(s.Characters) > 0)
 	pid, err := ctx.comfy.submit(wf)
 	if err != nil {
 		return err
 	}
-	if err := ctx.comfy.wait(pid, 1800*time.Second, 10*time.Second); err != nil {
+	if err := ctx.comfy.wait(pid, 1800*time.Second, 10*time.Second, lg.stopped); err != nil {
 		return err
 	}
 	lg.logf("  ✅ 镜头 " + strconv.Itoa(s.ID) + " 条件缓存完成 -> " + cacheName + ".pt")
@@ -1574,6 +1890,9 @@ func stageEncode(ctx *manjuCtx, lg *manjuLogger) error {
 	if err := ctx.ensureComfyReady(lg); err != nil {
 		return err
 	}
+	// 编码前释放显存:assets 阶段加载的 ZImage/Lumina 常驻,不腾空间 Qwen3-VL 32B 加载会
+	// 因显存不足阻塞,编码任务提交后 ComfyUI 挂起 → 渲染"显卡没动静"卡死(本 BUG 根因)
+	ctx.freeComfyModels(lg)
 	_, shots, err := ctx.ensurePlanAndPrompts(lg)
 	if err != nil {
 		return err
@@ -1583,6 +1902,22 @@ func stageEncode(ctx *manjuCtx, lg *manjuLogger) error {
 		lg.logf("  ⏭ 没有需要处理的镜头")
 		return nil
 	}
+	// 预编码耗时提示:单镜 = 条件编码(~10min) + 视频采样(8 步 × 帧数 × ~1.42s/帧),
+	// 实测 4s 镜约 30 分钟、12s 镜约 70 分钟。中途退出会打断采样、条件缓存不落盘,
+	// 下次续跑该镜重编(此前"反复中断零进度"死循环的根因)——先给总览再逐镜提示,防误判卡死。
+	minE, maxE, estTotal := 1<<30, 0, 0
+	for _, s := range selected {
+		e := manjuEncEstMin(s.Duration, ctx.fps)
+		estTotal += e
+		if e < minE {
+			minE = e
+		}
+		if e > maxE {
+			maxE = e
+		}
+	}
+	lg.logf(fmt.Sprintf("  ⏱ 预编码 %d 镜:单镜约 %d~%d 分钟,预计共 %d 分钟(%d 小时 %d 分)——期间请勿退出应用,退出将中断当前镜编码",
+		len(selected), minE, maxE, estTotal, estTotal/60, estTotal%60))
 	for i, s := range selected {
 		if lg.stopped() {
 			return fmt.Errorf("已停止")
@@ -1592,13 +1927,20 @@ func stageEncode(ctx *manjuCtx, lg *manjuLogger) error {
 			lg.logf("  跳过（缓存已存在）: " + cacheName + ".pt")
 			continue
 		}
-		lg.logf(fmt.Sprintf("[%d/%d] 镜头 %d: [%s] %s", i+1, len(selected), s.ID, s.Scene, s.Camera))
+		lg.logf(fmt.Sprintf("[%d/%d] 镜头 %d: [%s] %s（预计 %d 分钟/镜）", i+1, len(selected), s.ID, s.Scene, s.Camera, manjuEncEstMin(s.Duration, ctx.fps)))
 		if err := ctx.ensureEncoded(s, cacheName, lg); err != nil {
 			return fmt.Errorf("镜头 %d 预编码失败: %w", s.ID, err)
 		}
 	}
 	lg.logf("🎉 预编码完成")
 	return nil
+}
+
+// manjuEncEstMin 单镜 H3 预编码预计耗时(分钟):条件编码约 10min + 视频采样
+// 8 步 × 帧数 × ~1.42s/帧(107 帧 ≈ 152s/步,实测)。仅作进度提示,不参与逻辑。
+func manjuEncEstMin(seconds, fps int) int {
+	frames := h3Length(seconds, fps)
+	return 10 + frames*8*142/6000
 }
 
 // ensurePlanAndPrompts 方案 + 多切点分组 + 逐镜提示词(渲染/预编码前置)
@@ -1757,44 +2099,25 @@ func (ctx *manjuCtx) selectedShots(shots []manjuShot) []manjuShot {
 	return out
 }
 
-// shotRefRoles 该镜实际有参考图的登场角色(顺序=characters 顺序,≤3 与 charRefNames 同限):
-// 供逐镜提示词生成判断哪些角色可写 <Picture N> 引用——名单外的登场角色只写外观描述,
-// 防止 Subject 引用不存在的参考图导致 H3 自由发挥出"无参考角色"喧宾夺主。
-func (ctx *manjuCtx) shotRefRoles(s manjuShot) []string {
-	var out []string
-	for i, cid := range s.Characters {
-		if i >= 3 {
-			break
-		}
-		rel := "characters/" + cid + "_face.png"
-		if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
-			rel = "characters/" + cid + ".png"
-			if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
-				continue
-			}
-		}
-		out = append(out, cid)
-	}
-	return out
-}
-
 // ---- 参考图(复制到 ComfyUI input,LoadImage 直接按名读取) ----
 
-// charRefNames 全部登场角色的参考图:每个角色优先正脸特写 <cid>_face.png(身份锁定强),
-// 缺省回退全身定妆照;最多前 3 个角色(参考图过多稀释 token)。多角色同镜逐一传图锁身份。
+// charRefNames 全部登场角色的参考图:按视图预算收集(正脸特写优先,可含全身/细节多视图),
+// 同一角色多视图按 <Picture N..N+k> 顺序传入,与 prompt 的 subject_definitions 一一对应。
 func (ctx *manjuCtx) charRefNames(s manjuShot) []string {
 	var out []string
+	n := len(s.Characters)
+	if n > 3 {
+		n = 3
+	}
 	for i, cid := range s.Characters {
 		if i >= 3 {
 			break
 		}
-		rel := ctx.refRelFor(cid)
-		if rel == "" {
-			continue
+		for j, rel := range ctx.charViewRels(cid, i, n) {
+			name := fmt.Sprintf("dir_char_%d_%d_%d.png", s.ID, i, j)
+			_ = copyFile(filepath.Join(ctx.assetsDir, rel), filepath.Join(ctx.comfyInput, name))
+			out = append(out, name)
 		}
-		name := fmt.Sprintf("dir_char_%d_%d.png", s.ID, i)
-		_ = copyFile(filepath.Join(ctx.assetsDir, rel), filepath.Join(ctx.comfyInput, name))
-		out = append(out, name)
 	}
 	return out
 }
@@ -1920,10 +2243,10 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 			nextDst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", next.ID))
 			if !fileExists(nextDst) {
 				preWg.Add(1)
-				go func() {
+				safeGo("preencode", lg, func() {
 					defer preWg.Done()
 					preErr = ctx.ensureEncoded(next, ctx.shotCacheName(next), lg)
-				}()
+				})
 			}
 		}
 		// 该镜重渲轮次:质检自愈重渲用它换 seed(seedFor 在 fixed 策略下 attempt>0 也 +轮次),
@@ -1994,7 +2317,7 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 		// 重渲路径:旧检查点已无意义,直接清除,避免后续误命中
 		ctx.renderCKClear(ckKey)
 	}
-	chained := !fresh && idx > 1 && fileExists(h3ContextLatentPath(ctx.comfyOutput, idx-1))
+	chained := !fresh && idx > 1 && fileExists(h3ContextLatentPath(ctx.comfyOutput, ctx.latentNS(), idx-1))
 	if fresh {
 		lg.logf("  ♻️ 镜头 " + strconv.Itoa(s.ID) + " 返工重渲:独立生成(不接缝)")
 	}
@@ -2014,25 +2337,13 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 	ctx.renderCKSet(ckKey, pid) // 提交即落盘:崩溃后可按 prompt_id 收回,绝不重复烧 GPU
 	lg.logf("  渲染提交 " + pid[:8] + "...")
 	t0 := time.Now()
-	if err := ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second); err != nil {
-		// 中断(网页取消/重启 ComfyUI)自动重试一次(同 attempt 同 seed:任务未完成,重抽无意义)
-		if strings.Contains(err.Error(), "interrupt") || strings.Contains(err.Error(), "中断") {
-			lg.logf("  ⚠️ 渲染被中断,5 秒后自动重试...")
-			time.Sleep(5 * time.Second)
-			if lg.stopped() {
-				return fmt.Errorf("已停止")
-			}
-			pid, err = submit()
-			if err != nil {
-				return fmt.Errorf("镜头 %d 重试提交失败: %w", s.ID, err)
-			}
-			ctx.renderCKSet(ckKey, pid) // 重试提交后更新检查点 pid(旧 pid 已失效)
-			if err = ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second); err != nil {
-				return fmt.Errorf("镜头 %d 渲染失败(重试后): %w", s.ID, err)
-			}
-		} else {
-			return fmt.Errorf("镜头 %d 渲染失败: %w", s.ID, err)
-		}
+	if err := ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second, lg.stopped); err != nil {
+		// 渲染异常/中断:不自动重渲染——直接返回错误,由管线收尾(用户可手动续跑/定点重渲)。
+		// 旧逻辑"中断自动重试一次"会在 ComfyUI 异常/外部中断时静默重新提交,
+		// 用户感知为"异常了还在自动烧 GPU"(升级优化:异常即停,不自动重试)
+		// 清检查点:该任务已失败(非"未收产物"),避免下次续跑 tryReclaim 误收失败产物
+		ctx.renderCKClear(ckKey)
+		return fmt.Errorf("镜头 %d 渲染失败: %w", s.ID, err)
 	}
 	entry := ctx.comfy.history(pid)
 	rel := comfyOutputVideo(entry)
@@ -2066,12 +2377,64 @@ func (ctx *manjuCtx) runMedia(lg *manjuLogger, args ...string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	// 审计 M3:子进程超时 + 停止感知——此前无超时且不查 lg.stopped(),
+	// whisper/ffmpeg 挂死时停止无效、任务永久 running、续跑被全局闸门阻塞
+	done := make(chan struct{})
+	var exitCode int = -1
+	go func() {
+		if st, err := cmd.Process.Wait(); err == nil && st != nil {
+			exitCode = st.ExitCode()
+		}
+		close(done)
+	}()
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		lg.logf(sc.Text())
+	var tail []string // 输出尾部(错误时带异常堆栈,便于定位,如 facecrop 的 UnicodeEncodeError)
+	scanDone := make(chan struct{})
+	go func() {
+		for sc.Scan() {
+			line := sc.Text()
+			lg.logf(line)
+			tail = append(tail, line)
+			if len(tail) > 12 {
+				tail = tail[len(tail)-12:]
+			}
+		}
+		close(scanDone)
+	}()
+	timer := time.NewTimer(25 * time.Minute)
+	defer timer.Stop()
+	stopTick := time.NewTicker(2 * time.Second)
+	defer stopTick.Stop()
+	for {
+		select {
+		case <-done:
+			<-scanDone
+			if exitCode != 0 {
+				detail := strings.Join(tail, "\n")
+				if len(detail) > 600 {
+					detail = detail[len(detail)-600:]
+				}
+				return fmt.Errorf("媒体处理退出码非 0(%d)%s", exitCode, func() string {
+					if strings.TrimSpace(detail) == "" {
+						return ""
+					}
+					return ": " + strings.TrimSpace(detail)
+				}())
+			}
+			return nil
+		case <-timer.C:
+			_ = cmd.Process.Kill()
+			<-scanDone
+			return fmt.Errorf("媒体处理超时(>25 分钟),已终止")
+		case <-stopTick.C:
+			if lg.stopped() {
+				_ = cmd.Process.Kill()
+				<-scanDone
+				return fmt.Errorf("已停止")
+			}
+		}
 	}
-	return cmd.Wait()
 }
 
 // hasTopLevelClips 集目录是否有顶层镜头 mp4(排除 _draft/2k 等工作子目录)
@@ -2110,6 +2473,11 @@ func stageQC(ctx *manjuCtx, lg *manjuLogger) error {
 	// 跳过镜头(用户决定不修,质检不计失败、合成时排除):从失败集中剔除
 	skip := ctx.qcSkipSet()
 	failed := ctx.qcFailedShots()
+	// 基础设施失败防线(审计 S4):脚本崩溃/python 缺失/报告未落盘 → 失败集为空,
+	// 此时 err != nil 必须显式报错,绝不静默"通过"放坏片进成片
+	if err != nil && len(failed) == 0 {
+		return fmt.Errorf("质检执行失败: %w", err)
+	}
 	if len(skip) > 0 {
 		ids := make([]string, 0, len(skip))
 		for n := range skip {
@@ -2134,7 +2502,11 @@ func stageQC(ctx *manjuCtx, lg *manjuLogger) error {
 			ctx.qcAcceptClear()
 			return nil
 		}
-		return fmt.Errorf("质检未通过: %w", err)
+		// 修复 M6:err 为 nil(脚本 exit 0 但报告含失败镜)时不得包装出 "%!w(<nil>)"
+		if err != nil {
+			return fmt.Errorf("质检未通过(%d 镜): %w", len(failed), err)
+		}
+		return fmt.Errorf("质检未通过(%d 镜)", len(failed))
 	}
 	// 无失败(或失败镜头全部被用户跳过):视为通过(忽略 runMedia 因被跳过镜头产生的 exit 1)
 	return nil
@@ -2183,6 +2555,10 @@ func (ctx *manjuCtx) qcAccept() bool {
 
 // qcAcceptClear 消费后清除接受标记(一次性决策,避免后续质检永久不报错)
 func (ctx *manjuCtx) qcAcceptClear() {
+	// 审计 S8:逃生门标记消费与其它写 config 端点串行化,防 read-modify-write 互相覆盖
+	mu := manjuConfigLock(ctx.configPath)
+	mu.Lock()
+	defer mu.Unlock()
 	R := ctx.R
 	delete(R, "qc_accept")
 	cfg := ctx.cfg
@@ -2653,8 +3029,11 @@ func manjuDefaultConfig(name, novelFile, novelDir, apiKey string) map[string]any
 			"analysis":     filepath.Join(ManjuRootDir, name, "analysis"),
 			"assets":       filepath.Join(ManjuRootDir, name, "assets"),
 			"clips":        filepath.Join(ManjuRootDir, name, "clips"),
-			"comfy_input":  `C:\Users\Administrator\AppData\Local\Comfy-Desktop\ComfyUI-Shared\input`,
-			"comfy_output": `C:\Users\Administrator\AppData\Local\Comfy-Desktop\ComfyUI-Shared\output`,
+			// 跟随生效的 ComfyUI 共享目录(而非硬编码 Desktop 路径):ComfyUI 可能按自包含
+			// 目录启动,写死旧路径会让新项目的 comfy_output 与实际输出目录不一致,
+			// 渲染"完成"但读产物报 not found。运行时 newManjuCtx 仍优先用 comfyParams 权威值。
+			"comfy_input":  filepath.Join(ComfySharedDir, "input"),
+			"comfy_output": filepath.Join(ComfySharedDir, "output"),
 			"outline":      "", "setting": "",
 		},
 	}
@@ -2676,15 +3055,17 @@ func (ctx *manjuCtx) gachaCharGender(char string) string {
 	return ""
 }
 
-// manjuGachaDraw 生成抽卡候选(随机 seed,一次可连抽 count 张)→ assets/characters/_gacha/<char>_s<seed>.png
+// manjuGachaDraw 生成抽卡候选(随机 seed,一次可连抽 count 张)→ assets/characters/_gacha/<char>_<view>_s<seed>.png
+// view 为空=正面主视图(半身立绘);可选 front/full/side/detail(角色卡 views 提示词,旧方案自动派生)。
 // 候选落盘不覆盖(文件名含 seed),前端据此保留抽卡历史供对比挑选
-func manjuGachaDraw(configPath, episode, char string, count int) ([]map[string]any, error) {
+func manjuGachaDraw(configPath, episode, char, view string, count int) ([]map[string]any, error) {
 	if count < 1 {
 		count = 1
 	}
 	if count > 8 {
 		count = 8
 	}
+	view = strings.TrimSpace(view)
 	ctx, err := newManjuCtx(configPath, episode, "", "", "")
 	if err != nil {
 		return nil, err
@@ -2694,33 +3075,65 @@ func manjuGachaDraw(configPath, episode, char string, count int) ([]map[string]a
 	}
 	// 抽卡候选与正式定妆照同款模型:写实→Z-Image,其余→SDXL checkpoint
 	charInfo := map[string]any{"gender": ctx.gachaCharGender(char)}
-	prompt := charPromptFor(ctx, char)
+	prompt := charViewPromptFor(ctx, char, view)
 	safe := sanitizeFileName(char)
 	lg := &manjuLogger{state: manjuState}
 	out := []map[string]any{}
 	for i := 0; i < count; i++ {
 		seed := randSeed()
 		wf := ctx.portraitWF(prompt, seed, "manju_gacha", charInfo)
-		dst := filepath.Join(ctx.assetsDir, "characters", "_gacha", fmt.Sprintf("%s_s%d.png", safe, seed))
-		if err := ctx.comfyGenImage(wf, dst, lg, "角色 "+char); err != nil {
+		vTag := ""
+		if view != "" {
+			vTag = "_" + view
+		}
+		dst := filepath.Join(ctx.assetsDir, "characters", "_gacha", fmt.Sprintf("%s%s_s%d.png", safe, vTag, seed))
+		if err := ctx.comfyGenImage(wf, dst, lg, "角色 "+char+"("+orDefault(view, "front")+")"); err != nil {
 			if len(out) == 0 {
 				return nil, err
 			}
 			break // 连抽中途失败:返回已生成的部分,不让一张失败全盘作废
 		}
-		out = append(out, map[string]any{"image": dst, "seed": seed})
+		out = append(out, map[string]any{"image": dst, "seed": seed, "view": view})
 	}
 	return out, nil
 }
 
 // charPromptFor 抽卡提示词:优先角色卡 image_prompt,兜底占位
 func charPromptFor(ctx *manjuCtx, char string) string {
+	return charViewPromptFor(ctx, char, "")
+}
+
+// manjuViewOrder 角色视图优先级(参考图传入顺序 = prompt Picture 编号顺序)
+var manjuViewOrder = []string{"front", "full", "detail", "side"}
+
+// manjuViewRel 视图 → 资产相对路径(front 正脸特写,其余独立视图文件)
+func manjuViewRel(cid, view string) string {
+	switch view {
+	case "front":
+		return "characters/" + cid + "_face.png"
+	default:
+		return "characters/" + cid + "_" + view + ".png"
+	}
+}
+
+// charViewPromptFor 按视图取角色提示词:优先角色卡 views.<view>,兜底 image_prompt + 视图修饰
+func charViewPromptFor(ctx *manjuCtx, char, view string) string {
 	plan, _, err := ctx.loadPlan()
 	if err == nil {
 		for _, c := range anyArr(plan["characters"]) {
 			if m, ok := c.(map[string]any); ok && str(m["id"]) == char {
+				if view != "" {
+					if vs, ok := m["views"].(map[string]any); ok {
+						if p := str(vs[view]); p != "" {
+							return p
+						}
+					}
+				}
 				if p := str(m["image_prompt"]); p != "" {
-					return p
+					if view == "" || view == "front" {
+						return p // 半身立绘即正面主视图
+					}
+					return p + ", " + manjuViewSuffix(view) // 旧方案无 views:派生修饰
 				}
 			}
 		}
@@ -2728,23 +3141,143 @@ func charPromptFor(ctx *manjuCtx, char string) string {
 	return "portrait of " + char + ", " + manjuAssetStyle(ctx.style) + ", upper body, detailed face, clean background"
 }
 
+// manjuViewSuffix 旧方案(无 views 字段)派生视图提示词的英文修饰后缀
+func manjuViewSuffix(view string) string {
+	switch view {
+	case "full":
+		return "full body, head to toe, standing pose, complete outfit visible"
+	case "side":
+		return "side profile, 90 degree side view, face and hairstyle silhouette, body side view"
+	case "detail":
+		return "extreme close-up on the signature detail (accessory / ornament / scar / hairdo), sharp focus, high detail"
+	default:
+		return ""
+	}
+}
+
+// charViewRels 该角色在指定镜位的参考图相对路径列表(Picture 顺序):
+// 预算:单角色 3 视图(front/full/detail),双角色每角色 2 视图(front/full),
+// 三角色 主角 2 视图其余 1 视图——总参考 ≤8 张(另加场景 1 张,符合 H3 Omni-reference ≤9)。
+// front 缺失回退主图;full/detail 缺失跳过(不降级,保持参考纯净)。
+func (ctx *manjuCtx) charViewRels(cid string, idx, total int) []string {
+	var picks []string
+	switch {
+	case total <= 1:
+		picks = []string{"front", "full", "detail"}
+	case total == 2:
+		picks = []string{"front", "full"}
+	default: // 3 角色
+		if idx == 0 {
+			picks = []string{"front", "full"}
+		} else {
+			picks = []string{"front"}
+		}
+	}
+	out := []string{}
+	for _, v := range picks {
+		rel := manjuViewRel(cid, v)
+		if v == "front" {
+			// 正脸缺失回退主图(半身立绘仍可锁身份)
+			if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
+				rel = "characters/" + cid + ".png"
+				if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
+					continue
+				}
+			}
+		} else if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
+			continue
+		}
+		out = append(out, rel)
+	}
+	return out
+}
+
+// shotRefRoles 该镜有参考图的登场角色(顺序=characters 顺序,≤3):供提示词判断可写 <Picture N> 的角色
+func (ctx *manjuCtx) shotRefRoles(s manjuShot) []string {
+	var out []string
+	n := len(s.Characters)
+	for i, cid := range s.Characters {
+		if i >= 3 {
+			break
+		}
+		if len(ctx.charViewRels(cid, i, minInt(n, 3))) > 0 {
+			out = append(out, cid)
+		}
+	}
+	return out
+}
+
+// shotRefViews 该镜参考图平铺清单(角色+视图,顺序=charRefNames 传入顺序,与 Picture 编号一一对应):
+// 供提示词生成写 <Picture N> 时知道每个角色有几个视图、对应哪些图。
+// 返回形如 ["陈鱼(front)", "陈鱼(full)", "柳如烟(front)"]。
+func (ctx *manjuCtx) shotRefViews(s manjuShot) []string {
+	var out []string
+	n := len(s.Characters)
+	if n > 3 {
+		n = 3
+	}
+	for i, cid := range s.Characters {
+		if i >= 3 {
+			break
+		}
+		for _, rel := range ctx.charViewRels(cid, i, n) {
+			view := strings.TrimSuffix(filepath.Base(rel), ".png")
+			view = strings.TrimPrefix(strings.TrimPrefix(view, sanitizeFileName(cid)+"_"), sanitizeFileName(cid))
+			if view == "" || view == "face" {
+				view = "front"
+			}
+			out = append(out, cid+"("+view+")")
+		}
+	}
+	return out
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // manjuAdoptGacha 采纳抽卡候选为正式定妆照(覆盖 → mtime 变化 → 缓存指纹失效),并切正脸参考
-func manjuAdoptGacha(configPath, episode, char, image string) error {
+// view 为空=主视图(characters/<char>.png);full/side/detail=对应视图文件。
+// front 视图的采纳与主图相同(正脸从主图裁切,ensureFaceCrop 统一生成)。
+func manjuAdoptGacha(configPath, episode, char, view, image string) error {
 	ctx, err := newManjuCtx(configPath, episode, "", "", "")
 	if err != nil {
 		return err
 	}
+	// 角色名 sanitize:防路径穿越(审计 H7——char 拼接进定妆照路径)
+	char = sanitizeFileName(char)
+	if char == "" || char == "." || char == ".." {
+		return fmt.Errorf("非法角色名")
+	}
 	if !fileExists(image) {
 		return fmt.Errorf("候选图不存在: %s", image)
 	}
+	// 候选图归属校验:image 必须位于本项目 assets/characters/_gacha 内(防任意文件拷贝)
+	gachaDir := filepath.Join(ctx.assetsDir, "characters", "_gacha")
+	imgClean := filepath.Clean(image)
+	gachaClean := filepath.Clean(gachaDir)
+	if imgClean == gachaClean || !strings.HasPrefix(imgClean, gachaClean+string(filepath.Separator)) {
+		return fmt.Errorf("候选图必须在项目 _gacha 目录内")
+	}
+	view = strings.TrimSpace(view)
 	dst := filepath.Join(ctx.assetsDir, "characters", char+".png")
+	if view != "" && view != "front" {
+		dst = filepath.Join(ctx.assetsDir, "characters", char+"_"+view+".png")
+	}
 	if err := copyFile(image, dst); err != nil {
 		return err
 	}
 	manjuMarkAdopted(ctx, char, dst)
-	// 正脸特写参考(替换旧的全身副本),供 R2V 身份锁定
+	// 主视图采纳(或重生成)后重切正脸特写参考,供 R2V 身份锁定;
+	// 仅采纳 full/side/detail 视图时主图未变,正脸无需重切(跳过,节省一次裁剪)
 	lg := &manjuLogger{state: manjuState}
-	return ctx.ensureFaceCrop(char, lg)
+	if view == "" || view == "front" {
+		return ctx.ensureFaceCrop(char, lg)
+	}
+	return nil
 }
 
 // manjuAdoptedFilePath 采纳标记:assets/characters/adopted.json,char → 正式定妆照路径

@@ -3,9 +3,7 @@
 package island
 
 import (
-	"math"
 	"runtime"
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -151,32 +149,14 @@ func applyIslandShape(hwnd uintptr, radius int) {
 	islandCurR = radius
 }
 
-func easeInOutCubic(t float64) float64 {
-	if t < 0.5 {
-		return 4 * t * t * t
-	}
-	return 1 - math.Pow(-2*t+2, 3)/2
-}
-
-// islandAnimMu 动画互斥:连续悬停展开/收起时,后一个动画等前一个结束再启动,
-// 避免多个 goroutine 并发互写 islandCurW/H/R,窗口停在中间尺寸
-var islandAnimMu sync.Mutex
-
+// islandAnimate 窗口尺寸切换(展开/收起):
+// 直接一次 SetWindowPos 到位(不做逐帧动画)——动画期间每 10ms 改窗口尺寸,
+// WebView2 透明窗口重绘黑边闪烁(用户反馈"频闪黑窗")。视觉过渡由前端 CSS 淡入淡出承担,
+// 窗口尺寸一次到位,不再反复重绘。
 func islandAnimate(hwnd uintptr, toW, toH, toR, steps int) {
-	go func() {
-		islandAnimMu.Lock()
-		defer islandAnimMu.Unlock()
-		fromW, fromH, fromR := islandCurW, islandCurH, islandCurR
-		for i := 1; i <= steps; i++ {
-			e := easeInOutCubic(float64(i) / float64(steps))
-			w := fromW + int(float64(toW-fromW)*e+0.5)
-			h := fromH + int(float64(toH-fromH)*e+0.5)
-			r := fromR + int(float64(toR-fromR)*e+0.5)
-			repositionIsland(hwnd, w, h)
-			applyIslandShape(hwnd, r)
-			time.Sleep(10 * time.Millisecond)
-		}
-	}()
+	_ = steps
+	repositionIsland(hwnd, toW, toH)
+	applyIslandShape(hwnd, toR)
 }
 
 func setIsland(wv webview.WebView, expanded bool, w, h int) {
@@ -192,9 +172,10 @@ func setIsland(wv webview.WebView, expanded bool, w, h int) {
 		if h <= 0 {
 			h = fullH
 		}
-		islandAnimate(hwnd, w, h, fullR, 24)
+		islandAnimate(hwnd, w, h, fullR, 24) // 展开:240ms(0.24s)
 	} else {
-		islandAnimate(hwnd, miniW, miniH, miniR, 24)
+		// 收起:180ms 与前端面板淡出(0.17s)同步,避免窗口已缩到胶囊但内容还挂着
+		islandAnimate(hwnd, miniW, miniH, miniR, 18)
 	}
 }
 
@@ -208,6 +189,10 @@ type Actions struct {
 	StopZCode  func() error
 	StopBot    func() error
 	RestartBot func() error
+	// DeepSeek Harness 服务(启动/重启/访问)
+	StartHarness   func() error
+	RestartHarness func() error
+	OpenHarness    func()
 }
 
 // Run 启动灵动岛悬浮胶囊（阻塞）。onClose 在用户点击关闭时回调（用于退出服务）。
@@ -289,17 +274,48 @@ func Run(islandURL string, onClose func(), a Actions) error {
 		}
 		return a.RestartBot()
 	})
+	// DeepSeek Harness 服务按钮
+	_ = w.Bind("startHarness", func() error {
+		if a.StartHarness == nil {
+			return nil
+		}
+		return a.StartHarness()
+	})
+	_ = w.Bind("restartHarness", func() error {
+		if a.RestartHarness == nil {
+			return nil
+		}
+		return a.RestartHarness()
+	})
+	_ = w.Bind("openHarness", func() {
+		if a.OpenHarness != nil {
+			a.OpenHarness()
+		}
+	})
 
 	w.Navigate(islandURL)
 	// 白窗修复:不能创建即隐藏——WebView2 在隐藏父窗口下创建环境,完成回调会收到
 	// nil 环境指针导致进程崩溃(实测 panic)。改为窗口立即显示 + SetTransparent
 	// 就绪重试:控制器一创建(约首帧前)就应用透明背景,白底来不及显示。
-	go func() {
-		for i := 0; i < 120 && !w.TransparentOK(); i++ {
-			w.SetTransparent()
+	// 透明就绪:WebView2 控制器异步初始化(需几秒),Controller2 就绪后才能设透明背景。
+	// 窗口创建即显示深色画刷背景(防白窗),透明生效前是深色——这是"胶囊黑底/黑窗"根源。
+	// 修复:持续重试直到透明生效(最多 10s,成功即停),并在导航完成后强制再设一次。
+	// 之前仅重试 250ms,WebView2 初始化慢时透明从未生效 → 窗口恒深色。
+	applyTransparent := func() {
+		for i := 0; i < 200 && !w.TransparentOK(); i++ {
 			time.Sleep(50 * time.Millisecond)
 		}
-	}()
+		if w.TransparentOK() {
+			w.SetTransparent()
+		}
+	}
+	go applyTransparent()
+	// 导航完成后再确保透明(Controller2 此时必就绪)。库层 SetTransparent 已 Dispatch 到
+	// UI 线程执行(WebView2 COM 必须 UI 线程),事件线程直接调用即可,无需再包 goroutine——
+	// 此前后台 goroutine 跨线程调 PutDefaultBackgroundColor 失败,透明永不生效(胶囊黑底)。
+	w.OnNavigationCompleted(func() {
+		w.SetTransparent()
+	})
 	w.Dispatch(func() {
 		applyWindowStyle(uintptr(w.Window()))
 	})

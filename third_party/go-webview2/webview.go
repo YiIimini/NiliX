@@ -447,25 +447,34 @@ func (w *webview) SetTitle(title string) {
 }
 
 // SetBackgroundColor 设置 WebView2 不透明默认背景色(消除页面加载期白闪;传站点底色)。
+// 必须经 Dispatch 投递到 UI 线程执行:WebView2 的 COM 接口(ICoreWebView2Controller2.
+// PutDefaultBackgroundColor)只能在创建它的线程调用,后台 goroutine 直调会跨线程
+// 失败(RPC_E_WRONG_THREAD,错误被忽略)→ 背景色从未生效 → 主窗口加载期白闪/黑窗、
+// 胶囊透明永不生效(黑底)的根源。
 func (w *webview) SetBackgroundColor(r, g, b uint8) {
-	if chromium, ok := w.browser.(*edge.Chromium); ok {
-		if c := chromium.GetController(); c != nil {
-			if c2 := c.GetICoreWebView2Controller2(); c2 != nil {
-				_ = c2.PutDefaultBackgroundColor(edge.COREWEBVIEW2_COLOR{A: 255, R: r, G: g, B: b})
+	w.Dispatch(func() {
+		if chromium, ok := w.browser.(*edge.Chromium); ok {
+			if c := chromium.GetController(); c != nil {
+				if c2 := c.GetICoreWebView2Controller2(); c2 != nil {
+					_ = c2.PutDefaultBackgroundColor(edge.COREWEBVIEW2_COLOR{A: 255, R: r, G: g, B: b})
+				}
 			}
 		}
-	}
+	})
 }
 
 // SetTransparent 设置 WebView2 背景透明（DefaultBackgroundColor alpha=0）。
+// 同上:必须 Dispatch 到 UI 线程执行,否则跨线程 COM 调用失败,胶囊圆角外恒深色(黑底)。
 func (w *webview) SetTransparent() {
-	if chromium, ok := w.browser.(*edge.Chromium); ok {
-		if c := chromium.GetController(); c != nil {
-			if c2 := c.GetICoreWebView2Controller2(); c2 != nil {
-				_ = c2.PutDefaultBackgroundColor(edge.COREWEBVIEW2_COLOR{A: 0, R: 0, G: 0, B: 0})
+	w.Dispatch(func() {
+		if chromium, ok := w.browser.(*edge.Chromium); ok {
+			if c := chromium.GetController(); c != nil {
+				if c2 := c.GetICoreWebView2Controller2(); c2 != nil {
+					_ = c2.PutDefaultBackgroundColor(edge.COREWEBVIEW2_COLOR{A: 0, R: 0, G: 0, B: 0})
+				}
 			}
 		}
-	}
+	})
 }
 
 func (w *webview) SetSize(width int, height int, hints Hint) {

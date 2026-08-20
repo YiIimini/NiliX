@@ -103,8 +103,10 @@ var manjuRenderStrFields = []string{
 	"minimax_api_key", "minimax_base_url", "jianying_dir",
 }
 
-// manjuRenderBoolFields 渲染参数布尔字段(SageAttention 加速/草稿预审开关)
-var manjuRenderBoolFields = []string{"sage_attention", "draft_judge"}
+// manjuRenderBoolFields 渲染参数布尔字段(SageAttention 加速/草稿预审开关/FL2VA 双帧)
+// fl2va_end_frame(审计升级 P1):空镜镜头生成场景尾帧走 FL2VA 首尾双帧插值,场景内运动更稳;
+// 默认关闭(场景图成本翻倍,节点缺失自动回退单图)
+var manjuRenderBoolFields = []string{"sage_attention", "draft_judge", "fl2va_end_frame"}
 
 // manjuRenderFloatFields 渲染参数浮点字段 + 取值范围 [min,max]
 var manjuRenderFloatFields = map[string][2]float64{
@@ -168,6 +170,26 @@ func manjuRunStatePath(project string) string {
 // manjuRunLogPath 项目运行日志:<项目目录>/run.log
 func manjuRunLogPath(project string) string {
 	return filepath.Join(ManjuRootDir, project, "run.log")
+}
+
+// manjuAppendRunLog 新一次运行开始:不清空历史日志,追加分隔线让用户看到进度累积
+// ("上次跑到镜头 X,本次从哪续")。历史超上限(512KB)截断保留尾部(256KB)防无限增长。
+func manjuAppendRunLog(project string) {
+	p := manjuRunLogPath(project)
+	const maxSize = 512 << 10
+	const keepSize = 256 << 10
+	if st, err := os.Stat(p); err == nil && st.Size() > maxSize {
+		if b, err := os.ReadFile(p); err == nil && len(b) > keepSize {
+			_ = os.WriteFile(p, b[len(b)-keepSize:], 0644)
+		}
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sep := "\n\n══════════ " + time.Now().Format("01-02 15:04:05") + " 新一次运行(续跑) ══════════\n"
+	_, _ = f.WriteString(sep)
 }
 
 func writeManjuDiskState(project string, ds *manjuDiskState) {
@@ -542,19 +564,36 @@ func manjuProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
 	}
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	configPath = cp
 	cfg, err := readManjuConfig(configPath)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	name := ""
 	if P, ok := cfg["paths"].(map[string]any); ok {
 		name = filepath.Base(str(P["workdir"]))
 	}
+	// llm 节密钥掩码(前端保存以 **** 往返表示"未修改",与 handlePutSettings 同协议)
+	llmOut := map[string]any{}
+	if L, ok := cfg["llm"].(map[string]any); ok {
+		for k, v := range L {
+			if k == "api_key" {
+				llmOut[k] = maskKey(str(v))
+			} else {
+				llmOut[k] = v
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":       name,
 		"style":      cfg["style"],
-		"llm":        cfg["llm"],
+		"llm":        llmOut,
 		"render":     cfg["render"],
 		"moderation": cfg["moderation"],
 		"paths":      cfg["paths"],
@@ -587,9 +626,15 @@ func manjuSaveRender(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
 	}
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	configPath = cp
 	cfg, err := readManjuConfig(configPath)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -760,7 +805,7 @@ func manjuSaveRender(w http.ResponseWriter, r *http.Request) {
 	cfg["moderation"] = MOD
 
 	if err := writeManjuConfig(configPath, cfg); err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "render": R, "style": cfg["style"], "moderation": cfg["moderation"]})
@@ -910,6 +955,12 @@ func manjuSettingsPost(w http.ResponseWriter, r *http.Request) {
 		_ = writeManjuSettings(def)
 		// 应用到指定项目:写项目 config.llm(api_key/base_url/model,非空覆盖)
 		if cfgPath := str(body["config"]); cfgPath != "" {
+			cp, gerr := manjuGuardConfig(cfgPath)
+			if gerr != nil {
+				writeErr(w, http.StatusForbidden, gerr.Error())
+				return
+			}
+			cfgPath = cp
 			if cfg, err := readManjuConfig(cfgPath); err == nil {
 				L, _ := cfg["llm"].(map[string]any)
 				if L == nil {
@@ -937,6 +988,14 @@ func manjuSettingsPost(w http.ResponseWriter, r *http.Request) {
 func manjuNovelInfo(w http.ResponseWriter, r *http.Request) {
 	novel := r.URL.Query().Get("novel")
 	configPath := r.URL.Query().Get("config")
+	if configPath != "" {
+		cp, gerr := manjuGuardConfig(configPath)
+		if gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
+			return
+		}
+		configPath = cp
+	}
 	if novel == "" && configPath != "" {
 		if cfg, err := readManjuConfig(configPath); err == nil {
 			if P, ok := cfg["paths"].(map[string]any); ok {
@@ -946,6 +1005,16 @@ func manjuNovelInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	if novel == "" {
 		http.Error(w, `{"error":"missing novel"}`, http.StatusBadRequest)
+		return
+	}
+	// novel 归属校验:禁止读取小说库根目录之外的任意文件(防任意读 + 大文件整读 OOM)
+	if _, gerr := manjuGuardNovel(novel); gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	// 大文件护栏:超过 64MB 的小说拒绝整读(章节统计无需读全量)
+	if fi, err := os.Stat(novel); err == nil && fi.Size() > 64<<20 {
+		writeErr(w, http.StatusBadRequest, "小说文件过大(>64MB),请直接使用 全本/<书名>·全本.md")
 		return
 	}
 	data, err := os.ReadFile(novel)
@@ -983,7 +1052,7 @@ func manjuNovelSave(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = "未命名小说"
 	}
-	dir := `C:\Mi\Ai\WorkBench\novel`
+	dir := filepath.Join(NovelRootDir, novelTitleSan.ReplaceAllString(strings.TrimSpace(title), ""))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1055,7 +1124,12 @@ func manjuEnv(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
 	}
-	out := manjuEnvCheck(configPath)
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	out := manjuEnvCheck(cp)
 	rc := 0
 	if i := strings.LastIndex(out, "[exit "); i >= 0 {
 		rc, _ = strconv.Atoi(strings.TrimSuffix(out[i+len("[exit "):], "]"))
@@ -1067,6 +1141,14 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	configPath := str(body["config"])
+	if configPath != "" {
+		cp, gerr := manjuGuardConfig(configPath)
+		if gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
+			return
+		}
+		configPath = cp
+	}
 	chapters := str(body["chapters"])
 	// 章节 0(默认)= 解析小说总章数作为实际值(全书范围,如 1-56)
 	if chapters == "" || chapters == "0" {
@@ -1103,7 +1185,7 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(err.Error(), "运行中") {
 			http.Error(w, `{"error":"已有任务运行中，先停止"}`, http.StatusConflict)
 		} else {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, err.Error())
 		}
 		return
 	}
@@ -1145,10 +1227,10 @@ func startManjuRun(configPath, chapters, episode, phase, only, novel string, aut
 	manjuState.episode = episode
 	manjuState.mu.Unlock()
 
-	// 落盘到对应项目目录:清空上次日志 + 写入"运行中"状态(服务重启后按项目恢复,删项目即删状态)
-	// PID 一并落盘:崩溃恢复的存活判定(isPidAlive)依赖它——此前恒为 0,判定形同虚设
+	// 落盘到对应项目目录:保留上次日志(追加分隔线,让用户看到"上次跑到哪、本次从哪续"——
+	// 此前每次续跑日志被清空,界面永远从 [1/19] 开始,用户误判卡死反复退出) + 写入"运行中"状态
 	_ = os.MkdirAll(filepath.Dir(manjuRunStatePath(projName)), 0755)
-	_ = os.WriteFile(manjuRunLogPath(projName), nil, 0644)
+	manjuAppendRunLog(projName)
 	writeManjuDiskState(projName, &manjuDiskState{Running: true, Stage: orDefault(phase, "all"), StartedAt: time.Now().Unix(), Episode: episode, PID: os.Getpid()})
 
 	// 新管线:章节/集号/镜头从 config.render 读取(render.chapters/episode/shots),先写入再启动
@@ -1333,11 +1415,47 @@ func manjuKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	manjuState.stopped = true
+	proj := manjuState.project
 	manjuState.mu.Unlock()
-	// 中断 ComfyUI 正在执行的任务,让等待快速返回(Go 管线在下一检查点收尾)
+	// 中断 ComfyUI 正在执行的任务:优先用任务项目的 comfy_url(自定义端口/地址也生效,
+	// 不再硬编码 8190——审计 H1/S9)
+	base := "http://127.0.0.1:8190"
+	if proj != "" {
+		if cfg, err := readManjuConfig(filepath.Join(ManjuRootDir, proj, "config.json")); err == nil {
+			if R, ok := cfg["render"].(map[string]any); ok {
+				if u := str(R["comfy_url"]); u != "" {
+					base = strings.TrimRight(u, "/")
+				}
+			}
+		}
+	}
 	client := &http.Client{Timeout: 8 * time.Second}
-	if resp, err := client.Post("http://127.0.0.1:8190/interrupt", "application/json", nil); err == nil {
-		_ = resp.Body.Close()
+	// 中断当前采样 + 清空排队任务:只 interrupt 会停当前镜,已提交排队的后续镜头仍会继续跑
+	// (普通一条龙逐镜提交、agent 流水线多镜预提交——停止后队列里还剩一堆,GPU 继续烧)
+	// ComfyUI:中断 = POST /interrupt;清空 pending 队列 = POST /queue {"clear":true}(实测 200)
+	if req, err := http.NewRequest("POST", base+"/interrupt", nil); err == nil {
+		if resp, err := client.Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}
+	if req, err := http.NewRequest("POST", base+"/queue", bytes.NewBufferString(`{"clear": true}`)); err == nil {
+		req.Header.Set("Content-Type", "application/json")
+		if resp, err := client.Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}
+	// 短暂等待管线感知 stopped(最大 3s:comfy.wait/runMedia 停止感知秒级生效;不阻塞 HTTP 太久,
+	// 前端 poll 会持续轮询状态——剩余未停的由停止感知逐点退出)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		manjuState.mu.Lock()
+		done := manjuState.done
+		running := manjuState.running
+		manjuState.mu.Unlock()
+		if done || !running {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pid": 0})
 }
@@ -1392,7 +1510,7 @@ func manjuStatus() map[string]any {
 func manjuDiskStatus(project string, ds *manjuDiskState) map[string]any {
 	if ds == nil {
 		return map[string]any{
-			"running": false, "stage": "", "currentStage": "", "stageIdx": -1,
+			"running": false, "stage": "", "currentStage": "", "episode": "", "stageIdx": -1,
 			"stageTotal": len(manjuStageOrder), "shotCur": 0, "shotTotal": 0, "progress": 0,
 			"done": false, "rc": nil, "stopped": false, "elapsedSec": 0, "logTail": "",
 		}
@@ -1417,7 +1535,10 @@ func manjuDiskStatus(project string, ds *manjuDiskState) map[string]any {
 	info := parseManjuProgress(logStr, running)
 	return map[string]any{
 		"running":      running,
-		"stage":        ds.Episode,
+		// 审计 M7:stage 恒为阶段名(与内存态一致),集号单独用 episode 字段——
+		// 此前磁盘态 stage 存集号(EP01),前端 stageCN 显示错乱/「中断于 EP01」
+		"stage":        info.CurrentStage,
+		"episode":      ds.Episode,
 		"currentStage": info.CurrentStage,
 		"stageIdx":     info.StageIdx,
 		"stageTotal":   len(manjuStageOrder),
@@ -1446,6 +1567,7 @@ func manjuStatusFor(config string) map[string]any {
 	baseElapsed := manjuState.baseElapsed
 	memLog := manjuState.log
 	liveProject := manjuState.project
+	liveEpisode := manjuState.episode
 	authoritative := running || done || rc != nil || memLog != "" || !started.IsZero()
 	manjuState.mu.Unlock()
 
@@ -1467,7 +1589,7 @@ func manjuStatusFor(config string) map[string]any {
 		info := parseManjuProgress(logStr, running)
 		return map[string]any{
 			"running": running, "stage": stage, "currentStage": info.CurrentStage,
-			"stageIdx": info.StageIdx, "stageTotal": len(manjuStageOrder),
+			"episode": liveEpisode, "stageIdx": info.StageIdx, "stageTotal": len(manjuStageOrder),
 			"shotCur": info.ShotCur, "shotTotal": info.ShotTotal, "progress": info.Progress,
 			"done": done, "rc": rc, "stopped": stopped, "elapsedSec": elapsed, "logTail": logStr,
 		}
@@ -1577,6 +1699,12 @@ func manjuOutputs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
 	}
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	configPath = cp
 	cfg, err := readManjuConfig(configPath)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"characters": []any{}, "scenes": []any{}, "episodes": []any{}, "error": err.Error()})
@@ -1731,6 +1859,12 @@ func manjuPlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
 	}
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	configPath = cp
 	cfg, err := readManjuConfig(configPath)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"exists": false, "error": err.Error()})
@@ -1771,7 +1905,8 @@ func manjuPlan(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// 附加磁盘抽卡历史:候选落盘于 _gacha/<char>_s<seed>.png 且不覆盖,弹窗重开仍可回看对比
+	// 附加磁盘抽卡历史:候选落盘于 _gacha/<char>[_<view>]_s<seed>.png 且不覆盖,弹窗重开仍可回看对比;
+	// 每个角色按视图分组返回候选(front 主视图无后缀,full/side/detail 带 _<view>),前端视图 tab 展示
 	if ctx, err := newManjuCtx(configPath, episode, "", "", ""); err == nil {
 		gdir := filepath.Join(ctx.assetsDir, "characters", "_gacha")
 		entries, _ := os.ReadDir(gdir)
@@ -1780,47 +1915,62 @@ func manjuPlan(w http.ResponseWriter, r *http.Request) {
 			if id == "" {
 				continue
 			}
-			prefix := sanitizeFileName(id) + "_s"
-			type cand struct {
-				path string
-				seed int
-				mod  time.Time
-			}
-			list := []cand{}
-			for _, e := range entries {
-				name := e.Name()
-				if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".png") {
-					continue
+			safe := sanitizeFileName(id)
+			views := []map[string]any{}
+			for _, view := range append([]string{""}, manjuViewOrder[1:]...) {
+				type cand struct {
+					path string
+					seed int
+					mod  time.Time
 				}
-				seed, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".png"))
-				if err != nil { // 其它角色前缀撞车/非 seed 文件,过滤
-					continue
+				list := []cand{}
+				prefix := safe + "_s" // front 主视图: <char>_s<seed>.png
+				if view != "" {
+					prefix = safe + "_" + view + "_s"
 				}
-				if fi, err := e.Info(); err == nil {
-					list = append(list, cand{path: filepath.Join(gdir, name), seed: seed, mod: fi.ModTime()})
+				for _, e := range entries {
+					name := e.Name()
+					if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".png") {
+						continue
+					}
+					seed, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".png"))
+					if err != nil { // 其它角色前缀撞车/非 seed 文件,过滤
+						continue
+					}
+					if fi, err := e.Info(); err == nil {
+						list = append(list, cand{path: filepath.Join(gdir, name), seed: seed, mod: fi.ModTime()})
+					}
 				}
+				sort.Slice(list, func(a, b int) bool { return list[a].mod.After(list[b].mod) })
+				if len(list) > 12 {
+					list = list[:12]
+				}
+				gacha := []map[string]any{}
+				for _, c := range list {
+					gacha = append(gacha, map[string]any{"image": c.path, "seed": c.seed})
+				}
+				// 采纳状态:主视图=主图存在;其余视图=对应视图文件存在
+				ready := fileExists(filepath.Join(ctx.assetsDir, "characters", safe+".png"))
+				if view != "" {
+					ready = fileExists(filepath.Join(ctx.assetsDir, "characters", safe+"_"+view+".png"))
+				}
+				views = append(views, map[string]any{"view": view, "gacha": gacha, "ready": ready})
 			}
-			sort.Slice(list, func(a, b int) bool { return list[a].mod.After(list[b].mod) })
-			if len(list) > 12 {
-				list = list[:12]
-			}
-			gacha := []map[string]any{}
-			for _, c := range list {
-				gacha = append(gacha, map[string]any{"image": c.path, "seed": c.seed})
-			}
-			chars[i]["gacha"] = gacha
+			chars[i]["views"] = views
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"exists": true, "episode_title": plan["episode_title"], "characters": chars, "shots": shots})
 }
 
 // manjuGacha 角色抽卡:一次连抽 count 张候选(随机 seed,前端可反复抽累积对比)
+// view 可选:空=正面主视图,full/side/detail=对应视图(角色卡 views 提示词)
 func manjuGacha(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	configPath := str(body["config"])
 	episode := orDefault(str(body["episode"]), "EP01")
 	char := str(body["char"])
+	view := str(body["view"])
 	count := 1
 	if v, ok := body["count"].(float64); ok {
 		count = int(v)
@@ -1829,7 +1979,12 @@ func manjuGacha(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config or char"}`, http.StatusBadRequest)
 		return
 	}
-	imgs, err := manjuGachaDraw(configPath, episode, char, count)
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	imgs, err := manjuGachaDraw(cp, episode, char, view, count)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "生成失败: " + err.Error()})
 		return
@@ -1842,19 +1997,27 @@ func manjuGacha(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// manjuGachaAdopt 采纳抽卡候选为正式定妆照
+// manjuGachaAdopt 采纳抽卡候选为正式定妆照(view 可选,同 manjuGacha)
 func manjuGachaAdopt(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	configPath := str(body["config"])
 	episode := orDefault(str(body["episode"]), "EP01")
 	char := str(body["char"])
+	view := str(body["view"])
 	image := str(body["image"])
 	if configPath == "" || char == "" || image == "" {
 		http.Error(w, `{"error":"missing config/char/image"}`, http.StatusBadRequest)
 		return
 	}
-	if err := manjuAdoptGacha(configPath, episode, char, image); err != nil {
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	configPath = cp
+	// 角色名 sanitize:防路径穿越(审计 H7;upload 已有方案成员校验,adopt 也需)
+	if err := manjuAdoptGacha(configPath, episode, char, view, image); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "采纳失败: " + err.Error()})
 		return
 	}
@@ -1885,6 +2048,7 @@ func manjuGachaUpload(w http.ResponseWriter, r *http.Request) {
 	configPath := r.FormValue("config")
 	episode := orDefault(r.FormValue("episode"), "EP01")
 	char := strings.TrimSpace(r.FormValue("char"))
+	view := strings.TrimSpace(r.FormValue("view"))
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "缺少上传文件")
@@ -1895,6 +2059,12 @@ func manjuGachaUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing config or char")
 		return
 	}
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	configPath = cp
 	ext := strings.ToLower(filepath.Ext(hdr.Filename))
 	switch ext {
 	case ".png", ".jpg", ".jpeg", ".webp":
@@ -1949,7 +2119,7 @@ func manjuGachaUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "文件超过 20MB 上限")
 		return
 	}
-	if err := manjuAdoptGacha(configPath, episode, char, saved); err != nil {
+	if err := manjuAdoptGacha(configPath, episode, char, view, saved); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "采纳失败: " + err.Error()})
 		return
 	}
@@ -2001,9 +2171,18 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/manju/env", manjuEnv)
 	mux.HandleFunc("POST /api/manju/run", manjuRun)
 	mux.HandleFunc("GET /api/manju/status", func(w http.ResponseWriter, r *http.Request) {
-		res := manjuStatusFor(r.URL.Query().Get("config"))
+		configPath := r.URL.Query().Get("config")
+		if configPath != "" {
+			cp, gerr := manjuGuardConfig(configPath)
+			if gerr != nil {
+				writeErr(w, http.StatusForbidden, gerr.Error())
+				return
+			}
+			configPath = cp
+		}
+		res := manjuStatusFor(configPath)
 		// 附带审片报告摘要(智能体模式数据源,前端复用同一轮询)
-		res["agent"] = agentStatusSummary(r.URL.Query().Get("config"))
+		res["agent"] = agentStatusSummary(configPath)
 		writeJSON(w, http.StatusOK, res)
 	})
 	mux.HandleFunc("POST /api/manju/kill", manjuKill)
