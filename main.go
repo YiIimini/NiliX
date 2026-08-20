@@ -9,6 +9,7 @@ import (
 	"flag"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -211,16 +212,24 @@ func saveWinLoop() {
 // - 任务栏图标天然是 NiliX.exe 自己的图标(不再显示 Edge 图标)
 // - 窗口由我们创建,尺寸/标题/位置全部可控,无 Edge 记忆/复用问题
 // - 窗口关闭 → 子进程退出;主进程(托盘/灵动岛/后台)不受影响
+// runMainWindow 打开主窗口:由独立 wails 进程(NiliX-Main.exe)提供——
+// frameless 自定义标题栏 + WebView2 集成(wails 后端成熟),替代旧的 --mainwin
+// go-webview2 子进程。NiliX-Main.exe 缺失时回退系统浏览器。
 func runMainWindow(url string) {
 	exe, err := os.Executable()
 	if err != nil {
 		openBrowser(url)
 		return
 	}
-	log.Printf("主窗口(子进程 WebView2)打开: %s", url)
-	cmd := exec.Command(exe, "--mainwin")
-	// 不能 HideWindow:子进程首个窗口(WebView2 主窗口)若被创建为隐藏,
-	// WebView2 环境初始化会卡死(隐藏父窗口的历史教训);exe 为 windowsgui 无控制台,正常显示即可
+	mainExe := filepath.Join(filepath.Dir(exe), "NiliX-Main.exe")
+	if _, err := os.Stat(mainExe); err != nil {
+		openBrowser(url)
+		return
+	}
+	log.Printf("主窗口(wails 进程)打开: %s", url)
+	cmd := exec.Command(mainExe)
+	// 不能 HideWindow:首个窗口若被创建为隐藏,WebView2 环境初始化会卡死(历史教训);
+	// exe 为 windowsgui 无控制台,正常显示即可
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 	if err := cmd.Start(); err != nil {
 		log.Printf("主窗口启动失败: %v(回退系统浏览器)", err)
@@ -501,7 +510,12 @@ func main() {
 }
 
 // startCapsule 拉起独立灵动岛胶囊进程(NiliX-Capsule.exe,与主 exe 同目录)。
+// 单实例:胶囊控制端口 8788 已监听(进程在跑)则不重复启动。
 func startCapsule() {
+	if conn, err := net.DialTimeout("tcp", "127.0.0.1:8788", 200*time.Millisecond); err == nil {
+		_ = conn.Close()
+		return // 胶囊已在运行
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return
@@ -524,15 +538,45 @@ func onReady(url string) func() {
 		systray.SetIcon(iconICO)
 		systray.SetTitle("NiliX")
 		systray.SetTooltip("NiliX")
-		mApp := systray.AddMenuItem("NiliX", "打开 NiliX 工作台")
-		mApp.SetIcon(iconICO) // 菜单项带应用图标
+		// 托盘菜单(美化):分组 + 图标 + ComfyUI 子菜单 + 胶囊开关
+		mApp := systray.AddMenuItem("NiliX 工作台", "打开 NiliX 工作台")
+		mApp.SetIcon(iconICO)
+		systray.AddSeparator()
+
+		mComfy := systray.AddMenuItem("ComfyUI", "ComfyUI 控制")
+		mComfy.SetIcon(iconICO)
+		mComfyOpen := mComfy.AddSubMenuItem("打开面板", "打开 ComfyUI 面板")
+		mComfyStart := mComfy.AddSubMenuItem("启动 ComfyUI", "启动 ComfyUI 服务")
+		mComfyStop := mComfy.AddSubMenuItem("停止 ComfyUI", "停止 ComfyUI 服务")
+		systray.AddSeparator()
+
+		// 灵动岛胶囊显示/隐藏(胶囊为独立 wails 进程)
+		mCapsule := systray.AddMenuItemCheckbox("灵动岛胶囊", "显示/隐藏灵动岛悬浮胶囊", true)
 		mAuto := systray.AddMenuItemCheckbox("开机自启", "开机自动启动 NiliX", autostart.Enabled())
+		systray.AddSeparator()
+
 		mQuit := systray.AddMenuItem("结束应用", "关闭窗口与服务并退出")
 		go func() {
 			for {
 				select {
 				case <-mApp.ClickedCh:
 					showMainWindow(url)
+				case <-mComfyOpen.ClickedCh:
+					openBrowser(api.ComfyURL())
+				case <-mComfyStart.ClickedCh:
+					if err := api.ComfyStart(); err != nil {
+						log.Printf("托盘启动 ComfyUI 失败: %v", err)
+					}
+				case <-mComfyStop.ClickedCh:
+					api.ComfyStop()
+				case <-mCapsule.ClickedCh:
+					if mCapsule.Checked() {
+						hideCapsule()
+						mCapsule.Uncheck()
+					} else {
+						startCapsule()
+						mCapsule.Check()
+					}
 				case <-mAuto.ClickedCh:
 					if mAuto.Checked() {
 						if autostart.Disable() == nil {
@@ -550,6 +594,22 @@ func onReady(url string) func() {
 			}
 		}()
 	}
+}
+
+// hideCapsule 隐藏灵动岛胶囊:调用胶囊进程控制端口 8788 /close(退出胶囊进程)。
+// 再次显示由托盘勾选触发 startCapsule 重新拉起。
+func hideCapsule() {
+	req, err := http.NewRequest("GET", "http://127.0.0.1:8788/close", nil)
+	if err != nil {
+		return
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("胶囊关闭请求失败(可能未运行): %v", err)
+		return
+	}
+	_ = resp.Body.Close()
 }
 
 // closeMainWindow 关闭管理主窗口(子进程 WebView2)。用 FindWindowW 精确匹配标题

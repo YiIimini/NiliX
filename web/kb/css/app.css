@@ -165,6 +165,25 @@ body:not(.view-graph-active) .side-collapse { display: none; }
 .settings-btn:hover { color: var(--accent); border-color: var(--accent); transform: rotate(60deg); box-shadow: 0 0 12px var(--glow); }
 .settings-btn:active { transform: rotate(60deg) scale(0.9); }
 .settings-btn svg { width: 17px; height: 17px; }
+/* ========== frameless 窗口标题栏(wails 主窗口,去系统标题栏) ==========
+   topbar 整体可拖拽(WebView2 NonClientRegionSupport → app-region: drag),
+   可交互元素(brand/nav/controls)标 no-drag 保持可点 */
+.topbar { -webkit-app-region: drag; }
+.topbar .brand, .topbar .nav, .topbar .controls { -webkit-app-region: no-drag; }
+.win-ctl { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; }
+.win-ctl-btn {
+  width: 30px; height: 28px;
+  border: none; border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px; line-height: 1;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.win-ctl-btn:hover { background: rgba(148, 180, 255, 0.14); color: var(--text); }
+.win-ctl-close:hover { background: rgba(231, 0, 11, 0.30); color: #ff6b6b; }
+
 .lang-switch { display: flex; align-items: center; gap: 10px; }
 /* 语言切换:胶囊按钮(与主题/风格选项统一视觉) */
 .lang-btn {

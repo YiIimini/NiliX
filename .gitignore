@@ -1,8 +1,11 @@
 # 构建产物(用 build.bat 重新编译)
 NiliX.exe
 NiliX-Capsule.exe
+NiliX-Main.exe
 capsule/build/
 capsule/capsule_test.exe
+mainwin/build/
+mainwin/mainwin_test.exe
 *.exe.old
 
 # 运行时数据与密钥(绝不入库)

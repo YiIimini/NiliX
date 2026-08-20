@@ -110,6 +110,12 @@
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
         </svg>
       </button>
+      <!-- frameless 窗口控制(wails 主窗口):最小化/最大化/关闭,经 8799 控制端口 -->
+      <span class="win-ctl" aria-hidden="false">
+        <button id="tb-min" class="win-ctl-btn" title="最小化">&#x2500;</button>
+        <button id="tb-max" class="win-ctl-btn" title="最大化">&#x25A1;</button>
+        <button id="tb-close" class="win-ctl-btn win-ctl-close" title="关闭">&#x2715;</button>
+      </span>
     </div>
   </header>
 
@@ -863,5 +869,15 @@
   <script src="/js/comfy.js?v=20260820e2"></script>
   <script src="/js/dirview.js?v=20260820e2"></script>
   <script src="/js/manju.js?v=20260820e2"></script>
+  <!-- frameless 窗口控制(wails 主窗口,外部 URL 无 runtime → HTTP 8799 控制端口) -->
+  <script>
+  (function () {
+    function ctl(act) { fetch("http://127.0.0.1:8799/" + act).catch(function () {}); }
+    var min = document.getElementById("tb-min"), max = document.getElementById("tb-max"), close = document.getElementById("tb-close");
+    if (min) min.addEventListener("click", function () { ctl("minimize"); });
+    if (max) max.addEventListener("click", function () { ctl("maximize"); });
+    if (close) close.addEventListener("click", function () { ctl("close"); });
+  })();
+  </script>
 </body>
 </html>
