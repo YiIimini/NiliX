@@ -168,7 +168,7 @@ body:not(.view-graph-active) .side-collapse { display: none; }
 /* ========== frameless 窗口标题栏(wails 主窗口,去系统标题栏) ==========
    不用 app-region/WebView2 原生非客户区(会拦截按钮点击,控制按钮无功能)。
    窗口拖拽由前端 JS 手动实现(web/kb/index.html inline script → HTTP 8799 /move)。 */
-.win-ctl { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; }
+.win-ctl { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; position: relative; z-index: 99999; }
 .win-ctl-btn {
   width: 30px; height: 28px;
   border: none; border-radius: 6px;
@@ -176,6 +176,7 @@ body:not(.view-graph-active) .side-collapse { display: none; }
   color: var(--muted);
   font-size: 12px; line-height: 1;
   cursor: pointer;
+  pointer-events: auto;
   display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.15s, color 0.15s;
 }

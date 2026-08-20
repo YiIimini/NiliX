@@ -614,6 +614,7 @@ func buildTray(app *application.App, url string) {
 	})
 
 	tray.SetMenu(menu)
+	tray.SetTooltip("NiliX")
 
 	// 状态灯动态动画:3s 探测状态(避免频繁 HTTP),500ms 切动画帧。
 	// 黄(启动中)=旋转加载圈;绿/蓝(运行/闲置)=呼吸脉冲;红(已停止)=静态。
@@ -628,6 +629,7 @@ func buildTray(app *application.App, url string) {
 			select {
 			case <-stateTicker.C:
 				st = comfyProbeState()
+				tray.SetTooltip("NiliX · ComfyUI " + st.label)
 			case <-animTicker.C:
 				frame++
 				switch st.mode {

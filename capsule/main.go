@@ -64,6 +64,9 @@ func main() {
 		Y:                0,
 		Windows: application.WindowsWindow{
 			DisableFramelessWindowDecorations: true,
+			// 胶囊是悬浮窗,不占任务栏(HiddenOnTaskbar)——避免与主应用窗口在任务栏
+			// 显示两个 NiliX 图标
+			HiddenOnTaskbar: true,
 		},
 	})
 
