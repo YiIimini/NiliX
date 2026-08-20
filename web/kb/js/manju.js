@@ -42,7 +42,7 @@
 
   const INT_KEYS = ["width", "height", "fps", "steps", "turbo_steps", "seed", "min_shot_seconds", "max_shot_seconds", "shots_per_take"];
   const STR_KEYS = ["comfy_url", "unet_fl2va", "unet_ref2va", "clip", "vae_video", "vae_audio",
-    "z_image_unet", "z_image_clip", "z_image_vae", "turbo_lora",
+    "z_image_unet", "z_image_clip", "z_image_vae", "turbo_lora", "turbo_lora_r2v", "animagine_ckpt",
     "chapters", "episode", "shots"];
 
   /* 数值字段默认值(与 direct_pipeline/new_project.py 保持一致,配置缺省/为空时回填,避免输入框空白) */
@@ -177,14 +177,15 @@
       "定妆照/场景图跨集自动复用，全季人物形象一致",
     ] },
     { ic: "🎯", t: "镜头(可选)", ps: [
-      "只影响<b>编码/渲染</b>：留空=全集所有镜头",
+      "只影响<b>编码/渲染/质检</b>：留空=全集所有镜头",
       "填 <b>1,2</b> / <b>1-3</b> / <b>1,3-5</b> 自由组合",
-      "典型用途：试拍先跑 1,2 看效果 / 断点续跑只重渲失败镜 / 局部重做（覆盖 NN.mp4）",
+      "典型用途：试拍先跑 1,2 看效果 / 局部重做（<b>覆盖</b> NN.mp4）/ 重渲质检不过的镜头",
+      "<b>填了镜头号 = 定点强制重渲</b>：已有产物也会覆盖重渲（只作用于<b>当前集</b>，集数 0 时为首集，不再逐集跑）",
     ] },
     { ic: "⏯", t: "断点续跑", ps: [
       "任何阶段中断/失败,右侧栏状态区<b>自动出现黄色提示条</b>(上次中断于 X 阶段),点「▶ 续跑」一键恢复;也可手动点「▶ 续跑」",
       "渲染中崩溃/被杀/重启:<b>渲染检查点</b>自动收回上次已提交未收的产物(查 ComfyUI history 免重渲,绝不重复烧 GPU)",
-      "只重渲失败镜头：镜头框填编号（如 7）再点渲染",
+      "<b>质检不过不卡死</b>：再点「一条龙/续跑」自动删旧重渲质检未过的镜头；也可在中断横幅直接选<b>「⏭ 跳过失败镜并续跑」</b>(该镜不计质检、不进成片)或<b>「✅ 接受并合成」</b>(未过镜头进成片,由你决策)",
       "缓存名带「项目_集号_镜头」前缀，多项目互不串用（集号由集数自动转 EPxx）",
     ] },
     { ic: "📺", t: "运行与质检", ps: [
@@ -193,6 +194,7 @@
       "运行状态卡：横向时间轴展示 7 阶段进度 + 产物缩略图",
       "左侧「成品列表」标题右侧可<b>搜索过滤</b>项目；小说管理页也支持书架搜索与阅读器全书搜索",
       "质检标准：时长达标 / 音轨 ≥1 / 近黑帧 ≤50% / 解码正常",
+      "质检结果落盘为报告：未过镜头下次渲染自动重渲；质检日志会直接列出失败镜头号；中断横幅可一键「跳过失败镜/接受结果」逃生",
       "想中途停：点红色「停止」；刷新页面不丢任务",
     ] },
     { ic: "⚠️", t: "常见坑", ps: [
@@ -305,7 +307,39 @@
     },
 
     /* 中断续跑提示:上次任务被中断/失败且日志有失败痕迹 → 动态创建「一键续跑」横幅;
-       无内容/无中断/无痕迹 → 彻底移除 DOM(静态 HTML 中不存在该元素,杜绝空提示条) */
+       无内容/无中断/无痕迹 → 彻底移除 DOM(静态 HTML 中不存在该元素,杜绝空提示条)
+       质检失败时额外给逃生门:跳过失败镜并续跑 / 接受质检结果并合成(坏镜进成片由用户决策) */
+    interruptTipHTML(s) {
+      const st = s.currentStage ? ("上次中断于「" + s.currentStage + "」阶段") : "检测到上次运行中断";
+      const m = (s.logTail || "").match(/质检未过镜头\s*([\d,]+)/);
+      let qcBtns = "";
+      if (s.currentStage === "qc" && m) {
+        qcBtns = `<button id="mi-tip-skip" class="hrs-btn" title="这些镜头不再质检、也不进成片,继续跑完合成">⏭ 跳过失败镜</button>` +
+          `<button id="mi-tip-accept" class="hrs-btn" title="接受当前结果,未过镜头将进成片(风险由你决定)">✅ 接受并合成</button>`;
+      }
+      // 布局:文字一行在上,按钮一行在下居中(用户明确要求)
+      return `<span class="mi-tip-t">⚠️ ${esc(st)} — 可一键续跑(幂等跳过已完成)${m ? ` · 质检未过镜头 ${esc(m[1])}` : ""}</span>` +
+        `<span class="mi-tip-actions"><button id="mi-tip-resume" class="hrs-btn hrs-btn-primary">▶ 续跑</button>${qcBtns}</span>`;
+    },
+    bindInterruptTip(div) {
+      const btn = $("mi-tip-resume");
+      if (btn) btn.addEventListener("click", () => { div.remove(); this.runResume(); });
+      const skipBtn = $("mi-tip-skip");
+      if (skipBtn) skipBtn.addEventListener("click", () => {
+        const m = ((this.status && this.status.logTail) || "").match(/质检未过镜头\s*([\d,]+)/);
+        if (!m || !this.project) { div.remove(); this.runResume(); return; }
+        post("/api/manju/qc/decision", { config: this.project, action: "skip", shots: m[1] })
+          .then(() => { div.remove(); this.runResume(); })
+          .catch((e) => this.setErr("跳过失败镜失败: " + e.message));
+      });
+      const accBtn = $("mi-tip-accept");
+      if (accBtn) accBtn.addEventListener("click", () => {
+        if (!this.project) { div.remove(); this.runResume(); return; }
+        post("/api/manju/qc/decision", { config: this.project, action: "accept" })
+          .then(() => { div.remove(); this.runResume(); })
+          .catch((e) => this.setErr("接受质检结果失败: " + e.message));
+      });
+    },
     renderInterruptTip() {
       const s = this.status || {};
       const interrupted = !s.running && (s.stopped || (s.rc !== null && s.rc !== undefined && s.rc !== 0));
@@ -317,11 +351,10 @@
         if (tip) tip.remove(); // 平时 DOM 彻底无此元素
         return;
       }
+      const html = this.interruptTipHTML(s);
       if (tip) { // 已存在:仅更新内容
-        const st = s.currentStage ? ("上次中断于「" + s.currentStage + "」阶段") : "检测到上次运行中断";
-        tip.innerHTML = `<span class="mi-tip-t">⚠️ ${esc(st)} — 可一键续跑(幂等跳过已完成)</span><button id="mi-tip-resume" class="hrs-btn hrs-btn-primary">▶ 续跑</button>`;
-        const btn = $("mi-tip-resume");
-        if (btn) btn.addEventListener("click", () => { tip.remove(); this.runResume(); });
+        tip.innerHTML = html;
+        this.bindInterruptTip(tip);
         return;
       }
       // 动态创建:插到运行状态区 badge 行(第一个 .manju-row)之后
@@ -330,12 +363,10 @@
       const div = document.createElement("div");
       div.id = "manju-interrupt-tip";
       div.className = "manju-interrupt-tip";
-      const st = s.currentStage ? ("上次中断于「" + s.currentStage + "」阶段") : "检测到上次运行中断";
-      div.innerHTML = `<span class="mi-tip-t">⚠️ ${esc(st)} — 可一键续跑(幂等跳过已完成)</span><button id="mi-tip-resume" class="hrs-btn hrs-btn-primary">▶ 续跑</button>`;
+      div.innerHTML = html;
       const firstRow = wrap.querySelector(".manju-row");
       wrap.insertBefore(div, firstRow ? firstRow.nextSibling : wrap.firstChild);
-      const btn = $("mi-tip-resume");
-      if (btn) btn.addEventListener("click", () => { div.remove(); this.runResume(); });
+      this.bindInterruptTip(div);
     },
 
 
@@ -541,7 +572,7 @@
 
     /* 预告片自动剪辑:高分镜头掐头去尾拼接 30s(音量归一+字幕),产物落工作目录 */
     makeTrailer() {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
+      if (this.denyNoProject()) return;
       const btn = $("manju-trailer");
       btn.disabled = true;
       btn.textContent = "剪辑中…";
@@ -773,7 +804,14 @@
     },
     renderSettings(n, ag, paths) {
       n = n || {};
+      const agFail = ag == null; // 智能体配置请求失败(null)标记:视觉区提示而非静默全空
       ag = ag || {};
+      // 默认服务描述:LLM 区回填与绑定区「未配置」提示共用。
+      // 注意:必须定义在函数顶层——曾定义在 LLM 区 IIFE 内,绑定区引用抛 ReferenceError
+      // 导致其后的按钮绑定(微信通知保存等)全部中断,表现为"配置了保存不了"
+      const defSvc = (n.defaultBaseUrl && n.defaultModel)
+        ? n.defaultBaseUrl + " / " + n.defaultModel
+        : "https://api.deepseek.com / deepseek-chat";
       // 「目录与部署」区:5 个路径输入 + 生效值 + ComfyUI/技能状态(数据来自 /api/manju/paths)
       const _paths = paths || {};
       const pathsHTML = (() => {
@@ -781,15 +819,16 @@
         const cfg = _paths.configured || {};
         const eff = _paths.effective || {};
         const rows = [
-          ["mp-manju-root", "manju_root", "项目目录(漫剧项目)"],
-          ["mp-novel-root", "novel_root", "小说库根目录"],
-          ["mp-comfy-root", "comfy_root", "ComfyUI 安装(含 main.py/.venv)"],
-          ["mp-comfy-shared", "comfy_shared", "ComfyUI 共享(模型/输入/输出)"],
-          ["mp-novel-skill", "novel_skill", "小说续作技能(词库/qa)"],
-        ].map(([id, key, label]) =>
+          ["mp-manju-root", "manju_root", "项目目录(漫剧项目)", ""],
+          ["mp-novel-root", "novel_root", "小说库根目录", ""],
+          ["mp-comfy-root", "comfy_root", "ComfyUI 安装(含 main.py/.venv)", ""],
+          ["mp-comfy-shared", "comfy_shared", "ComfyUI 共享(模型/输入/输出)", ""],
+          ["mp-comfy-output", "comfy_output", "ComfyUI 成品输出目录", "自动(跟随共享目录 output)"],
+          ["mp-novel-skill", "novel_skill", "小说续作技能(词库/qa)", ""],
+        ].map(([id, key, label, ph]) =>
           `<div class="manju-set-item">
             <div class="manju-set-item-title">${label}</div>
-            <input id="${id}" class="manju-input manju-mono" placeholder="自动(exe 目录/${key})" value="${esc(cfg[key] || "")}" spellcheck="false" autocomplete="off">
+            <input id="${id}" class="manju-input manju-mono" placeholder="${ph || "自动(exe 目录/" + key + ")"}" value="${esc(cfg[key] || "")}" spellcheck="false" autocomplete="off">
             <div class="manju-meta">生效: ${esc(eff[key] || "--")}</div>
           </div>`
         ).join("");
@@ -844,9 +883,6 @@
                 const llmHit = LLM_PRESETS.find((p) => p.url.replace(/\/+$/, "") === curUrl && p.model === curModel);
                 const llmCustom = !llmHit && (curUrl || curModel);
                 const llmSel = llmHit ? llmHit.id : (llmCustom ? "__custom__" : "");
-                const defSvc = (n.defaultBaseUrl && n.defaultModel)
-                  ? n.defaultBaseUrl + " / " + n.defaultModel
-                  : "https://api.deepseek.com / deepseek-chat";
                 return `
               <div class="manju-field-row">
                 <label>服务商</label>
@@ -879,13 +915,19 @@
                 const gd = ag.globalDefaults || {};
                 // 项目缺失(config 不存在):视觉区回显全局默认(项目未配置时本就自动用全局),避免整块空白
                 const projMissing = !!ag.projectMissing;
-                const vModel = ag.visionModel || (projMissing ? gd.visionModel : "") || "";
-                const vUrl = ag.visionBaseUrl || (projMissing ? gd.visionBaseUrl : "") || "";
-                const vHasKey = ag.hasVisionKey || (projMissing ? !!gd.hasVisionKey : false);
+                // 项目配置优先;未单独配置时回显全局默认——运行时 loadAgentCfg 本就项目空→回退全局,
+                // 若这里不回显,用户会看到"视觉模型被清空"(实际配置在全局默认里一直生效)
+                const vModel = ag.visionModel || gd.visionModel || "";
+                const vUrl = ag.visionBaseUrl || gd.visionBaseUrl || "";
+                const vHasKey = ag.hasVisionKey || !!gd.hasVisionKey;
+                // 项目存在但未单独配置、正回显全局默认:标注来源,避免误以为被清空
+                const usingGlobal = !projMissing && !ag.visionModel && (gd.visionModel || gd.hasVisionKey);
                 const presetHit = VISION_PRESETS.find((p) => p.id === vModel);
                 const isCustom = vModel && !presetHit;
                 return `
               ${projMissing ? '<div class="manju-set-status st-bad">⚠️ 项目 config 不存在（目录已删除/未创建），以下展示<b>全局默认</b>配置，重建项目后自动生效</div>' : ""}
+              ${usingGlobal ? '<div class="manju-set-status st-bad">⚠️ 当前项目未单独配置视觉模型，以下展示<b>全局默认</b>值（运行中一直在生效）；点「保存智能体配置」即写入当前项目</div>' : ""}
+              ${agFail ? '<div class="manju-set-status st-bad">⚠️ 智能体配置读取失败（服务异常），请关闭弹窗重开重试</div>' : ""}
               <div class="manju-field-row">
                 <label>模型</label>
                 <select id="manju-ag-model" class="manju-input">
@@ -929,7 +971,7 @@
               <div class="manju-set-status">审片八维度对齐 MiniMax H3 官方能力：主体/场景一致性(Ref2VA 参考保持)、动作/运镜符合(多模态指令遵循)、可见性(近黑防线)、技术质量(畸变/水印)、风格、口型对白。低分镜头由修复师改写 H3 提示词后自动定点重渲染（「🤖 AI 一条龙」走全流程）。点「🤖 AI 一条龙」会先询问是否让 Agent 深度分析小说内容并更新渲染风格（是=分析后更新；否=按当前配置直接跑）。</div>
               ${(() => {
                 const g = ag.globalDefaults || {};
-                if (!g.visionModel && !g.hasVisionKey && !g.enabled) return "";
+                // 恒显示:未配置也明确告知,避免"视觉区整块空白误以为被清空"
                 return `<div class="manju-set-status manju-set-global">🌐 全局默认（所有项目共用）：${g.visionModel ? esc(g.visionModel) : "未设模型"}${g.hasVisionKey ? " · Key 已存" : ""} · 及格 ${Math.round(g.passScore || 75)} · 返工 ${g.maxRetries == null ? 2 : g.maxRetries} 轮${g.enabled ? "" : " · 智能模式默认关"}。项目未单独配置时自动使用，点「另存为全局默认」可更新。</div>`;
               })()}
               <div class="manju-set-actions">
@@ -974,44 +1016,34 @@
           </div>
           <div class="manju-set-card">
             <div class="manju-set-head">
+              <span class="manju-set-icon">📦</span>
+              <span class="manju-set-title">配置管理</span>
+            </div>
+            <div class="manju-set-body">
+              <div class="manju-set-line">
+                <button id="mc-export" class="hrs-btn hrs-btn-primary">导出为 JSON</button>
+                <span class="manju-meta">导出当前渲染配置为 JSON，可跨项目复用</span>
+              </div>
+              <div class="manju-set-line">
+                <button id="mc-import" class="hrs-btn">选择 JSON 文件</button>
+                <span class="manju-meta">从 JSON 文件导入渲染配置，点「保存参数」写入项目</span>
+                <input id="mc-import-file" type="file" accept=".json,application/json" style="display:none">
+              </div>
+              <div class="manju-set-line">
+                <button id="mc-reset" class="hrs-btn hrs-btn-danger">恢复默认</button>
+                <span class="manju-meta">按当前参数为默认（保留当前值，移除自定义风格），需重新保存</span>
+              </div>
+              <span id="mc-import-msg" class="manju-meta manju-set-msg"></span>
+            </div>
+          </div>
+          </div>
+          <div class="manju-set-card">
+            <div class="manju-set-head">
               <span class="manju-set-icon">🗂️</span>
               <span class="manju-set-title">目录与部署</span>
             </div>
             <div class="manju-set-body">
               ${pathsHTML}
-            </div>
-          </div>
-          <div class="manju-set-card">
-            <div class="manju-set-head">
-              <span class="manju-set-icon">📦</span>
-              <span class="manju-set-title">配置管理</span>
-            </div>
-            <div class="manju-set-body">
-              <div class="manju-set-grid">
-                <div class="manju-set-item">
-                  <div class="manju-set-item-title">导出配置</div>
-                  <div class="manju-meta">把当前渲染配置(风格/数值/模型/审核)导出为 JSON 文件,可跨项目复用。</div>
-                  <div class="manju-set-actions">
-                    <button id="mc-export" class="hrs-btn hrs-btn-primary">导出为 JSON</button>
-                  </div>
-                </div>
-                <div class="manju-set-item">
-                  <div class="manju-set-item-title">导入配置</div>
-                  <div class="manju-meta">从 JSON 文件导入渲染配置(应用到当前表单,点「保存参数」写入项目)。</div>
-                  <div class="manju-set-actions">
-                    <input id="mc-import-file" type="file" accept=".json,application/json" style="display:none">
-                    <button id="mc-import" class="hrs-btn">选择 JSON 文件</button>
-                    <span id="mc-import-msg" class="manju-meta manju-set-msg"></span>
-                  </div>
-                </div>
-                <div class="manju-set-item">
-                  <div class="manju-set-item-title">恢复默认</div>
-                  <div class="manju-meta">将渲染配置恢复到默认值(768×1344 / 20步 / 2.5D 动漫等),当前项目需重新保存。</div>
-                  <div class="manju-set-actions">
-                    <button id="mc-reset" class="hrs-btn hrs-btn-danger">恢复默认</button>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </div>`, true);
@@ -1048,7 +1080,10 @@
           if (msg) msg.textContent = "⏹ 已请求停止";
         });
       });
-      $("mp-save").addEventListener("click", () => {
+      // mp-save 仅在 paths 接口返回 effective 时渲染;失败/缺失时无该按钮,
+      // 必须 if 保护——否则 $() 为 null 抛错会中断其后所有绑定(与 defSvc 同款事故)
+      const mpSave = $("mp-save");
+      if (mpSave) mpSave.addEventListener("click", () => {
         const msg = $("mp-msg");
         if (msg) msg.textContent = "保存中…";
         post("/api/manju/paths", {
@@ -1056,6 +1091,7 @@
           novel_root: $("mp-novel-root").value.trim(),
           comfy_root: $("mp-comfy-root").value.trim(),
           comfy_shared: $("mp-comfy-shared").value.trim(),
+          comfy_output: $("mp-comfy-output").value.trim(),
           novel_skill: $("mp-novel-skill").value.trim(),
         }).then((r) => {
           if (msg) msg.textContent = r.ok ? "✅ 已保存并生效(ComfyUI 重启后完全生效)" : ("❌ " + (r.error || "保存失败"));
@@ -1587,6 +1623,10 @@
       INT_KEYS.forEach((k) => { const v = this.mapInt(k); if (v !== undefined) body[k] = v; });
       STR_KEYS.forEach((k) => { const v = this.mapStr(k); if (v) body[k] = v; });
       body.neg_prompt = this.strVal("manju-neg-prompt") || "";
+      // 角色模型 checkpoint(char_models.男/女):前端 camelCase 提交,后端 setCharModel 写入 render.char_models
+      const charM = this.strVal("manju-char-male"), charF = this.strVal("manju-char-female");
+      if (charM) body.charModelMale = charM;
+      if (charF) body.charModelFemale = charF;
       body.banned_words = this.strVal("manju-banned-words").split("\n").map((s) => s.trim()).filter(Boolean);
       body.mosaic_enabled = $("manju-mosaic-enabled").checked;
       body.mosaic_level = this.intVal("manju-mosaic-level");
@@ -1675,19 +1715,21 @@
       reader.readAsText(file);
     },
     resetConfig() {
-      // 恢复默认:清空草稿 + 用 NUM_DEFAULTS 回填表单 + 默认风格
+      // 恢复默认 = 以当前值为默认基准:保留当前表单参数(自定义风格不参与默认),
+      // 仅清空草稿并移除自定义风格标签——不再跳回出厂默认(768×1344/20步/2.5D)
       this.clearDraft();
-      this.style = "2.5d";
-      this.clearForm();
+      const presets = STYLE_PRESETS.map((p) => p.key);
+      const kept = String(this.style || "").split("+").map((s) => s.trim()).filter((s) => presets.includes(s));
+      this.style = kept.length ? kept.join("+") : "2.5d";
       this.renderStyle();
       this.renderRatio();
       this.closeModal();
       const msg = $("manju-render-msg");
-      if (msg) { msg.textContent = "✅ 已恢复默认值(点「保存参数」写入项目)"; setTimeout(() => { msg.textContent = ""; }, 3000); }
+      if (msg) { msg.textContent = "✅ 已按当前参数为默认(自定义风格已移除;点「保存参数」写入项目)"; setTimeout(() => { msg.textContent = ""; }, 3000); }
     },
 
     saveRender() {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
+      if (this.denyNoProject()) return;
       const body = this.collectRenderConfig();
       body.config = this.project;
       const msg = $("manju-render-msg");
@@ -1718,16 +1760,51 @@
         comfy_url: "manju-comfy-url", neg_prompt: "manju-neg-prompt", unet_fl2va: "manju-unet-fl2va", unet_ref2va: "manju-unet-ref2va",
         clip: "manju-clip", vae_video: "manju-vae-video", vae_audio: "manju-vae-audio",
         z_image_unet: "manju-zimage-unet", z_image_clip: "manju-zimage-clip", z_image_vae: "manju-zimage-vae",
-        turbo_lora: "manju-turbo-lora", turbo_lora_r2v: "manju-turbo-lora-r2v",
+        turbo_lora: "manju-turbo-lora", turbo_lora_r2v: "manju-turbo-lora-r2v", animagine_ckpt: "manju-animagine",
         chapters: "manju-chapters", episode: "manju-episode", shots: "manju-only",
       };
       return $(m[k]).value.trim();
     },
 
+    /* 运行中点击执行类按钮的统一拦截:弹醒目模态(静默 setErr 用户常以为"没反应"),
+       告知当前正在跑什么阶段,引导停止或等待 */
+    denyIfRunning() {
+      if (!this.status.running) return false;
+      const stageCN = { env: "项目体检", plan: "方案", assets: "资产", encode: "编码", render: "渲染", qc: "质检", assemble: "合成", upscale: "云端 2K", all: "一条龙" };
+      const st = stageCN[this.status.currentStage] || this.status.currentStage || "运行中";
+      this.openModal("⏳ 已有任务运行中",
+        `<div class="manju-confirm">
+          <p class="mc-q">当前有任务正在执行（${esc(st)} 阶段），不能同时启动新任务</p>
+          <p class="mc-d">可能是崩溃恢复自动续跑的任务。请到「运行状态」查看进度；<br>如需改跑其他内容，先点红色「停止」按钮结束当前任务。</p>
+          <div class="manju-row" style="justify-content:center;margin-top:16px">
+            <button id="mc-ok-run" class="hrs-btn hrs-btn-primary">知道了</button>
+          </div>
+        </div>`);
+      const ok = $("mc-ok-run");
+      if (ok) ok.addEventListener("click", () => this.closeModal());
+      return true;
+    },
+
+    /* 未选项目点击执行类按钮的统一拦截:弹醒目模态(静默 setErr 用户常以为"没反应") */
+    denyNoProject() {
+      if (this.project) return false;
+      this.openModal("📌 请先选择项目",
+        `<div class="manju-confirm">
+          <p class="mc-q">请先在顶部「项目」下拉框选择一个项目，再执行该操作</p>
+          <p class="mc-d">还没有项目？点左上「+ 新建项目」创建，或到「小说」页先创作一部作品。</p>
+          <div class="manju-row" style="justify-content:center;margin-top:16px">
+            <button id="mc-ok-proj" class="hrs-btn hrs-btn-primary">知道了</button>
+          </div>
+        </div>`);
+      const ok = $("mc-ok-proj");
+      if (ok) ok.addEventListener("click", () => this.closeModal());
+      return true;
+    },
+
     /* ---- 阶段执行 ---- */
     runStage(phase) {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
-      if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
+      if (this.denyNoProject()) return;
+      if (this.denyIfRunning()) return;
       this.setErr("");
       this.logNote("(启动 " + phase + " ...)");
       post("/api/manju/run", {
@@ -1738,8 +1815,8 @@
 
     /* 一键续跑:从上次中断处继续(= 一条龙,管线幂等自动跳过已完成阶段) */
     runResume() {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
-      if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
+      if (this.denyNoProject()) return;
+      if (this.denyIfRunning()) return;
       this.setErr("");
       const last = this.status && this.status.currentStage ? this.status.currentStage : "";
       const hint = last ? "，上次中断于「" + last + "」阶段" : "";
@@ -1752,8 +1829,8 @@
 
     /* AI 一条龙:先询问是否让 Agent 深度分析小说并更新渲染配置(主要是风格),再走全流程 */
     runAgent() {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
-      if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
+      if (this.denyNoProject()) return;
+      if (this.denyIfRunning()) return;
       this.setErr("");
       this.openModal("🤖 AI 一条龙",
         `<div class="manju-confirm">
@@ -1795,8 +1872,8 @@
 
     /* AI 一条龙本体:一条龙 + 智能体调度(剧本复核 → 渲染 → 审片判分 → 自动返工 → 例外升级) */
     runAgentFlow() {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
-      if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
+      if (this.denyNoProject()) return;
+      if (this.denyIfRunning()) return;
       this.setErr("");
       this.logNote("(🤖 AI 一条龙启动: 剧本复核 → 渲染 → 审片官判分 → 未达标自动返工 ...)");
       post("/api/manju/run", {
@@ -1808,7 +1885,7 @@
     /* ---- 项目体检:全项诊断 + 一键修复 ---- */
     /* 项目体检(整合):智能体检 items(可一键修复) + 环境自检文本(ComfyUI/模型/依赖就绪性,只读) */
     openHealth() {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
+      if (this.denyNoProject()) return;
       this.openModal("🔍 项目体检", `<div class="mj-health">
         <div class="mj-health-load" id="mj-hp-load">🤖 智能体正在体检项目…</div>
         <div id="mj-hp-items"></div>
@@ -2319,8 +2396,9 @@
     /* 打开抽卡弹窗:完整 抽卡/采纳 操作在此进行 */
     openGachaModal() {
       if (!this.project) return;
+      const gen = this._modalGen; // 代次守卫:弹窗关闭/切换后放弃回弹,防止劫持当前弹窗
       this.renderGachaModal();          // 先渲染(可能已有 plan)
-      this.loadPlan(() => this.renderGachaModal()); // 拉最新方案再刷一次
+      this.loadPlan(() => { if (gen === this._modalGen) this.renderGachaModal(); }); // 拉最新方案再刷一次
     },
 
     /* 生成角色/场景方案(前置·角色抽卡,char_gacha.py --plan-characters) */
@@ -2398,11 +2476,13 @@
 
     drawGacha(charId, btn) {
       if (!this.project) return;
+      const gen = this._modalGen; // 代次守卫:抽卡耗时期间弹窗被关闭则不回弹
       btn.textContent = "抽卡中…";
       btn.disabled = true;
       post("/api/manju/gacha", { config: this.project, episode: this.episode, char: charId }).then((r) => {
         btn.textContent = "🎲 抽卡";
         btn.disabled = false;
+        if (gen !== this._modalGen) return;
         if (r.ok) {
           this.gacha[charId] = { image: r.image, seed: r.seed };
           this.renderGachaModal();
@@ -2410,20 +2490,22 @@
       }).catch((e) => {
         btn.textContent = "🎲 抽卡";
         btn.disabled = false;
-        this.setErr(e.message);
+        if (gen === this._modalGen) this.setErr(e.message);
       });
     },
 
     adoptGacha(charId) {
       const g = this.gacha[charId];
       if (!this.project || !g || !g.image) return;
+      const gen = this._modalGen; // 代次守卫:采纳请求期间弹窗被关闭则不回弹
       post("/api/manju/gacha/adopt", { config: this.project, episode: this.episode, char: charId, image: g.image }).then((r) => {
+        if (gen !== this._modalGen) return;
         if (r.ok) {
           g.adopted = true;
           this.renderGachaModal();
           this.refreshOutputs();
         } else this.setErr((r.error || "采纳失败").trim());
-      }).catch((e) => this.setErr(e.message));
+      }).catch((e) => { if (gen === this._modalGen) this.setErr(e.message); });
     },
 
     /* 上传本地角色图:选图后直接采纳为正式定妆照(自动生成正脸参考) */
@@ -2439,6 +2521,7 @@
       const charId = this._uploadChar;
       this._uploadChar = "";
       if (this.status.running) { this.setErr("任务运行中，请结束后再上传角色图"); return; }
+      const gen = this._modalGen; // 代次守卫:上传耗时期间弹窗被关闭则不回弹
       const fd = new FormData();
       fd.append("config", this.project);
       fd.append("episode", this.episode);
@@ -2447,13 +2530,14 @@
       fetch("/api/manju/gacha/upload", { method: "POST", body: fd, cache: "no-store", headers: { "X-NiliX-Token": nilixTok() } })
         .then((r) => r.json())
         .then((r) => {
+          if (this._modalGen !== gen) return; // 代次守卫:上传耗时期间弹窗被关闭则不回弹
           if (r.ok) {
             this.gacha[charId] = { image: r.image, seed: 0, adopted: true };
             this.renderGachaModal();
             this.refreshOutputs();
           } else this.setErr("上传采纳失败: " + (r.error || ""));
         })
-        .catch((e) => this.setErr("上传失败: " + e.message));
+        .catch((e) => { if (this._modalGen === gen) this.setErr("上传失败: " + e.message); });
     },
 
     /* 产物分区折叠状态:人物/场景默认折叠,视频默认展开;用户切换后按 localStorage 记忆 */
@@ -2579,7 +2663,7 @@
 
     /* 剪映草稿导出(同步):视频轨+字幕轨,返回草稿路径;未装 pyJianYingDraft 时透出安装指引 */
     exportJianying(ep) {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
+      if (this.denyNoProject()) return;
       this.logNote("(📦 剪映草稿导出中 ...)");
       post("/api/manju/jianying", { config: this.project, episode: ep || this.episode })
         .then((r) => {
@@ -2591,14 +2675,13 @@
           } else {
             this.openModal("📦 导出失败", `<div class="manju-confirm"><p class="mc-d" style="white-space:pre-wrap">${esc(r.error || "未知错误")}</p></div>`);
           }
-          if (log) log.textContent = "";
-        }).catch((e) => { this.setErr(e.message); if (log) log.textContent = ""; });
+        }).catch((e) => { this.setErr(e.message); });
     },
 
     /* 云端 2K 定稿:整集(shots 空)或指定镜头;后台任务,进度走运行日志 */
     /* 云端 2K 定稿:先请求费用预估,弹出准入确认(总时长/费用/产物落点),确认后提交 */
     startUpscale(ep, shots) {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
+      if (this.denyNoProject()) return;
       if (this.status.running) { this.setErr("已有任务运行中，先停止"); return; }
       this.setErr("");
       const cfg = this.project, ep2 = ep || this.episode, shots2 = shots || "";
@@ -2628,13 +2711,13 @@
 
     /* 产物操作弹窗:镜头文件附「云端 2K」入口;删除支持 文件级(单 mp4)/ 集级 */
     openDeleteMenu(path, ep, isFinal) {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
+      if (this.denyNoProject()) return;
       const fname = path.split(/[\\/]/).pop() || "";
       const isShot = /^\d+\.mp4$/i.test(fname); // 本地定稿镜头(非成片/预告片/2K 产物)
       this.openModal("🛠 产物操作",
         `<div class="manju-confirm">
           <p class="mc-q">要做什么?</p>
-          <p class="mc-d">文件:${esc(fname)}${isFinal ? "(成片)" : isShot ? "(镜头)" : ""}${ep ? "<br>集:${esc(ep)}" : ""}</p>
+          <p class="mc-d">文件:${esc(fname)}${isFinal ? "(成片)" : isShot ? "(镜头)" : ""}${ep ? "<br>集:" + esc(ep) : ""}</p>
           <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px;flex-wrap:wrap">
             ${isShot ? '<button id="up-2k" class="hrs-btn hrs-btn-primary" title="此镜提交 MiniMax 云端升 2K(需设置里填 Key)">☁️ 此镜云端 2K</button>' : ""}
             <button id="del-file" class="hrs-btn">删除此文件</button>
@@ -2669,7 +2752,7 @@
 
     /* 产物清理:展示三类可再生成产物占用,勾选后一键清理(定妆照/定稿/成片不动) */
     openCleanup() {
-      if (!this.project) { this.setErr("请先选择项目"); return; }
+      if (this.denyNoProject()) return;
       get("/api/manju/cleanup/sizes?config=" + encodeURIComponent(this.project)).then((sizes) => {
         const fmtB = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB";
         const row = (key, label, hint) => {

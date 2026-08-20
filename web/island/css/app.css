@@ -335,6 +335,21 @@ body.high .status-dot { animation-name: pulseWarn; }
   transition: background 0.2s, color 0.2s;
 }
 .btn-close:hover { background: rgba(231, 0, 11, 0.16); color: var(--danger); }
+/* ✕ 全退防误触:armed 态 = 红色发光「退出?」按钮(3s 内再点才退出,点收起/移开鼠标取消) */
+.btn-close.armed {
+  width: auto;
+  min-width: 34px;
+  padding: 0 6px;
+  background: var(--danger);
+  color: #fff;
+  font-weight: 700;
+  border-radius: 8px;
+  animation: nix-close-pulse 0.7s ease-in-out infinite alternate;
+}
+@keyframes nix-close-pulse {
+  from { box-shadow: 0 0 4px rgba(231, 0, 11, 0.35); transform: scale(1); }
+  to   { box-shadow: 0 0 14px rgba(231, 0, 11, 0.85); transform: scale(1.08); }
+}
 
 /* 主题切换按钮(现为设置按钮入口) */
 .theme-btn {

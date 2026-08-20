@@ -179,7 +179,7 @@ const App = {
         // 空输入沿用 GET 返回的掩码值（后端检测 **** 即不改）；输入新 key 则覆盖
         if (key) cfg.llm.api_key = key;
         const rr = await fetch("/api/settings", {
-          method: "PUT", headers: { "Content-Type": "application/json" },
+          method: "PUT", headers: this.nilixHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify(cfg),
         });
         if (rr.ok) {

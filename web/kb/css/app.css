@@ -652,12 +652,6 @@ body.view-dir-active .top-search { display: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.bk-meta {
-  margin-top: 6px;
-  font-size: 11.5px;
-  color: rgba(230, 238, 250, 0.82);
-  font-family: var(--font-mono);
-}
 .bk-cover::after {
   content: "⌄";
   position: absolute;
@@ -2916,17 +2910,8 @@ select.manju-input {
   background: color-mix(in srgb, var(--surface) 55%, transparent);
   overflow: hidden;
 }
-/* 宽弹窗:API Key 与 微信通知 并排两列,配置管理独占一行三列 */
-/* 设置弹窗 2 列,按卡片高度合理配对:智能体调度最高独占整行;微信通知与配置管理(均为中矮卡)并排均衡;
-   目录与部署全宽紧贴微信通知下方(内部 2 列)。消除并排高度差产生的空白。 */
-.manju-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
-.manju-settings .manju-set-card:nth-child(1) { grid-column: 1 / -1; }  /* 智能体调度:整行 */
-.manju-settings .manju-set-card:nth-child(2) { grid-column: 1; }       /* 微信通知:左 */
-.manju-settings .manju-set-card:nth-child(4) { grid-column: 2; }       /* 配置管理:右(与微信通知并排) */
-.manju-settings .manju-set-card:nth-child(3) { grid-column: 1 / -1; }  /* 目录与部署:整行(微信通知正下方) */
-/* 配置管理卡与微信通知并排(窄卡):内部网格改单列竖排,避免 3 列挤压 */
-.manju-settings .manju-set-card:nth-child(4) .manju-set-grid { grid-template-columns: 1fr; gap: 10px; }
-.manju-settings .manju-set-card:nth-child(4) .manju-set-item { padding: 10px 12px; }
+/* 设置弹窗布局:智能体调度最高独占整行;微信通知与配置管理(均为中矮卡)并排均衡;
+   目录与部署全宽紧贴并排卡下方(内部 2 列)。实现见文末 .manju-settings 纵向流 + .manju-set-row2-cards 并排。 */
 .manju-set-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .manju-set-grid-2 { grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .manju-set-item {
@@ -2956,8 +2941,8 @@ select.manju-input {
 .manju-field-row .manju-input { flex: 1; min-width: 0; }
 .manju-mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .manju-set-status { font-size: 12px; line-height: 1.5; padding: 0 2px; }
-.manju-set-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.manju-set-msg { margin-left: auto; }
+.manju-set-actions { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.manju-set-msg { margin-left: 8px; }
 /* ===================== 使用说明：卡片化 ===================== */
 .manju-guide { display: flex; flex-direction: column; gap: 14px; }
 /* 顶部 Hero */
@@ -3674,170 +3659,6 @@ select,
 }
 select option { text-align: center; }
 
-/* 设置弹窗改为纵向流:智能体主卡整行,通知+配置管理并排 */
-.manju-settings { display: flex; flex-direction: column; gap: 14px; }
-.manju-set-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; align-items: center; }
-.manju-set-row2-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: stretch; }
-.manju-set-row2-cards .manju-set-card { min-width: 0; }
-.manju-set-row2-cards .manju-set-grid { grid-template-columns: 1fr; }
-@media (max-width: 900px) {
-  .manju-set-row2, .manju-set-row2-cards { grid-template-columns: 1fr; }
-}
-
-/* 卡片通用打磨 */
-.manju-set-card { border-radius: 14px; transition: border-color .18s ease; }
-.manju-set-card:hover { border-color: color-mix(in srgb, var(--accent, #6799fe) 32%, var(--panel-border)); }
-.manju-set-head { padding: 11px 16px; gap: 10px; }
-.manju-set-title { font-size: 13.5px; }
-.manju-set-body { padding: 15px 16px 16px; gap: 11px; }
-
-/* 图标渐变芯片 */
-.manju-set-icon {
-  width: 26px; height: 26px; flex: none;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 8px; font-size: 14px; line-height: 1;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent, #6799fe) 30%, transparent), color-mix(in srgb, var(--accent, #6799fe) 10%, transparent));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, #6799fe) 32%, transparent);
-}
-
-/* 智能体主卡:渐变描边 + 紫晕 */
-.manju-set-hero {
-  border: 1.2px solid transparent;
-  background:
-    linear-gradient(color-mix(in srgb, var(--bg, #0e1117) 82%, var(--surface, transparent)), color-mix(in srgb, var(--bg, #0e1117) 82%, var(--surface, transparent))) padding-box,
-    linear-gradient(135deg, color-mix(in srgb, #7c5cff 75%, transparent), color-mix(in srgb, #b45cff 60%, transparent) 55%, color-mix(in srgb, #ff5c8a 65%, transparent)) border-box;
-  box-shadow: 0 8px 28px color-mix(in srgb, #7c5cff 14%, transparent);
-}
-.manju-set-hero .manju-set-icon {
-  background: linear-gradient(135deg, #7c5cff, #b45cff);
-  box-shadow: 0 2px 10px color-mix(in srgb, #7c5cff 45%, transparent);
-}
-.manju-set-hero .manju-set-head { border-bottom-color: color-mix(in srgb, #7c5cff 22%, transparent); }
-
-/* 头部右侧开关(智能模式) */
-.manju-set-switch {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
-  cursor: pointer; user-select: none; font-size: 12.5px; color: var(--muted, #9aa4b8);
-}
-.manju-set-switch input { display: none; }
-.manju-set-switch-track {
-  width: 34px; height: 19px; flex: none; position: relative;
-  border-radius: 999px; background: rgba(127, 127, 127, .35);
-  transition: background .18s ease;
-}
-.manju-set-switch-dot {
-  position: absolute; top: 2.5px; left: 2.5px; width: 14px; height: 14px;
-  border-radius: 50%; background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
-  transition: transform .18s ease;
-}
-.manju-set-switch input:checked + .manju-set-switch-track { background: linear-gradient(135deg, #7c5cff, #b45cff); }
-.manju-set-switch input:checked + .manju-set-switch-track .manju-set-switch-dot { transform: translateX(15px); }
-
-/* 子分区标题(文本模型 / 视觉模型) */
-.manju-set-sub {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--text, #dde3ee);
-  padding: 7px 10px; border-radius: 8px; margin-top: 3px;
-  background: color-mix(in srgb, var(--accent, #6799fe) 8%, transparent);
-  border-left: 3px solid var(--accent, #6799fe);
-}
-.manju-set-body > .manju-set-sub:first-child { margin-top: 0; }
-
-/* 数字输入单位后缀 + 状态色 */
-.manju-set-unit { font-size: 11px; color: var(--muted, #9aa4b8); flex: none; }
-.manju-set-status .st-ok { color: var(--ok, #00a63e); }
-.manju-set-status .st-bad { color: #d25c4d; }
-
-/* Key 行内按钮(应用到项目/存为默认)不挤压 */
-.manju-field-row .hrs-btn { flex: none; }
-
-/* ===================== 2026-08-18 五项增强 ===================== */
-/* 1) 图谱侧栏折叠钮:绝对定位锚点是 .stage(本身 position:relative),
-   勿给 .view-graph 设 relative——会覆盖 .view 的 absolute 导致高度塌陷图谱消失 */
-@media (max-width: 600px) { .side-collapse { display: none !important; } }
-
-/* 2) 小说管理:书架搜索框(页头工具区,独立样式勿复用 .top-search——
-   view-dir-active 页面顶栏搜索按设计隐藏,会连带把本框藏掉) */
-.hrs-search { position: relative; display: flex; align-items: center; margin-right: 2px; }
-.hrs-search .ic { position: absolute; left: 11px; width: 13px; height: 13px; color: var(--muted); pointer-events: none; }
-.hrs-search input {
-  width: 168px;
-  padding: 7px 12px 7px 30px;
-  font-size: 12.5px; letter-spacing: 1px;
-  color: var(--text);
-  background: var(--chip-bg);
-  border: 1px solid var(--panel-border);
-  border-radius: 10px;
-  outline: none;
-  transition: border-color 0.25s, box-shadow 0.25s, width 0.25s;
-}
-.hrs-search input::placeholder { color: var(--muted); }
-.hrs-search input:focus { border-color: var(--accent); box-shadow: 0 0 14px var(--glow); }
-
-/* 2b) 阅读器:全书搜索 */
-.reader-search { position: relative; display: flex; align-items: center; }
-.reader-search .ic { position: absolute; left: 9px; width: 13px; height: 13px; color: var(--muted); pointer-events: none; }
-.reader-search input {
-  width: 150px; padding: 6px 10px 6px 28px; font-size: 12.5px;
-  background: color-mix(in srgb, var(--bg) 50%, transparent);
-  border: 1px solid var(--panel-border); border-radius: 8px;
-  color: var(--text); outline: none;
-  transition: width .25s, border-color .2s, box-shadow .2s;
-}
-.reader-search input:focus { width: 210px; border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
-.reader-search-pop {
-  position: absolute; right: 0; top: calc(100% + 8px); width: 340px; max-height: 340px;
-  overflow-y: auto; z-index: 60;
-  background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, .45);
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  padding: 6px;
-}
-.rs-item { padding: 8px 10px; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
-.rs-item:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.rs-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
-.rs-snip { font-size: 11.5px; color: var(--muted); line-height: 1.5; word-break: break-all; }
-.rs-snip mark { color: var(--accent); background: none; }
-.rs-empty, .rs-loading { color: var(--muted); padding: 10px; font-size: 12px; cursor: default; }
-.rs-empty:hover, .rs-loading:hover { background: none; }
-
-/* 3) 漫剧左侧栏:成品搜索 */
-.manju-side-search {
-  width: 108px; padding: 5px 9px; font-size: 12px;
-  background: color-mix(in srgb, var(--bg) 45%, transparent);
-  border: 1px solid var(--panel-border); border-radius: 8px;
-  color: var(--text); outline: none;
-  transition: border-color .2s, box-shadow .2s, width .25s;
-}
-.manju-side-search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); width: 130px; }
-
-/* 5) 通知渠道官网按钮(新标签打开) */
-.manju-notify-site { flex: none; text-decoration: none; font-size: 12px; padding: 6px 10px; }
-.manju-notify-site:hover { transform: translateY(-1px); }
-
-/* 风格?按钮 + 官方风格预览网格 */
-.manju-style-help {
-  flex: none; width: 26px; height: 26px; margin-left: 6px;
-  border-radius: 50%; border: 1px solid var(--panel-border);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent); font-size: 13px; font-weight: 700; line-height: 1;
-  display: inline-flex; align-items: center; justify-content: center;
-  cursor: pointer; transition: all 0.2s;
-}
-.manju-style-help:hover { border-color: var(--accent); box-shadow: 0 0 10px var(--glow); transform: scale(1.1); }
-.manju-style-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-.manju-style-card {
-  border: 1px solid var(--panel-border); border-radius: 12px; overflow: hidden;
-  background: color-mix(in srgb, var(--bg) 40%, transparent);
-  transition: border-color 0.2s, box-shadow 0.25s, transform 0.2s;
-}
-.manju-style-card:hover { border-color: var(--accent); box-shadow: 0 0 16px var(--glow); transform: translateY(-2px); }
-.manju-style-gif { aspect-ratio: 9/13; background: #000; }
-.manju-style-gif img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.manju-style-name { font-size: 12.5px; font-weight: 700; color: var(--text); padding: 8px 10px 2px; }
-.manju-style-tag { font-size: 11px; color: var(--muted); padding: 0 10px 10px; }
-@media (max-width: 900px) { .manju-style-grid { grid-template-columns: repeat(2, 1fr); } }
 
 /* 悬浮 AI 小助手(对话云朵 + 角色) */
 #ai-mascot {
@@ -4344,6 +4165,11 @@ select option { text-align: center; }
 .manju-set-row2-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: stretch; }
 .manju-set-row2-cards .manju-set-card { min-width: 0; }
 .manju-set-row2-cards .manju-set-grid { grid-template-columns: 1fr; }
+/* 配置管理:每行按钮+说明同行依次排布(说明紧跟按钮,不推右留空) */
+.manju-set-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.manju-set-line .manju-meta { line-height: 1.5; }
+/* 卡片底部按钮区:与上方内容/说明留呼吸间距,消除"文字压按钮"的拥挤感 */
+.manju-set-body > .manju-set-actions { margin-top: 6px; }
 @media (max-width: 900px) {
   .manju-set-row2, .manju-set-row2-cards { grid-template-columns: 1fr; }
 }
@@ -4420,6 +4246,7 @@ select option { text-align: center; }
 /* 1) 图谱侧栏折叠钮:绝对定位锚点是 .stage(本身 position:relative),
    勿给 .view-graph 设 relative——会覆盖 .view 的 absolute 导致高度塌陷图谱消失 */
 
+@media (max-width: 600px) { .side-collapse { display: none !important; } }
 
 /* 2) 小说管理:书架搜索框(页头工具区,独立样式勿复用 .top-search——
    view-dir-active 页面顶栏搜索按设计隐藏,会连带把本框藏掉) */
@@ -4706,20 +4533,23 @@ select option { text-align: center; }
 /* 中断续跑提示(琥珀色提示卡:柔和渐变底 + 琥珀图标 + 正文色文字,不再整条刺眼黄;
    无内容不渲染(前端已守卫),显示时与下方时间轴保持间距) */
 .manju-interrupt-tip {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  margin: 8px 0 12px; padding: 8px 12px; border-radius: 10px; font-size: 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  margin: 8px 0 12px; padding: 10px 12px; border-radius: 10px; font-size: 12px;
   border: 1px solid color-mix(in srgb, #f5b942 32%, transparent);
   background: linear-gradient(135deg, color-mix(in srgb, #f5b942 14%, transparent), color-mix(in srgb, #f5b942 3%, transparent) 70%);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
 }
 .manju-interrupt-tip .mi-tip-t {
   display: flex; align-items: center; gap: 7px; min-width: 0;
-  color: var(--text); line-height: 1.5;
+  align-self: flex-start; /* 文字行左对齐(按钮行保持居中) */
+  color: var(--text); line-height: 1.5; text-align: left;
 }
 .manju-interrupt-tip .mi-tip-t::before {
   content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%;
   background: #f5b942; box-shadow: 0 0 0 3px color-mix(in srgb, #f5b942 20%, transparent), 0 0 8px color-mix(in srgb, #f5b942 55%, transparent);
 }
+/* 按钮一行,居中排列(文字在上、按钮在下) */
+.manju-interrupt-tip .mi-tip-actions { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
 .manju-interrupt-tip .hrs-btn { flex: none; padding: 3px 12px; font-size: 11.5px; }
 /* 小说来源卡片头部:标题 + 使用说明/设置/刷新(自页头迁入) */
 .manju-novel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }

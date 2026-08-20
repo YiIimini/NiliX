@@ -35,11 +35,37 @@
   // 顶部已无收起/关闭按钮(右上角仅状态灯);收起仍由鼠标移出面板触发
   const btnCollapse = $("btn-collapse");
   if (btnCollapse) btnCollapse.addEventListener("click", () => setExpanded(false));
+  // ✕ 全退防误触:点击后按钮变「退出?」(红色发光,3 秒内再点才真正退出,超时复原)。
+  // 灵动岛 ✕ = 整个应用退出,与 ▾(收起)相邻极易误点——点 ▾ 或鼠标离开面板会取消上膛。
   const btnClose = $("btn-close");
+  let closeArmed = false, closeTimer = null;
+  const cancelCloseArm = () => {
+    if (!closeArmed) return;
+    closeArmed = false;
+    clearTimeout(closeTimer);
+    if (btnClose) {
+      btnClose.textContent = "✕";
+      btnClose.classList.remove("armed");
+      btnClose.title = "关闭";
+    }
+  };
   if (btnClose)
     btnClose.addEventListener("click", () => {
+      if (!closeArmed) {
+        closeArmed = true;
+        btnClose.textContent = "退出?";
+        btnClose.classList.add("armed");
+        btnClose.title = "再点一次退出 NiliX";
+        closeTimer = setTimeout(cancelCloseArm, 3000);
+        return;
+      }
+      clearTimeout(closeTimer);
       if (typeof closeWin === "function") closeWin();
     });
+  // 点收起或鼠标离开面板:取消退出上膛,防"想收起误点 ✕ 后又点一下"的误退
+  if (btnCollapse) btnCollapse.addEventListener("click", cancelCloseArm);
+  const fullPanel = $("full");
+  if (fullPanel) fullPanel.addEventListener("mouseleave", cancelCloseArm);
 
   /* ---- 主题切换(配色已移入设置面板) ---- */
   function applySysTheme(light) {

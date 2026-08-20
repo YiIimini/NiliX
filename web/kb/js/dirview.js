@@ -1363,6 +1363,10 @@ class DirView {
   }
 }
 
-/* 实例:小说(书架平台) / 漫剧(影音平台) */
-const NovelView = new DirView("novel", { root: "C:\\Mi\\Ai\\WorkBench\\novel", id: "novel", mode: "book" });
-const ManjuView = new DirView("manju", { root: "C:\\Mi\\Ai\\WorkBench\\manju", id: "manju", mode: "film", hidden: ["manju_pipeline"] });
+/* 实例:小说(书架平台) / 漫剧(影音平台)
+   根路径优先用服务端注入的实际值(window.NILIX_PATHS,自包含部署后 manju/novel 在 exe 目录旁),
+   注入缺失时回退旧硬编码(兼容旧部署)。硬编码路径在自包含部署下不存在,
+   /api/fs/analyze 返回非 2xx → 界面提示 "load failed"。 */
+const NILIX_PATHS = window.NILIX_PATHS || {};
+const NovelView = new DirView("novel", { root: NILIX_PATHS.novelRoot || "C:\\Mi\\Ai\\WorkBench\\novel", id: "novel", mode: "book" });
+const ManjuView = new DirView("manju", { root: NILIX_PATHS.manjuRoot || "C:\\Mi\\Ai\\WorkBench\\manju", id: "manju", mode: "film", hidden: ["manju_pipeline"] });
