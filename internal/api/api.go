@@ -96,6 +96,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/outputs", s.handleOutputs)
 	mux.HandleFunc("GET /clips/{file}", s.handleClipFile)
 	registerManjuRoutes(mux)
+	s.registerZcodeRoutes(mux) // 胶囊服务按钮:ZCode 启停/Bot 停止(原 Go 绑定 HTTP 化)
 	if s.islandFS != nil {
 		mux.Handle("/island/", noCacheHTML(http.StripPrefix("/island/", http.FileServer(http.FS(s.islandFS)))))
 	}

@@ -37,11 +37,11 @@
   if (typeof startHarness !== "function") window.startHarness = () => httpPost("http://127.0.0.1:8787/api/harness/start");
   if (typeof restartHarness !== "function") window.restartHarness = () => httpPost("http://127.0.0.1:8787/api/harness/restart");
   if (typeof openHarness !== "function") window.openHarness = () => window.open("http://127.0.0.1:3080");
-  // ZCode/BOT 无 HTTP API:fallback 空操作(按钮保持现状)
-  if (typeof startZCode !== "function") window.startZCode = () => Promise.resolve();
-  if (typeof stopZCode !== "function") window.stopZCode = () => Promise.resolve();
-  if (typeof stopBot !== "function") window.stopBot = () => Promise.resolve();
-  if (typeof restartBot !== "function") window.restartBot = () => Promise.resolve();
+  // ZCode/BOT:HTTP API(NiliX 主服务,原 Go 绑定 HTTP 化,重构不阉割功能)
+  if (typeof startZCode !== "function") window.startZCode = () => httpPost("http://127.0.0.1:8787/api/zcode/start");
+  if (typeof stopZCode !== "function") window.stopZCode = () => httpPost("http://127.0.0.1:8787/api/zcode/stop");
+  if (typeof stopBot !== "function") window.stopBot = () => httpPost("http://127.0.0.1:8787/api/bot/stop");
+  if (typeof restartBot !== "function") window.restartBot = () => httpPost("http://127.0.0.1:8787/api/bot/restart");
 
   /* ========== 灵动岛展开/收起 ========== */
   let expanded = false;
