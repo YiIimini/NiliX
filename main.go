@@ -621,7 +621,7 @@ func buildTray(app *application.App, url string) {
 		st := comfyProbeState()
 		frame := 0
 		stateTicker := time.NewTicker(3 * time.Second)
-		animTicker := time.NewTicker(500 * time.Millisecond)
+		animTicker := time.NewTicker(400 * time.Millisecond)
 		defer stateTicker.Stop()
 		defer animTicker.Stop()
 		for {
@@ -668,19 +668,19 @@ func comfyProbeState() comfyState {
 }
 
 // dotIconAnim 动态状态灯动画帧:
-//   - spin:圆环 + 旋转缺口(加载圈),缺口位置 = frame/total * 2π
-//   - pulse:圆点 + 外发光光晕,光晕强度随 frame 呼吸(正弦)
+//   - spin:圆环 + 大缺口旋转(加载圈),缺口 137° 随帧转动,环加粗更醒目
+//   - pulse:圆点 + 强外发光光晕,光晕随帧正弦呼吸(明暗差大,动态明显)
 func dotIconAnim(r, g, b uint8, frame, total int, mode string) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
 	if mode == "spin" {
-		// 旋转加载圈:圆环半径 4.5~7,缺口 100° 随帧旋转
+		// 旋转加载圈:粗环半径 4.5~7,缺口 137°(gapHalf=1.2)随帧旋转——缺口大才看得出转动
 		gapCenter := float64(frame) / float64(total) * 2 * math.Pi
-		gapHalf := 0.9 // 缺口半角(弧度)
+		gapHalf := 1.2
 		for y := 0; y < 16; y++ {
 			for x := 0; x < 16; x++ {
 				dx, dy := float64(x)-7.5, float64(y)-7.5
 				dist := math.Sqrt(dx*dx + dy*dy)
-				if dist < 4.5 || dist > 7.0 {
+				if dist < 4.0 || dist > 7.0 {
 					continue
 				}
 				ang := math.Atan2(dy, dx)
@@ -691,17 +691,18 @@ func dotIconAnim(r, g, b uint8, frame, total int, mode string) []byte {
 			}
 		}
 	} else if mode == "pulse" {
-		// 呼吸脉冲:实心圆 + 外发光光晕,光晕随正弦呼吸
+		// 呼吸脉冲:实心圆 + 强外发光光晕,明暗差大(30↔180),呼吸感明显
 		p := float64(frame) / float64(total)
-		halo := uint8(40 + 110*math.Sin(p*math.Pi))
+		halo := uint8(30 + 150*math.Sin(p*math.Pi))
+		core := uint8(180 + 75*math.Sin(p*math.Pi))
 		for y := 0; y < 16; y++ {
 			for x := 0; x < 16; x++ {
 				dx, dy := float64(x)-7.5, float64(y)-7.5
 				dist := math.Sqrt(dx*dx + dy*dy)
 				switch {
-				case dist <= 7.0:
-					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
-				case dist <= 9.0 && halo > 50:
+				case dist <= 6.5:
+					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: core})
+				case dist <= 9.5 && halo > 45:
 					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: halo})
 				}
 			}
