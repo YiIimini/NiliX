@@ -154,6 +154,7 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	if P == nil {
 		P = map[string]any{}
 	}
+	epEff := orDefault(episode, str(R["episode"]))
 	ctx := &manjuCtx{
 		configPath:   configPath,
 		cfg:          cfg,
@@ -161,7 +162,7 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 		R:            R,
 		P:            P,
 		project:      filepath.Base(filepath.Dir(configPath)),
-		episode:      normalizeEpisode(orDefault(episode, str(R["episode"]))),
+		episode:      normalizeEpisode(epEff),
 		chapters:     orDefault(chapters, str(R["chapters"])),
 		only:         only,
 		novel:        str(P["novel"]),
@@ -173,6 +174,19 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	}
 	if ctx.episode == "" {
 		ctx.episode = "EP01"
+	}
+	// 章节范围语义归一(与 manjuRun 同一套规则;抽卡方案/智能体分析/诊断等旁路入口
+	// 不再各自漏归一化——"0" 曾被当字面章节号报"章节不存在: 0"):
+	// 空/0 = 全书 1-N;集数纯数字 N>0 = 第 N 集即第 N 章(chapters=N-N)
+	if ctx.chapters == "" || ctx.chapters == "0" {
+		if n := manjuChapterTotal(configPath); n > 0 {
+			ctx.chapters = fmt.Sprintf("1-%d", n)
+		} else {
+			ctx.chapters = "1-3"
+		}
+	}
+	if epNum, err := strconv.Atoi(strings.TrimSpace(epEff)); err == nil && epNum > 0 {
+		ctx.chapters = fmt.Sprintf("%d-%d", epNum, epNum)
 	}
 	if novel != "" {
 		if fileExists(novel) {
