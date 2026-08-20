@@ -670,49 +670,6 @@ func comfyProbeState() comfyState {
 // dotIconAnim 动态状态灯动画帧:
 //   - spin:圆环 + 大缺口旋转(加载圈),缺口 137° 随帧转动,环加粗更醒目
 //   - pulse:圆点 + 强外发光光晕,光晕随帧正弦呼吸(明暗差大,动态明显)
-func dotIconAnim(r, g, b uint8, frame, total int, mode string) []byte {
-	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
-	if mode == "spin" {
-		// 旋转加载圈:粗环半径 4.5~7,缺口 137°(gapHalf=1.2)随帧旋转——缺口大才看得出转动
-		gapCenter := float64(frame) / float64(total) * 2 * math.Pi
-		gapHalf := 1.2
-		for y := 0; y < 16; y++ {
-			for x := 0; x < 16; x++ {
-				dx, dy := float64(x)-7.5, float64(y)-7.5
-				dist := math.Sqrt(dx*dx + dy*dy)
-				if dist < 4.0 || dist > 7.0 {
-					continue
-				}
-				ang := math.Atan2(dy, dx)
-				diff := math.Mod(ang-gapCenter+math.Pi*2, math.Pi*2)
-				if diff > gapHalf && diff < math.Pi*2-gapHalf {
-					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
-				}
-			}
-		}
-	} else if mode == "pulse" {
-		// 呼吸脉冲:实心圆 + 强外发光光晕,明暗差大(30↔180),呼吸感明显
-		p := float64(frame) / float64(total)
-		halo := uint8(30 + 150*math.Sin(p*math.Pi))
-		core := uint8(180 + 75*math.Sin(p*math.Pi))
-		for y := 0; y < 16; y++ {
-			for x := 0; x < 16; x++ {
-				dx, dy := float64(x)-7.5, float64(y)-7.5
-				dist := math.Sqrt(dx*dx + dy*dy)
-				switch {
-				case dist <= 6.5:
-					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: core})
-				case dist <= 9.5 && halo > 45:
-					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: halo})
-				}
-			}
-		}
-	}
-	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
-	return buf.Bytes()
-}
-
 // hideCapsule 隐藏灵动岛胶囊:调用胶囊进程控制端口 8788 /close(退出胶囊进程)。
 // 再次显示由托盘勾选触发 startCapsule 重新拉起。
 func hideCapsule() {
@@ -729,14 +686,118 @@ func hideCapsule() {
 	_ = resp.Body.Close()
 }
 
-// dotIcon 生成 16x16 实心圆点状态灯 PNG(托盘菜单项图标)
+// dotIcon 美化的状态球:玻璃质感(径向渐变+左上高光+外发光+亮描边)。
+// 已停止(红)等静态态用它;动画帧走 dotIconAnim/dotIconBeauty。
 func dotIcon(r, g, b uint8) []byte {
+	return dotIconBeauty(r, g, b, 90)
+}
+
+// dotIconBeauty 玻璃质感状态球(16x16):
+//   - 球体:径向渐变(光源左上,边缘衰减)+ 暗部衬底,立体感
+//   - 外发光:状态色柔和光晕(halo 强度可调,呼吸动画用)
+//   - 亮描边:球缘提亮,玻璃感
+func dotIconBeauty(r, g, b uint8, halo uint8) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
 	for y := 0; y < 16; y++ {
 		for x := 0; x < 16; x++ {
 			dx, dy := float64(x)-7.5, float64(y)-7.5
-			if dx*dx+dy*dy <= 7*7 {
-				img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
+			dist := math.Sqrt(dx*dx + dy*dy)
+			// 外发光(柔和光晕,球体覆盖部分自然叠加)
+			if dist <= 10 && halo > 18 {
+				f := 1 - dist/10.5
+				a := uint8(float64(halo) * f * 0.55)
+				if a > 0 {
+					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: a})
+				}
+			}
+			// 球体:径向渐变(光源左上 2.8,2.8,边缘衰减)
+			if dist <= 6.5 {
+				edge := 1 - dist/6.5
+				hld := math.Hypot(float64(x)-2.8, float64(y)-2.8)
+				hl := math.Max(0, 1-hld/9)
+				br := 150*edge + 100 + 65*hl
+				if br > 255 {
+					br = 255
+				}
+				img.Set(x, y, color.RGBA{
+					R: u8min(float64(r)*br/200 + 45),
+					G: u8min(float64(g)*br/200 + 45),
+					B: u8min(float64(b)*br/200 + 45),
+					A: 255,
+				})
+			}
+			// 亮描边(玻璃缘)
+			if dist > 6.5 && dist <= 7.0 {
+				img.Set(x, y, color.RGBA{
+					R: u8min(float64(r) * 1.7),
+					G: u8min(float64(g) * 1.7),
+					B: u8min(float64(b) * 1.7),
+					A: 255,
+				})
+			}
+		}
+	}
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
+
+// u8min float→uint8 且截断到 255
+func u8min(v float64) uint8 {
+	if v > 255 {
+		return 255
+	}
+	if v < 0 {
+		return 0
+	}
+	return uint8(v)
+}
+
+// dotIconAnim 动态状态球动画帧:
+//   - spin(黄·启动中):玻璃质感圆环 + 137° 缺口旋转(加载圈)
+//   - pulse(绿·运行中/蓝·闲置):玻璃球 + 外发光正弦呼吸(明暗差大)
+func dotIconAnim(r, g, b uint8, frame, total int, mode string) []byte {
+	if mode == "pulse" {
+		p := float64(frame) / float64(total)
+		halo := uint8(45 + 130*math.Sin(p*math.Pi))
+		return dotIconBeauty(r, g, b, halo)
+	}
+	// spin:玻璃环 + 缺口旋转
+	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	gapCenter := float64(frame) / float64(total) * 2 * math.Pi
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			dx, dy := float64(x)-7.5, float64(y)-7.5
+			dist := math.Sqrt(dx*dx + dy*dy)
+			if dist < 4.0 || dist > 7.0 {
+				continue
+			}
+			ang := math.Atan2(dy, dx)
+			diff := math.Mod(ang-gapCenter+math.Pi*2, math.Pi*2)
+			if diff <= 1.2 || diff >= math.Pi*2-1.2 {
+				continue // 缺口
+			}
+			// 环渐变(玻璃感:内外亮,中段暗)
+			edge := 1 - math.Abs(dist-5.5)/1.5
+			img.Set(x, y, color.RGBA{
+				R: u8min(float64(r)*(0.6+0.55*edge) + 70),
+				G: u8min(float64(g)*(0.6+0.55*edge) + 70),
+				B: u8min(float64(b)*(0.6+0.55*edge) + 70),
+				A: 255,
+			})
+		}
+	}
+	// 环外发光
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			dx, dy := float64(x)-7.5, float64(y)-7.5
+			dist := math.Sqrt(dx*dx + dy*dy)
+			if dist > 7.0 && dist <= 10 {
+				f := 1 - dist/10.5
+				a := uint8(70 * f)
+				if a > 0 {
+					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: a})
+				}
 			}
 		}
 	}
