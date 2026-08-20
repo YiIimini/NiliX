@@ -166,10 +166,12 @@ body:not(.view-graph-active) .side-collapse { display: none; }
 .settings-btn:active { transform: rotate(60deg) scale(0.9); }
 .settings-btn svg { width: 17px; height: 17px; }
 /* ========== frameless 窗口标题栏(wails 主窗口,去系统标题栏) ==========
-   topbar 整体可拖拽(WebView2 NonClientRegionSupport → app-region: drag),
-   可交互元素(brand/nav/controls)标 no-drag 保持可点 */
-.topbar { -webkit-app-region: drag; }
-.topbar .brand, .topbar .nav, .topbar .controls { -webkit-app-region: no-drag; }
+   topbar 整体可拖拽,可交互元素(brand/nav/controls)标 no-drag 保持可点。
+   WebView2 原生非客户区(GetNonClientRegionAtPoint)认无前缀 app-region;
+   -webkit- 前缀兼容 Electron 风格。两者都写,确保 no-drag 生效(否则按钮点击
+   被拖拽拦截 → 最小化/最大化/关闭无功能)。 */
+.topbar { -webkit-app-region: drag; app-region: drag; }
+.topbar .brand, .topbar .nav, .topbar .controls { -webkit-app-region: no-drag; app-region: no-drag; }
 .win-ctl { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; }
 .win-ctl-btn {
   width: 30px; height: 28px;
