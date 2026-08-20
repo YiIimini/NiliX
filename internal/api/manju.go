@@ -1771,24 +1771,73 @@ func manjuPlan(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// 附加磁盘抽卡历史:候选落盘于 _gacha/<char>_s<seed>.png 且不覆盖,弹窗重开仍可回看对比
+	if ctx, err := newManjuCtx(configPath, episode, "", "", ""); err == nil {
+		gdir := filepath.Join(ctx.assetsDir, "characters", "_gacha")
+		entries, _ := os.ReadDir(gdir)
+		for i := range chars {
+			id := str(chars[i]["id"])
+			if id == "" {
+				continue
+			}
+			prefix := sanitizeFileName(id) + "_s"
+			type cand struct {
+				path string
+				seed int
+				mod  time.Time
+			}
+			list := []cand{}
+			for _, e := range entries {
+				name := e.Name()
+				if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".png") {
+					continue
+				}
+				seed, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".png"))
+				if err != nil { // 其它角色前缀撞车/非 seed 文件,过滤
+					continue
+				}
+				if fi, err := e.Info(); err == nil {
+					list = append(list, cand{path: filepath.Join(gdir, name), seed: seed, mod: fi.ModTime()})
+				}
+			}
+			sort.Slice(list, func(a, b int) bool { return list[a].mod.After(list[b].mod) })
+			if len(list) > 12 {
+				list = list[:12]
+			}
+			gacha := []map[string]any{}
+			for _, c := range list {
+				gacha = append(gacha, map[string]any{"image": c.path, "seed": c.seed})
+			}
+			chars[i]["gacha"] = gacha
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"exists": true, "episode_title": plan["episode_title"], "characters": chars, "shots": shots})
 }
 
-// manjuGacha 角色抽卡:生成一张定妆照候选(随机 seed)
+// manjuGacha 角色抽卡:一次连抽 count 张候选(随机 seed,前端可反复抽累积对比)
 func manjuGacha(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	configPath := str(body["config"])
 	episode := orDefault(str(body["episode"]), "EP01")
 	char := str(body["char"])
+	count := 1
+	if v, ok := body["count"].(float64); ok {
+		count = int(v)
+	}
 	if configPath == "" || char == "" {
 		http.Error(w, `{"error":"missing config or char"}`, http.StatusBadRequest)
 		return
 	}
-	res, _, err := manjuGachaDraw(configPath, episode, char)
+	imgs, err := manjuGachaDraw(configPath, episode, char, count)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "生成失败: " + err.Error()})
 		return
+	}
+	res := map[string]any{"ok": true, "images": imgs}
+	if len(imgs) > 0 { // 兼容单抽旧字段
+		res["image"] = imgs[0]["image"]
+		res["seed"] = imgs[0]["seed"]
 	}
 	writeJSON(w, http.StatusOK, res)
 }

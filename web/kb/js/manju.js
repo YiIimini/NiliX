@@ -87,7 +87,7 @@
     { ic: "🎭", t: "角色管理", ps: [
       "入口在「渲染配置」卡右上角：「角色管理」按钮打开抽卡弹窗",
       "先「生成方案」产出角色列表，再逐角色抽卡",
-      "抽卡 = 按角色 image_prompt + 随机 seed 生成候选定妆照，可反复抽换选最佳",
+      "抽卡 = 按角色 image_prompt + 随机 seed 连抽多张候选定妆照，候选累积保留可对比点选，采纳最佳（支持全员抽卡批量出卡）",
       "「采纳」把候选设为正式定妆照（覆盖旧图 → 缓存指纹失效 → 自动重新预编码/渲染）",
       "采纳后右侧栏「产物」的人物缩略图自动刷新",
       "正脸参考 <code>_face.png</code> 从定妆照切「完整头部+肩部」用于 R2V 锁脸",
@@ -2354,6 +2354,13 @@
       get("/api/manju/plan?config=" + encodeURIComponent(this.project) + "&episode=" + encodeURIComponent(this.episode)).then((r) => {
         if (reqProject !== this.project || reqEp !== this.episode) return;
         this.plan = r;
+        // 合并磁盘抽卡历史(后端扫 _gacha 候选,跨会话保留);本会话已抽的不覆盖
+        (r.characters || []).forEach((c) => {
+          if (!this.gacha[c.id]) {
+            const list = (c.gacha || []).map((g) => ({ image: g.image, seed: g.seed }));
+            this.gacha[c.id] = { list, sel: list.length ? 0 : -1 };
+          }
+        });
         if (cb) cb(); else this.renderGacha();
       }).catch(() => {});
     },
@@ -2395,7 +2402,7 @@
 
     /* 打开抽卡弹窗:完整 抽卡/采纳 操作在此进行 */
     openGachaModal() {
-      if (!this.project) return;
+      if (this.denyNoProject()) return;
       const gen = this._modalGen; // 代次守卫:弹窗关闭/切换后放弃回弹,防止劫持当前弹窗
       this.renderGachaModal();          // 先渲染(可能已有 plan)
       this.loadPlan(() => { if (gen === this._modalGen) this.renderGachaModal(); }); // 拉最新方案再刷一次
@@ -2415,13 +2422,15 @@
       });
     },
 
+    /* 正式定妆照路径(已采纳/管线产出),无则空串 */
+    officialChar(id) {
+      const m = ((this.outputs && this.outputs.characters) || [])
+        .find((c) => (c.name || "").replace(/\.[^.]+$/, "") === id);
+      return m ? m.path : "";
+    },
+
     renderGachaModal() {
       const p = this.plan || {};
-      const currentChars = (this.outputs && this.outputs.characters) || [];
-      const findCurrent = (id) => {
-        const m = currentChars.find((c) => (c.name || "").replace(/\.[^.]+$/, "") === id);
-        return m ? m.path : "";
-      };
       const fileUrl = (p2) => "/api/fs/file?path=" + encodeURIComponent(p2);
       let html = "";
       if (!p.exists) {
@@ -2432,21 +2441,36 @@
         </div>`;
       } else {
         const chars = p.characters || [];
+        const pending = chars.filter((c) => !this.officialChar(c.id)); // 还没有正式定妆照的角色
+        const cntSaved = ls("gachaCount") || "4";
         html = chars.length
-          ? `<div class="manju-gacha-grid">` + chars.map((c) => {
-              const g = this.gacha[c.id] || {};
-              const img = g.image || findCurrent(c.id);
+          ? `<div class="manju-gacha-toolbar">
+              <span class="manju-meta">每次</span>
+              <select id="mg-count">${[1, 2, 4, 6].map((n) => `<option value="${n}"${String(n) === cntSaved ? " selected" : ""}>${n} 张</option>`).join("")}</select>
+              <button id="mg-draw-all" class="hrs-btn"${pending.length ? "" : " disabled"}>🎲 全员抽卡${pending.length ? `（${pending.length} 位未定妆）` : ""}</button>
+              <span class="manju-meta" style="margin-left:auto">候选累积保留 · 点缩略图切换 · 采纳当前选中</span>
+            </div>
+          <div class="manju-gacha-grid">` + chars.map((c) => {
+              const g = this.gacha[c.id] || (this.gacha[c.id] = { list: [], sel: -1 });
+              const cur = g.sel >= 0 && g.list[g.sel] ? g.list[g.sel] : null;
+              const official = this.officialChar(c.id);
+              const img = (cur && cur.image) || official;
               const preview = img ? `<img class="manju-char-img" src="${fileUrl(img)}" alt="${esc(c.id)}" data-img="${esc(img)}" data-name="${esc(c.id)}" title="点击预览大图">` : '<div class="manju-gacha-ph">未抽卡</div>';
+              const strip = g.list.length
+                ? `<div class="manju-cand-strip">` + g.list.map((it, i) =>
+                    `<button class="manju-cand${i === g.sel ? " sel" : ""}" data-cand="${esc(c.id)}" data-idx="${i}" title="seed ${it.seed}"><img src="${fileUrl(it.image)}" loading="lazy" alt=""></button>`).join("") + `</div>`
+                : "";
               return `<div class="manju-char">
                 <div class="manju-char-head">
                   <span class="manju-char-name">${esc(c.id)}</span>
-                  <span class="manju-char-tag">${esc(c.gender || "")}${c.age ? "·" + esc(c.age) : ""}</span>
+                  <span class="manju-char-tag">${official ? "✅ " : ""}${esc(c.gender || "")}${c.age ? "·" + esc(c.age) : ""}</span>
                 </div>
                 <div class="manju-char-preview">${preview}</div>
+                ${strip}
                 <div class="manju-char-actions">
                   <button class="hrs-btn" data-gacha="${esc(c.id)}">🎲 抽卡</button>
                   <button class="hrs-btn" data-upload="${esc(c.id)}" title="上传本地角色图并采纳为正式定妆照">📤 上传</button>
-                  <button class="hrs-btn hrs-btn-primary" data-adopt="${esc(c.id)}" ${g.image ? "" : "disabled"}>采纳</button>
+                  <button class="hrs-btn hrs-btn-primary" data-adopt="${esc(c.id)}" ${cur ? "" : "disabled"}>采纳</button>
                 </div>
               </div>`;
             }).join("") + `</div>
@@ -2457,6 +2481,10 @@
       this.openModal("角色抽卡", html, true);
       const planBtn = $("mg-plan");
       if (planBtn) planBtn.addEventListener("click", () => this.genCharacters());
+      const cnt = $("mg-count");
+      if (cnt) cnt.addEventListener("change", () => ls("gachaCount", cnt.value));
+      const da = $("mg-draw-all");
+      if (da) da.addEventListener("click", () => this.drawAllGacha());
       document.querySelectorAll("#manju-modal [data-gacha]").forEach((b) =>
         b.addEventListener("click", () => this.drawGacha(b.dataset.gacha, b))
       );
@@ -2468,40 +2496,90 @@
       document.querySelectorAll("#manju-modal [data-adopt]").forEach((b) =>
         b.addEventListener("click", () => this.adoptGacha(b.dataset.adopt))
       );
+      // 候选缩略图点选:切换当前查看/采纳的候选
+      document.querySelectorAll("#manju-modal [data-cand]").forEach((b) =>
+        b.addEventListener("click", () => {
+          const g = this.gacha[b.dataset.cand];
+          if (!g) return;
+          const idx = parseInt(b.dataset.idx, 10);
+          if (idx >= 0 && idx < g.list.length) { g.sel = idx; this.renderGachaModal(); }
+        })
+      );
       // 角色照片点击预览大图
       document.querySelectorAll("#manju-modal .manju-char-img").forEach((el) =>
         el.addEventListener("click", () => this.previewImage(el.dataset.img, el.dataset.name))
       );
     },
 
+    /* 每次抽卡张数:取弹窗下拉当前值(localStorage 记忆) */
+    gachaCount() {
+      const sel = $("mg-count");
+      if (sel) return parseInt(sel.value, 10) || 4;
+      return parseInt(ls("gachaCount") || "4", 10) || 4;
+    },
+
+    /* 新候选并入抽卡历史并自动选中第一张新卡(历史不覆盖,旧候选一直可回看) */
+    gachaAdd(charId, imgs) {
+      const g = this.gacha[charId] || (this.gacha[charId] = { list: [], sel: -1 });
+      const start = g.list.length;
+      imgs.forEach((im) => g.list.push({ image: im.image, seed: im.seed }));
+      g.sel = start;
+    },
+
     drawGacha(charId, btn) {
       if (!this.project) return;
+      if (this.denyIfRunning()) return; // 抽卡走 ComfyUI 出图,渲染任务运行中不抢 GPU
       const gen = this._modalGen; // 代次守卫:抽卡耗时期间弹窗被关闭则不回弹
-      btn.textContent = "抽卡中…";
-      btn.disabled = true;
-      post("/api/manju/gacha", { config: this.project, episode: this.episode, char: charId }).then((r) => {
-        btn.textContent = "🎲 抽卡";
-        btn.disabled = false;
+      const n = this.gachaCount();
+      if (btn) { btn.textContent = "抽卡中…"; btn.disabled = true; }
+      post("/api/manju/gacha", { config: this.project, episode: this.episode, char: charId, count: n }).then((r) => {
+        if (btn) { btn.textContent = "🎲 抽卡"; btn.disabled = false; }
         if (gen !== this._modalGen) return;
-        if (r.ok) {
-          this.gacha[charId] = { image: r.image, seed: r.seed };
+        if (r.ok && r.images && r.images.length) {
+          this.gachaAdd(charId, r.images);
           this.renderGachaModal();
         } else this.setErr((r.error || "抽卡失败").trim());
       }).catch((e) => {
-        btn.textContent = "🎲 抽卡";
-        btn.disabled = false;
+        if (btn) { btn.textContent = "🎲 抽卡"; btn.disabled = false; }
         if (gen === this._modalGen) this.setErr(e.message);
       });
     },
 
+    /* 全员抽卡:为所有还没有正式定妆照的角色各连抽一轮(串行逐个出卡,实时刷新进度) */
+    async drawAllGacha() {
+      if (!this.project) return;
+      if (this.denyIfRunning()) return;
+      const chars = ((this.plan && this.plan.characters) || []).filter((c) => !this.officialChar(c.id));
+      if (!chars.length) return;
+      const gen = this._modalGen;
+      const n = this.gachaCount();
+      for (let i = 0; i < chars.length; i++) {
+        if (gen !== this._modalGen) return; // 弹窗已关闭:停止批量,不打扰新弹窗
+        const btn = $("mg-draw-all");
+        if (btn) { btn.disabled = true; btn.textContent = `抽卡中 ${i + 1}/${chars.length}（${chars[i].id}）…`; }
+        try {
+          const r = await post("/api/manju/gacha", { config: this.project, episode: this.episode, char: chars[i].id, count: n });
+          if (gen !== this._modalGen) return;
+          if (r.ok && r.images && r.images.length) this.gachaAdd(chars[i].id, r.images);
+          else this.setErr((r.error || chars[i].id + " 抽卡失败").trim());
+        } catch (e) { this.setErr(e.message); }
+        if (gen !== this._modalGen) return;
+        this.renderGachaModal();
+      }
+      if (gen === this._modalGen) {
+        this.renderGachaModal();
+        this.logNote("(🎲 全员抽卡完成:" + chars.length + " 位角色已出新候选)");
+      }
+    },
+
     adoptGacha(charId) {
       const g = this.gacha[charId];
-      if (!this.project || !g || !g.image) return;
+      const cur = g && g.sel >= 0 && g.list[g.sel] ? g.list[g.sel] : null;
+      if (!this.project || !cur) return;
       const gen = this._modalGen; // 代次守卫:采纳请求期间弹窗被关闭则不回弹
-      post("/api/manju/gacha/adopt", { config: this.project, episode: this.episode, char: charId, image: g.image }).then((r) => {
+      post("/api/manju/gacha/adopt", { config: this.project, episode: this.episode, char: charId, image: cur.image }).then((r) => {
         if (gen !== this._modalGen) return;
         if (r.ok) {
-          g.adopted = true;
           this.renderGachaModal();
           this.refreshOutputs();
         } else this.setErr((r.error || "采纳失败").trim());
@@ -2520,7 +2598,7 @@
       if (!file || !this._uploadChar) return;
       const charId = this._uploadChar;
       this._uploadChar = "";
-      if (this.status.running) { this.setErr("任务运行中，请结束后再上传角色图"); return; }
+      if (this.denyIfRunning()) return; // 渲染任务运行中不上传/覆盖定妆照
       const gen = this._modalGen; // 代次守卫:上传耗时期间弹窗被关闭则不回弹
       const fd = new FormData();
       fd.append("config", this.project);
@@ -2532,7 +2610,7 @@
         .then((r) => {
           if (this._modalGen !== gen) return; // 代次守卫:上传耗时期间弹窗被关闭则不回弹
           if (r.ok) {
-            this.gacha[charId] = { image: r.image, seed: 0, adopted: true };
+            this.gacha[charId] = { list: [{ image: r.image, seed: 0 }], sel: 0 };
             this.renderGachaModal();
             this.refreshOutputs();
           } else this.setErr("上传采纳失败: " + (r.error || ""));

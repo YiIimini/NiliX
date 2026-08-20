@@ -2621,25 +2621,41 @@ func (ctx *manjuCtx) gachaCharGender(char string) string {
 	return ""
 }
 
-// manjuGachaDraw 生成一张抽卡候选(随机 seed)→ assets/characters/_gacha/<char>_s<seed>.png
-func manjuGachaDraw(configPath, episode, char string) (map[string]any, int, error) {
+// manjuGachaDraw 生成抽卡候选(随机 seed,一次可连抽 count 张)→ assets/characters/_gacha/<char>_s<seed>.png
+// 候选落盘不覆盖(文件名含 seed),前端据此保留抽卡历史供对比挑选
+func manjuGachaDraw(configPath, episode, char string, count int) ([]map[string]any, error) {
+	if count < 1 {
+		count = 1
+	}
+	if count > 8 {
+		count = 8
+	}
 	ctx, err := newManjuCtx(configPath, episode, "", "", "")
 	if err != nil {
-		return nil, -1, err
+		return nil, err
 	}
 	if _, _, err := ctx.loadPlan(); err != nil {
-		return nil, -1, fmt.Errorf("角色方案未生成,请先「生成方案」")
+		return nil, fmt.Errorf("角色方案未生成,请先「生成方案」")
 	}
-	seed := randSeed()
 	// 抽卡候选与正式定妆照同款模型:写实→Z-Image,其余→SDXL checkpoint
 	charInfo := map[string]any{"gender": ctx.gachaCharGender(char)}
-	wf := ctx.portraitWF(charPromptFor(ctx, char), seed, "manju_gacha", charInfo)
-	dst := filepath.Join(ctx.assetsDir, "characters", "_gacha", fmt.Sprintf("%s_s%d.png", char, seed))
+	prompt := charPromptFor(ctx, char)
+	safe := sanitizeFileName(char)
 	lg := &manjuLogger{state: manjuState}
-	if err := ctx.comfyGenImage(wf, dst, lg, "角色 "+char); err != nil {
-		return nil, -1, err
+	out := []map[string]any{}
+	for i := 0; i < count; i++ {
+		seed := randSeed()
+		wf := ctx.portraitWF(prompt, seed, "manju_gacha", charInfo)
+		dst := filepath.Join(ctx.assetsDir, "characters", "_gacha", fmt.Sprintf("%s_s%d.png", safe, seed))
+		if err := ctx.comfyGenImage(wf, dst, lg, "角色 "+char); err != nil {
+			if len(out) == 0 {
+				return nil, err
+			}
+			break // 连抽中途失败:返回已生成的部分,不让一张失败全盘作废
+		}
+		out = append(out, map[string]any{"image": dst, "seed": seed})
 	}
-	return map[string]any{"ok": true, "image": dst, "seed": seed}, seed, nil
+	return out, nil
 }
 
 // charPromptFor 抽卡提示词:优先角色卡 image_prompt,兜底占位
