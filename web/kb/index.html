@@ -877,6 +877,26 @@
     if (min) min.addEventListener("click", function () { ctl("minimize"); });
     if (max) max.addEventListener("click", function () { ctl("maximize"); });
     if (close) close.addEventListener("click", function () { ctl("close"); });
+    // 窗口拖拽:topbar 空白区(非交互元素)按下 → 移动增量走 8799 /move
+    var topbar = document.querySelector(".topbar");
+    if (topbar) {
+      var dragging = false, lastX = 0, lastY = 0;
+      topbar.addEventListener("mousedown", function (e) {
+        if (e.target.closest(".controls, .nav, a, button, input, select, label")) return;
+        dragging = true;
+        lastX = e.screenX; lastY = e.screenY;
+        e.preventDefault();
+      });
+      window.addEventListener("mousemove", function (e) {
+        if (!dragging) return;
+        var dx = e.screenX - lastX, dy = e.screenY - lastY;
+        lastX = e.screenX; lastY = e.screenY;
+        if (dx !== 0 || dy !== 0) {
+          fetch("http://127.0.0.1:8799/move?dx=" + dx + "&dy=" + dy).catch(function () {});
+        }
+      });
+      window.addEventListener("mouseup", function () { dragging = false; });
+    }
   })();
   </script>
 </body>

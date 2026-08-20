@@ -2,11 +2,11 @@ package main
 
 // NiliX 主窗口(wails v3 实现)。
 // 重构:go-webview2(--mainwin 子进程) → wails WebViewWindow。
-//   - Frameless(去系统标题栏):前端自定义标题栏(app-region: drag 拖拽,
-//     依赖 wails WindowsWindow.NonClientRegionSupport → WebView2 原生非客户区)
+//   - Frameless(去系统标题栏):前端自定义标题栏 + JS 手动拖拽(HTTP 8799 /move 增量),
+//     不用 NonClientRegionSupport(WebView2 原生 NC 会拦截按钮点击,控制按钮无功能)
 //   - Solid 不透明背景(主窗口无透明需求,渲染稳定)
 //   - 加载 NiliX 管理页 http://127.0.0.1:8787
-//   - 最小化/关闭经本地 HTTP 8799 控制(外部 URL 页面无 wails runtime)
+//   - 最小化/最大化/关闭/移动经本地 HTTP 8799 控制(外部 URL 页面无 wails runtime)
 //   - 窗口尺寸/位置记忆(同旧 mainwin.json 语义,存 exe 目录)
 
 import (
@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -44,12 +45,13 @@ func main() {
 		BackgroundColour: application.NewRGB(10, 15, 30),
 		URL:              "http://127.0.0.1:8787",
 		Windows: application.WindowsWindow{
-			// 前端标题栏用 app-region: drag 拖拽窗口(WebView2 原生非客户区支持)
-			NonClientRegionSupport: true,
+			// 不用 NonClientRegionSupport(WebView2 原生 NC 会拦截按钮点击——
+			// app-region no-drag 兼容性差,最小化/最大化/关闭无功能)。
+			// 窗口拖拽由前端 JS 手动实现(HTTP 8799 /move 增量移动)。
 		},
 	})
 
-	// 本地控制端口(页面 8787 加载,无 wails runtime):最小化/关闭/最大化
+	// 本地控制端口(页面 8787 加载,无 wails runtime):最小化/关闭/最大化/移动
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /minimize", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -65,6 +67,18 @@ func main() {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(200)
 		go win.Close()
+	})
+	// /move?dx=&dy= 窗口增量移动(前端 JS 手动拖拽用;frameless 无系统拖拽)
+	mux.HandleFunc("GET /move", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		q := r.URL.Query()
+		dx, _ := strconv.Atoi(q.Get("dx"))
+		dy, _ := strconv.Atoi(q.Get("dy"))
+		if dx != 0 || dy != 0 {
+			cx, cy := win.Position()
+			go win.SetPosition(cx+dx, cy+dy)
+		}
+		w.WriteHeader(200)
 	})
 	go func() {
 		if err := http.ListenAndServe("127.0.0.1:8799", mux); err != nil {

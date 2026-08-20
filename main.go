@@ -552,10 +552,8 @@ func startCapsule() {
 	}
 }
 
-// buildTray 构建 wails SystemTray 托盘菜单:
-// 菜单项原生位图(SetBitmap)支持状态灯图标,子菜单父项也可带图标(wails 实现,
-// 不同于 getlantern/systray 的 Windows 弹出菜单父项不显示位图)。
-// 结构:工作台 / ─ / ComfyUI 状态(状态灯+文字) + ComfyUI 控制子菜单 / ─ /
+// buildTray 构建 wails SystemTray 托盘菜单(wails MenuItem 原生位图支持状态灯)。
+// 结构:工作台 / ─ / ComfyUI 状态(一个条目:状态灯位图+动态文字+控制子菜单) / ─ /
 //       灵动岛胶囊 / 开机自启 / ─ / 结束应用
 func buildTray(app *application.App, url string) {
 	tray := app.SystemTray.New()
@@ -567,20 +565,20 @@ func buildTray(app *application.App, url string) {
 	})
 	menu.AddSeparator()
 
-	// ComfyUI 状态灯:红=已停止 黄=启动中 绿=运行中(有任务) 蓝=闲置中(在线空闲)。
-	// 3s 轮询 SetBitmap + SetLabel 更新。
-	mComfyStatus := menu.Add("ComfyUI 状态…")
-	mComfyStatus.SetBitmap(dotIcon(235, 70, 60))
-	mComfyCtl := menu.AddSubmenu("ComfyUI 控制")
-	mComfyCtl.Add("打开面板").OnClick(func(*application.Context) {
+	// ComfyUI:单个条目(父项=状态灯位图+动态文字,子菜单=打开/启动/停止)。
+	// 红=已停止 黄=启动中 绿=运行中(有任务) 蓝=闲置中(在线空闲),3s 轮询刷新。
+	mComfySub := menu.AddSubmenu("ComfyUI 闲置中")
+	mComfy := menu.FindByLabel("ComfyUI 闲置中")
+	mComfy.SetBitmap(dotIcon(235, 70, 60))
+	mComfySub.Add("打开面板").OnClick(func(*application.Context) {
 		openBrowser(api.ComfyURL())
 	})
-	mComfyCtl.Add("启动 ComfyUI").OnClick(func(*application.Context) {
+	mComfySub.Add("启动 ComfyUI").OnClick(func(*application.Context) {
 		if err := api.ComfyStart(); err != nil {
 			log.Printf("托盘启动 ComfyUI 失败: %v", err)
 		}
 	})
-	mComfyCtl.Add("停止 ComfyUI").OnClick(func(*application.Context) {
+	mComfySub.Add("停止 ComfyUI").OnClick(func(*application.Context) {
 		api.ComfyStop()
 	})
 	menu.AddSeparator()
@@ -616,12 +614,12 @@ func buildTray(app *application.App, url string) {
 
 	tray.SetMenu(menu)
 
-	// 状态灯轮询
+	// 状态灯轮询:更新 ComfyUI 父项的位图(状态灯)与文字
 	go func() {
 		for {
 			icon, label := comfyStatusLight()
-			mComfyStatus.SetBitmap(icon)
-			mComfyStatus.SetLabel("ComfyUI " + label)
+			mComfy.SetBitmap(icon)
+			mComfy.SetLabel("ComfyUI " + label)
 			time.Sleep(3 * time.Second)
 		}
 	}()
