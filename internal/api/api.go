@@ -98,7 +98,10 @@ func (s *Server) Routes() http.Handler {
 	registerManjuRoutes(mux)
 	s.registerZcodeRoutes(mux) // 胶囊服务按钮:ZCode 启停/Bot 停止(原 Go 绑定 HTTP 化)
 	if s.islandFS != nil {
-		mux.Handle("/island/", noCacheHTML(http.StripPrefix("/island/", http.FileServer(http.FS(s.islandFS)))))
+		// 灵动岛页面同样注入会话令牌(占位符 /*__NILIX_TOKEN__*/ → 真实 token):
+		// island JS 的 httpPost(http://127.0.0.1:8787/api/comfy/start 等写请求)
+		// 必须带 X-NiliX-Token,否则被 auth 拦成 401「会话失效」——重构不能阉割胶囊按钮
+		mux.Handle("/island/", noCacheHTML(s.tokenInject(http.StripPrefix("/island/", http.FileServer(http.FS(s.islandFS))))))
 	}
 	mux.HandleFunc("/manage/", s.handleManage)
 	if s.kbFS != nil {
@@ -140,7 +143,8 @@ func validLocalHost(hostPort string) bool {
 // 仅 index.html(路径 / 或 *.html)走缓冲替换;媒体/脚本直接透传(不整文件缓冲)。
 func (s *Server) tokenInject(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		isHTML := r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") || strings.HasSuffix(r.URL.Path, "/index.html")
+		isHTML := r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") || strings.HasSuffix(r.URL.Path, "/index.html") ||
+			strings.HasSuffix(r.URL.Path, "/island/") || r.URL.Path == "/island"
 		if isHTML {
 			// 审计 H6:CSP——本地页面含用户可控 md 内容,XSS 后果放大;frame-ancestors 防嵌入。
 			// frame-src 必须放行 ComfyUI(默认 127.0.0.1:8190,可自定义端口/地址)——此前缺

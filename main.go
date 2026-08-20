@@ -61,7 +61,7 @@ var islandFS embed.FS
 // 第二个会创建卡死——实测结�?故主窗口�?Edge App 进程,互不冲突)�?
 // 关闭窗口 = 驻留托盘(渲染/续写任务不中�?,托盘菜单或再次双击可唤起;托盘「退出」才真正退出�?
 
-const mainWinTitle = "NiliX" // 管理主窗口标�?Edge App 窗口=页面 title,恒为 NiliX;灵动岛为 NiliX HUD 区分)
+const mainWinTitle = "NiliX" // 管理主窗口标题(Edge App 窗口=页面 title,恒为 NiliX;灵动岛为 NiliX HUD 区分)
 
 // ---- 主窗口尺寸记�?用户调整后持久化,下次启动直接加载;独立 json,避免动加�?settings) ----
 const mainWinMemFile = "mainwin.json"
@@ -233,18 +233,18 @@ func runMainWindow(url string) {
 		openBrowser(url)
 		return
 	}
-	log.Printf("主窗�?wails 进程)打开: %s", url)
+	log.Printf("主窗口(wails 进程)打开: %s", url)
 	cmd := exec.Command(mainExe)
 	// 不能 HideWindow:首个窗口若被创建为隐�?WebView2 环境初始化会卡死(历史教训);
 	// exe �?windowsgui 无控制台,正常显示即可
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 	if err := cmd.Start(); err != nil {
-		log.Printf("主窗口启动失�? %v(回退系统浏览�?", err)
+		log.Printf("主窗口启动失败: %v(回退系统浏览器)", err)
 		openBrowser(url)
 	}
 }
 
-// setMainWinIcon 加载内嵌 icon.ico 并设置窗口图�?左上�?+ Alt-Tab + 任务栏小图标)
+// setMainWinIcon 加载内嵌 icon.ico 并设置窗口图�?左上角 + Alt-Tab + 任务栏小图标)
 func setMainWinIcon(hwnd uintptr) {
 	if hwnd == 0 || len(iconICO) == 0 {
 		return
@@ -277,10 +277,10 @@ func runMainWindowWebView() {
 	defer runtime.UnlockOSThread()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("主窗口异常退�? %v", r)
+			log.Printf("主窗口异常退出: %v", r)
 		}
 	}()
-	island.EnablePerMonitorDPI() // 子进程同样高 DPI 感知:GetSystemMetrics/SetWindowPos 用物理像�?
+	island.EnablePerMonitorDPI() // 子进程同样高 DPI 感知:GetSystemMetrics/SetWindowPos 用物理像素
 	_, _, ww, wh := calcMainWinSize()
 	// 创建即指定尺�?居中:窗口第一帧就是正确尺�?不做任何后续校正,杜绝"先小后大/闪退观感"
 	w := webview.NewWithOptions(webview.WebViewOptions{
@@ -307,7 +307,7 @@ func runMainWindowWebView() {
 	}()
 	w.Navigate("http://127.0.0.1:8787")
 	hw := uintptr(w.Window())
-	setMainWinIcon(hw) // 窗口图标(NiliX icon.ico):左上�?+ Alt-Tab
+	setMainWinIcon(hw) // 窗口图标(NiliX icon.ico):左上角 + Alt-Tab
 	// 记忆轮询:用户调整窗口大小后落�?子进程持有窗口句�?
 	go saveWinLoop()
 	w.Run()
@@ -340,7 +340,7 @@ func findMainWindow() uintptr {
 // 跨进程枚举窗�?兼容"再次双击 exe 唤起已运行实例的窗口"�?
 func showMainWindow(url string) {
 	if h := findMainWindow(); h != 0 {
-		procWinShow.Call(h, 9) // SW_RESTORE(最小化时恢�?
+		procWinShow.Call(h, 9) // SW_RESTORE(最小化时恢复
 		procWinSetForeground.Call(h)
 		return
 	}
@@ -391,14 +391,15 @@ func main() {
 	if err != nil {
 		if errors.Is(err, watchdog.ErrAlreadyRunning) {
 			// 第二个实例在此进程内 gApp 尚未创建(nil),直接 openMainWindow 会 panic。
-			// 先 HTTP 唤起第一个实例的 8799 /open(同进程 gApp 有效,窗口重建/置前),
-			// 再弹 Alert——Alert 是模态 MessageBox 会阻塞,必须先唤起后提示。
+			// 改为 HTTP 唤起第一个实例的 8799 /open(同进程 gApp 有效,窗口重建/置前)。
+			// 唤起成功则静默退出(不弹阻塞式 MessageBox 打断用户);失败才提示。
 			client := &http.Client{Timeout: 2 * time.Second}
 			resp, e2 := client.Get("http://127.0.0.1:8799/open")
 			if e2 == nil {
 				resp.Body.Close()
+			} else {
+				watchdog.Alert("小说转视频服务", "NiliX 已在运行,但唤起管理窗口失败,请直接使用托盘图标。")
 			}
-			watchdog.Alert("小说转视频服务", "NiliX 已在运行,已为你唤起管理窗口。")
 		} else {
 			log.Printf("单实例检查失败: %v", err)
 		}
@@ -453,7 +454,7 @@ func main() {
 
 	// HTTP 服务放后�?goroutine，托盘图标阻塞主流程�?
 	go func() {
-		log.Printf("NiliX 已启动，控制�? %s", url)
+		log.Printf("NiliX 已启动，控制台: %s", url)
 		// 审计 M14:服务超时配置(�?slowloris 挂死连接/超大头占内存);
 		// WriteTimeout 不设——LLM/渲染为长任务,写超时反而误杀
 		srv := &http.Server{
@@ -465,7 +466,7 @@ func main() {
 			MaxHeaderBytes:    1 << 20,
 		}
 		if err := srv.ListenAndServe(); err != nil {
-			log.Printf("HTTP 服务退�? %v", err)
+			log.Printf("HTTP 服务退出: %v", err)
 			if gApp != nil {
 				gApp.Quit()
 			}
@@ -479,6 +480,11 @@ func main() {
 		Name:        "NiliX",
 		Description: "NiliX 小说转视频工作台",
 	})
+	// 应用级图标(icon.ico):统一 exe 任务栏/Alt-Tab/窗口图标(rsrc syso 提供 exe 资源,
+	// 此调用补 wails 应用图标,托盘 SetIcon 另设)
+	if len(iconICO) > 0 {
+		gApp.SetIcon(iconICO)
+	}
 
 	// 主窗�?frameless 自定义标题栏,控制按钮/拖拽�?8799 同进程直接调窗口 API)
 	createMainWindow(gApp, url)
@@ -495,18 +501,18 @@ func main() {
 	// ComfyUI 自动拉起:应用启动后判�?未运行则自动启动(用户无需手动;
 	// 渲染/资产/编码前另�?ensureComfyReady 兜底)。在线则跳过,零打扰�?
 	go func() {
-		time.Sleep(1200 * time.Millisecond) // 等服务与主窗口就�?
+		time.Sleep(1200 * time.Millisecond) // 等服务与主窗口就绪
 		if api.ComfyOnline() {
 			return
 		}
 		log.Println("ComfyUI 未运行,自动启动…")
 		if err := api.ComfyStart(); err != nil {
-			log.Printf("ComfyUI 自动启动失败: %v(可到灵动�?ComfyUI 页手动启�?", err)
+			log.Printf("ComfyUI 自动启动失败: %v(可到灵动岛/ComfyUI 页手动启动)", err)
 		}
 	}()
 
 	if err := gApp.Run(); err != nil {
-		log.Printf("应用退�? %v", err)
+		log.Printf("应用退出: %v", err)
 	}
 	onExit()
 }
@@ -518,6 +524,7 @@ var gApp *application.App
 var (
 	procGetSystemMetrics = syscall.NewLazyDLL("user32.dll").NewProc("GetSystemMetrics")
 	smXVirtual           = 76
+	smYVirtual           = 77
 	smCXVirtual          = 78
 )
 
@@ -546,7 +553,7 @@ func createMainWindow(app *application.App, url string) *application.WebviewWind
 		Height:           mh,
 		X:                mx,
 		Y:                my,
-		Frameless:        true, // 去系统标题栏,前端自定�?按钮/拖拽�?8799)
+		Frameless:        true, // 去系统标题栏,前端自定义(按钮/拖拽走 8799)
 		BackgroundType:   application.BackgroundTypeSolid,
 		BackgroundColour: application.NewRGB(10, 15, 30),
 		URL:              url + "/?_=" + strconv.FormatInt(time.Now().UnixNano(), 36),
@@ -567,17 +574,19 @@ func createMainWindow(app *application.App, url string) *application.WebviewWind
 	return win
 }
 
-// createCapsuleWindow 创建灵动岛胶囊窗�?透明 + 隐藏任务�?+ 顶部居中 300x44)
+// createCapsuleWindow 创建灵动岛胶囊窗口(透明 + 隐藏任务栏 + 顶部居中 300x44)
 func createCapsuleWindow(app *application.App, url string) *application.WebviewWindow {
 	vx, _, _ := procGetSystemMetrics.Call(uintptr(smXVirtual))
+	vy, _, _ := procGetSystemMetrics.Call(uintptr(smYVirtual))
 	vw, _, _ := procGetSystemMetrics.Call(uintptr(smCXVirtual))
 	capX := int(int32(vx)) + (int(int32(vw))-300)/2
-	return app.Window.NewWithOptions(application.WebviewWindowOptions{
+	capY := int(int32(vy)) + 4 // 顶部 4px 内边距(不可为 0:wails 对 X==0&&Y==0 走系统默认位置=屏幕正中)
+	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "NiliX HUD",
 		Width:            300,
 		Height:           44,
 		X:                capX,
-		Y:                0,
+		Y:                capY,
 		Frameless:        true,
 		AlwaysOnTop:      true,
 		DisableResize:    true,
@@ -589,6 +598,16 @@ func createCapsuleWindow(app *application.App, url string) *application.WebviewW
 			HiddenOnTaskbar:                   true, // 悬浮窗不占任务栏
 		},
 	})
+	// 双保险:强制顶部居中定位。wails 的 Run() 在 gApp.Run() 时才创建窗口并
+	// 执行初始定位(X==0&&Y==0 会走 CW_USEDEFAULT=屏幕正中),此前的 SetPosition
+	// 因 w.impl==nil 只存 options 不生效——延迟到应用启动后(约 1.5s)再强制。
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		win.SetPosition(capX, capY)
+		win.SetAlwaysOnTop(true)
+		win.Focus()
+	}()
+	return win
 }
 
 // loadMainWinState 读取记忆的主窗口尺寸/位置(缺省 1400x900)
@@ -647,7 +666,7 @@ func startControlServers(app *application.App, url string) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(200)
 		if mainWinRef != nil {
-			go mainWinRef.Close() // 关闭主窗�?应用(托盘+胶囊)继续,托盘可重�?
+			go mainWinRef.Close() // 关闭主窗口,应用(托盘+胶囊)继续,托盘可重建
 		}
 	})
 	mux.HandleFunc("GET /move", func(w http.ResponseWriter, r *http.Request) {
@@ -661,9 +680,27 @@ func startControlServers(app *application.App, url string) {
 		}
 		w.WriteHeader(200)
 	})
+	// 前端边缘拖拽缩放(frameless + 外部 URL 无 wails runtime,JS 边缘检测 →
+	// HTTP 调 SetSize 缩放)。w=新宽,h=新高(绝对像素,含最小/最大约束)。
+	mux.HandleFunc("GET /resize", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		q := r.URL.Query()
+		nw, _ := strconv.Atoi(q.Get("w"))
+		nh, _ := strconv.Atoi(q.Get("h"))
+		if nw < 900 {
+			nw = 900
+		}
+		if nh < 600 {
+			nh = 600
+		}
+		if mainWinRef != nil {
+			go mainWinRef.SetSize(nw, nh)
+		}
+		w.WriteHeader(200)
+	})
 	go func() {
 		if err := http.ListenAndServe("127.0.0.1:8799", mux); err != nil {
-			log.Printf("主窗口控制端口退�? %v", err)
+			log.Printf("主窗口控制端口退出: %v", err)
 		}
 	}()
 
@@ -689,7 +726,7 @@ func startControlServers(app *application.App, url string) {
 	})
 	go func() {
 		if err := http.ListenAndServe("127.0.0.1:8788", mux2); err != nil {
-			log.Printf("胶囊控制端口退�? %v", err)
+			log.Printf("胶囊控制端口退出: %v", err)
 		}
 	}()
 }
@@ -752,14 +789,14 @@ func startCapsule() {
 	}
 	capExe := filepath.Join(filepath.Dir(exe), "NiliX-Capsule.exe")
 	if _, err := os.Stat(capExe); err != nil {
-		log.Printf("灵动岛胶囊程序缺�?跳过): %s", capExe)
+		log.Printf("灵动岛胶囊程序缺失(跳过): %s", capExe)
 		return
 	}
 	cmd := exec.Command(capExe)
 	// 胶囊�?GUI 应用(windowsgui,�?console),不能�?HideWindow——STARTF_USESHOWWINDOW
 	// 会把胶囊的主窗口也隐�?实测窗口 vis=false)�?
 	if err := cmd.Start(); err != nil {
-		log.Printf("灵动岛胶囊启动失�? %v", err)
+		log.Printf("灵动岛胶囊启动失败: %v", err)
 	}
 }
 
@@ -820,7 +857,7 @@ func buildTray(app *application.App, url string) {
 	menu.AddSeparator()
 	menu.Add("结束应用").OnClick(func(*application.Context) {
 		log.Println("退出触发: 托盘「结束应用」")
-		app.Quit() // app.Run 返回�?main 统一�?onExit
+		app.Quit() // app.Run 返回后 main 统一走 onExit
 	})
 
 	tray.SetMenu(menu)
@@ -892,7 +929,7 @@ func hideCapsule() {
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("胶囊关闭请求失败(可能未运�?: %v", err)
+		log.Printf("胶囊关闭请求失败(可能未运行): %v", err)
 		return
 	}
 	_ = resp.Body.Close()
@@ -1037,11 +1074,11 @@ func closeMainWindow() {
 
 func onExit() {
 	log.Println("onExit: 开始退出")
-	// 正常退出标�?看门狗守护进程据此判断——存在该标记=用户主动退�?不重�?
+	// 正常退出标�?看门狗守护进程据此判断——存在该标记=用户主动退出,不重启
 	// 崩溃/被强杀不会�?onExit,无标�?�?看门狗自动重�?
 	_ = os.MkdirAll("logs", 0755)
 	_ = os.WriteFile(filepath.Join("logs", "graceful_exit"), []byte(time.Now().Format(time.RFC3339)), 0644)
-	closeMainWindow() // 全退(灵动�?X / 托盘结束应用):一并关闭管理主窗口
+	closeMainWindow() // 全退(灵动岛 X / 托盘结束应用):一并关闭管理主窗口
 	log.Println("NiliX 已退出")
 }
 
@@ -1067,13 +1104,13 @@ func runWatchdog() {
 	_, _ = windows.WaitForSingleObject(h, windows.INFINITE)
 	_ = windows.CloseHandle(h)
 	if _, err := os.Stat(marker); err == nil {
-		_ = os.Remove(marker) // 用户主动退�?不重�?
+		_ = os.Remove(marker) // 用户主动退出,不重启
 		return
 	}
 	// 异常退�?记录并自动重�?
 	f, _ := os.OpenFile(filepath.Join("logs", "watchdog.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if f != nil {
-		_, _ = f.WriteString("[" + time.Now().Format("2006-01-02 15:04:05") + "] 主进程异常退�?PID " + strconv.Itoa(pid) + "),自动重启\n")
+		_, _ = f.WriteString("[" + time.Now().Format("2006-01-02 15:04:05") + "] 主进程异常退出(PID " + strconv.Itoa(pid) + "),自动重启\n")
 		_ = f.Close()
 	}
 	restartNiliX()
@@ -1085,7 +1122,7 @@ func restartNiliX() {
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err := cmd.Start(); err != nil {
-		log.Printf("看门狗重启失�? %v", err)
+		log.Printf("看门狗重启失败: %v", err)
 	}
 }
 

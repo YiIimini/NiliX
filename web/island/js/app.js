@@ -12,11 +12,16 @@
        - 窗口尺寸/关闭: 本机 8788(capsule 进程控制端口)
        - ComfyUI/Harness 启停: 8787 主服务 HTTP API
        - 打开浏览器: window.open */
+  function nilixTok() {
+    var t = window.NILIX_TOKEN;
+    if (t && t.length > 8) return t;
+    try { return localStorage.getItem("nilix_token") || ""; } catch (e) { return ""; }
+  }
   function httpPost(url) {
-    return fetch(url, { method: "POST" }).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); });
+    return fetch(url, { method: "POST", headers: nilixTok() ? { "X-NiliX-Token": nilixTok() } : {} }).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); });
   }
   function httpGet(url) {
-    return fetch(url).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); });
+    return fetch(url, { headers: nilixTok() ? { "X-NiliX-Token": nilixTok() } : {} }).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); });
   }
   if (typeof setIsland !== "function") {
     window.setIsland = (expanded, w, h) => {
