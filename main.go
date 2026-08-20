@@ -13,6 +13,7 @@ import (
 	"image/png"
 	"io/fs"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -614,15 +615,101 @@ func buildTray(app *application.App, url string) {
 
 	tray.SetMenu(menu)
 
-	// 状态灯轮询:更新 ComfyUI 父项的位图(状态灯)与文字
+	// 状态灯动态动画:3s 探测状态(避免频繁 HTTP),500ms 切动画帧。
+	// 黄(启动中)=旋转加载圈;绿/蓝(运行/闲置)=呼吸脉冲;红(已停止)=静态。
 	go func() {
+		st := comfyProbeState()
+		frame := 0
+		stateTicker := time.NewTicker(3 * time.Second)
+		animTicker := time.NewTicker(500 * time.Millisecond)
+		defer stateTicker.Stop()
+		defer animTicker.Stop()
 		for {
-			icon, label := comfyStatusLight()
-			mComfy.SetBitmap(icon)
-			mComfy.SetLabel("ComfyUI " + label)
-			time.Sleep(3 * time.Second)
+			select {
+			case <-stateTicker.C:
+				st = comfyProbeState()
+			case <-animTicker.C:
+				frame++
+				switch st.mode {
+				case "spin":
+					mComfy.SetBitmap(dotIconAnim(st.r, st.g, st.b, frame%8, 8, "spin"))
+				case "pulse":
+					mComfy.SetBitmap(dotIconAnim(st.r, st.g, st.b, frame%4, 4, "pulse"))
+				default:
+					mComfy.SetBitmap(dotIcon(st.r, st.g, st.b))
+				}
+				mComfy.SetLabel("ComfyUI " + st.label)
+			}
 		}
 	}()
+}
+
+// comfyState 托盘 ComfyUI 状态灯状态:色值 + 动画模式(spin 转圈/pulse 脉冲/static 静态) + 文字
+type comfyState struct {
+	r, g, b uint8
+	mode    string
+	label   string
+}
+
+// comfyProbeState 探测 ComfyUI 状态:
+// 红=已停止(离线无进程) 黄=启动中(离线但端口有进程,转圈动画)
+// 绿=运行中(在线且队列有任务,脉冲) 蓝=闲置中(在线空闲,脉冲)
+func comfyProbeState() comfyState {
+	if api.ComfyOnline() {
+		if api.ComfyBusy() {
+			return comfyState{70, 200, 100, "pulse", "运行中"}
+		}
+		return comfyState{80, 150, 240, "pulse", "闲置中"}
+	}
+	if api.ComfyPortPID() > 0 {
+		return comfyState{255, 190, 30, "spin", "启动中"}
+	}
+	return comfyState{235, 70, 60, "static", "已停止"}
+}
+
+// dotIconAnim 动态状态灯动画帧:
+//   - spin:圆环 + 旋转缺口(加载圈),缺口位置 = frame/total * 2π
+//   - pulse:圆点 + 外发光光晕,光晕强度随 frame 呼吸(正弦)
+func dotIconAnim(r, g, b uint8, frame, total int, mode string) []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	if mode == "spin" {
+		// 旋转加载圈:圆环半径 4.5~7,缺口 100° 随帧旋转
+		gapCenter := float64(frame) / float64(total) * 2 * math.Pi
+		gapHalf := 0.9 // 缺口半角(弧度)
+		for y := 0; y < 16; y++ {
+			for x := 0; x < 16; x++ {
+				dx, dy := float64(x)-7.5, float64(y)-7.5
+				dist := math.Sqrt(dx*dx + dy*dy)
+				if dist < 4.5 || dist > 7.0 {
+					continue
+				}
+				ang := math.Atan2(dy, dx)
+				diff := math.Mod(ang-gapCenter+math.Pi*2, math.Pi*2)
+				if diff > gapHalf && diff < math.Pi*2-gapHalf {
+					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
+				}
+			}
+		}
+	} else if mode == "pulse" {
+		// 呼吸脉冲:实心圆 + 外发光光晕,光晕随正弦呼吸
+		p := float64(frame) / float64(total)
+		halo := uint8(40 + 110*math.Sin(p*math.Pi))
+		for y := 0; y < 16; y++ {
+			for x := 0; x < 16; x++ {
+				dx, dy := float64(x)-7.5, float64(y)-7.5
+				dist := math.Sqrt(dx*dx + dy*dy)
+				switch {
+				case dist <= 7.0:
+					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
+				case dist <= 9.0 && halo > 50:
+					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: halo})
+				}
+			}
+		}
+	}
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
 }
 
 // hideCapsule 隐藏灵动岛胶囊:调用胶囊进程控制端口 8788 /close(退出胶囊进程)。
@@ -659,18 +746,7 @@ func dotIcon(r, g, b uint8) []byte {
 
 // comfyStatusLight 托盘 ComfyUI 状态灯(图标 + 文字):
 // 红=已停止(离线无进程) 黄=启动中(离线但端口有进程) 绿=运行中(在线且队列有任务) 蓝=闲置中(在线空闲)
-func comfyStatusLight() ([]byte, string) {
-	if api.ComfyOnline() {
-		if api.ComfyBusy() {
-			return dotIcon(70, 200, 100), "运行中"
-		}
-		return dotIcon(80, 150, 240), "闲置中"
-	}
-	if api.ComfyPortPID() > 0 {
-		return dotIcon(255, 190, 30), "启动中"
-	}
-	return dotIcon(235, 70, 60), "已停止"
-}
+// 已由 comfyProbeState 取代(带动画模式)。
 
 // closeMainWindow 关闭管理主窗口(子进程 WebView2)。用 FindWindowW 精确匹配标题
 // (主窗口 title 恒为 "NiliX",灵动岛为 "NiliX HUD")——不用 EnumWindows 枚举:
