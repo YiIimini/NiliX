@@ -25,7 +25,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/getlantern/systray"
+	"github.com/wailsapp/wails/v3/pkg/application"
 	webview "github.com/jchv/go-webview2"
 	"golang.org/x/sys/windows"
 
@@ -457,7 +457,9 @@ func main() {
 		}
 		if err := srv.ListenAndServe(); err != nil {
 			log.Printf("HTTP 服务退出: %v", err)
-			systray.Quit()
+			if gApp != nil {
+				gApp.Quit()
+			}
 		}
 	}()
 
@@ -510,8 +512,21 @@ func main() {
 		startCapsule()
 	}()
 
-	systray.Run(onReady(url), onExit)
+	// 托盘(wails SystemTray 重构):菜单项原生位图支持(状态灯 SetBitmap),
+	// getlantern/systray 的子菜单父项不显示位图、独立项图标显示不稳,弃用。
+	gApp = application.New(application.Options{
+		Name:        "NiliX",
+		Description: "NiliX 小说转视频工作台",
+	})
+	buildTray(gApp, url)
+	if err := gApp.Run(); err != nil {
+		log.Printf("应用退出: %v", err)
+	}
+	onExit()
 }
+
+// gApp 全局应用引用(HTTP 服务异常退出时调用 Quit)
+var gApp *application.App
 
 // startCapsule 拉起独立灵动岛胶囊进程(NiliX-Capsule.exe,与主 exe 同目录)。
 // 单实例:胶囊控制端口 8788 已监听(进程在跑)则不重复启动。
@@ -537,80 +552,79 @@ func startCapsule() {
 	}
 }
 
-func onReady(url string) func() {
-	return func() {
-		systray.SetIcon(iconICO)
-		systray.SetTitle("NiliX")
-		systray.SetTooltip("NiliX")
-		// 托盘菜单(美化):分组 + 图标 + ComfyUI 子菜单 + 胶囊开关
-		mApp := systray.AddMenuItem("NiliX 工作台", "打开 NiliX 工作台")
-		mApp.SetIcon(iconICO)
-		systray.AddSeparator()
+// buildTray 构建 wails SystemTray 托盘菜单:
+// 菜单项原生位图(SetBitmap)支持状态灯图标,子菜单父项也可带图标(wails 实现,
+// 不同于 getlantern/systray 的 Windows 弹出菜单父项不显示位图)。
+// 结构:工作台 / ─ / ComfyUI 状态(状态灯+文字) + ComfyUI 控制子菜单 / ─ /
+//       灵动岛胶囊 / 开机自启 / ─ / 结束应用
+func buildTray(app *application.App, url string) {
+	tray := app.SystemTray.New()
+	tray.SetIcon(iconICO)
+	menu := application.NewMenu()
 
-		// ComfyUI 状态灯:独立菜单项(子菜单父项在 Windows 弹出菜单不显示位图,
-		// 只能独立项带图标 + 文字)。红=已停止 黄=启动中 绿=运行中 蓝=闲置中。
-		mComfyStatus := systray.AddMenuItem("ComfyUI 状态…", "ComfyUI 运行状态")
-		mComfyStatus.SetIcon(dotIcon(235, 70, 60))
-		go func() {
-			for {
-				icon, label := comfyStatusLight()
-				mComfyStatus.SetIcon(icon)
-				mComfyStatus.SetTitle("ComfyUI " + label)
-				time.Sleep(3 * time.Second)
+	menu.Add("NiliX 工作台").OnClick(func(*application.Context) {
+		showMainWindow(url)
+	})
+	menu.AddSeparator()
+
+	// ComfyUI 状态灯:红=已停止 黄=启动中 绿=运行中(有任务) 蓝=闲置中(在线空闲)。
+	// 3s 轮询 SetBitmap + SetLabel 更新。
+	mComfyStatus := menu.Add("ComfyUI 状态…")
+	mComfyStatus.SetBitmap(dotIcon(235, 70, 60))
+	mComfyCtl := menu.AddSubmenu("ComfyUI 控制")
+	mComfyCtl.Add("打开面板").OnClick(func(*application.Context) {
+		openBrowser(api.ComfyURL())
+	})
+	mComfyCtl.Add("启动 ComfyUI").OnClick(func(*application.Context) {
+		if err := api.ComfyStart(); err != nil {
+			log.Printf("托盘启动 ComfyUI 失败: %v", err)
+		}
+	})
+	mComfyCtl.Add("停止 ComfyUI").OnClick(func(*application.Context) {
+		api.ComfyStop()
+	})
+	menu.AddSeparator()
+
+	// 灵动岛胶囊显示/隐藏(胶囊为独立 wails 进程)
+	mCapsule := menu.AddCheckbox("灵动岛胶囊", true)
+	mCapsule.OnClick(func(*application.Context) {
+		if mCapsule.Checked() {
+			hideCapsule()
+			mCapsule.SetChecked(false)
+		} else {
+			startCapsule()
+			mCapsule.SetChecked(true)
+		}
+	})
+	mAuto := menu.AddCheckbox("开机自启", autostart.Enabled())
+	mAuto.OnClick(func(*application.Context) {
+		if mAuto.Checked() {
+			if autostart.Disable() == nil {
+				mAuto.SetChecked(false)
 			}
-		}()
-		systray.AddSeparator()
-
-		mComfy := systray.AddMenuItem("ComfyUI 控制", "ComfyUI 控制")
-		mComfyOpen := mComfy.AddSubMenuItem("打开面板", "打开 ComfyUI 面板")
-		mComfyStart := mComfy.AddSubMenuItem("启动 ComfyUI", "启动 ComfyUI 服务")
-		mComfyStop := mComfy.AddSubMenuItem("停止 ComfyUI", "停止 ComfyUI 服务")
-		systray.AddSeparator()
-
-		// 灵动岛胶囊显示/隐藏(胶囊为独立 wails 进程)
-		mCapsule := systray.AddMenuItemCheckbox("灵动岛胶囊", "显示/隐藏灵动岛悬浮胶囊", true)
-		mAuto := systray.AddMenuItemCheckbox("开机自启", "开机自动启动 NiliX", autostart.Enabled())
-		systray.AddSeparator()
-
-		mQuit := systray.AddMenuItem("结束应用", "关闭窗口与服务并退出")
-		go func() {
-			for {
-				select {
-				case <-mApp.ClickedCh:
-					showMainWindow(url)
-				case <-mComfyOpen.ClickedCh:
-					openBrowser(api.ComfyURL())
-				case <-mComfyStart.ClickedCh:
-					if err := api.ComfyStart(); err != nil {
-						log.Printf("托盘启动 ComfyUI 失败: %v", err)
-					}
-				case <-mComfyStop.ClickedCh:
-					api.ComfyStop()
-				case <-mCapsule.ClickedCh:
-					if mCapsule.Checked() {
-						hideCapsule()
-						mCapsule.Uncheck()
-					} else {
-						startCapsule()
-						mCapsule.Check()
-					}
-				case <-mAuto.ClickedCh:
-					if mAuto.Checked() {
-						if autostart.Disable() == nil {
-							mAuto.Uncheck()
-						}
-					} else {
-						if exe, err := os.Executable(); err == nil && autostart.Enable(exe) == nil {
-							mAuto.Check()
-						}
-					}
-				case <-mQuit.ClickedCh:
-					log.Println("退出触发: 托盘「结束应用」") // 诊断:莫名退出时定位触发源
-					systray.Quit()
-				}
+		} else {
+			if exe, err := os.Executable(); err == nil && autostart.Enable(exe) == nil {
+				mAuto.SetChecked(true)
 			}
-		}()
-	}
+		}
+	})
+	menu.AddSeparator()
+	menu.Add("结束应用").OnClick(func(*application.Context) {
+		log.Println("退出触发: 托盘「结束应用」")
+		app.Quit() // app.Run 返回后 main 统一调 onExit
+	})
+
+	tray.SetMenu(menu)
+
+	// 状态灯轮询
+	go func() {
+		for {
+			icon, label := comfyStatusLight()
+			mComfyStatus.SetBitmap(icon)
+			mComfyStatus.SetLabel("ComfyUI " + label)
+			time.Sleep(3 * time.Second)
+		}
+	}()
 }
 
 // hideCapsule 隐藏灵动岛胶囊:调用胶囊进程控制端口 8788 /close(退出胶囊进程)。
