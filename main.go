@@ -566,10 +566,10 @@ func buildTray(app *application.App, url string) {
 	})
 	menu.AddSeparator()
 
-	// ComfyUI:单个条目(父项=状态灯位图+动态文字,子菜单=打开/启动/停止)。
-	// 红=已停止 黄=启动中 绿=运行中(有任务) 蓝=闲置中(在线空闲),3s 轮询刷新。
-	mComfySub := menu.AddSubmenu("ComfyUI 闲置中")
-	mComfy := menu.FindByLabel("ComfyUI 闲置中")
+	// ComfyUI:单个条目(父项=状态灯位图动态动画,无状态文字——有灯就不需要文字)。
+	// 红=已停止 黄=启动中 绿=运行中(有任务) 蓝=闲置中(在线空闲),3s 探测+400ms 动画帧。
+	mComfySub := menu.AddSubmenu("ComfyUI")
+	mComfy := menu.FindByLabel("ComfyUI")
 	mComfy.SetBitmap(dotIcon(235, 70, 60))
 	mComfySub.Add("打开面板").OnClick(func(*application.Context) {
 		openBrowser(api.ComfyURL())
@@ -638,7 +638,7 @@ func buildTray(app *application.App, url string) {
 				default:
 					mComfy.SetBitmap(dotIcon(st.r, st.g, st.b))
 				}
-				mComfy.SetLabel("ComfyUI " + st.label)
+				// 状态灯图标已表达状态,菜单项文字保持「ComfyUI」不带状态描述
 			}
 		}
 	}()
