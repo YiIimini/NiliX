@@ -20,7 +20,10 @@
   }
   if (typeof setIsland !== "function") {
     window.setIsland = (expanded, w, h) => {
-      const nw = expanded ? 380 : 300, nh = expanded ? 420 : 44;
+      // 用页面测量的动态高度(islandHeight):展开面板贴合内容,底部不留空白;
+      // 收起回胶囊 300x44
+      const nw = expanded ? (w && w >= 200 ? w : 380) : 300;
+      const nh = expanded ? (h && h >= 40 ? h : 420) : 44;
       httpGet("http://127.0.0.1:8788/size?w=" + nw + "&h=" + nh).catch(() => {});
     };
   }

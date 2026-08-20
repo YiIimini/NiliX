@@ -5,16 +5,18 @@ package main
 // 后端成熟处理 WebView2 透明(A:0) + WS_EX_LAYERED + DirectComposition + WM_NC* 消息。
 //
 // 页面加载 NiliX 主服务 8787 的 /island/(外部 URL,无 wails runtime 注入),因此:
-//   - 窗口尺寸(展开/收起)通过本进程的 HTTP 端口 127.0.0.1:8788 控制
+//   - 窗口尺寸(展开/收起)通过本进程 HTTP 端口 127.0.0.1:8788 控制,带分段动画
 //     (页面 JS fallback:setIsland → GET /size?w=&h=)
-//   - 关闭走 GET /close
+//   - 退出走 GET /close → app.Quit(确保进程真退出)
 //   - 数据/按钮走 8787 的 HTTP API(fetch 同源,无需绑定)
 
 import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -27,11 +29,14 @@ var (
 )
 
 const (
-	miniW = 300
-	miniH = 44 // 胶囊高度:无外部投影(透明窗口投影合成灰矩形,已去掉),无需投影空间
-	expandW = 380
-	expandH = 420
+	miniW    = 300
+	miniH    = 44
+	animStep = 12 // 动画步数
+	animMS   = 12 // 每步间隔毫秒
 )
+
+// animGen 动画代数:新的展开/收起请求递增,旧动画检测到代数变化立即中止(防动画打架)
+var animGen int32
 
 func main() {
 	app := application.New(application.Options{
@@ -62,7 +67,7 @@ func main() {
 		},
 	})
 
-	// 本地控制端口:页面(8787 加载)通过 GET 请求控制胶囊窗口尺寸/关闭(跨源,响应带 CORS 头)
+	// 本地控制端口(页面 8787 加载,跨源响应带 CORS 头)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /size", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -74,16 +79,14 @@ func main() {
 		if v, err := strconv.Atoi(q.Get("h")); err == nil && v >= 40 && v <= 900 {
 			hgt = v
 		}
-		vw, _, _ := procGetSystemMetrics.Call(uintptr(smCXVirtual))
-		x := (int(int32(vw)) - wid) / 2
-		win.SetPosition(x, 0)
-		win.SetSize(wid, hgt)
+		animateWindow(win, wid, hgt)
 		w.WriteHeader(200)
 	})
 	mux.HandleFunc("GET /close", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(200)
-		go win.Close()
+		// 必须 app.Quit() 而非 win.Close():确保胶囊进程真退出(win.Close 可能只关窗口)
+		go app.Quit()
 	})
 	go func() {
 		if err := http.ListenAndServe("127.0.0.1:8788", mux); err != nil {
@@ -94,4 +97,35 @@ func main() {
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// animateWindow 展开/收起动画:从当前尺寸分段 SetSize/SetPosition 过渡到目标,
+// 窗口居中(宽度变化 → x 同步)。新请求递增代数,旧动画中止。
+func animateWindow(win *application.WebviewWindow, toW, toH int) {
+	vw, _, _ := procGetSystemMetrics.Call(uintptr(smCXVirtual))
+	sw, sh := win.Size()
+	if sw <= 0 {
+		sw = miniW
+	}
+	if sh <= 0 {
+		sh = miniH
+	}
+	gen := atomic.AddInt32(&animGen, 1)
+	go func() {
+		steps := animStep
+		if sw == toW && sh == toH {
+			steps = 1
+		}
+		for i := 1; i <= steps; i++ {
+			if atomic.LoadInt32(&animGen) != gen {
+				return // 被新的展开/收起请求取代
+			}
+			w := sw + (toW-sw)*i/steps
+			h := sh + (toH-sh)*i/steps
+			x := (int(int32(vw)) - w) / 2
+			win.SetPosition(x, 0)
+			win.SetSize(w, h)
+			time.Sleep(animMS * time.Millisecond)
+		}
+	}()
 }
