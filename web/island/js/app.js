@@ -52,11 +52,14 @@
   let expanded = false;
   let lastCollapseAt = 0; // 收起时间戳:防收起动画后鼠标仍在胶囊位置导致闪烁重开
   let collapseTimer = null; // 收起淡出阶段计时器(170ms 后切 collapsed)
-  // 展开面板内容高度(#full 为自然高度,设置面板/行显隐变化后重新测量)
+  // 展开面板内容高度(#full 为自然高度,设置面板/行显隐变化后重新测量)。
+  // 注意:窗口收起态只有 44px 高,.card{position:fixed;inset:0} 占满视口,
+  // #full 作为 flex 子元素 offsetHeight 被父容器(视口)钳制为 44——必须用
+  // scrollHeight(内容实际滚动高度,不受父容器高度约束),否则展开只到胶囊大小。
   function islandHeight() {
     const el = $("full");
     if (!el) return 380;
-    return Math.max(1, el.offsetHeight);
+    return Math.max(1, el.scrollHeight || el.offsetHeight);
   }
   // 按内容高度自适应窗口(offsetHeight 同步强制布局,类切换后立即量到最终高度)
   function syncIslandSize() {
@@ -72,23 +75,21 @@
       document.body.classList.remove("island-closing");
       document.body.classList.add("island-expanded");
       document.body.classList.remove("island-collapsed");
-      // 展开:先加 expanded 类强制布局,再量 #full 自然高度——
-      // 若在 collapsed 态直接量 offsetHeight,面板未显示量到的是收起高度,
-      // 窗口只展开到很小,内容显示不全(用户反馈的"鼠标不能全显示")。
-      // 同步强制布局(offsetHeight 读取即触发),确保量到展开后真实高度。
+      // 展开高度测量坑:窗口收起态仅 44px,.card{position:fixed;inset:0} 占满视口,
+      // #full 是 flex 子元素,offsetHeight 被父容器(视口 44px)钳制 → 展开只到胶囊大小。
+      // 修复:先展开到足够高度(600)让 #full 内容完整渲染,scrollHeight 才能量到真实
+      // 内容高度,随后校准窗口到内容贴合高度(最小 300)。
       void document.body.offsetHeight; // 强制同步布局
       if (typeof setIsland === "function") {
-        var h = islandHeight();
-        setIsland(true, 380, Math.max(300, h)); // 最小 300 防内容面板未就绪时塌陷
+        setIsland(true, 380, 600); // 首帧给足高度,内容完整呈现
       }
-      // 展开动画/内容渲染完成后再次同步窗口高度(内容行/字体加载后 #full 高度可能增长,
-      // 首测偏小会导致底部内容被裁剪——用户反馈"鼠标不能全显示"的兜底)
+      // 内容渲染后再按 scrollHeight 校准(此时窗口已高,测量不受父容器钳制)
       setTimeout(function () {
         if (expanded && typeof setIsland === "function") {
-          var h2 = islandHeight();
-          setIsland(true, 380, Math.max(300, h2));
+          var h = islandHeight();
+          setIsland(true, 380, Math.max(300, h));
         }
-      }, 350);
+      }, 120);
     } else {
       // 收起:先播面板淡出(island-closing),170ms 后再切 collapsed——与窗口缩小动画同步,
       // 避免"内容瞬间消失"的生硬切换(升级动效)

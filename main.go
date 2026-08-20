@@ -682,7 +682,12 @@ func createMainWindow(app *application.App, url string) *application.WebviewWind
 	}
 	win.OnWindowEvent(events.Common.WindowDidMove, func(*application.WindowEvent) { saveWin() })
 	win.OnWindowEvent(events.Common.WindowDidResize, func(*application.WindowEvent) { saveWin() })
-	win.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) { mainWinClosed.Store(true) })
+	win.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
+		// 退出/关闭前兜底保存最后一次尺寸位置(拖动后直接关窗的场景,
+		// WM_EXITSIZEMOVE 若未触发,保证下次启动仍用用户最后调整的尺寸)
+		saveWin()
+		mainWinClosed.Store(true)
+	})
 	return win
 }
 
