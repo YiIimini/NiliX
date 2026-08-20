@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1097,20 +1099,31 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	fresh, _ := body["fresh"].(bool)     // 重跑:先清空项目旧产物(方案/镜头/成片/缓存)
 	agentMode, _ := body["agent"].(bool) // 智能体调度:剧本复核 + 审片官判分 + 自动返工 + 例外升级
 
-	if configPath == "" {
-		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+	if err := startManjuRun(configPath, chapters, episode, phase, only, novel, autoByChapter, fresh, agentMode); err != nil {
+		if strings.Contains(err.Error(), "运行中") {
+			http.Error(w, `{"error":"已有任务运行中，先停止"}`, http.StatusConflict)
+		} else {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		}
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "stage": orDefault(phase, "all")})
+}
+
+// startManjuRun 启动渲染管线(manjuRun HTTP 与崩溃自动恢复共用):
+// 校验、初始化运行状态、启动后台 goroutine。返回 error(参数非法/已有任务/初始化失败)。
+func startManjuRun(configPath, chapters, episode, phase, only, novel string, autoByChapter, fresh, agentMode bool) error {
+	if configPath == "" {
+		return fmt.Errorf("missing config")
+	}
 	if phase != "" && !manjuPhases[phase] {
-		http.Error(w, `{"error":"未知阶段: `+phase+`(可用 all/plan/assets/encode/render/qc/assemble)"}`, http.StatusBadRequest)
-		return
+		return fmt.Errorf("未知阶段: %s(可用 all/plan/assets/encode/render/qc/assemble)", phase)
 	}
 
 	manjuState.mu.Lock()
 	if manjuState.running {
 		manjuState.mu.Unlock()
-		http.Error(w, `{"error":"已有任务运行中，先停止"}`, http.StatusConflict)
-		return
+		return fmt.Errorf("已有任务运行中，先停止")
 	}
 	// 续跑耗时累加:上次运行被手动停止或失败时,总耗时从上次冻结值继续累计(不重新计时);
 	// 上次成功完成则视为全新一轮,从 0 开始
@@ -1133,9 +1146,10 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	manjuState.mu.Unlock()
 
 	// 落盘到对应项目目录:清空上次日志 + 写入"运行中"状态(服务重启后按项目恢复,删项目即删状态)
+	// PID 一并落盘:崩溃恢复的存活判定(isPidAlive)依赖它——此前恒为 0,判定形同虚设
 	_ = os.MkdirAll(filepath.Dir(manjuRunStatePath(projName)), 0755)
 	_ = os.WriteFile(manjuRunLogPath(projName), nil, 0644)
-	writeManjuDiskState(projName, &manjuDiskState{Running: true, Stage: orDefault(phase, "all"), StartedAt: time.Now().Unix(), Episode: episode})
+	writeManjuDiskState(projName, &manjuDiskState{Running: true, Stage: orDefault(phase, "all"), StartedAt: time.Now().Unix(), Episode: episode, PID: os.Getpid()})
 
 	// 新管线:章节/集号/镜头从 config.render 读取(render.chapters/episode/shots),先写入再启动
 	if err := writeManjuRunParams(configPath, chapters, episode, only); err != nil {
@@ -1146,8 +1160,7 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 		manjuState.done = true
 		manjuState.mu.Unlock()
 		writeManjuDiskState(projName, &manjuDiskState{Running: false, Stage: manjuState.stage, Done: true, RC: &rc, StartedAt: manjuState.started.Unix(), Episode: episode})
-		http.Error(w, `{"error":"写入渲染参数失败: `+err.Error()+`"}`, http.StatusInternalServerError)
-		return
+		return fmt.Errorf("写入渲染参数失败: %w", err)
 	}
 
 	// Go 管线:全部阶段在本进程内实现(替代 Python 子进程 spawn)
@@ -1160,8 +1173,7 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 		manjuState.done = true
 		manjuState.mu.Unlock()
 		writeManjuDiskState(projName, &manjuDiskState{Running: false, Stage: manjuState.stage, Done: true, RC: &rc, StartedAt: manjuState.started.Unix(), Episode: episode})
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
-		return
+		return err
 	}
 	runFile, _ := os.OpenFile(manjuRunLogPath(projName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	lg := newManjuLogger(manjuState, runFile, ctx.project, ctx.episode)
@@ -1194,6 +1206,20 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	}
 	go func() {
 		rc := 0
+		// 管线崩溃保护:渲染/质检等 goroutine panic 会直接崩掉整个主进程(无日志、无状态落盘,
+		// 表现为"应用莫名退出")。这里兜底:记录崩溃堆栈到 logs/crash.log、状态落盘为失败、不崩进程。
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 64<<10)
+				n := runtime.Stack(buf, false)
+				lg.logf(fmt.Sprintf("💥 渲染管线崩溃(panic): %v\n%s", r, buf[:n]))
+				manjuWriteCrash("pipeline", fmt.Sprintf("%v", r), buf[:n])
+				if runFile != nil {
+					_ = runFile.Close()
+				}
+				manjuFinish(1) // 落盘失败态,用户可续跑
+			}
+		}()
 		// 智能模式走 agent 调度壳(阶段函数复用,qc 扩展为审片+返工闭环),普通模式原样
 		runPipeline := func(c *manjuCtx, l *manjuLogger) int {
 			if agentMode {
@@ -1238,7 +1264,65 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 		}
 		manjuFinish(rc)
 	}()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "stage": phaseName})
+	return nil
+}
+
+// AutoRecoverRendering 启动后自动恢复"渲染中异常退出"的任务(崩溃恢复续跑):
+// 磁盘 run_state 显示 running 但进程已死(崩溃残留——异常退出不走 onExit,磁盘仍为运行中),
+// 且上次阶段在渲染链路(编码/渲染/质检),且环境就绪(ComfyUI 可拉起、项目可读)
+// → 自动续跑:幂等跳过已完成阶段、渲染检查点自动收回上次未收产物,绝不重复烧 GPU。
+// 用户主动停止(磁盘 Stopped=true,run_state 会落盘 stopped)与已完成任务不自动恢复。
+func AutoRecoverRendering() {
+	// 恢复扫描自身兜底:任何 panic 不静默失效,记录后继续
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 64<<10)
+			n := runtime.Stack(buf, false)
+			manjuWriteCrash("autorecover", fmt.Sprintf("%v", r), buf[:n])
+		}
+	}()
+	entries, err := os.ReadDir(ManjuRootDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		ds := loadManjuDiskState(name)
+		if ds == nil || !ds.Running || isPidAlive(ds.PID) {
+			continue // 未在运行或进程仍存活
+		}
+		// 崩溃残留:running 但进程已死。只在渲染链路阶段自动恢复(plan/assets 无 GPU 消耗,用户按需重跑)
+		stage := ds.Stage
+		if stage == "" {
+			stage = ds.CurrentStage
+		}
+		// 渲染链路阶段才自动恢复。注意:前端一条龙/续跑都发 phase="all",磁盘 Stage 落盘恒为 "all",
+		// 运行期不更新磁盘阶段——白名单必须含 "all",否则一条龙崩溃后永不自动恢复(实测发现的坑)。
+		if stage != "all" && stage != "encode" && stage != "render" && stage != "qc" {
+			continue
+		}
+		cfgPath := filepath.Join(ManjuRootDir, name, "config.json")
+		if !fileExists(cfgPath) {
+			continue
+		}
+		// 环境判断:ComfyUI 不在线先拉起,拉不起则不自动跑(避免空转)
+		if !ComfyOnline() {
+			if err := startComfy(); err != nil {
+				log.Printf("♻️ 自动恢复 %s 跳过: ComfyUI 无法启动(%v)", name, err)
+				continue
+			}
+		}
+		episode := orDefault(ds.Episode, "EP01")
+		log.Printf("♻️ 检测到 %s 渲染中断于「%s」阶段,自动续跑…", name, stage)
+		if err := startManjuRun(cfgPath, "", episode, "all", "", "", false, false, false); err != nil {
+			log.Printf("♻️ 自动恢复 %s 失败: %v", name, err)
+		}
+		// 注意:startManjuRun 遇"已有任务运行中"返回错误——这是已恢复第一个任务后的正常状态,
+		// 不能 break,其余项目留待下次启动(或用户手动续跑)
+	}
 }
 
 func manjuKill(w http.ResponseWriter, r *http.Request) {

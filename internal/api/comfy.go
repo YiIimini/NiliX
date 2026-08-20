@@ -213,6 +213,13 @@ func comfyLogTail() string {
 func ComfyStart() error { return startComfy() }
 func ComfyStop() error  { return stopComfy() }
 
+// ComfyOnline 检查 ComfyUI 是否在线(应用启动自动拉起/渲染前兜底用;地址=生效配置端口)
+func ComfyOnline() bool {
+	c := newComfyClient(comfyParams.url)
+	_, err := c.online()
+	return err == nil
+}
+
 func (s *Server) handleComfy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, probeComfy())
 }

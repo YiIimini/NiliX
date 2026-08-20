@@ -63,6 +63,10 @@ type WebView interface {
 	// applied (WebView2 controller ready). Used for retry loops.
 	TransparentOK() bool
 
+	// BackgroundOK reports whether the default background color can take
+	// effect (WebView2 controller ready). Used for retry loops.
+	BackgroundOK() bool
+
 	// Show shows the native window (interface compatibility; created visible).
 	Show()
 

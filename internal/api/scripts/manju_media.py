@@ -464,6 +464,20 @@ def cmd_assemble(args):
     if not files:
         print("❌ 无镜头可合成: " + args.clips_dir)
         sys.exit(1)
+    # 跳过镜头(用户决定不入成片):按 03.mp4 补零名匹配
+    if args.skip_shots:
+        skip = set()
+        for x in args.skip_shots.split(","):
+            x = x.strip()
+            if x.isdigit():
+                skip.add(x.zfill(2))
+        kept = [f for f in files if f.rsplit(".", 1)[0] not in skip]
+        if len(kept) != len(files):
+            print(f"  ⏭ 跳过 {len(files) - len(kept)} 个镜头: {sorted(skip)}")
+        files = kept
+        if not files:
+            print("❌ 全部镜头均被跳过,无可合成: " + args.clips_dir)
+            sys.exit(1)
     out = args.out
     if os.path.exists(out):
         os.remove(out)
@@ -1243,6 +1257,7 @@ def main():
                    help="镜头间转场:cut=硬切 fade=闪黑 dissolve=叠化(seam 接缝镜自动硬切)")
     a.add_argument("--trans-dur", type=float, default=0.4, help="转场时长(秒)")
     a.add_argument("--hard-cuts", default="", help="强制硬切的镜头号(逗号分隔,seam 接缝镜)")
+    a.add_argument("--skip-shots", default="", help="合成时排除的镜头号(逗号分隔,如 7 或 1,3;用户决定跳过质检不过的镜头)")
     a.add_argument("--bgm", default="", help="背景音乐音频文件(循环补齐,按字幕窗口对白闪避)")
     a.add_argument("--bgm-gain", type=float, default=0.28, help="BGM 基础音量(0-1)")
     a.add_argument("--bgm-duck", type=float, default=0.35, help="对白时段 BGM 压低系数(0-1)")

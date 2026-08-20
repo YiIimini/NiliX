@@ -22,6 +22,7 @@ import (
 
 	"github.com/getlantern/systray"
 	webview "github.com/jchv/go-webview2"
+	"golang.org/x/sys/windows"
 
 	"nilix/internal/api"
 	"nilix/internal/autostart"
@@ -280,6 +281,14 @@ func runMainWindowWebView() {
 	}
 	defer w.Destroy()
 	w.SetBackgroundColor(0x0b, 0x12, 0x1f) // 站点深色底色:加载期不白闪
+	// 就绪重试:控制器创建前 SetBackgroundColor 是空操作(GetController 为 nil),
+	// 首帧前反复应用直到生效,WebView2 默认白底来不及显示(与灵动岛 SetTransparent 同套路)
+	go func() {
+		for i := 0; i < 120 && !w.BackgroundOK(); i++ {
+			w.SetBackgroundColor(0x0b, 0x12, 0x1f)
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
 	w.Navigate("http://127.0.0.1:8787")
 	hw := uintptr(w.Window())
 	setMainWinIcon(hw) // 窗口图标(NiliX icon.ico):左上角 + Alt-Tab
@@ -329,6 +338,14 @@ func main() {
 		if dir := filepath.Dir(exe); dir != "" {
 			_ = os.Chdir(dir)
 		}
+	}
+
+	// 看门狗守护进程模式(--watchdog <主进程PID> [原参数...]):
+	// 监控主进程,异常退出(崩溃/被强杀,无 graceful_exit 标记)自动重启;用户主动退出不重启。
+	// 必须在单实例/主窗口逻辑之前拦截,否则会与主进程抢互斥锁。
+	if len(os.Args) > 1 && os.Args[1] == "--watchdog" {
+		runWatchdog()
+		return
 	}
 
 	// 主窗口子进程模式:独立进程跑 WebView2 管理窗口(任务栏图标=NiliX,环境不与灵动岛冲突)
@@ -426,8 +443,50 @@ func main() {
 		go saveWinLoop() // 记忆用户调整的窗口尺寸
 	}()
 
+	// ComfyUI 自动拉起:应用启动后判断,未运行则自动启动(用户无需手动;
+	// 渲染/资产/编码前另有 ensureComfyReady 兜底)。在线则跳过,零打扰。
+	go func() {
+		time.Sleep(1200 * time.Millisecond) // 等服务与主窗口就绪
+		if api.ComfyOnline() {
+			return
+		}
+		log.Println("ComfyUI 未运行,自动启动…")
+		if err := api.ComfyStart(); err != nil {
+			log.Printf("ComfyUI 自动启动失败: %v(可到灵动岛/ComfyUI 页手动启动)", err)
+		}
+	}()
+
+	// 崩溃恢复续跑:渲染中异常退出(崩溃/被杀/断电)后,启动时自动检测上次中断于渲染链路的项目,
+	// 环境无问题(ComfyUI 可拉起)则自动继续渲染(幂等跳过已完成,检查点收回未收产物)。
+	go func() {
+		time.Sleep(3 * time.Second) // 等服务/ComfyUI 拉起就绪
+		api.AutoRecoverRendering()
+	}()
+
+	// 看门狗守护:spawn 独立进程监控本进程,崩溃/被强杀自动重启(用户主动退出不重启)。
+	// 与 ComfyUI 自动拉起并列,在服务就绪后启动。
+	go func() {
+		time.Sleep(2 * time.Second)
+		exe, err := os.Executable()
+		if err != nil {
+			return
+		}
+		args := append([]string{"--watchdog", strconv.Itoa(os.Getpid())}, os.Args[1:]...)
+		cmd := exec.Command(exe, args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		_ = cmd.Start()
+	}()
+
 	// 灵动岛悬浮胶囊（WebView2）
 	go func() {
+		// 灵动岛崩溃保护:不让 WebView2/样式回调 panic 崩掉整个主进程
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 64<<10)
+				n := runtime.Stack(buf, false)
+				log.Printf("灵动岛崩溃(panic): %v\n%s", r, buf[:n])
+			}
+		}()
 		time.Sleep(500 * time.Millisecond)
 		actions := island.Actions{
 			StartComfy: api.ComfyStart,
@@ -439,7 +498,10 @@ func main() {
 			StopBot:    stopBot,
 			RestartBot: stopBot, // 同 stop：kill 后 ZCode 约 5s 自动重建接管
 		}
-		if err := island.Run(url+"/island/", func() { systray.Quit() }, actions); err != nil {
+		if err := island.Run(url+"/island/", func() {
+			log.Println("退出触发: 灵动岛关闭按钮(X)") // 诊断:莫名退出时定位触发源
+			systray.Quit()
+		}, actions); err != nil {
 			log.Printf("灵动岛启动失败: %v", err)
 		}
 	}()
@@ -472,6 +534,7 @@ func onReady(url string) func() {
 						}
 					}
 				case <-mQuit.ClickedCh:
+					log.Println("退出触发: 托盘「结束应用」") // 诊断:莫名退出时定位触发源
 					systray.Quit()
 				}
 			}
@@ -494,8 +557,56 @@ func closeMainWindow() {
 
 func onExit() {
 	log.Println("onExit: 开始退出")
+	// 正常退出标记:看门狗守护进程据此判断——存在该标记=用户主动退出,不重启;
+	// 崩溃/被强杀不会走 onExit,无标记 → 看门狗自动重启
+	_ = os.MkdirAll("logs", 0755)
+	_ = os.WriteFile(filepath.Join("logs", "graceful_exit"), []byte(time.Now().Format(time.RFC3339)), 0644)
 	closeMainWindow() // 全退(灵动岛 X / 托盘结束应用):一并关闭管理主窗口
 	log.Println("NiliX 已退出")
+}
+
+// runWatchdog 看门狗守护进程(NiliX.exe --watchdog <主进程PID> [原参数...]):
+// 监控主进程句柄,退出后检查 graceful_exit 标记——有(用户主动退出)则不重启并清标记;
+// 无(崩溃/被强杀/渲染 panic 未兜住)则记录并自动重启 NiliX(原参数)。
+func runWatchdog() {
+	pid, err := strconv.Atoi(os.Args[2])
+	if err != nil || pid <= 0 {
+		return
+	}
+	marker := filepath.Join("logs", "graceful_exit")
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		// 主进程已不在(可能启动即崩):异常则重启
+		if _, serr := os.Stat(marker); os.IsNotExist(serr) {
+			restartNiliX()
+		} else {
+			_ = os.Remove(marker)
+		}
+		return
+	}
+	_, _ = windows.WaitForSingleObject(h, windows.INFINITE)
+	_ = windows.CloseHandle(h)
+	if _, err := os.Stat(marker); err == nil {
+		_ = os.Remove(marker) // 用户主动退出,不重启
+		return
+	}
+	// 异常退出:记录并自动重启
+	f, _ := os.OpenFile(filepath.Join("logs", "watchdog.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if f != nil {
+		_, _ = f.WriteString("[" + time.Now().Format("2006-01-02 15:04:05") + "] 主进程异常退出(PID " + strconv.Itoa(pid) + "),自动重启\n")
+		_ = f.Close()
+	}
+	restartNiliX()
+}
+
+// restartNiliX 看门狗重启主进程(os.Args[1:3] = --watchdog <pid>,原参数从 3 开始)
+func restartNiliX() {
+	args := os.Args[3:]
+	cmd := exec.Command(os.Args[0], args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err != nil {
+		log.Printf("看门狗重启失败: %v", err)
+	}
 }
 
 func openBrowser(url string) {

@@ -118,6 +118,14 @@ func (s *Server) tokenInject(next http.Handler) http.Handler {
 		body := rr.Body.Bytes()
 		if strings.Contains(rr.Header().Get("Content-Type"), "text/html") {
 			body = bytes.Replace(body, []byte("/*__NILIX_TOKEN__*/"), []byte(sessionToken), 1)
+			// 实际根路径注入(JSON 编码转义反斜杠):前端 dirview 不再硬编码 C:\Mi\Ai\WorkBench\manju,
+			// 自包含部署后 manju/novel 在 exe 目录旁,硬编码路径不存在 → /api/fs/analyze 非 2xx → "load failed"
+			if mj, err := json.Marshal(ManjuRootDir); err == nil {
+				body = bytes.Replace(body, []byte("/*__NILIX_MANJU_ROOT__*/"), mj, 1)
+			}
+			if nv, err := json.Marshal(NovelRootDir); err == nil {
+				body = bytes.Replace(body, []byte("/*__NILIX_NOVEL_ROOT__*/"), nv, 1)
+			}
 		}
 		for k, vs := range rr.Header() {
 			// Content-Length 必须丢弃:占位符(21B)替换成 token(32B)后长度已变,
@@ -178,6 +186,13 @@ func (s *Server) handleManage(w http.ResponseWriter, r *http.Request) {
 	// 注入会话令牌(前端 window.NILIX_TOKEN + localStorage),供所有 API 写请求带 X-NiliX-Token
 	if sessionToken != "" {
 		out = bytes.Replace(out, []byte("/*__NILIX_TOKEN__*/"), []byte(sessionToken), 1)
+	}
+	// 实际根路径注入(与 tokenInject 同步):前端 dirview 读取真实 manju/novel 根
+	if mj, err := json.Marshal(ManjuRootDir); err == nil {
+		out = bytes.Replace(out, []byte("/*__NILIX_MANJU_ROOT__*/"), mj, 1)
+	}
+	if nv, err := json.Marshal(NovelRootDir); err == nil {
+		out = bytes.Replace(out, []byte("/*__NILIX_NOVEL_ROOT__*/"), nv, 1)
 	}
 	_, _ = w.Write(out)
 }
@@ -265,6 +280,9 @@ func maskKey(k string) string {
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
+	// 全部 API 响应禁缓存:设置/agent 等配置接口若被 WebView2 启发式缓存,
+	// 保存后重开弹窗会显示旧值,表现为"配置被清空/没保存上"
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)

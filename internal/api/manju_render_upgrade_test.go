@@ -57,8 +57,11 @@ func TestDraftDims(t *testing.T) {
 // TestSeedFor seed 重试策略:fixed 恒定 / increment 递增 / random 首渲仍用配置 seed
 func TestSeedFor(t *testing.T) {
 	ctx := &manjuCtx{seed: 1688, seedPolicy: "fixed"}
-	if s := ctx.seedFor(3); s != 1688 {
-		t.Errorf("fixed 策略应恒定: %d", s)
+	if s := ctx.seedFor(0); s != 1688 {
+		t.Errorf("fixed 首渲应等于配置 seed: %d", s)
+	}
+	if s := ctx.seedFor(3); s != 1691 {
+		t.Errorf("fixed 重渲(attempt>0)应换 seed(+attempt),否则同 seed 同画面质检永远不过: %d", s)
 	}
 	ctx.seedPolicy = "increment"
 	if s := ctx.seedFor(2); s != 1690 {

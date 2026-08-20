@@ -6,6 +6,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,4 +91,18 @@ func maskKeys(v any) {
 			maskKeys(item)
 		}
 	}
+}
+
+// manjuWriteCrash 记录崩溃堆栈到 logs/crash.log(排查"应用莫名退出"的依据:
+// 崩溃往往不经 onExit,server.log 无记录,只有这里留下堆栈)。
+func manjuWriteCrash(where string, msg string, stack []byte) {
+	dir := filepath.Join(ManjuRootDir, "logs")
+	_ = os.MkdirAll(dir, 0755)
+	line := fmt.Sprintf("\n[%s] 💥 %s panic: %s\n%s\n", time.Now().Format("2006-01-02 15:04:05"), where, msg, string(stack))
+	f, err := os.OpenFile(filepath.Join(dir, "crash.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(line)
 }

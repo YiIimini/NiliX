@@ -49,21 +49,27 @@ var manjuSettingsStore *config.Store
 
 // SetGlobalAgentCfg 由 main/保存设置后调用,刷新全局默认(settings.json agent 节 → agent.Config)
 func SetGlobalAgentCfg(cfg *config.Settings) {
-	a := agent.DefaultConfig()
-	if cfg != nil && cfg.Agent != nil {
-		a.Enabled = cfg.Agent.Enabled
-		a.VisionBaseURL = cfg.Agent.VisionBaseURL
-		a.VisionAPIKey = cfg.Agent.VisionAPIKey
-		a.VisionModel = cfg.Agent.VisionModel
-		if cfg.Agent.PassScore > 0 {
-			a.PassScore = cfg.Agent.PassScore
-		}
-		a.MaxRetries = cfg.Agent.MaxRetries
-		if cfg.Agent.AutoResolve != nil {
-			a.AutoResolve = *cfg.Agent.AutoResolve
-		}
-		a.Normalize()
+	// 入参不带 agent 节(如 PUT /api/settings 只改 LLM)时必须保留旧值——
+	// 否则被重置为出厂默认,视觉模型/Key/及格线/返工轮数全部清空
+	if cfg == nil || cfg.Agent == nil {
+		return
 	}
+	a := agent.DefaultConfig()
+	a.Enabled = cfg.Agent.Enabled
+	a.VisionBaseURL = cfg.Agent.VisionBaseURL
+	a.VisionAPIKey = cfg.Agent.VisionAPIKey
+	a.VisionModel = cfg.Agent.VisionModel
+	if cfg.Agent.PassScore > 0 {
+		a.PassScore = cfg.Agent.PassScore
+	}
+	a.MaxRetries = cfg.Agent.MaxRetries
+	if cfg.Agent.JudgeConcurrency >= 1 && cfg.Agent.JudgeConcurrency <= 4 {
+		a.JudgeConcurrency = cfg.Agent.JudgeConcurrency
+	}
+	if cfg.Agent.AutoResolve != nil {
+		a.AutoResolve = *cfg.Agent.AutoResolve
+	}
+	a.Normalize()
 	manjuGlobalAgent = a
 }
 
@@ -1012,6 +1018,9 @@ func (ctx *manjuCtx) clearShotArtifacts(s manjuShot) {
 	_ = os.Remove(filepath.Join(ctx.clipsDir, ctx.episode, fmt.Sprintf("%02d.mp4", s.ID)))
 	_ = os.Remove(h3CachePath(ctx.sharedModels, ctx.shotCacheName(s)))
 	ctx.manifestRemove(s.ID)
+	// 检查点一并清除:定点重渲/质检自愈/agent 返工删产物后,残留 ck 会让 tryReclaim 收回旧产物
+	ctx.renderCKClear(strconv.Itoa(s.ID))
+	ctx.renderCKClear(strconv.Itoa(s.ID) + "@d")
 }
 
 // updateShotPrompt 把修复师的新提示词写回方案 json + 逐镜提示词缓存
@@ -1075,6 +1084,12 @@ func topAgentIssues(project string, n int) []string {
 // 删产物进重渲队列(每镜预算 acfg.MaxRetries 轮);预算耗尽升级待人拍板;全部通过后
 // 由 qc 阶段收尾汇总、assemble 统一合成成片。
 func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) error {
+	// ComfyUI 未运行自动拉起(渲染前兜底)
+	if err := ctx.ensureComfyReady(lg); err != nil {
+		return err
+	}
+	// SageAttn 节点缺失提前降级,使「⚙️ 生效参数」总览展示真实生效值(renderShotTo 内兜底)
+	ctx.sageAttnGuard(lg)
 	plan, shots, err := ctx.ensurePlanAndPrompts(lg)
 	if err != nil {
 		return err
@@ -2096,6 +2111,9 @@ func registerAgentRoutes(mux *http.ServeMux) {
 			}
 			if b, ok := A["auto_resolve"].(bool); ok {
 				ga.AutoResolve = &b
+			}
+			if n, ok := manjuToInt(A["judge_concurrency"]); ok && n >= 1 && n <= 4 {
+				ga.JudgeConcurrency = n
 			}
 			// Key:项目已填则同步为全局默认;否则保留全局旧值(避免空值清掉已存的默认 Key)
 			if k := strings.TrimSpace(str(m["vision_api_key"])); k != "" {

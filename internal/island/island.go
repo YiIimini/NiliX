@@ -217,9 +217,17 @@ func Run(islandURL string, onClose func(), a Actions) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	w := webview.New(false)
+	// 创建即定尺寸:webview.New(false) 会以默认 640×480 创建窗口并立即显示,
+	// 随后 SetSize 才缩成胶囊——启动瞬间闪现一个默认尺寸的小窗口(用户反馈"闪弹小窗口")。
+	// 与主窗口同款方案:NewWithOptions 传 Width/Height,第一帧就是胶囊尺寸,不做后续校正。
+	w := webview.NewWithOptions(webview.WebViewOptions{
+		WindowOptions: webview.WindowOptions{
+			Title:  "NiliX HUD", // 与管理主窗口(NiliX)区分,供窗口枚举识别
+			Width:  uint(miniW),
+			Height: uint(miniH),
+		},
+	})
 	defer w.Destroy()
-	w.SetTitle("NiliX HUD") // 与管理主窗口(NiliX)区分,供窗口枚举识别
 	w.SetSize(miniW, miniH, webview.HintNone)
 	w.SetTransparent() // WebView2 背景透明，消除胶囊圆角外的白色块
 

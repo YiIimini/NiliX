@@ -37,12 +37,13 @@ type WindowSettings struct {
 
 // AgentSettings 智能体全局默认(视觉模型地址/Key/模型/及格线/返工轮数)。
 type AgentSettings struct {
-	Enabled       bool    `json:"enabled,omitempty"`
-	VisionBaseURL string  `json:"vision_base_url,omitempty"`
-	VisionAPIKey  string  `json:"vision_api_key,omitempty"`
-	VisionModel   string  `json:"vision_model,omitempty"`
-	PassScore     float64 `json:"pass_score,omitempty"`
-	MaxRetries    int     `json:"max_retries,omitempty"`
+	Enabled          bool    `json:"enabled,omitempty"`
+	VisionBaseURL    string  `json:"vision_base_url,omitempty"`
+	VisionAPIKey     string  `json:"vision_api_key,omitempty"`
+	VisionModel      string  `json:"vision_model,omitempty"`
+	PassScore        float64 `json:"pass_score,omitempty"`
+	MaxRetries       int     `json:"max_retries,omitempty"`
+	JudgeConcurrency int     `json:"judge_concurrency,omitempty"` // 视觉判分并发上限(1-4,0=默认)
 	// AutoResolve 预算耗尽 AI 终审自动拍板(nil=未设置,用 agent 包默认 true)
 	AutoResolve *bool `json:"auto_resolve,omitempty"`
 }

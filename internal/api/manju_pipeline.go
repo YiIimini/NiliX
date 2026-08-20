@@ -61,8 +61,54 @@ type manjuCtx struct {
 	draftJudge   bool    // 智能模式草稿预审:审片返工轮用缩放分辨率草稿,全部通过后全分辨率定稿重渲
 	draftScale   float64 // 草稿缩放(0.2-0.95,默认 0.5;0.5 ≈ 1/4 像素量)
 	forceAttempt int     // 定点返工等外部路径传入的重试序号(seed 策略用它换 seed;0=首渲)
+	sageChecked  bool    // SageAttn 节点探测已完成(每 run 一次,避免逐镜 HTTP 探测)
+	sageOK       bool    // PatchSageAttentionKJ 节点存在
+	qcRerender   map[int]int // 质检自愈重渲轮数(镜头号 → 已重渲次数;换 seed 重渲,上限后提示逃生门)
 	visionOnce   sync.Once
 	vision       *agent.VisionClient // 每 run 共享(粘性降级状态跨镜头保留)
+}
+
+// sageAttnGuard 检查 SageAttention 节点可用性:ComfyUI 未装对应节点时
+// 硬提交会 400 missing_node_type 失败——可选加速项不阻塞渲染,自动降级关闭并提示。
+// 每 run 只探测一次(逐镜探测太慢);装好节点后 config 里开关仍是开的,下次 run 自动恢复。
+// 注意 KJNodes 上游把类名拼错为 PathchSageAttentionKJ(非 Patch),两个名字都探测取实际存在者,
+// 实际名写入 R["sage_node_name"] 供 h3RenderWorkflow 使用(未来上游修拼写也兼容)。
+func (ctx *manjuCtx) sageAttnGuard(lg *manjuLogger) {
+	b, _ := ctx.R["sage_attention"].(bool)
+	if !b || ctx.sageChecked {
+		return
+	}
+	ctx.sageChecked = true
+	for _, n := range []string{"PathchSageAttentionKJ", "PatchSageAttentionKJ"} {
+		if ctx.comfy.hasNode(n) {
+			ctx.sageOK = true
+			ctx.R["sage_node_name"] = n
+			return
+		}
+	}
+	ctx.R["sage_attention"] = false
+	lg.logf("  ⚠️ ComfyUI 缺少 PatchSageAttentionKJ/PathchSageAttentionKJ 节点(未装 ComfyUI-KJNodes),SageAttn 已自动关闭继续渲染;装好节点或关闭「渲染参数→SageAttn」后恢复")
+}
+
+// ensureComfyReady 渲染/资产/编码等需 Comfy 的阶段前,确保 ComfyUI 在线:
+// 不在线自动拉起并轮询等待就绪(最长 120s),不再让续跑/一键渲染直接报"连接被拒绝"。
+// 在线则立即返回,零开销。
+func (ctx *manjuCtx) ensureComfyReady(lg *manjuLogger) error {
+	if _, err := ctx.comfy.online(); err == nil {
+		return nil
+	}
+	lg.logf("  ⚠️ ComfyUI 未运行,自动启动中(首次加载模型约 10-60s,请稍候)…")
+	if err := startComfy(); err != nil {
+		return fmt.Errorf("ComfyUI 自动启动失败(检查「目录与部署」ComfyUI 安装目录): %w", err)
+	}
+	for i := 0; i < 60; i++ {
+		time.Sleep(2 * time.Second)
+		if _, err := ctx.comfy.online(); err == nil {
+			lg.logf("  ✅ ComfyUI 已就绪")
+			return nil
+		}
+	}
+	return fmt.Errorf("ComfyUI 启动后 120 秒内未就绪——请到灵动岛/ComfyUI 页查看启动日志,或手动启动后重试")
 }
 
 func manjuToFloat(v any) (float64, bool) {
@@ -123,6 +169,7 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 		comfyInput:   str(P["comfy_input"]),
 		sharedModels: filepath.Join(ComfySharedDir, "models"),
 		workdir:      str(P["workdir"]),
+		qcRerender:   map[int]int{},
 	}
 	if ctx.episode == "" {
 		ctx.episode = "EP01"
@@ -211,6 +258,12 @@ func (ctx *manjuCtx) seedFor(attempt int) int {
 	case "random":
 		if attempt > 0 {
 			return randSeed()
+		}
+	default:
+		// fixed:重渲(attempt>0)也换 seed——否则同 seed 同画面,质检重渲/定点返工/终审重渲
+		// 永远产出相同结果,质检不过的死循环无法打破
+		if attempt > 0 {
+			return ctx.seed + attempt
 		}
 	}
 	return ctx.seed
@@ -1327,6 +1380,10 @@ func copyFile(src, dst string) error {
 }
 
 func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
+	// 定妆照/场景图也走 ComfyUI:未运行自动拉起
+	if err := ctx.ensureComfyReady(lg); err != nil {
+		return err
+	}
 	plan, err := ctx.ensurePlan(lg)
 	if err != nil {
 		return err
@@ -1483,6 +1540,10 @@ func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg
 }
 
 func stageEncode(ctx *manjuCtx, lg *manjuLogger) error {
+	// 预编码走 ComfyUI:未运行自动拉起
+	if err := ctx.ensureComfyReady(lg); err != nil {
+		return err
+	}
 	_, shots, err := ctx.ensurePlanAndPrompts(lg)
 	if err != nil {
 		return err
@@ -1727,6 +1788,12 @@ func (ctx *manjuCtx) sceneRefName(s manjuShot) string {
 // ---- 渲染 ----
 
 func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
+	// ComfyUI 未运行则自动拉起(启动自动拉起外的渲染前兜底)
+	if err := ctx.ensureComfyReady(lg); err != nil {
+		return err
+	}
+	// SageAttn 节点缺失提前降级(生效参数与后续渲染一致;renderShotTo 内兜底所有路径)
+	ctx.sageAttnGuard(lg)
 	_, shots, err := ctx.ensurePlanAndPrompts(lg)
 	if err != nil {
 		return err
@@ -1746,6 +1813,20 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 	for i, s := range allShots {
 		idxOf[s.ID] = i + 1
 	}
+	// 质检自愈:最近一次质检未过的镜头,下次渲染自动删旧重渲(坏产物不再卡死整条管线)。
+	// 定点重渲:镜头框(only)显式指定 = 强制重渲,已有产物也覆盖(文档语义「局部重做/重渲失败镜」)。
+	qcFailed := ctx.qcFailedShots()
+	forceRR := ctx.only != ""
+	if forceRR {
+		lg.logf("  ♻️ 定点重渲: 镜头 " + ctx.only + " 已显式指定,已有产物将覆盖重渲")
+	} else if len(qcFailed) > 0 {
+		ids := make([]string, 0, len(qcFailed))
+		for n := range qcFailed {
+			ids = append(ids, strconv.Itoa(n))
+		}
+		sort.Strings(ids)
+		lg.logf("  ♻️ 质检自愈: 上次未过镜头 " + strings.Join(ids, ",") + " 自动删旧重渲")
+	}
 	for i, s := range selected {
 		if lg.stopped() {
 			return fmt.Errorf("已停止")
@@ -1761,6 +1842,21 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 				// 产物过期(提示词/定妆照/场景图/画幅已变):旧镜头会被跳过复用,必须删旧重渲
 				lg.logf("  ⚠️ 镜头 " + strconv.Itoa(s.ID) + " 产物已过期(输入已变),删旧重渲(含条件缓存)")
 				ctx.clearShotArtifacts(s)
+			} else if forceRR {
+				// 定点重渲:镜头框显式指定,覆盖已有产物(条件缓存复用:输入未变无需重编码)
+				_ = os.Remove(dst)
+				lg.logf("  ♻️ 镜头 " + strconv.Itoa(s.ID) + " 定点重渲(覆盖旧产物)")
+			} else if qcFailed[s.ID] {
+				// 质检自愈:上次质检未过的坏产物删旧重渲。重渲换 seed(见 rerunAttempt),
+				// 否则 fixed seed 下同 seed 同画面,质检永远不过;轮数封顶后提示逃生门
+				reruns := ctx.qcRerender[s.ID]
+				if reruns >= 2 {
+					lg.logf("  ⚠️ 镜头 " + strconv.Itoa(s.ID) + " 已重渲 " + strconv.Itoa(reruns) + " 次仍未过质检——建议用中断横幅「跳过失败镜/接受并合成」,或检查该镜提示词/参考图")
+					continue
+				}
+				ctx.qcRerender[s.ID] = reruns + 1
+				_ = os.Remove(dst)
+				lg.logf("  ♻️ 镜头 " + strconv.Itoa(s.ID) + " 质检未过,换 seed 重渲(第 " + strconv.Itoa(reruns+1) + " 次)")
 			} else {
 				lg.logf("  跳过（已存在）: " + dst)
 				continue
@@ -1781,7 +1877,13 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 				}()
 			}
 		}
-		if err := ctx.renderSingleShot(s, idxOf[s.ID], false, lg); err != nil {
+		// 该镜重渲轮次:质检自愈重渲用它换 seed(seedFor 在 fixed 策略下 attempt>0 也 +轮次),
+		// 避免同 seed 同画面"重渲了但质检还是不过"的死循环;普通镜头沿用 forceAttempt
+		rerunAttempt := ctx.forceAttempt
+		if ctx.qcRerender[s.ID] > 0 {
+			rerunAttempt = ctx.qcRerender[s.ID]
+		}
+		if err := ctx.renderShotTo(s, idxOf[s.ID], false, clipsEp, ctx.w, ctx.h, rerunAttempt, lg); err != nil {
 			preWg.Wait()
 			return err
 		}
@@ -1791,6 +1893,8 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 			lg.logf("  ⚠️ 下一镜预编码失败(下一镜将串行重试): " + truncate(preErr.Error(), 100))
 		}
 	}
+	// 质检报告已被本次渲染消费(失败镜头已重渲,重检前不再触发重复重渲)
+	ctx.qcReportClear()
 	lg.logf("🎉 渲染完成 -> " + clipsEp)
 	return nil
 }
@@ -1806,6 +1910,8 @@ func (ctx *manjuCtx) renderSingleShot(s manjuShot, idx int, fresh bool, lg *manj
 // fresh=true 时独立生成不接缝(返工重渲镜:其首渲的接缝 latent 已被本次覆盖,
 // 且下游镜基于旧 latent,再接缝只会放大跳变)。
 func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir string, w, h, attempt int, lg *manjuLogger) error {
+	// SageAttn 节点缺失自动降级(覆盖 stageRender/Agent 流水线/定点返工/草稿预审全部渲染路径)
+	ctx.sageAttnGuard(lg)
 	if err := os.MkdirAll(dstDir, 0755); err != nil {
 		return err
 	}
@@ -1814,22 +1920,30 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 	if err := ctx.ensureEncodedAt(s, cacheName, w, h, lg); err != nil {
 		return fmt.Errorf("镜头 %d 预编码失败: %w", s.ID, err)
 	}
-	// 崩溃恢复:上次「已提交未收产物」的任务先尝试收回(已完成免重渲/在跑的等完再收/丢失的重新提交)
+	// 崩溃恢复:上次「已提交未收产物」的任务先尝试收回(已完成免重渲/在跑的等完再收/丢失的重新提交)。
+	// 注意:定点重渲/质检自愈/agent 返工(attempt>0 或 fresh)必须先删旧产物再重渲,
+	// 若此时 tryReclaim 从 history 收回旧任务的产物,会把"已决定重渲"的镜头静默替换成旧产物——
+	// 必须跳过收回,直接重新提交。
 	ckKey := strconv.Itoa(s.ID)
 	if dstDir == ctx.draftDir() {
 		ckKey += "@d"
 	}
-	if old := ctx.renderCKGet(ckKey); old != "" {
-		if ok2, rerr := ctx.tryReclaim(old, dst, lg); ok2 {
-			ctx.renderCKClear(ckKey)
-			return nil
-		} else if rerr != nil {
-			lg.logf("  ⚠️ 上次未收产物的任务无法恢复(" + truncate(rerr.Error(), 120) + "),重新提交")
-			ctx.renderCKClear(ckKey)
-		} else {
-			lg.logf("  ⚠️ 上次任务已丢失(ComfyUI 重启),重新提交")
-			ctx.renderCKClear(ckKey)
+	if attempt == 0 && !fresh {
+		if old := ctx.renderCKGet(ckKey); old != "" {
+			if ok2, rerr := ctx.tryReclaim(old, dst, lg); ok2 {
+				ctx.renderCKClear(ckKey)
+				return nil
+			} else if rerr != nil {
+				lg.logf("  ⚠️ 上次未收产物的任务无法恢复(" + truncate(rerr.Error(), 120) + "),重新提交")
+				ctx.renderCKClear(ckKey)
+			} else {
+				lg.logf("  ⚠️ 上次任务已丢失(ComfyUI 重启),重新提交")
+				ctx.renderCKClear(ckKey)
+			}
 		}
+	} else if ctx.renderCKGet(ckKey) != "" {
+		// 重渲路径:旧检查点已无意义,直接清除,避免后续误命中
+		ctx.renderCKClear(ckKey)
 	}
 	chained := !fresh && idx > 1 && fileExists(h3ContextLatentPath(ctx.comfyOutput, idx-1))
 	if fresh {
@@ -1863,6 +1977,7 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 			if err != nil {
 				return fmt.Errorf("镜头 %d 重试提交失败: %w", s.ID, err)
 			}
+			ctx.renderCKSet(ckKey, pid) // 重试提交后更新检查点 pid(旧 pid 已失效)
 			if err = ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second); err != nil {
 				return fmt.Errorf("镜头 %d 渲染失败(重试后): %w", s.ID, err)
 			}
@@ -1931,10 +2046,177 @@ func stageQC(ctx *manjuCtx, lg *manjuLogger) error {
 		lg.logf("  ⏭ 该集无镜头可质检，跳过")
 		return nil
 	}
-	if err := ctx.runMedia(lg, "qc", "--dir", clipsEp); err != nil {
+	args := []string{"qc", "--dir", clipsEp}
+	if ctx.only != "" {
+		// 定点质检:镜头框显式指定时只检选中镜头(与定点重渲语义一致);范围展开为单号
+		shots := expandShotList(ctx.only)
+		args = append(args, "--shots", shots)
+		lg.logf("  🔍 定点质检镜头: " + shots)
+	}
+	// 质检报告落盘(渲染阶段据此自动重渲未过镜头,「一条龙/续跑」可自行走通到合成)
+	reportPath := ctx.qcReportPath()
+	_ = os.MkdirAll(filepath.Dir(reportPath), 0755)
+	args = append(args, "--json", reportPath)
+	err := ctx.runMedia(lg, args...)
+	// 跳过镜头(用户决定不修,质检不计失败、合成时排除):从失败集中剔除
+	skip := ctx.qcSkipSet()
+	failed := ctx.qcFailedShots()
+	if len(skip) > 0 {
+		ids := make([]string, 0, len(skip))
+		for n := range skip {
+			ids = append(ids, strconv.Itoa(n))
+		}
+		sort.Strings(ids)
+		lg.logf("  ⏭ 已跳过镜头 " + strings.Join(ids, ",") + "(用户决定,不计质检失败、合成时排除)")
+		for n := range skip {
+			delete(failed, n)
+		}
+	}
+	if len(failed) > 0 {
+		ids := make([]string, 0, len(failed))
+		for n := range failed {
+			ids = append(ids, strconv.Itoa(n))
+		}
+		sort.Strings(ids)
+		lg.logf("  🔁 质检未过镜头 " + strings.Join(ids, ",") + " — 再点「一条龙/续跑」自动删旧重渲;或镜头框填编号(+集数)定点重渲")
+		if ctx.qcAccept() {
+			// 逃生门:用户已明确「接受质检结果」(坏镜进成片由用户决策),打警告继续
+			lg.logf("  ✅ 已按用户决定「接受质检结果」,未过镜头将进成片 — 如需重渲请镜头框填编号")
+			ctx.qcAcceptClear()
+			return nil
+		}
 		return fmt.Errorf("质检未通过: %w", err)
 	}
+	// 无失败(或失败镜头全部被用户跳过):视为通过(忽略 runMedia 因被跳过镜头产生的 exit 1)
 	return nil
+}
+
+// ---- 质检逃生门(用户决策:跳过失败镜 / 接受质检结果) ----
+
+// qcSkipSet 用户决定跳过的镜头:质检不计失败、合成时排除(来源 config.render.qc_skip_shots)
+func (ctx *manjuCtx) qcSkipSet() map[int]bool {
+	s := strings.TrimSpace(str(ctx.R["qc_skip_shots"]))
+	if s == "" {
+		return nil
+	}
+	out := map[int]bool{}
+	for _, p := range strings.Split(s, ",") {
+		if n, err := strconv.Atoi(strings.TrimSpace(p)); err == nil && n > 0 {
+			out[n] = true
+		}
+	}
+	return out
+}
+
+// qcSkipList 跳过镜头逗号分隔串(合成脚本 --skip-shots 用;空=无)
+func (ctx *manjuCtx) qcSkipList() string {
+	skip := ctx.qcSkipSet()
+	if len(skip) == 0 {
+		return ""
+	}
+	ids := make([]int, 0, len(skip))
+	for n := range skip {
+		ids = append(ids, n)
+	}
+	sort.Ints(ids)
+	parts := make([]string, 0, len(ids))
+	for _, n := range ids {
+		parts = append(parts, strconv.Itoa(n))
+	}
+	return strings.Join(parts, ",")
+}
+
+// qcAccept 用户是否已决定接受本次质检结果(失败不阻断,坏镜进成片由用户决策)
+func (ctx *manjuCtx) qcAccept() bool {
+	b, _ := ctx.R["qc_accept"].(bool)
+	return b
+}
+
+// qcAcceptClear 消费后清除接受标记(一次性决策,避免后续质检永久不报错)
+func (ctx *manjuCtx) qcAcceptClear() {
+	R := ctx.R
+	delete(R, "qc_accept")
+	cfg := ctx.cfg
+	cfg["render"] = R
+	_ = writeManjuConfig(ctx.configPath, cfg)
+}
+
+// ---- 质检报告(渲染自愈依据) ----
+
+// expandShotList 把镜头筛选串展开为逗号分隔的单个编号(供质检 --shots 等)
+// "1-3,5" → "1,2,3,5";空串返回空
+func expandShotList(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return ""
+	}
+	seen := map[int]bool{}
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if i := strings.Index(p, "-"); i > 0 {
+			a, _ := strconv.Atoi(strings.TrimSpace(p[:i]))
+			b, _ := strconv.Atoi(strings.TrimSpace(p[i+1:]))
+			if a <= 0 {
+				a = 1
+			}
+			if b < a {
+				a, b = b, a
+			}
+			for n := a; n <= b; n++ {
+				seen[n] = true
+			}
+		} else if n, err := strconv.Atoi(p); err == nil {
+			seen[n] = true
+		}
+	}
+	ids := make([]int, 0, len(seen))
+	for n := range seen {
+		ids = append(ids, n)
+	}
+	sort.Ints(ids)
+	parts := make([]string, 0, len(ids))
+	for _, n := range ids {
+		parts = append(parts, strconv.Itoa(n))
+	}
+	return strings.Join(parts, ",")
+}
+
+// qcReportPath 质检报告路径:<workdir>/qc/<ep>_qc.json(逐集独立,渲染阶段消费后清除)
+func (ctx *manjuCtx) qcReportPath() string {
+	return filepath.Join(ctx.workdir, "qc", ctx.episode+"_qc.json")
+}
+
+// qcFailedShots 读取最近一次质检报告中的失败镜头号(无报告/文件损坏返回空)
+func (ctx *manjuCtx) qcFailedShots() map[int]bool {
+	data, err := os.ReadFile(ctx.qcReportPath())
+	if err != nil {
+		return nil
+	}
+	var rep struct {
+		Shots map[string]struct {
+			OK bool `json:"ok"`
+		} `json:"shots"`
+	}
+	if json.Unmarshal(data, &rep) != nil || rep.Shots == nil {
+		return nil
+	}
+	out := map[int]bool{}
+	for name, s := range rep.Shots {
+		if s.OK {
+			continue
+		}
+		if n, err := strconv.Atoi(strings.TrimSuffix(name, filepath.Ext(name))); err == nil && n > 0 {
+			out[n] = true
+		}
+	}
+	return out
+}
+
+// qcReportClear 清除质检报告:渲染阶段消费后调用,避免未重检前重复触发重渲
+func (ctx *manjuCtx) qcReportClear() {
+	_ = os.Remove(ctx.qcReportPath())
 }
 
 // ---- 合成 ----
@@ -1978,6 +2260,11 @@ func stageAssemble(ctx *manjuCtx, lg *manjuLogger) error {
 		if d, ok := manjuToFloat(ctx.R["bgm_duck"]); ok && d > 0 {
 			args = append(args, "--bgm-duck", strconv.FormatFloat(d, 'g', -1, 64))
 		}
+	}
+	// 跳过镜头(用户决定):合成时从成片中排除
+	if sk := ctx.qcSkipList(); sk != "" {
+		args = append(args, "--skip-shots", sk)
+		lg.logf("  ⏭ 合成跳过镜头 " + sk + "(用户决定,不入成片)")
 	}
 	if err := ctx.runMedia(lg, args...); err != nil {
 		return fmt.Errorf("合成失败: %w", err)
@@ -2102,8 +2389,15 @@ func manjuEnvCheck(configPath string) string {
 	}
 	if b2, _ := ctx.R["sage_attention"].(bool); b2 {
 		b.WriteString("⚡ SageAttention 加速(已开启):\n")
-		if ctx.comfy.hasNode("PatchSageAttentionKJ") {
-			b.WriteString("  ✅ ComfyUI 节点 PatchSageAttentionKJ 可用(KJNodes)\n")
+		sageNode := ""
+		for _, n := range []string{"PathchSageAttentionKJ", "PatchSageAttentionKJ"} {
+			if ctx.comfy.hasNode(n) {
+				sageNode = n
+				break
+			}
+		}
+		if sageNode != "" {
+			b.WriteString("  ✅ ComfyUI 节点 " + sageNode + " 可用(KJNodes)\n")
 		} else {
 			b.WriteString("  ❌ ComfyUI 缺少 PatchSageAttentionKJ 节点(安装 ComfyUI-KJNodes,或在渲染参数里关闭 SageAttention)\n")
 			ok = false

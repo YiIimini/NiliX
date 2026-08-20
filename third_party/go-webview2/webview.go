@@ -282,12 +282,17 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	}
 
 	className, _ := windows.UTF16PtrFromString("webview")
+	// 深色背景画刷(站点底色 #0b121f):窗口创建即深色,消除 WebView2 环境就绪前的
+	// 原生白窗——此前类无画刷,客户端区在控制器创建前显示为白色,首帧闪白。
+	// 画刷随窗口类存续整个进程生命周期,无需释放。
+	brush, _, _ := w32.Gdi32CreateSolidBrush.Call(0x001f120b) // COLORREF(BGR): R=0x0b G=0x12 B=0x1f
 	wc := w32.WndClassExW{
 		CbSize:        uint32(unsafe.Sizeof(w32.WndClassExW{})),
 		HInstance:     hinstance,
 		LpszClassName: className,
 		HIcon:         windows.Handle(icon),
 		HIconSm:       windows.Handle(icon),
+		HbrBackground: windows.Handle(brush),
 		LpfnWndProc:   windows.NewCallback(wndproc),
 	}
 	_, _, _ = w32.User32RegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
@@ -361,6 +366,11 @@ func (w *webview) TransparentOK() bool {
 		}
 	}
 	return false
+}
+
+// BackgroundOK 默认背景色是否已可能生效(控制器就绪;与 TransparentOK 同源)。
+func (w *webview) BackgroundOK() bool {
+	return w.TransparentOK()
 }
 
 // OnNavigationCompleted 注册页面导航完成回调(WebView2 事件线程触发,UI 操作请自行 Dispatch)。

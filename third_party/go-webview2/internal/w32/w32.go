@@ -44,6 +44,9 @@ var (
 	User32SetWindowPos       = user32.NewProc("SetWindowPos")
 	User32IsDialogMessage    = user32.NewProc("IsDialogMessage")
 	User32GetAncestor        = user32.NewProc("GetAncestor")
+
+	gdi32                = windows.NewLazySystemDLL("gdi32")
+	Gdi32CreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
 )
 
 const (

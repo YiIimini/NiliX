@@ -54,26 +54,17 @@ func pickPath(setting, selfContained, legacy string) string {
 
 // manjuPathsGet 返回路径配置:显式值 + 生效值 + ComfyUI/技能就绪状态(设置弹窗「目录与部署」区)。
 func manjuPathsGet(w http.ResponseWriter, r *http.Request) {
-	res := map[string]any{
-		"effective": map[string]any{
-			"manju_root":   ManjuRootDir,
-			"novel_root":   NovelRootDir,
-			"comfy_root":   ComfyRootDir,
-			"comfy_shared": ComfySharedDir,
-			"novel_skill":  NovelSkillDir,
-		},
-		"comfy": map[string]any{
-			"exists": dirExists(ComfyRootDir),
-			"venv":   fileExists(filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe")),
-		},
-		"skill": map[string]any{
-			"exists": dirExists(NovelSkillDir),
-			"isGit":  dirExists(filepath.Join(NovelSkillDir, ".git")),
-		},
+	eff := map[string]any{
+		"manju_root":   ManjuRootDir,
+		"novel_root":   NovelRootDir,
+		"comfy_root":   ComfyRootDir,
+		"comfy_shared": ComfySharedDir,
+		"novel_skill":  NovelSkillDir,
 	}
+	cfgd := map[string]any{}
 	if manjuSettingsStore != nil {
 		if cfg, err := manjuSettingsStore.Load(); err == nil {
-			res["configured"] = map[string]any{
+			cfgd = map[string]any{
 				"manju_root":   cfg.Paths.ManjuRoot,
 				"novel_root":   cfg.Paths.NovelRoot,
 				"comfy_root":   cfg.Paths.ComfyRoot,
@@ -82,7 +73,25 @@ func manjuPathsGet(w http.ResponseWriter, r *http.Request) {
 				"comfy_input":  cfg.Paths.ComfyInput,
 				"comfy_output": cfg.Paths.ComfyOutput,
 			}
+			// ComfyUI 成品输出目录生效值:显式配置优先,缺省跟随共享目录 output(与 main 启动解析一致)
+			if s := strings.TrimSpace(cfg.Paths.ComfyOutput); s != "" {
+				eff["comfy_output"] = s
+			} else {
+				eff["comfy_output"] = filepath.Join(ComfySharedDir, "output")
+			}
 		}
+	}
+	res := map[string]any{
+		"effective":  eff,
+		"configured": cfgd,
+		"comfy": map[string]any{
+			"exists": dirExists(ComfyRootDir),
+			"venv":   fileExists(filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe")),
+		},
+		"skill": map[string]any{
+			"exists": dirExists(NovelSkillDir),
+			"isGit":  dirExists(filepath.Join(NovelSkillDir, ".git")),
+		},
 	}
 	writeJSON(w, http.StatusOK, res)
 }
@@ -106,6 +115,10 @@ func manjuPathsPost(w http.ResponseWriter, r *http.Request) {
 	cfg.Paths.ComfyRoot = strings.TrimSpace(str(body["comfy_root"]))
 	cfg.Paths.ComfyShared = strings.TrimSpace(str(body["comfy_shared"]))
 	cfg.Paths.NovelSkill = strings.TrimSpace(str(body["novel_skill"]))
+	// ComfyUI 成品输出目录:显式指定保存;留空=跟随共享目录 output
+	if v, present := body["comfy_output"]; present {
+		cfg.Paths.ComfyOutput = strings.TrimSpace(str(v))
+	}
 	if err := manjuSettingsStore.Save(cfg); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "保存失败: " + err.Error()})
 		return

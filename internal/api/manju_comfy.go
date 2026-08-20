@@ -63,6 +63,11 @@ func (c *comfyClient) submit(workflow map[string]any) (string, error) {
 	body, _ := json.Marshal(map[string]any{"prompt": workflow})
 	resp, err := c.client.Post(c.base+"/prompt", "application/json", bytes.NewReader(body))
 	if err != nil {
+		// 连接被拒绝/主机不可达:提示 ComfyUI 未就绪,而非甩技术栈
+		msg := err.Error()
+		if strings.Contains(msg, "connection refused") || strings.Contains(msg, "connectex") || strings.Contains(msg, "no such host") {
+			return "", fmt.Errorf("ComfyUI 未就绪(连接失败)——已尝试自动启动,若仍失败请到灵动岛/ComfyUI 页查看日志后手动启动")
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -398,11 +403,16 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 	if loraName != "" {
 		model = wfAdd(wf, "LoraLoaderModelOnly", map[string]any{"model": refOf(model), "lora_name": loraName, "strength_model": spec.Strength})
 	}
-	// SageAttention 加速补丁(KJNodes PatchSageAttentionKJ,starter 官方工作流同款):
-	// 长序列注意力量化加速,RTX 50 系白捡提速。默认关;未装 KJNodes 时 ComfyUI 校验会明确报节点缺失,
-	// 环境自检(manjuEnvCheck)也会提前提示。
+	// SageAttention 加速补丁(KJNodes,starter 官方工作流同款):
+	// 长序列注意力量化加速,RTX 50 系白捡提速。默认关。
+	// 节点名用 sageAttnGuard 探测到的实际注册名——KJNodes 上游把类名拼错为
+	// PathchSageAttentionKJ(非 Patch),用错名字 ComfyUI 会报 missing_node_type 400。
 	if b, _ := R["sage_attention"].(bool); b {
-		model = wfAdd(wf, "PatchSageAttentionKJ", map[string]any{
+		nodeName := "PatchSageAttentionKJ"
+		if n := str(R["sage_node_name"]); n != "" {
+			nodeName = n
+		}
+		model = wfAdd(wf, nodeName, map[string]any{
 			"model": refOf(model), "sage_attention": "auto", "allow_compile": false,
 		})
 	}
