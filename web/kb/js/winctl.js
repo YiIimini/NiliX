@@ -4,7 +4,8 @@
    本文件负责:
    1) topbar 空白区拖拽移动(/move 增量);
    2) 窗口边缘拖拽缩放(/resize 绝对尺寸)——frameless + 外部 URL 无 wails runtime,
-      系统缩放热区不生效,只能前端边缘检测 + HTTP SetSize。 */
+      系统缩放热区不生效,只能前端边缘检测 + HTTP SetSize。
+   3) 边缘 hover 光标反馈(用户感知可缩放:边缘显示 ns/ew/nesw/nwse 缩放箭头)。 */
 (function () {
   function ctlUrl(path) {
     return "http://127.0.0.1:8799" + path;
@@ -16,6 +17,16 @@
   var RESIZE_EDGE = 8;
   var edge = null; // "n"|"s"|"e"|"w"|"ne"|"nw"|"se"|"sw"
   var sizing = false, sx = 0, sy = 0, sw = 0, sh = 0, lastSent = 0;
+  var curEdge = null; // 当前光标所在边缘(仅 hover,未按下)——用于光标反馈
+
+  function edgeCursor(ed) {
+    if (!ed) return "";
+    if (ed === "n" || ed === "s") return "ns-resize";
+    if (ed === "e" || ed === "w") return "ew-resize";
+    if (ed === "ne" || ed === "sw") return "nesw-resize";
+    if (ed === "nw" || ed === "se") return "nwse-resize";
+    return "";
+  }
 
   function detectEdge(x, y, w, h) {
     var e = "";
@@ -26,20 +37,23 @@
     return e || null;
   }
 
-  window.addEventListener("mousedown", function (e) {
-    if (edge) return; // 已在缩放
+  // 顶部边缘避开右上角控制按钮/左上角品牌(该区保持可点击)
+  function topEdgeBlocked(x, w) {
+    return x < 120 || x > w - 160;
+  }
+
+  // 光标反馈:鼠标移到边缘 8px 内显示对应缩放箭头,移出恢复默认
+  function updateHoverCursor(e) {
     var ed = detectEdge(e.clientX, e.clientY, window.innerWidth, window.innerHeight);
-    if (!ed) return;
-    // 顶部边缘只允许中间区(避开右上角控制按钮/左上角品牌),四角正常
-    if (ed === "n" && (e.clientX < 120 || e.clientX > window.innerWidth - 160)) return;
-    edge = ed;
-    sizing = true;
-    sx = e.screenX; sy = e.screenY;
-    sw = window.innerWidth; sh = window.innerHeight;
-    e.preventDefault();
-  });
+    if (ed === "n" && topEdgeBlocked(e.clientX, window.innerWidth)) ed = null;
+    if (ed !== curEdge) {
+      curEdge = ed;
+      document.body.style.cursor = ed ? edgeCursor(ed) : "default";
+    }
+  }
 
   window.addEventListener("mousemove", function (e) {
+    updateHoverCursor(e);
     if (!sizing || !edge) return;
     var dx = e.screenX - sx, dy = e.screenY - sy;
     var nw = sw, nh = sh;
@@ -54,6 +68,18 @@
       lastSent = now;
       fetch(ctlUrl("/resize?w=" + nw + "&h=" + nh)).catch(function () {});
     }
+  });
+
+  window.addEventListener("mousedown", function (e) {
+    if (edge) return; // 已在缩放
+    var ed = detectEdge(e.clientX, e.clientY, window.innerWidth, window.innerHeight);
+    if (!ed) return;
+    if (ed === "n" && topEdgeBlocked(e.clientX, window.innerWidth)) return;
+    edge = ed;
+    sizing = true;
+    sx = e.screenX; sy = e.screenY;
+    sw = window.innerWidth; sh = window.innerHeight;
+    e.preventDefault();
   });
 
   window.addEventListener("mouseup", function () {

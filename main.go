@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"embed"
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -54,6 +56,106 @@ var kbFS embed.FS
 
 //go:embed web/island
 var islandFS embed.FS
+
+// iconPNG 从 icon.ico 提取的 PNG 字节(wails 托盘/菜单位图只认 PNG,
+// 直接传 ICO 给 CreateSmallHIconFromImage 会失败——见 icotest 验证)。
+var iconPNG = func() []byte {
+	b, _ := icoToPNG(iconICO, 32)
+	return b
+}()
+
+// icoToPNG 从 ICO 文件提取指定尺寸(含最近似)的图标图像,输出 PNG 字节。
+// 支持 BMP(ICONIMAGE)与 PNG 压缩两种内嵌格式。wails 的 CreateSmallHIconFromImage
+// 把完整 ICO 容器传给 CreateIconFromResourceEx(该 API 要单图像资源位),加载失败;
+// SetMenuIcons 走 pngToImage 只认 PNG——故统一转 PNG。
+func icoToPNG(ico []byte, targetSize int) ([]byte, error) {
+	if len(ico) < 6 || ico[0] != 0 || ico[1] != 0 || ico[2] != 1 || ico[3] != 0 {
+		return nil, errors.New("not an ICO file")
+	}
+	count := int(binary.LittleEndian.Uint16(ico[4:6]))
+	if count == 0 {
+		return nil, errors.New("empty ICO")
+	}
+	type entry struct{ off, size, w, h int }
+	var ents []entry
+	best := -1
+	bestDelta := int(^uint(0) >> 1)
+	for i := 0; i < count; i++ {
+		base := 6 + i*16
+		if base+16 > len(ico) {
+			break
+		}
+		w := int(ico[base])
+		if w == 0 {
+			w = 256
+		}
+		h := int(ico[base+1])
+		if h == 0 {
+			h = 256
+		}
+		size := int(binary.LittleEndian.Uint32(ico[base+8 : base+12]))
+		off := int(binary.LittleEndian.Uint32(ico[base+12 : base+16]))
+		ents = append(ents, entry{off: off, size: size, w: w, h: h})
+		d := w - targetSize
+		if d < 0 {
+			d = -d
+		}
+		if d < bestDelta {
+			bestDelta = d
+			best = i
+		}
+	}
+	if best < 0 || best >= len(ents) {
+		return nil, errors.New("no icon entry")
+	}
+	e := ents[best]
+	if e.off+e.size > len(ico) {
+		return nil, errors.New("icon data out of range")
+	}
+	data := ico[e.off : e.off+e.size]
+	if len(data) > 8 && bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}) {
+		return data, nil // PNG 压缩内嵌:直接返回
+	}
+	if len(data) < 40 {
+		return nil, errors.New("icon image too small")
+	}
+	biSize := binary.LittleEndian.Uint32(data[0:4])
+	if int(biSize) < 40 || int(biSize) > len(data) {
+		return nil, fmt.Errorf("bad BITMAPINFOHEADER size %d", biSize)
+	}
+	width := int(int32(binary.LittleEndian.Uint32(data[4:8])))
+	height := int(int32(binary.LittleEndian.Uint32(data[8:12])))
+	bpp := int(binary.LittleEndian.Uint16(data[14:16]))
+	pxHeader := int(biSize)
+	if height%2 != 0 {
+		return nil, fmt.Errorf("odd height %d", height)
+	}
+	realH := height / 2
+	if realH <= 0 {
+		return nil, fmt.Errorf("bad height %d", height)
+	}
+	rowSize := ((width*bpp + 31) / 32) * 4
+	xorSize := rowSize * realH
+	if pxHeader+xorSize > len(data) {
+		return nil, errors.New("xor data out of range")
+	}
+	img := image.NewRGBA(image.Rect(0, 0, width, realH))
+	for y := 0; y < realH; y++ {
+		srcRow := data[pxHeader+(realH-1-y)*rowSize : pxHeader+(realH-y)*rowSize]
+		for x := 0; x < width; x++ {
+			bitOff := x * bpp / 8
+			if bitOff+4 > len(srcRow) {
+				continue
+			}
+			img.SetRGBA(x, y, color.RGBA{R: srcRow[bitOff+2], G: srcRow[bitOff+1], B: srcRow[bitOff], A: srcRow[bitOff+3]})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
 
 // ---- 桌面主窗�?双击 exe 即在应用窗口内管�?----
 // �?Edge App 模式(msedge --app=URL)开独立应用窗口:无边栏地址栏、独立任务栏�?
@@ -574,19 +676,21 @@ func createMainWindow(app *application.App, url string) *application.WebviewWind
 	return win
 }
 
-// createCapsuleWindow 创建灵动岛胶囊窗口(透明 + 隐藏任务栏 + 顶部居中 300x44)
+// createCapsuleWindow 创建灵动岛胶囊窗口(透明 + 隐藏任务栏 + 顶部居中贴边 300x44)
 func createCapsuleWindow(app *application.App, url string) *application.WebviewWindow {
 	vx, _, _ := procGetSystemMetrics.Call(uintptr(smXVirtual))
 	vy, _, _ := procGetSystemMetrics.Call(uintptr(smYVirtual))
 	vw, _, _ := procGetSystemMetrics.Call(uintptr(smCXVirtual))
 	capX := int(int32(vx)) + (int(int32(vw))-300)/2
-	capY := int(int32(vy)) + 4 // 顶部 4px 内边距(不可为 0:wails 对 X==0&&Y==0 走系统默认位置=屏幕正中)
+	capY := int(int32(vy)) // 顶部贴边(0px)。WindowXY 模式下直接用 X/Y,不居中;
+	// 且 X≠0 不会触发 wails 的 X==0&&Y==0 → CW_USEDEFAULT(屏幕正中)分支。
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "NiliX HUD",
 		Width:            300,
 		Height:           44,
 		X:                capX,
 		Y:                capY,
+		InitialPosition:  application.WindowXY, // 关键:默认 WindowCentered 会先居中再跳顶
 		Frameless:        true,
 		AlwaysOnTop:      true,
 		DisableResize:    true,
@@ -598,14 +702,12 @@ func createCapsuleWindow(app *application.App, url string) *application.WebviewW
 			HiddenOnTaskbar:                   true, // 悬浮窗不占任务栏
 		},
 	})
-	// 双保险:强制顶部居中定位。wails 的 Run() 在 gApp.Run() 时才创建窗口并
-	// 执行初始定位(X==0&&Y==0 会走 CW_USEDEFAULT=屏幕正中),此前的 SetPosition
-	// 因 w.impl==nil 只存 options 不生效——延迟到应用启动后(约 1.5s)再强制。
+	// 兜底:应用启动后(窗口 impl 已建)再强制定位一次,防止任何初始位置偏差。
+	// 300ms 足够 impl 创建(此前 1.5s 造成"先中心后跳顶"的视觉闪烁)。
 	go func() {
-		time.Sleep(1500 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 		win.SetPosition(capX, capY)
 		win.SetAlwaysOnTop(true)
-		win.Focus()
 	}()
 	return win
 }
@@ -805,10 +907,21 @@ func startCapsule() {
 //       灵动岛胶�?/ 开机自�?/ ─ / 结束应用
 func buildTray(app *application.App, url string) {
 	tray := app.SystemTray.New()
-	tray.SetIcon(iconICO)
+	// 托盘图标:必须传 PNG(wails CreateSmallHIconFromImage 传 ICO 容器会失败——
+	// CreateIconFromResourceEx 要单图像资源位)。iconPNG 是 icon.ico 提取的 32px PNG。
+	if len(iconPNG) > 0 {
+		tray.SetIcon(iconPNG)
+	} else {
+		tray.SetIcon(iconICO)
+	}
 	menu := application.NewMenu()
 
-	menu.Add("NiliX 工作台").OnClick(func(*application.Context) {
+	mWork := menu.Add("NiliX 工作台")
+	// 菜单项图标:SetBitmap 走 pngToImage 只认 PNG,同样用 iconPNG(icon.ico 的 32px)
+	if len(iconPNG) > 0 {
+		mWork.SetBitmap(iconPNG)
+	}
+	mWork.OnClick(func(*application.Context) {
 		openMainWindow(url)
 	})
 	menu.AddSeparator()

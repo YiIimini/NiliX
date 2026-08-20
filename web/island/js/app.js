@@ -72,7 +72,23 @@
       document.body.classList.remove("island-closing");
       document.body.classList.add("island-expanded");
       document.body.classList.remove("island-collapsed");
-      if (typeof setIsland === "function") setIsland(true, 380, islandHeight()); // 展开即时触发窗口动画,无延迟
+      // 展开:先加 expanded 类强制布局,再量 #full 自然高度——
+      // 若在 collapsed 态直接量 offsetHeight,面板未显示量到的是收起高度,
+      // 窗口只展开到很小,内容显示不全(用户反馈的"鼠标不能全显示")。
+      // 同步强制布局(offsetHeight 读取即触发),确保量到展开后真实高度。
+      void document.body.offsetHeight; // 强制同步布局
+      if (typeof setIsland === "function") {
+        var h = islandHeight();
+        setIsland(true, 380, Math.max(300, h)); // 最小 300 防内容面板未就绪时塌陷
+      }
+      // 展开动画/内容渲染完成后再次同步窗口高度(内容行/字体加载后 #full 高度可能增长,
+      // 首测偏小会导致底部内容被裁剪——用户反馈"鼠标不能全显示"的兜底)
+      setTimeout(function () {
+        if (expanded && typeof setIsland === "function") {
+          var h2 = islandHeight();
+          setIsland(true, 380, Math.max(300, h2));
+        }
+      }, 350);
     } else {
       // 收起:先播面板淡出(island-closing),170ms 后再切 collapsed——与窗口缩小动画同步,
       // 避免"内容瞬间消失"的生硬切换(升级动效)
