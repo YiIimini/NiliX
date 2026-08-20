@@ -75,21 +75,21 @@
       document.body.classList.remove("island-closing");
       document.body.classList.add("island-expanded");
       document.body.classList.remove("island-collapsed");
-      // 展开高度测量坑:窗口收起态仅 44px,.card{position:fixed;inset:0} 占满视口,
-      // #full 是 flex 子元素,offsetHeight 被父容器(视口 44px)钳制 → 展开只到胶囊大小。
-      // 修复:先展开到足够高度(600)让 #full 内容完整渲染,scrollHeight 才能量到真实
-      // 内容高度,随后校准窗口到内容贴合高度(最小 300)。
+      // 展开高度:固定 500px(实测 HUD 面板内容真实高度≈500,CPU/RAM/GPU/SSD/NET+服务状态区)。
+      // 不再依赖 JS 测量:透明窗口收起态 44px,.card{position:fixed;inset:0} 占满视口,
+      // #full 的 offsetHeight 被父容器钳制为 44(历史 bug:展开只到胶囊大小),
+      // scrollHeight 在部分 WebView2 渲染时序下也不可靠——固定高度最稳,内容完整显示。
       void document.body.offsetHeight; // 强制同步布局
       if (typeof setIsland === "function") {
-        setIsland(true, 380, 600); // 首帧给足高度,内容完整呈现
+        setIsland(true, 380, 500);
       }
-      // 内容渲染后再按 scrollHeight 校准(此时窗口已高,测量不受父容器钳制)
+      // 兜底:渲染完成后若内容实际更高(未来内容增加),再按 scrollHeight 上调
       setTimeout(function () {
         if (expanded && typeof setIsland === "function") {
           var h = islandHeight();
-          setIsland(true, 380, Math.max(300, h));
+          if (h > 500) setIsland(true, 380, h);
         }
-      }, 120);
+      }, 200);
     } else {
       // 收起:先播面板淡出(island-closing),170ms 后再切 collapsed——与窗口缩小动画同步,
       // 避免"内容瞬间消失"的生硬切换(升级动效)
@@ -107,6 +107,8 @@
   }
   // 悬停胶囊展开;展开后鼠标落在面板内,离开面板才缩回
   $("pill").addEventListener("mouseenter", () => setExpanded(true));
+  // 点击胶囊同样展开(透明窗口部分场景 mouseenter 不可达,mousedown 更可靠)
+  $("pill").addEventListener("mousedown", () => setExpanded(true));
   $("full").addEventListener("mouseleave", () => setExpanded(false));
   // 顶部已无收起/关闭按钮(右上角仅状态灯);收起仍由鼠标移出面板触发
   const btnCollapse = $("btn-collapse");

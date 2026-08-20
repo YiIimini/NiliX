@@ -64,6 +64,14 @@ var iconPNG = func() []byte {
 	return b
 }()
 
+// iconPNGMenu 托盘菜单项图标:Windows 菜单位图(SetMenuItemBitmaps)不合成 alpha,
+// 透明 PNG 的透明区在菜单里显示为黑底。给图标垫不透明深色圆角背景,
+// 菜单里显示为整洁的深色小方块图标(16x16,接近系统菜单图标尺寸)。
+var iconPNGMenu = func() []byte {
+	b, _ := icoToPNGMenu(iconICO, 16)
+	return b
+}()
+
 // icoToPNG 从 ICO 文件提取指定尺寸(含最近似)的图标图像,输出 PNG 字节。
 // 支持 BMP(ICONIMAGE)与 PNG 压缩两种内嵌格式。wails 的 CreateSmallHIconFromImage
 // 把完整 ICO 容器传给 CreateIconFromResourceEx(该 API 要单图像资源位),加载失败;
@@ -152,6 +160,77 @@ func icoToPNG(ico []byte, targetSize int) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// icoToPNGMenu 生成托盘菜单项图标(16x16,完全不透明):
+// Windows 菜单位图(SetMenuItemBitmaps)用 DrawState 绘制,不合成 alpha——
+// 透明 PNG 的透明区在菜单里显示为黑底。给图标垫深色圆角背景,
+// 输出不透明 16x16 位图,菜单里显示为整洁小方块(接近系统菜单图标)。
+func icoToPNGMenu(ico []byte, targetSize int) ([]byte, error) {
+	inner, err := icoToPNG(ico, targetSize)
+	if err != nil {
+		return nil, err
+	}
+	src, err := png.Decode(bytes.NewReader(inner))
+	if err != nil {
+		return nil, err
+	}
+	sb := src.Bounds()
+	// 输出画布 targetSize x targetSize,深色圆角底
+	out := image.NewRGBA(image.Rect(0, 0, targetSize, targetSize))
+	bg := color.RGBA{R: 24, G: 28, B: 38, A: 255} // 深空蓝灰(与应用深色主题一致)
+	radius := float64(targetSize) * 0.28
+	for y := 0; y < targetSize; y++ {
+		for x := 0; x < targetSize; x++ {
+			// 圆角遮罩
+			dx := float64(x) + 0.5
+			dy := float64(y) + 0.5
+			corn := false
+			if dx < radius && dy < radius {
+				corn = (dx-radius)*(dx-radius)+(dy-radius)*(dy-radius) > radius*radius
+			} else if dx > float64(targetSize)-radius && dy < radius {
+				corn = (dx-(float64(targetSize)-radius))*(dx-(float64(targetSize)-radius))+(dy-radius)*(dy-radius) > radius*radius
+			} else if dx < radius && dy > float64(targetSize)-radius {
+				corn = (dx-radius)*(dx-radius)+(dy-(float64(targetSize)-radius))*(dy-(float64(targetSize)-radius)) > radius*radius
+			} else if dx > float64(targetSize)-radius && dy > float64(targetSize)-radius {
+				corn = (dx-(float64(targetSize)-radius))*(dx-(float64(targetSize)-radius))+(dy-(float64(targetSize)-radius))*(dy-(float64(targetSize)-radius)) > radius*radius
+			}
+			if corn {
+				out.SetRGBA(x, y, color.RGBA{R: 0, G: 0, B: 0, A: 0})
+				continue
+			}
+			out.SetRGBA(x, y, bg)
+		}
+	}
+	// 缩放原图标到画布中央 70%(留边距),覆盖深色底
+	sw := sb.Dx()
+	sh := sb.Dy()
+	drawW := targetSize * 70 / 100
+	drawH := targetSize * 70 / 100
+	ox := (targetSize - drawW) / 2
+	oy := (targetSize - drawH) / 2
+	for y := 0; y < drawH; y++ {
+		srcY := y * sh / drawH
+		for x := 0; x < drawW; x++ {
+			srcX := x * sw / drawW
+			sc := src.At(sb.Min.X+srcX, sb.Min.Y+srcY)
+			sr, sg, sbb, sa := sc.RGBA()
+			if sa == 0 {
+				continue // 透明保留底色
+			}
+			// 简单 alpha 混合到深色底
+			a := float64(sa) / 65535.0
+			r := float64(sr)/65535.0*a + float64(bg.R)/255.0*(1-a)
+			g := float64(sg)/65535.0*a + float64(bg.G)/255.0*(1-a)
+			b := float64(sbb)/65535.0*a + float64(bg.B)/255.0*(1-a)
+			out.SetRGBA(ox+x, oy+y, color.RGBA{R: uint8(r * 255), G: uint8(g * 255), B: uint8(b * 255), A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, out); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -939,8 +1018,11 @@ func buildTray(app *application.App, url string) {
 	menu := application.NewMenu()
 
 	mWork := menu.Add("NiliX 工作台")
-	// 菜单项图标:SetBitmap 走 pngToImage 只认 PNG,同样用 iconPNG(icon.ico 的 32px)
-	if len(iconPNG) > 0 {
+	// 菜单项图标:SetBitmap 走 pngToImage + SetMenuItemBitmaps,Windows 菜单不合成
+	// alpha(透明区=黑底)——用 iconPNGMenu(16x16 深色圆角底,完全不透明)避免黑底。
+	if len(iconPNGMenu) > 0 {
+		mWork.SetBitmap(iconPNGMenu)
+	} else if len(iconPNG) > 0 {
 		mWork.SetBitmap(iconPNG)
 	}
 	mWork.OnClick(func(*application.Context) {
