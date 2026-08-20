@@ -7,10 +7,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=20260820afr">
-<link rel="stylesheet" href="/css/themes.css?v=20260820afr">
-<link rel="stylesheet" href="/css/materials.css?v=20260820afr">
-<link rel="stylesheet" href="/css/app.css?v=20260820afr">
+<link rel="icon" type="image/png" href="/icon.png?v=20260820e2">
+<link rel="stylesheet" href="/css/themes.css?v=20260820e2">
+<link rel="stylesheet" href="/css/materials.css?v=20260820e2">
+<link rel="stylesheet" href="/css/app.css?v=20260820e2">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -62,6 +62,13 @@
       <rect x="3.5" y="14.5" width="6" height="6" rx="1.5"/><rect x="14.5" y="14.5" width="6" height="6" rx="1.5"/>
       <path d="M9.5 6.5h5M6.5 9.5v5M17.5 9.5v5M9.5 17.5h5"/>
     </symbol>
+    <symbol id="i-harness" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5" y="8" width="14" height="10" rx="2"/>
+      <path d="M9 8V5M15 8V5M9 18v2M15 18v2"/>
+      <circle cx="9.5" cy="13" r="1.2" fill="currentColor" stroke="none"/>
+      <circle cx="14.5" cy="13" r="1.2" fill="currentColor" stroke="none"/>
+      <path d="M12 10.5V12M12 15v.5" stroke-width="1.4"/>
+    </symbol>
     <symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
       <path d="M14 4h6v6M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>
     </symbol>
@@ -78,7 +85,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260820afr" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260820e2" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -88,6 +95,9 @@
       </a>
       <a href="#/manju" class="nav-link" data-route="manju">
         <svg class="ic" aria-hidden="true"><use href="#i-film"/></svg><span data-i18n="nav.manju">视频管理</span>
+      </a>
+      <a href="#/harness" class="nav-link" data-route="harness">
+        <svg class="ic" aria-hidden="true"><use href="#i-harness"/></svg><span data-i18n="nav.harness">Harness</span>
       </a>
       <a href="#/comfy" class="nav-link" data-route="comfy">
         <svg class="ic" aria-hidden="true"><use href="#i-comfy"/></svg><span data-i18n="nav.comfy">ComfyUI</span>
@@ -104,6 +114,43 @@
   </header>
 
   <main class="stage">
+    <!-- 二级页:DeepSeek Harness(AI 智能体工作台,内嵌 Web UI) -->
+    <section id="view-harness" class="view view-comfy">
+      <div class="hrs-head">
+        <div class="hrs-title">
+          <h1 data-i18n="harness.title">Harness</h1>
+          <p class="ov-sub" data-i18n="harness.sub">DeepSeek Harness · AI 智能体工作台内嵌访问</p>
+        </div>
+        <div class="hrs-tools">
+          <span id="hrs-status" class="hrs-status"><span class="hrs-dot off"></span><span id="hrs-txt" data-i18n="harness.checking">检测中…</span></span>
+          <button id="hrs-start" class="hrs-btn hidden" data-i18n="harness.start">启动服务</button>
+          <button id="hrs-restart" class="hrs-btn hidden" data-i18n="harness.restart">重启服务</button>
+          <button id="hrs-open" class="hrs-btn hrs-btn-icon hidden" data-i18n-title="harness.open" title="新窗口打开" aria-label="Open in new tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 4h6v6M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>
+            </svg>
+          </button>
+          <button id="hrs-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/>
+            </svg>
+          </button>
+          <p id="hrs-live" class="live-tag"></p>
+        </div>
+      </div>
+      <p id="hrs-err" class="hrs-err hidden"></p>
+      <div id="hrs-stage" class="hrs-stage">
+        <div id="hrs-offline" class="hrs-offline hidden">
+          <div class="hrs-off-ic"><svg class="ic" aria-hidden="true"><use href="#i-harness"/></svg></div>
+          <div class="hrs-off-t" data-i18n="harness.offlineTitle">Harness 服务未运行</div>
+          <div class="hrs-off-s" data-i18n="harness.offlineSub">启动后此处将完整内嵌 DeepSeek Harness Web 界面（127.0.0.1:3080）</div>
+          <button id="hrs-start-big" class="hrs-btn hrs-btn-big" data-i18n="harness.start">启动服务</button>
+        </div>
+        <div id="hrs-loading" class="hrs-loading hidden"><span class="hrs-loading-dot"></span><span data-i18n="harness.loading">页面加载中…</span></div>
+        <iframe id="hrs-frame" class="hrs-frame" title="Harness" src="about:blank" allow="clipboard-write"></iframe>
+      </div>
+    </section>
+
     <!-- 二级页:Comfy UI(内嵌 Web UI) -->
     <section id="view-comfy" class="view view-comfy">
       <div class="hrs-head">
@@ -325,8 +372,6 @@
                 <option value="increment">重试递增</option>
                 <option value="random">重试随机</option>
               </select>
-              <label class="manju-check" title="SageAttention 注意力加速补丁(需 ComfyUI-KJNodes 的 PatchSageAttentionKJ;RTX 50 系白捡提速),项目体检会校验节点"><input id="manju-sage" type="checkbox">SageAttn</label>
-              <label class="manju-check" title="AI 一条龙:审片返工轮用缩放分辨率草稿(约1/4像素量),全部落定后自动全分辨率定稿重渲(零返工)"><input id="manju-draft-judge" type="checkbox">草稿预审</label>
               <span class="manju-label">缩放</span><input id="manju-draft-scale" class="manju-input manju-num" type="number" min="0.2" max="0.95" step="0.05" title="草稿预审的分辨率缩放(0.2-0.95,默认 0.5)">
               <span class="manju-label">长镜</span>
               <select id="manju-take" class="manju-input" title="多切点长镜(experimental):相邻同场景镜头合并为一次生成,组内 [Shot N] At MM:SS.mmm 多机位切点;关闭=一镜一渲+接缝">
@@ -334,6 +379,19 @@
                 <option value="2">2镜/组</option>
                 <option value="3">3镜/组</option>
               </select>
+            </div>
+
+            <!-- 增强开关独立一行:与「风格」同款分段胶囊样式(隐藏 checkbox 保持数据源兼容) -->
+            <div class="manju-row">
+              <span class="manju-label">增强</span>
+              <div class="manju-seg" id="manju-boost">
+                <button data-boost="sage" class="hrs-btn" title="SageAttention 注意力加速补丁(需 ComfyUI-KJNodes 的 PatchSageAttentionKJ;RTX 50 系白捡提速),项目体检会校验节点">⚡ SageAttn</button>
+                <button data-boost="draft" class="hrs-btn" title="AI 一条龙:审片返工轮用缩放分辨率草稿(约1/4像素量),全部落定后自动全分辨率定稿重渲(零返工)">📐 草稿预审</button>
+                <button data-boost="fl2va" class="hrs-btn" title="FL2VA 双帧:空镜镜头生成场景尾帧,走官方 FL2VA 首尾双图插值(场景内运动更稳,如叶飘/水纹/光移);需 ComfyUI 装 MiniMaxH3Fl2VA 节点,缺失自动回退单图">🖼️ FL2VA 双帧</button>
+              </div>
+              <input id="manju-sage" type="checkbox" hidden>
+              <input id="manju-draft-judge" type="checkbox" hidden>
+              <input id="manju-fl2va" type="checkbox" hidden>
             </div>
 
             <div class="manju-row">
@@ -461,9 +519,9 @@
             </button>
           </div>
           <div class="manju-sysmon" id="manju-sysmon" title="本机系统状态(每 2 秒刷新)">
-            <span class="ms-it" data-k="cpu"><i>CPU</i><span class="ms-line"><b>--</b><em>--</em></span></span>
-            <span class="ms-it" data-k="mem"><i>内存</i><span class="ms-line"><b>--</b><em>--</em></span></span>
-            <span class="ms-it" data-k="gpu"><i>GPU</i><span class="ms-line"><b>--</b><em>--</em></span></span>
+            <span class="ms-it" data-k="cpu"><i>CPU</i><span class="ms-line"><b>--</b><span class="ms-sep">·</span><em>--</em></span><span class="ms-bar"><span class="ms-fill"></span></span></span>
+            <span class="ms-it" data-k="mem"><i>内存</i><span class="ms-line"><b>--</b><span class="ms-sep">·</span><em>--</em></span><span class="ms-bar"><span class="ms-fill"></span></span></span>
+            <span class="ms-it" data-k="gpu"><i>GPU</i><span class="ms-line"><b>--</b><span class="ms-sep">·</span><em>--</em></span><span class="ms-bar"><span class="ms-fill"></span></span></span>
           </div>
           <div class="manju-side-body" id="manju-side-body">
             <div class="manju-row">
@@ -682,79 +740,90 @@
         </div>
 
         <div class="settings-group">
+          <div class="settings-label"><span class="sl-emoji">🏝️</span>灵动岛</div>
+          <div class="settings-row">
+            <span class="settings-row-label">启用悬浮胶囊</span>
+            <label class="toggle"><input type="checkbox" id="set-island-on"><span class="tk"></span></label>
+            <span class="settings-hint">顶部悬浮系统监测 HUD · 关闭后隐藏</span>
+          </div>
+        </div>
+
+        <div class="settings-group">
           <div class="settings-label"><span class="sl-emoji">🤖</span>AI 助手</div>
-          <div class="settings-row">
-            <span class="settings-row-label">启用助手</span>
-            <label class="toggle"><input type="checkbox" id="set-ai-on"><span class="tk"></span></label>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">状态播报</span>
-            <label class="toggle"><input type="checkbox" id="set-ai-status"><span class="tk"></span></label>
-            <span class="settings-hint">管线/审片实时播报</span>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">闲置名言</span>
-            <label class="toggle"><input type="checkbox" id="set-ai-quotes"><span class="tk"></span></label>
-            <span class="settings-hint">典故·成语·名言轮播</span>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">闲逛移动</span>
-            <label class="toggle"><input type="checkbox" id="set-ai-wander"><span class="tk"></span></label>
-            <span class="settings-hint">闲时踱步换位</span>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">闲逛间隔</span>
-            <select id="set-ai-wander-int" class="settings-input">
-              <option value="6000">频繁(6s)</option>
-              <option value="11000">较快(11s)</option>
-              <option value="19000">适中(19s)</option>
-              <option value="35000">悠哉(35s)</option>
-              <option value="60000">佛系(60s)</option>
-            </select>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">冒泡频率</span>
-            <select id="set-ai-freq" class="settings-input">
-              <option value="12000">勤快(12s)</option>
-              <option value="22000">适中(22s)</option>
-              <option value="45000">安静(45s)</option>
-            </select>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">体型</span>
-            <select id="set-ai-size" class="settings-input">
-              <option value="76">小</option>
-              <option value="104">中(默认)</option>
-              <option value="132">大</option>
-            </select>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">左右摇摆</span>
-            <label class="toggle"><input type="checkbox" id="set-ai-waddle"><span class="tk"></span></label>
-            <span class="settings-hint">闲逛/步行时的摇摆动画</span>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">摇摆幅度</span>
-            <select id="set-ai-waddle-amp" class="settings-input">
-              <option value="0">关闭(0°)</option>
-              <option value="1.5">轻(1.5°)</option>
-              <option value="2.5" selected>中(2.5°)</option>
-              <option value="4">大(4°)</option>
-            </select>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">对话闲置隐藏</span>
-            <label class="toggle"><input type="checkbox" id="set-ai-chat-hide"><span class="tk"></span></label>
-            <span class="settings-hint">对话框无交互自动收起</span>
-          </div>
-          <div class="settings-row">
-            <span class="settings-row-label">闲置时长</span>
-            <select id="set-ai-chat-hide-sec" class="settings-input">
-              <option value="30">30 秒</option>
-              <option value="60">1 分钟</option>
-              <option value="120">2 分钟</option>
-              <option value="300">5 分钟</option>
-            </select>
+          <div class="settings-grid">
+            <div class="settings-row">
+              <span class="settings-row-label">启用助手</span>
+              <label class="toggle"><input type="checkbox" id="set-ai-on"><span class="tk"></span></label>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-label">状态播报</span>
+              <label class="toggle"><input type="checkbox" id="set-ai-status"><span class="tk"></span></label>
+              <span class="settings-hint">管线/审片实时播报</span>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-label">闲置名言</span>
+              <label class="toggle"><input type="checkbox" id="set-ai-quotes"><span class="tk"></span></label>
+              <span class="settings-hint">典故·成语·名言轮播</span>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-label">闲逛移动</span>
+              <label class="toggle"><input type="checkbox" id="set-ai-wander"><span class="tk"></span></label>
+              <span class="settings-hint">闲时踱步换位</span>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-label">闲逛间隔</span>
+              <select id="set-ai-wander-int" class="settings-input">
+                <option value="6000">频繁(6s)</option>
+                <option value="11000">较快(11s)</option>
+                <option value="19000">适中(19s)</option>
+                <option value="35000">悠哉(35s)</option>
+                <option value="60000">佛系(60s)</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-label">冒泡频率</span>
+              <select id="set-ai-freq" class="settings-input">
+                <option value="12000">勤快(12s)</option>
+                <option value="22000">适中(22s)</option>
+                <option value="45000">安静(45s)</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-label">体型</span>
+              <select id="set-ai-size" class="settings-input">
+                <option value="76">小</option>
+                <option value="104">中(默认)</option>
+                <option value="132">大</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-label">左右摇摆</span>
+              <label class="toggle"><input type="checkbox" id="set-ai-waddle"><span class="tk"></span></label>
+              <span class="settings-hint">闲逛/步行时的摇摆动画</span>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-label">摇摆幅度</span>
+              <select id="set-ai-waddle-amp" class="settings-input">
+                <option value="0">关闭(0°)</option>
+                <option value="1.5">轻(1.5°)</option>
+                <option value="2.5" selected>中(2.5°)</option>
+                <option value="4">大(4°)</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-label">对话闲置隐藏</span>
+              <label class="toggle"><input type="checkbox" id="set-ai-chat-hide"><span class="tk"></span></label>
+              <span class="settings-hint">对话框无交互自动收起</span>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-label">闲置时长</span>
+              <select id="set-ai-chat-hide-sec" class="settings-input">
+                <option value="30">30 秒</option>
+                <option value="60">1 分钟</option>
+                <option value="120">2 分钟</option>
+                <option value="300">5 分钟</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -788,11 +857,11 @@
   </div>
   <!-- 实际根路径由服务端注入(自包含部署后 manju/novel 在 exe 目录旁,dirview 勿再硬编码) -->
   <script>window.NILIX_PATHS = { manjuRoot: /*__NILIX_MANJU_ROOT__*/, novelRoot: /*__NILIX_NOVEL_ROOT__*/ };</script>
-  <script src="/js/i18n.js?v=20260820afr"></script>
-  <script src="/js/markdown.js?v=20260820afr"></script>
-  <script src="/js/app.js?v=20260820afr"></script>
-  <script src="/js/comfy.js?v=20260820afr"></script>
-  <script src="/js/dirview.js?v=20260820afr"></script>
-  <script src="/js/manju.js?v=20260820afr"></script>
+  <script src="/js/i18n.js?v=20260820e2"></script>
+  <script src="/js/markdown.js?v=20260820e2"></script>
+  <script src="/js/app.js?v=20260820e2"></script>
+  <script src="/js/comfy.js?v=20260820e2"></script>
+  <script src="/js/dirview.js?v=20260820e2"></script>
+  <script src="/js/manju.js?v=20260820e2"></script>
 </body>
 </html>

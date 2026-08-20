@@ -229,12 +229,14 @@ function setField(obj, path, val) {
 function fill(cfg) {
   $$('[data-field]').forEach(el => {
     const v = getField(cfg, el.dataset.field);
+    if (el.type === 'checkbox') { el.checked = !!v; return; }
     if (v !== undefined && v !== null) el.value = v;
   });
 }
 function collect() {
   const obj = {};
   $$('[data-field]').forEach(el => {
+    if (el.type === 'checkbox') { setField(obj, el.dataset.field, el.checked); return; }
     let v = el.value;
     if (el.dataset.type === 'int') v = parseInt(v, 10) || 0;
     else if (el.dataset.type === 'float') v = parseFloat(v) || 0;

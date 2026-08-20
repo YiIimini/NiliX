@@ -5,6 +5,19 @@ import (
 	"strings"
 )
 
+// parseFloatClean 解析 nvidia-smi 数值字段:剥离单位/百分号等非数字残留
+// (部分驱动忽略 --nounits,输出 "5 %" / "20987 MiB";直接 ParseFloat 会失败 → 温度/显存错乱)
+func parseFloatClean(s string) float64 {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= '0' && r <= '9') || r == '.' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	v, _ := strconv.ParseFloat(b.String(), 64)
+	return v
+}
+
 // GPUInfo 通过 nvidia-smi 查询 GPU 利用率/温度/显存。
 func GPUInfo() GPU {
 	g := GPU{Present: false}
@@ -20,12 +33,16 @@ func GPUInfo() GPU {
 		return g
 	}
 	g.Present = true
-	g.Usage, _ = strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
-	g.Temp, _ = strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-	usedMB, _ := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
-	totalMB, _ := strconv.ParseFloat(strings.TrimSpace(parts[3]), 64)
+	g.Usage = parseFloatClean(parts[0])
+	g.Temp = parseFloatClean(parts[1])
+	usedMB := parseFloatClean(parts[2])
+	totalMB := parseFloatClean(parts[3])
 	g.MemUsed = FormatBytes(uint64(usedMB) * 1024 * 1024)
 	g.MemTotal = FormatBytes(uint64(totalMB) * 1024 * 1024)
+	// 显存使用率(used/total 百分比):灵动岛/工作台据此显示"占用 20.5/23.9 GB (86%)"
+	if totalMB > 0 {
+		g.MemPercent = usedMB / totalMB * 100
+	}
 	return g
 }
 

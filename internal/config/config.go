@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const encPrefix = "enc:"
@@ -26,6 +27,13 @@ type Settings struct {
 	Agent *AgentSettings `json:"agent,omitempty"`
 	// Window 桌面主窗口记忆(用户调整后持久化,下次启动直接加载;0=未记忆按 16:9 默认)
 	Window WindowSettings `json:"window,omitempty"`
+	// Island 灵动岛悬浮胶囊配置(启用/禁用;默认启用)
+	Island IslandSettings `json:"island,omitempty"`
+}
+
+// IslandSettings 灵动岛 HUD 悬浮胶囊配置。
+type IslandSettings struct {
+	Enabled *bool `json:"enabled,omitempty"` // nil=未设置(默认启用)
 }
 
 // WindowSettings 主窗口尺寸记忆(用户手动调整窗口大小后落盘,下次启动直接恢复)
@@ -175,10 +183,29 @@ func (s *Store) Load() (*Settings, error) {
 	return cfg, nil
 }
 
-// recoverKey 主密钥失效自愈:备份原文件、重建密钥、以空 key 配置返回
+// recoverKey 主密钥失效自愈(审计 M4):先短暂重试一次——杀软锁文件/IO 抖动这类瞬时读错误
+// 会误判"密钥损坏",此前直接删 settings.json+.secret.key 重建,用户配置静默清零。
+// 确认真损坏后:坏密文保留为 .corrupt(不删除,供排查)、重建密钥、以空 key 配置返回。
 func (s *Store) recoverKey(cfg *Settings, cause error) error {
+	// 瞬时错误重试(200ms 后重新加载 key 并尝试解密)
+	time.Sleep(200 * time.Millisecond)
+	if k2, err := s.loadOrCreateKey(); err == nil {
+		c2 := *cfg
+		if e1 := openAPIKey(k2, &c2.LLM); e1 == nil {
+			if c2.Agent == nil {
+				s.key = k2
+				*cfg = c2
+				return nil
+			}
+			if e2 := openStr(k2, &c2.Agent.VisionAPIKey); e2 == nil {
+				s.key = k2
+				*cfg = c2
+				return nil
+			}
+		}
+	}
 	if rb, rerr := os.ReadFile(s.Path); rerr == nil {
-		_ = os.WriteFile(s.Path+".bak", rb, 0600)
+		_ = os.WriteFile(s.Path+".corrupt", rb, 0600)
 	}
 	_ = os.Remove(s.keyPath)
 	_ = os.Remove(s.Path)

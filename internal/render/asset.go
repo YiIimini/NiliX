@@ -36,7 +36,11 @@ func (r *Renderer) generateImage(ctx context.Context, prompt string, width, heig
 		return "", err
 	}
 
+	deadline := time.Now().Add(15 * time.Minute) // 审计 M8:总超时(此前无限轮询,节点错误但 history 不落 error 则永久空转)
 	for {
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("生成参考图超时(>15 分钟)")
+		}
 		h, err := r.comfy.History(ctx, pr.PromptID)
 		if err != nil {
 			return "", err

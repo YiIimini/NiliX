@@ -102,7 +102,7 @@ class DirView {
     menu.setAttribute("aria-hidden", "true");
     menu.innerHTML = `<button class="cm-item cm-hide">${I18N.t("book.hide")}</button>` +
       (this.mode === "book"
-        ? `<button class="cm-item cm-continue">✍ 小说续作</button><button class="cm-item cm-manju">🎬 漫剧制作</button>`
+        ? `<button class="cm-item cm-continue">✍ 小说续作</button><button class="cm-item cm-manju">🎬 漫剧制作</button><button class="cm-item cm-del-book danger">🗑 删除小说</button>`
         : (this.id === "manju" ? `<button class="cm-item cm-del danger">🗑 删除项目</button>` : ""));
     const del = menu.querySelector(".cm-del");
     if (del) del.addEventListener("click", (e) => {
@@ -110,6 +110,13 @@ class DirView {
       const name = this._menuName;
       this.closeCardMenu();
       if (name) this.deleteManjuProject(name);
+    });
+    const delBook = menu.querySelector(".cm-del-book");
+    if (delBook) delBook.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const name = this._menuName;
+      this.closeCardMenu();
+      if (name) this.deleteNovel(name);
     });
     menu.querySelector(".cm-hide").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -214,6 +221,40 @@ class DirView {
         .catch((e) => {
           b.disabled = false; b.textContent = "确认删除";
           if (wb.setErr) wb.setErr(e.message); else alert(e.message);
+        });
+    });
+  }
+
+  /* 删除小说(小说书架封面 ⋮ 菜单):确认弹窗 → 删整个小说目录 → 刷新书架 */
+  deleteNovel(name) {
+    const wb = typeof ManjuWorkbench !== "undefined" ? ManjuWorkbench : null;
+    if (!wb || !wb.openModal) { alert("删除功能暂不可用(工作台未就绪)"); return; }
+    wb.openModal("🗑 删除小说",
+      `<div class="manju-confirm">
+        <p class="mc-q">确定彻底删除小说「${this.escapeHtml(name)}」？</p>
+        <p class="mc-d">将删除该小说<b>整个完整目录</b>(设定集/正文/素材/封面/全本/创作档案)，<b>不可恢复</b>；若该书正在自动连载，后台任务将一并停止。同名漫剧项目不受影响。请确认！</p>
+        <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+          <button id="bk-del-yes" class="hrs-btn hrs-btn-danger">确认删除</button>
+          <button id="bk-del-no" class="hrs-btn">取消</button>
+        </div>
+      </div>`);
+    document.getElementById("bk-del-no").addEventListener("click", () => wb.closeModal());
+    document.getElementById("bk-del-yes").addEventListener("click", () => {
+      const b = document.getElementById("bk-del-yes");
+      b.disabled = true; b.textContent = "删除中…";
+      fetch("/api/novel/delete", { method: "POST", headers: tokHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ title: name }) })
+        .then((r) => r.json())
+        .then((d) => {
+          if (!d.ok) throw new Error(d.error || "删除失败");
+          wb.closeModal();
+          this.render(); // 刷新书架
+        })
+        .catch((e) => {
+          b.disabled = false; b.textContent = "确认删除";
+          // 小说页可能不在视频工作台视图:setErr 写在 manju 视图内不可见,用 alert 保证用户能看到原因
+          if (wb.setErr) wb.setErr(e.message);
+          alert("删除失败: " + e.message);
         });
     });
   }

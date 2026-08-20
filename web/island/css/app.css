@@ -112,12 +112,31 @@ body.island-collapsed #full { display: none; }
 body.island-collapsed #pill { display: flex; }
 body.island-expanded #pill { display: none; }
 body.island-expanded #full { display: flex; }
-/* 展开/收起内容淡入,配合窗口尺寸动画更顺滑 */
-body.island-expanded #full { animation: islandFadeIn 0.22s ease; }
-body.island-collapsed #pill { animation: islandFadeIn 0.22s ease; }
-@keyframes islandFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+/* 系统设置禁用灵动岛:整个悬浮胶囊(胶囊+面板)隐藏,card 背景一并透明且不拦截鼠标
+   (否则黑色方块残留 + 透明区域挡桌面点击) */
+body.island-disabled #pill, body.island-disabled #full { display: none !important; }
+body.island-disabled .card, body.island-disabled .pill {
+  background: transparent !important;
+  box-shadow: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
+body.island-disabled .pill::before, body.island-disabled .pill::after { display: none !important; }
+/* 展开:面板从胶囊位置弹入(上移+微缩放+淡入,轻微弹性);收起:胶囊弹入 */
+body.island-expanded #full { animation: islandExpand 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.15); }
+body.island-collapsed #pill { animation: islandExpand 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.15); }
+@keyframes islandExpand {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+/* 收起过渡:先播面板淡出(0.17s),JS 延迟 170ms 后再切 island-collapsed(display:none),
+   让"窗口缩小 + 内容淡出"同步,避免面板瞬间消失的生硬感 */
+body.island-closing #full { animation: islandShrink 0.17s ease forwards; }
+body.island-closing #pill { display: none; }
+@keyframes islandShrink {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateY(8px) scale(0.97); }
 }
 
 /* 收起态胶囊:不透明深黑玻璃(iOS 灵动岛同款)——深黑渐变 + 玻璃高光 + 描边 + 投影 + 流光。

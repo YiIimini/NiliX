@@ -180,9 +180,14 @@ func manjuHealth(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
 	}
-	ctx, err := newManjuCtx(configPath, "", "", "", "")
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	ctx, err := newManjuCtx(cp, "", "", "", "")
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	items := manjuHealthCheck(ctx)
@@ -269,13 +274,13 @@ func manjuHealthFix(w http.ResponseWriter, r *http.Request) {
 	}
 	applied, err := manjuApplyHealthFix(configPath, key)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	_ = applied
 	ctx2, err := newManjuCtx(configPath, "", "", "", "")
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": manjuHealthCheck(ctx2)})

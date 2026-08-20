@@ -2384,6 +2384,14 @@ body.view-dir-active .top-search { display: none; }
   display: flex; align-items: center; gap: 12px;
   padding: 8px 0;
 }
+/* AI 助手区:一行两列布局(11 项配置双列排布,减少纵向滚动) */
+.settings-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 20px;
+}
+.settings-grid .settings-row { min-width: 0; }
+.settings-grid .settings-row-label { width: 96px; font-size: 12px; }
+.settings-grid .settings-input { width: 150px; }
 .settings-row-top { align-items: flex-start; }
 .settings-row-label {
   font-size: 12.5px; color: var(--text); letter-spacing: 1px;
@@ -2602,26 +2610,46 @@ body.view-dir-active .top-search { display: none; }
   background: color-mix(in srgb, var(--muted) 4%, transparent);
 }
 .manju-sysmon .ms-it {
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 0 6px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 2px 6px 5px;
   border-left: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent);
   min-width: 0;
 }
 .manju-sysmon .ms-it:first-child { border-left: none; }
 .manju-sysmon .ms-it i { font-style: normal; font-size: 9.5px; color: var(--muted); letter-spacing: 1px; }
-.manju-sysmon .ms-it .ms-line { display: flex; align-items: baseline; justify-content: center; gap: 8px; min-width: 0; }
+.manju-sysmon .ms-it .ms-line { display: flex; align-items: baseline; justify-content: center; gap: 5px; min-width: 0; }
+/* 百分比与温度同字号 + 中间分隔符间隔 */
 .manju-sysmon .ms-it b {
-  font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
   color: var(--text); white-space: nowrap;
 }
 .manju-sysmon .ms-it em {
-  font-style: normal; font-size: 9.5px; font-variant-numeric: tabular-nums;
-  color: var(--muted); white-space: nowrap;
+  font-style: normal; font-size: 11.5px; font-variant-numeric: tabular-nums;
+  color: var(--text); white-space: nowrap; opacity: 0.75;
 }
-.manju-sysmon .ms-it em.hot { color: #fbbf24; }
-.manju-sysmon .ms-it em.crit { color: #f87171; }
+.manju-sysmon .ms-it .ms-sep { font-size: 10px; color: var(--muted); opacity: 0.6; }
+.manju-sysmon .ms-it em.hot { color: #fbbf24; opacity: 1; }
+.manju-sysmon .ms-it em.crit { color: #f87171; opacity: 1; }
 .manju-sysmon .ms-it b.hot { color: #fbbf24; }
 .manju-sysmon .ms-it b.crit { color: #f87171; }
+/* 底部进度条:按负载填充,颜色跟随负载等级 */
+.manju-sysmon .ms-bar {
+  width: 100%; height: 4px; border-radius: 999px;
+  background: color-mix(in srgb, var(--panel-border) 55%, transparent);
+  overflow: hidden;
+}
+.manju-sysmon .ms-fill {
+  display: block; height: 100%; width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--ok, #3ddc84), var(--accent-2, #4da3ff));
+  transition: width 0.4s ease;
+}
+.manju-sysmon .ms-fill.hot {
+  background: linear-gradient(90deg, #fbbf24, #f59e0b);
+}
+.manju-sysmon .ms-fill.crit {
+  background: linear-gradient(90deg, #f87171, #ef4444);
+}
 /* 收起态:保持网格占位(列宽 0),去掉边框阴影,内容 overflow 隐藏;不能用 display:none(会导致网格项前移错位) */
 .manju-side.collapsed { border: none; box-shadow: none; background: transparent; }
 /* 收起/展开按钮:贴 manju-body 最外缘(左按钮贴左缘、右按钮贴右缘),在侧栏之外 */
@@ -2837,6 +2865,14 @@ select.manju-input {
 .manju-badge-err { color: var(--danger, #e7000b); background: color-mix(in srgb, var(--danger, #e7000b) 10%, transparent); }
 .manju-badge-stop { color: #b45309; background: rgba(217, 119, 6, 0.12); border: 1px solid rgba(217, 119, 6, 0.35); }
 .manju-badge-idle { color: var(--muted); border: 1px solid var(--panel-border); }
+/* 成片完成 badge:附「查看成片」直达按钮 */
+.manju-badge-done { flex-wrap: wrap; }
+.manju-badge-btn {
+  margin-left: 2px; padding: 1px 9px; border-radius: 999px; cursor: pointer;
+  color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border: none; font-size: 11px; font-weight: 600; line-height: 1.7; transition: filter 0.15s;
+}
+.manju-badge-btn:hover { filter: brightness(1.12); }
 .manju-progress-wrap { margin: 10px 0 12px; }
 .manju-progress-label { display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; color: var(--muted); margin-bottom: 5px; }
 .manju-progress-label #manju-progress-pct { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent); }
@@ -3109,44 +3145,123 @@ select.manju-input {
 
 /* 角色抽卡 */
 .manju-gacha-sub { margin: -8px 0 12px; }
-.manju-gacha-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; }
+.manju-gacha-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+
+/* 角色卡片:更宽更精致,层次分明 */
 .manju-char {
-  border: 1px solid var(--panel-border); border-radius: 12px; overflow: hidden;
-  background: var(--chip-bg); transition: border-color 0.2s, box-shadow 0.2s;
+  position: relative;
+  border: 1px solid var(--panel-border); border-radius: 14px; overflow: hidden;
+  background: var(--chip-bg);
+  display: flex; flex-direction: column;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
 }
-.manju-char:hover { border-color: var(--accent); box-shadow: 0 0 14px var(--glow); }
+.manju-char:hover { border-color: var(--accent); box-shadow: 0 6px 24px var(--glow); transform: translateY(-2px); }
 .manju-char-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 6px;
-  padding: 8px 10px; border-bottom: 1px solid var(--panel-border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid var(--panel-border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent);
 }
-.manju-char-name { font-size: 13px; font-weight: 700; color: var(--text); }
-.manju-char-tag { font-size: 11px; color: var(--accent); }
+.manju-char-name {
+  font-size: 13.5px; font-weight: 700; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.manju-char-tag { font-size: 11px; color: var(--accent); display: flex; align-items: center; gap: 4px; }
+/* 预览区:方形(定妆照 1024×1024),object-fit 完整展示不裁头;底部留候选条空间 */
 .manju-char-preview {
-  position: relative; aspect-ratio: 9 / 12; background: #000;
+  position: relative; aspect-ratio: 1 / 1; background: #111;
   display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.manju-char-preview::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(180deg, transparent 60%, rgba(0,0,0,0.22));
 }
 .manju-char-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .manju-char-preview img.manju-char-img { cursor: zoom-in; transition: opacity 0.15s; }
 .manju-char-preview img.manju-char-img:hover { opacity: 0.82; }
-.manju-gacha-ph { color: var(--muted); font-size: 12px; }
-.manju-char-actions { display: flex; gap: 8px; padding: 8px 10px; }
-.manju-char-actions .hrs-btn { flex: 1; padding: 6px 10px; font-size: 12px; }
+/* 图片加载失败兜底:灰底 + 破图提示(不再撑破卡片/按钮区) */
+.manju-char-img.img-err { display: none; }
+.manju-char-preview .img-err-ph {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  color: var(--muted); font-size: 12px; letter-spacing: 1px;
+}
+.manju-gacha-ph {
+  color: var(--muted); font-size: 12.5px; letter-spacing: 1px;
+  text-shadow: 0 1px 6px rgba(0,0,0,0.5);
+}
+/* 当前视图状态角标(已定/未抽)悬浮在预览区 */
+.manju-char-badge {
+  position: absolute; top: 8px; left: 8px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+  color: #fff; background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
+  border: 1px solid rgba(255,255,255,0.18);
+}
+.manju-char-badge.ok { color: #4ade80; border-color: rgba(74,222,128,0.4); }
+/* 操作按钮:等高不换行,flex 均分但文字单行,杜绝变形 */
+.manju-char-actions {
+  display: flex; gap: 8px; padding: 10px 12px 12px;
+  border-top: 1px solid var(--panel-border);
+}
+.manju-char-actions .hrs-btn {
+  flex: 1 1 0; min-width: 0; height: 32px;
+  padding: 0 6px; font-size: 12px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  white-space: nowrap; letter-spacing: 0;
+}
+.manju-char-actions .hrs-btn:disabled { opacity: 0.5; }
+
+/* 多视图 tab:正面/全身/侧面/细节,圆角胶囊式(更清爽) */
+.manju-view-tabs {
+  display: flex; gap: 4px; padding: 8px 10px 4px; overflow-x: auto; scrollbar-width: thin;
+}
+.manju-view-tab {
+  flex: 1; min-width: 0; padding: 5px 6px; font-size: 11px; cursor: pointer;
+  background: color-mix(in srgb, var(--text) 4%, transparent); color: var(--muted);
+  border: 1px solid transparent; border-radius: 8px; white-space: nowrap;
+  position: relative; transition: all 0.18s; display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+}
+.manju-view-tab:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.manju-view-tab.sel {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 3px 10px var(--glow); font-weight: 600;
+}
+.manju-view-ok {
+  font-style: normal; color: #4ade80; margin-left: 1px; font-weight: 700; font-size: 10px;
+}
+.manju-view-tab.sel .manju-view-ok { color: #fff; }
+.manju-gacha-oktag {
+  display: inline-block; font-size: 10px; color: #4ade80; font-weight: 700; margin-right: 4px;
+}
 
 /* 抽卡弹窗工具栏:连抽张数 + 全员抽卡 */
-.manju-gacha-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.manju-gacha-toolbar {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap;
+  padding: 10px 12px; border: 1px solid var(--panel-border); border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+}
+.manju-gacha-toolbar .manju-meta { font-size: 12px; color: var(--muted); }
 .manju-gacha-toolbar select {
   background: var(--chip-bg); color: var(--text); border: 1px solid var(--panel-border);
-  border-radius: 8px; padding: 5px 8px; font-size: 12px; outline: none; cursor: pointer;
+  border-radius: 8px; padding: 6px 10px; font-size: 12px; outline: none; cursor: pointer;
+  transition: border-color 0.15s;
 }
+.manju-gacha-toolbar select:hover { border-color: var(--accent); }
+.manju-gacha-toolbar .hrs-btn { border-radius: 8px; padding: 6px 14px; }
 /* 候选缩略图条:抽卡历史累积,点选切换当前查看/采纳的候选 */
-.manju-cand-strip { display: flex; gap: 6px; padding: 8px 10px 0; overflow-x: auto; scrollbar-width: thin; }
+.manju-cand-strip { display: flex; gap: 6px; padding: 8px 12px 0; overflow-x: auto; scrollbar-width: thin; }
 .manju-cand {
-  flex: none; width: 44px; height: 58px; padding: 0; background: #000;
-  border: 2px solid var(--panel-border); border-radius: 6px; overflow: hidden; cursor: pointer;
+  flex: none; width: 44px; height: 44px; padding: 0; background: #111;
+  border: 2px solid var(--panel-border); border-radius: 8px; overflow: hidden; cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
 }
 .manju-cand img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.manju-cand:hover { border-color: var(--accent); }
-.manju-cand.sel { border-color: var(--accent); box-shadow: 0 0 8px var(--glow); }
+.manju-cand:hover { border-color: var(--accent); transform: translateY(-1px); }
+.manju-cand.sel { border-color: var(--accent); box-shadow: 0 0 10px var(--glow); }
+.manju-cand.sel::after {
+  content: ""; position: absolute; inset: 0; border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 
 /* ===================== 视频管理 UI 美化升级 ===================== */
 
@@ -3388,6 +3503,56 @@ select.manju-input {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
   font-size: 10px; font-weight: 700; line-height: 1;
+}
+/* 阶段按钮运行态(renderStageButtons 同步):当前跑马灯边框/完成✓/失败✗ */
+/* @property 注册角度变量,使 conic-gradient 的 from 角可被动画插值(跑马灯流动) */
+@property --mj-run-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+#view-manju [data-phase].mj-ph-run {
+  position: relative;
+  border: 2px solid var(--ok, #3ddc84) !important;
+  color: var(--ok, #3ddc84) !important;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--ok, #3ddc84) 10%, var(--chip-bg)) !important;
+  box-shadow: 0 0 14px rgba(74, 222, 128, 0.5);
+}
+/* 跑马灯:伪元素遮罩在边框上,只亮边框一圈(按钮中间保持原样,不加任何填充特效) */
+#view-manju [data-phase].mj-ph-run::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 2px;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  background: conic-gradient(from var(--mj-run-angle),
+    transparent 0deg,
+    #6ee7a0 60deg,
+    #22c55e 140deg,
+    transparent 240deg);
+  animation: mjBorderSpin 1.2s linear infinite;
+  pointer-events: none;
+}
+@keyframes mjBorderSpin {
+  to { --mj-run-angle: 360deg; }
+}
+#view-manju [data-phase].mj-ph-done {
+  opacity: 0.85;
+}
+#view-manju [data-phase].mj-ph-done::after {
+  content: "✓"; margin-left: 4px; color: var(--ok, #00a63e); font-weight: 700;
+}
+#view-manju [data-phase].mj-ph-fail {
+  border-color: #f87171 !important;
+  color: #f87171 !important;
+}
+#view-manju [data-phase].mj-ph-fail::after {
+  content: "✗"; margin-left: 4px; color: #f87171; font-weight: 700;
 }
 
 .manju-content-col {
@@ -3989,20 +4154,27 @@ select option { text-align: center; }
   -webkit-text-fill-color: transparent;
 }
 
-/* 全站提示气泡(替代原生 title) */
+/* 全站提示气泡(替代原生 title):精致小弹窗——深色毛玻璃 + 主题色箭头 + 多行支持 */
 .tip-bubble {
-  position: fixed; z-index: 9999; pointer-events: none;
-  max-width: 260px; padding: 6px 11px;
-  font-size: 12px; line-height: 1.5; color: #EDF1F7;
-  background: rgba(10, 14, 22, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  position: fixed; z-index: 99999; pointer-events: none;
+  max-width: 320px; padding: 8px 13px;
+  font-size: 12px; line-height: 1.65; color: #EDF1F7;
+  background: rgba(14, 18, 28, 0.94);
+  border: 1px solid color-mix(in srgb, var(--accent, #ff6c37) 35%, transparent);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0,0,0,0.3);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  white-space: pre-line; word-break: break-word;
   opacity: 0; transform: translateY(4px) scale(0.96);
   transition: opacity 0.18s, transform 0.18s;
 }
 .tip-bubble.show { opacity: 1; transform: none; }
+/* 顶部小箭头(深色尖角,贴顶翻转时仍指向元素) */
+.tip-bubble::before {
+  content: ""; position: absolute; left: 50%; top: -5px; margin-left: -5px;
+  width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-bottom: 5px solid color-mix(in srgb, var(--accent, #ff6c37) 35%, transparent);
+}
 
 /* 创作表单:? 气泡提示 + 按钮居中 */
 .nv-tip {

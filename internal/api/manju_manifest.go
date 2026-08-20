@@ -52,8 +52,18 @@ func (ctx *manjuCtx) manifestSave(m *manjuManifest) {
 }
 
 // shotRenderFingerprint 渲染输入全指纹 = 条件指纹(提示词/角色/场景/画幅/帧数) + 资产指纹(定妆照/场景图)
+// + 渲染质量参数(审计 H7:steps/turbo_lora/sampler/sage/seed_policy——此前改这些参数后重跑被判
+// current 直接跳过,新参数永不生效。seed 有意不参与:避免改 seed 触发全量重渲,定点重渲/fresh 覆盖)
 func (ctx *manjuCtx) shotRenderFingerprint(s manjuShot) string {
-	return md5Hex(ctx.shotCondFingerprint(s) + "|a=" + ctx.assetsFingerprint())
+	R := ctx.R
+	lora := str(R["turbo_lora"])
+	if r2v := str(R["turbo_lora_r2v"]); r2v != "" {
+		lora += "|r2v=" + r2v
+	}
+	spec := turboLoRASpecOf(str(R["turbo_lora"]))
+	q := fmt.Sprintf("|steps=%d|sampler=%s|sched=%s|lora=%s|sage=%v|policy=%s",
+		ctx.steps, spec.Sampler, spec.Scheduler, lora, R["sage_attention"], ctx.seedPolicy)
+	return md5Hex(ctx.shotCondFingerprint(s) + "|a=" + ctx.assetsFingerprint() + q)
 }
 
 // manifestMark 渲染成功后记录(仅定稿产物;draft 目录不入清单)

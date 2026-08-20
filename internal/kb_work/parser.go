@@ -226,7 +226,9 @@ func parsePage(root, relPath, category, color string) (*Page, error) {
 	}
 
 	rawLinks := make([]string, 0)
-	for _, m := range linkRe.FindAllStringSubmatch(text, -1) {
+	// 审计 H17:跳过代码块/行内代码里的 [[链接]](此前直接对全文匹配,代码示例/HTML 注释中的
+	// [[x]] 会生成幽灵边/污染真实关系)——先剔除 codeRe 匹配内容再提取链接
+	for _, m := range linkRe.FindAllStringSubmatch(codeRe.ReplaceAllString(text, " "), -1) {
 		rawLinks = append(rawLinks, m[1])
 	}
 

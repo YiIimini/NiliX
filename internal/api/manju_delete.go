@@ -37,6 +37,11 @@ func manjuDeleteProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"项目目录不存在或缺少 config.json"}`, http.StatusNotFound)
 		return
 	}
+	// 运行中禁止删除(审计 S7:与渲染并发 RemoveAll 撕扯产物/状态)
+	if manjuStateRunningFor(configPath) {
+		http.Error(w, `{"error":"项目正在渲染中,请先停止再删除"}`, http.StatusConflict)
+		return
+	}
 	if err := os.RemoveAll(dir); err != nil {
 		http.Error(w, `{"error":"删除失败: `+err.Error()+`"}`, http.StatusInternalServerError)
 		return

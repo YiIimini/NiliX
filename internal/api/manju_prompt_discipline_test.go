@@ -15,7 +15,7 @@ func TestShotPromptRoleDiscipline(t *testing.T) {
 			t.Errorf("manjuShotPromptSystem 缺少纪律 %q", want)
 		}
 	}
-	if !strings.Contains(sys, "in <Picture N>") || !strings.Contains(sys, "名单外的登场角色") {
+	if !strings.Contains(sys, "in <Picture 1>") || !strings.Contains(sys, "清单外的登场角色") {
 		t.Errorf("Ref2VA 模板缺少参考图纪律")
 	}
 }

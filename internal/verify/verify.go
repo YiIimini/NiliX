@@ -92,14 +92,41 @@ func Verify(path string) (*Report, error) {
 }
 
 func checkFaststart(path string) bool {
-	data, err := os.ReadFile(path)
+	// 审计 M9:分块扫描而非整文件读入内存——成片动辄 GB 级,os.ReadFile 峰值内存翻倍甚至 OOM。
+	// moov/mdat 原子在文件前部(正常 mp4),扫前 64KB + 尾部 1MB 已足够;若未命中再退化为全文件流式扫描
+	f, err := os.Open(path)
 	if err != nil {
 		return false
 	}
-	moov := bytes.Index(data, []byte("moov"))
-	mdat := bytes.Index(data, []byte("mdat"))
+	defer f.Close()
+	head := make([]byte, 64<<10)
+	n1, _ := f.ReadAt(head, 0)
+	head = head[:n1]
+	if moovPos(head) >= 0 && mdatPos(head) >= 0 {
+		return moovPos(head) < mdatPos(head)
+	}
+	// 尾部分块(找尾部 mdat 起点或后续 moov)
+	const tailSize = 1 << 20
+	st, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	start := st.Size() - tailSize
+	if start < 0 {
+		start = 0
+	}
+	tail := make([]byte, st.Size()-start)
+	if _, err := f.ReadAt(tail, start); err != nil {
+		return false
+	}
+	combined := append(append([]byte{}, head...), tail...)
+	moov := bytes.Index(combined, []byte("moov"))
+	mdat := bytes.Index(combined, []byte("mdat"))
 	return moov >= 0 && (mdat < 0 || moov < mdat)
 }
+
+func moovPos(b []byte) int { return bytes.Index(b, []byte("moov")) }
+func mdatPos(b []byte) int { return bytes.Index(b, []byte("mdat")) }
 
 func boolMsg(b bool, t, f string) string {
 	if b {

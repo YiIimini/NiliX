@@ -458,6 +458,16 @@ var (
 	fsRoots   []string
 )
 
+// fsNormRoot 规范化允许根目录:解析符号链接/junction 后的真实路径(审计 M11),
+// 与 fsPathAllowed 的 EvalSymlinks 结果保持一致(Windows 长路径/符号链接格式差异)
+func fsNormRoot(r string) string {
+	r = filepath.Clean(strings.TrimSpace(r))
+	if ev, err := filepath.EvalSymlinks(r); err == nil {
+		r = filepath.Clean(ev)
+	}
+	return r
+}
+
 // SetFSRoots 全量设置允许根目录(启动时注入)
 func SetFSRoots(roots ...string) {
 	fsRootsMu.Lock()
@@ -465,30 +475,28 @@ func SetFSRoots(roots ...string) {
 	seen := map[string]bool{}
 	fsRoots = fsRoots[:0]
 	for _, r := range roots {
-		if r = filepath.Clean(strings.TrimSpace(r)); r != "" && !seen[strings.ToLower(r)] {
+		if r = fsNormRoot(r); r != "" && !seen[strings.ToLower(r)] {
 			seen[strings.ToLower(r)] = true
 			fsRoots = append(fsRoots, r)
 		}
 	}
 	// 漫剧项目根恒允许(api 包内部)
-	if r := filepath.Clean(strings.TrimSpace(ManjuRootDir)); r != "" && !seen[strings.ToLower(r)] {
+	if r := fsNormRoot(ManjuRootDir); r != "" && !seen[strings.ToLower(r)] {
 		fsRoots = append(fsRoots, r)
 	}
 }
 
 // addFSRoot 动态注册一个允许根(去重)
 func addFSRoot(p string) {
-	if p = filepath.Clean(strings.TrimSpace(p)); p == "" {
+	if p = fsNormRoot(p); p == "" {
 		return
 	}
 	fsRootsMu.Lock()
 	defer fsRootsMu.Unlock()
-	lp := strings.ToLower(p)
 	for _, r := range fsRoots {
 		if strings.EqualFold(r, p) {
 			return
 		}
-		_ = lp
 	}
 	fsRoots = append(fsRoots, p)
 }
@@ -497,6 +505,12 @@ func addFSRoot(p string) {
 func fsPathAllowed(p string) bool {
 	if p = filepath.Clean(strings.TrimSpace(p)); p == "" {
 		return false
+	}
+	// 审计 M11:解析符号链接/junction 后再比对——根内若有目录 junction 指向根外
+	// (如 manju/<项目>/secret → C:\Users\.ssh),字符串前缀比对会放行越界读取。
+	// EvalSymlinks 对不存在路径返回错误,此时回退原路径(浏览未创建文件场景)
+	if ev, err := filepath.EvalSymlinks(p); err == nil {
+		p = filepath.Clean(ev)
 	}
 	fsRootsMu.RLock()
 	defer fsRootsMu.RUnlock()

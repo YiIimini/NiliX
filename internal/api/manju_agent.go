@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,7 +43,11 @@ func (m manjuAgentLLM) ChatJSON(system, user string, temp float64) (map[string]a
 
 // manjuGlobalAgent 全局默认智能体配置(settings.json 的 agent 节),main 注入;
 // 项目 config.json 的 agent 节只覆盖非空字段,视觉模型配一次全局即可全项目生效。
-var manjuGlobalAgent = agent.DefaultConfig()
+// 读写须持 manjuGlobalAgentMu(审计 S8:管线 goroutine 与保存设置 HTTP 并发读写)
+var (
+	manjuGlobalAgentMu sync.RWMutex
+	manjuGlobalAgent   = agent.DefaultConfig()
+)
 
 // manjuSettingsStore 全局 settings.json 的读写入口(main 注入,「另存为全局默认」用)
 var manjuSettingsStore *config.Store
@@ -70,7 +75,9 @@ func SetGlobalAgentCfg(cfg *config.Settings) {
 		a.AutoResolve = *cfg.Agent.AutoResolve
 	}
 	a.Normalize()
+	manjuGlobalAgentMu.Lock()
 	manjuGlobalAgent = a
+	manjuGlobalAgentMu.Unlock()
 }
 
 // SetManjuSettingsStore 注入全局设置读写(main 调用,供「另存为全局默认」写 settings.json)
@@ -78,7 +85,9 @@ func SetManjuSettingsStore(st *config.Store) { manjuSettingsStore = st }
 
 // loadAgentCfg 读取生效的智能体配置:全局默认打底,项目 agent 节非空字段覆盖
 func loadAgentCfg(ctx *manjuCtx) agent.Config {
+	manjuGlobalAgentMu.RLock()
 	acfg := manjuGlobalAgent
+	manjuGlobalAgentMu.RUnlock()
 	if m, ok := ctx.cfg["agent"].(map[string]any); ok {
 		if b, ok := m["enabled"].(bool); ok {
 			acfg.Enabled = b
@@ -118,6 +127,14 @@ func loadAgentCfg(ctx *manjuCtx) agent.Config {
 func (ctx *manjuCtx) visionClient(acfg agent.Config) *agent.VisionClient {
 	base := strings.TrimSpace(acfg.VisionBaseURL)
 	if base == "" {
+		// 审计 M6:base_url 缺省回退 LLM 地址是常见配置坑——GLM 模型名打 DeepSeek 端点必 401,
+		// 且难排查(体检只查 model 不查地址匹配)。回退时若模型名明显非 DeepSeek 系,
+		// 直接返回 nil 降级跳过判分(不再静默用错端点空转返工)
+		ml := strings.ToLower(strings.TrimSpace(acfg.VisionModel))
+		if strings.Contains(ml, "glm") || strings.Contains(ml, "qwen-vl") ||
+			strings.Contains(ml, "vision") || strings.Contains(ml, "gpt-4o") {
+			return nil
+		}
 		base = ctx.llm.baseURL
 	}
 	key := strings.TrimSpace(acfg.VisionAPIKey)
@@ -128,6 +145,10 @@ func (ctx *manjuCtx) visionClient(acfg agent.Config) *agent.VisionClient {
 		key = agent.EnvAPIKey() // 环境变量兜底(GLM_VISION_API_KEY)
 	}
 	vc := agent.NewVisionClient(base, key, strings.TrimSpace(acfg.VisionModel), 180*time.Second)
+	if vc == nil {
+		// 模型配置非法(拆分后无合法模型名):返回 nil,调用方降级跳过判分(审计 S2)
+		return nil
+	}
 	vc.OnUsage = func(model string, u agent.Usage) { manjuStatsAdd(ctx.project, model, u) }
 	return vc
 }
@@ -138,6 +159,26 @@ func (ctx *manjuCtx) visionClient(acfg agent.Config) *agent.VisionClient {
 func (ctx *manjuCtx) visionClientShared(acfg agent.Config) *agent.VisionClient {
 	ctx.visionOnce.Do(func() { ctx.vision = ctx.visionClient(acfg) })
 	return ctx.vision
+}
+
+// safeGo 带 panic 兜底的后台 goroutine(审计 S2):崩溃不崩进程——
+// 与 startManjuRun 主管线 recover 同策略:记录 crash.log + 状态日志后降级继续。
+// 所有管线/判分/ASR/预编码等子 goroutine 必须走此封装(Go 的 recover 只捕获同 goroutine,
+// 主 run goroutine 的 defer 对子 goroutine panic 形同虚设)。
+func safeGo(tag string, lg *manjuLogger, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 64<<10)
+				n := runtime.Stack(buf, false)
+				if lg != nil {
+					lg.logf(fmt.Sprintf("💥 后台[%s]崩溃(panic): %v\n%s", tag, r, buf[:n]))
+				}
+				manjuWriteCrash(tag, fmt.Sprintf("%v", r), buf[:n])
+			}
+		}()
+		fn()
+	}()
 }
 
 // ---- 审片状态落盘(<项目>/agent_state.json,随项目目录删除) ----
@@ -184,6 +225,9 @@ type manjuAgentMemory struct {
 	ScoreTrend   []manjuScorePoint  `json:"scoreTrend,omitempty"`
 	StyleChoices []manjuStyleChoice `json:"styleChoices,omitempty"`
 	LastRunAt    int64              `json:"lastRunAt"`
+	// LastSummarizedEp 最近一次汇总的集号(审计 M3:同一集只汇总一次,
+	// 此前每次 qc/续跑都全量再累加一遍,返工计数/问题统计/趋势曲线虚高)
+	LastSummarizedEp string `json:"lastSummarizedEp,omitempty"`
 }
 
 // manjuAgentError 阶段失败诊断记录
@@ -405,7 +449,15 @@ func agentPlanReview(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) {
 	}
 	manjuAgentMu.Lock()
 	st := loadAgentStateLocked(ctx.project)
-	st.Episode = ctx.episode
+	if st.Episode != ctx.episode {
+		// 审计 H9:换集翻页统一在 plan 阶段执行——此前 judgeShots/agentJudgeRemaining 的
+		// 换集清空条件被这里提前写入的 Episode 破坏(条件恒假),EP01 旧判分/未解决升级
+		// 残留混入 EP02,两集镜头号重叠时相互覆盖。这里集中翻页后,judgeShots 等处的
+		// 同类判断因 Episode 已匹配而幂等跳过,不再重复清空
+		st.Episode = ctx.episode
+		st.Shots = map[string]*agent.Judgment{}
+		st.Escalations = nil
+	}
 	st.PlanReview = &manjuAgentPlanReview{Score: score, Issues: issues, Suggestions: sugg, At: time.Now().Unix()}
 	st.PassScore, st.MaxRetries, st.VisionModel = acfg.PassScore, acfg.MaxRetries, acfg.VisionModel
 	saveAgentStateLocked(ctx.project, st)
@@ -612,7 +664,7 @@ func manjuAgentStyleAnalyze(w http.ResponseWriter, r *http.Request) {
 			strings.Contains(err.Error(), "写入渲染配置失败") {
 			code = http.StatusInternalServerError
 		}
-		http.Error(w, `{"error":"`+err.Error()+`"}`, code)
+		writeErr(w, code, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -661,9 +713,12 @@ func (ctx *manjuCtx) runASRCheck(lg *manjuLogger, clipsEp string, shots []manjuS
 	for _, s := range spoken {
 		ids = append(ids, strconv.Itoa(s.ID))
 	}
-	out, err := ctx.runMediaOut("asr", "--dir", clipsEp, "--plan", planPath, "--shots", strings.Join(ids, ","))
+	out, err := ctx.runMediaOutStop([]string{"asr", "--dir", clipsEp, "--plan", planPath, "--shots", strings.Join(ids, ",")}, lg.stopped)
 	if err != nil {
-		lg.logf("  ⚠️ ASR 核对不可用(忽略,继续视觉判分): " + truncate(err.Error(), 120))
+		// 停止触发的返回不告警(正常流程);其他错误提示后忽略继续
+		if !strings.Contains(err.Error(), "已停止") {
+			lg.logf("  ⚠️ ASR 核对不可用(忽略,继续视觉判分): " + truncate(err.Error(), 120))
+		}
 		return nil
 	}
 	m := parseJSONLine(out)
@@ -698,6 +753,12 @@ func (ctx *manjuCtx) runASRCheck(lg *manjuLogger, clipsEp string, shots []manjuS
 
 // runMediaOut 跑媒体辅助脚本并捕获完整 stdout(不写运行日志,供 JSON 解析)
 func (ctx *manjuCtx) runMediaOut(args ...string) (string, error) {
+	return ctx.runMediaOutStop(args, nil)
+}
+
+// runMediaOutStop 同 runMediaOut,但支持停止感知(stopped 回调非空时,用户点「停止」立即杀子进程,
+// 不再等 25 分钟超时——ASR whisper 转写/质检 PyAV 卡住时停止必须有效)
+func (ctx *manjuCtx) runMediaOutStop(args []string, stopped func() bool) (string, error) {
 	script := ensureMediaHelper()
 	cmd := exec.Command(manjuPythonPath(), append([]string{script}, args...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
@@ -708,10 +769,30 @@ func (ctx *manjuCtx) runMediaOut(args ...string) (string, error) {
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
-	if err := cmd.Wait(); err != nil {
-		return out.String(), err
+	// 审计 M2:子进程超时——此前 cmd.Wait 无限阻塞,whisper 首次下载/PyAV 坏文件/ffmpeg 死锁
+	// 时整条 AI 一条龙永久挂死,停止也无效(只能杀进程);停止感知:500ms 粒度检查,立即杀
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	timeout := time.NewTimer(25 * time.Minute)
+	defer timeout.Stop()
+	stopTick := time.NewTicker(500 * time.Millisecond)
+	defer stopTick.Stop()
+	for {
+		select {
+		case err := <-done:
+			return out.String(), err
+		case <-timeout.C:
+			_ = cmd.Process.Kill()
+			<-done
+			return out.String(), fmt.Errorf("媒体子进程超时(>25 分钟),已终止")
+		case <-stopTick.C:
+			if stopped != nil && stopped() {
+				_ = cmd.Process.Kill()
+				<-done
+				return out.String(), fmt.Errorf("已停止")
+			}
+		}
 	}
-	return out.String(), nil
 }
 
 // runQCJSON 机械质检并返回问题镜头报告 {镜头ID: flags}
@@ -761,13 +842,34 @@ func (ctx *manjuCtx) shotFramesDir(shotID int) string {
 
 // inspectShot 审片单进程:一遍解码同时产出机械质检报告+抽帧 JPEG(替代原先 qc+frames
 // 两个独立进程、同一文件解两遍)。返回 (frames, qcFlags, err)。
+// 抽帧缓存复用:同一镜头产物未变(比对源 mp4 的 mtime/大小标记文件)时直接复用上次抽帧,
+// 手动重审/终检重审不再重复解码视频(每镜省一次完整解码;产物变化自动失效重抽)。
 func (ctx *manjuCtx) inspectShot(lg *manjuLogger, clip string, shotID, count int) ([]string, []string, error) {
 	dir := ctx.shotFramesDir(shotID)
+	mark := filepath.Join(dir, "_src.meta")
+	// 缓存命中条件:标记文件存在且记录的源 mp4 指纹(大小+mtime)与当前一致 → 复用已有帧
+	if b, err := os.ReadFile(mark); err == nil && fileExists(clip) {
+		if fi, err2 := os.Stat(clip); err2 == nil {
+			cur := fmt.Sprintf("%d@%d", fi.Size(), fi.ModTime().UnixNano())
+			if string(b) == cur {
+				var frames []string
+				entries, _ := os.ReadDir(dir)
+				for _, e := range entries {
+					if strings.HasSuffix(strings.ToLower(e.Name()), ".jpg") {
+						frames = append(frames, filepath.Join(dir, e.Name()))
+					}
+				}
+				if len(frames) > 0 {
+					return frames, nil, nil
+				}
+			}
+		}
+	}
 	_ = os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, nil, err
 	}
-	out, err := ctx.runMediaOut("inspect", "--file", clip, "--out-dir", dir, "--count", strconv.Itoa(count))
+	out, err := ctx.runMediaOutStop([]string{"inspect", "--file", clip, "--out-dir", dir, "--count", strconv.Itoa(count)}, lg.stopped)
 	if err != nil {
 		return nil, nil, fmt.Errorf("审片检测失败: %w", err)
 	}
@@ -800,6 +902,10 @@ func (ctx *manjuCtx) inspectShot(lg *manjuLogger, clip string, shotID, count int
 	}
 	if len(frames) == 0 {
 		return nil, flags, fmt.Errorf("抽帧 0 张")
+	}
+	// 记录源 mp4 指纹,下次同产物审片直接复用抽帧(免重复解码)
+	if fi, err := os.Stat(clip); err == nil {
+		_ = os.WriteFile(mark, []byte(fmt.Sprintf("%d@%d", fi.Size(), fi.ModTime().UnixNano())), 0644)
 	}
 	return frames, flags, nil
 }
@@ -859,18 +965,21 @@ func shotMetaFromPlan(s manjuShot, charMap, sceneMap map[string]map[string]any, 
 	return meta
 }
 
-// refImagesFor 镜头参考图:R2V=全部登场角色定妆照(正脸优先,最多 3 个),FL2VA=场景图
+// refImagesFor 镜头参考图:R2V=全部登场角色多视图(正脸优先+全身/细节,≤9 预算),FL2VA=场景图
 func (ctx *manjuCtx) refImagesFor(s manjuShot) []string {
 	var out []string
+	n := len(s.Characters)
+	if n > 3 {
+		n = 3
+	}
 	for i, cid := range s.Characters {
 		if i >= 3 {
 			break
 		}
-		for _, rel := range []string{"characters/" + cid + "_face.png", "characters/" + cid + ".png"} {
+		for _, rel := range ctx.charViewRels(cid, i, n) {
 			p := filepath.Join(ctx.assetsDir, rel)
 			if fileExists(p) {
 				out = append(out, p)
-				break
 			}
 		}
 	}
@@ -898,6 +1007,16 @@ func (ctx *manjuCtx) judgeShots(lg *manjuLogger, acfg agent.Config, plan map[str
 		return failed
 	}
 	vc := ctx.visionClientShared(acfg)
+	if vc == nil {
+		// 审计 M6:视觉客户端构造失败(模型名与 base_url 服务商不匹配/模型名为空)→ 降级跳过判分,
+		// 机械质检问题照常升级,不空转返工
+		lg.logf("🤖 视觉模型配置异常(模型名与 base_url 服务商不匹配或模型名为空),跳过判分")
+		var failed []int
+		for id := range qcBad {
+			failed = append(failed, id)
+		}
+		return failed
+	}
 	charMap, sceneMap := planCharSceneMaps(plan)
 	styleDesc := manjuStyleDesc(ctx.style).asset
 	primaryModel := strings.Split(strings.TrimSpace(acfg.VisionModel), ",")[0]
@@ -906,6 +1025,17 @@ func (ctx *manjuCtx) judgeShots(lg *manjuLogger, acfg agent.Config, plan map[str
 		clip := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
 		if !fileExists(clip) {
 			continue
+		}
+		// 审计 H8:断点续跑判分幂等——该镜已判分通过(pass/fixed/accepted)且产物未变(stale 检查)
+		// 且无机械质检问题则跳过,不重复扣 VLM 费/重建抽帧(此前每次续跑整集重判)
+		if len(qcBad[s.ID]) == 0 {
+			if prev := loadAgentStateShot(project, s.ID); prev != nil &&
+				(prev.Status == "pass" || prev.Status == "fixed" || prev.Status == "accepted") {
+				if ctx.shotManifestStatus(s) != "stale" {
+					lg.logf(fmt.Sprintf("   ⏭ 镜头 %d 已判分通过(%s)且产物未变,跳过审片", s.ID, prev.Status))
+					continue
+				}
+			}
 		}
 		jd := &agent.Judgment{Status: "pending", JudgedAt: time.Now().Unix(), Model: acfg.VisionModel}
 		jd.QCFlags = qcBad[s.ID]
@@ -1088,6 +1218,9 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	if err := ctx.ensureComfyReady(lg); err != nil {
 		return err
 	}
+	// 渲染/编码前释放显存(assets 阶段 ZImage/Lumina 常驻,不腾空间 Qwen3-VL/H3 UNET 加载
+	// 会因显存不足阻塞 → 提交后 ComfyUI 挂起、显卡没动静)
+	ctx.freeComfyModels(lg)
 	// SageAttn 节点缺失提前降级,使「⚙️ 生效参数」总览展示真实生效值(renderShotTo 内兜底)
 	ctx.sageAttnGuard(lg)
 	plan, shots, err := ctx.ensurePlanAndPrompts(lg)
@@ -1169,12 +1302,12 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 				}
 				if need {
 					preWg.Add(1)
-					go func(n manjuShot) {
+					safeGo("preencode", lg, func() {
 						defer preWg.Done()
-						if e := ctx.ensureEncodedAt(n, ctx.shotCacheNameAt(n, jw2, jh2), jw2, jh2, lg); e != nil {
+						if e := ctx.ensureEncodedAt(next, ctx.shotCacheNameAt(next, jw2, jh2), jw2, jh2, lg); e != nil {
 							preErr = e
 						}
-					}(next)
+					})
 				}
 			}
 			dst := filepath.Join(judgeDir, fmt.Sprintf("%02d.mp4", s.ID))
@@ -1215,7 +1348,7 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 			// 后台即时审片:inspect 单进程已含机械质检+抽帧(无需再跑 runQCJSON 独立进程),
 			// 结论落 agent_state;ASR 与审片并行
 			jw.Add(1)
-			go func(s manjuShot) {
+			safeGo("judge", lg, func() {
 				defer jw.Done()
 				judgeSem <- struct{}{}
 				defer func() { <-judgeSem }()
@@ -1223,16 +1356,16 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 				lg.logf(fmt.Sprintf("🤖 审片官接管镜头 %d ...", s.ID))
 				ctx.judgeShots(lg, acfg, plan, []manjuShot{s}, nil, judgeDir)
 				lg.logf(fmt.Sprintf("    ⏱ 镜头 %d 审片 %.1fs(质检+抽帧单进程,含判分)", s.ID, time.Since(t0).Seconds()))
-			}(s)
+			})
 		}
 		// ASR 与视觉审片并行开跑(ASR 只需产物文件;渲染循环已结束,全部镜头就绪)
 		var asrWg sync.WaitGroup
 		var asrBad map[int][]string
 		asrWg.Add(1)
-		go func() {
+		safeGo("asr", lg, func() {
 			defer asrWg.Done()
 			asrBad = ctx.runASRCheck(lg, judgeDir, queue, planPath)
-		}()
+		})
 		jw.Wait()    // 等本轮全部审片落定
 		asrWg.Wait() // 等批量 ASR(与审片并行,通常早已完成)
 		if lg.stopped() {
@@ -1244,9 +1377,18 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 		for _, s := range queue {
 			jd := loadAgentStateShot(ctx.project, s.ID)
 			asrFlags, asrHit := asrBad[s.ID]
-			visualFailed := jd.Status == "failed" || (jd.Status == "pending" && jd.Error != "")
-			if !visualFailed && !asrHit {
+			// 审计 S5:判分调用失败(pending+Error,视觉服务不可用/超时/熔断)与判分不合格(failed)分流——
+			// 前者无判分依据,重渲只会空烧 GPU/LLM/VLM,直接升级待恢复后人工重试;后者走修复师返工
+			judgeErr := jd.Status == "pending" && jd.Error != ""
+			judgeFailed := jd.Status == "failed"
+			if !judgeFailed && !judgeErr && !asrHit {
 				passed++
+				continue
+			}
+			// 判分服务不可用:不返工不重渲,直接升级(熔断窗恢复后用户可「重试」该升级)
+			if judgeErr {
+				escalateShot(ctx, lg, s.ID, jd.Score, "判分调用失败(视觉服务不可用/超时),未重渲: "+jd.Error, acfg)
+				escCount++
 				continue
 			}
 			if asrHit { // ASR 意见并入该镜 QCFlags(升级原因与面板可见)
@@ -1316,6 +1458,9 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	}
 	if escCount > 0 {
 		lg.logf(fmt.Sprintf("⚠️ %d 个镜头升级待拍板(工作台「审片报告」可重试/忽略),成片继续合成", escCount))
+		// 审计 H10:升级通知——此前智能模式的升级推送只在死代码 agentJudgeAndRework 里,
+		// 实际运行从不触发,坏镜升级无人知晓(阶段切换/完成通知已有,唯独升级缺失)
+		manjuNotifySend(fmt.Sprintf("漫剧《%s》%s · 🚨 %d 个镜头升级待拍板(工作台「审片报告」可重试/忽略)", ctx.project, ctx.episode, escCount))
 	} else if autoAccept+autoRegen == 0 {
 		lg.logf(fmt.Sprintf("🎉 审片全部通过:%d 镜(含返工通过)", passed))
 	}
@@ -1356,12 +1501,12 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 				}
 				if !fileExists(filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", nx.ID))) {
 					preWg.Add(1)
-					go func(n manjuShot) {
+					safeGo("rework-preencode", lg, func() {
 						defer preWg.Done()
-						if e := ctx.ensureEncodedAt(n, ctx.shotCacheNameAt(n, ctx.w, ctx.h), ctx.w, ctx.h, lg); e != nil {
+						if e := ctx.ensureEncodedAt(nx, ctx.shotCacheNameAt(nx, ctx.w, ctx.h), ctx.w, ctx.h, lg); e != nil {
 							preErr = e
 						}
-					}(nx)
+					})
 				}
 				break // 只预编码最近下一个待渲镜头
 			}
@@ -1429,7 +1574,30 @@ func agentJudgeRemaining(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 	selected := ctx.selectedShots(shots)
 	// 合成前终检:全目录机械质检兜底(流水线逐镜审过,此处抓漏网:产物被手动替换/ASR 库中途不可用等)
 	// 发现"有产物、有判分记录、但最新记录未含当前质检问题"的镜头 → 重审一次;仍失败直接升级(收尾阶段不再返工)
-	finalBad, _ := ctx.runQCJSON(lg, clipsEp, "")
+	// 性能护栏:全部镜头已判分通过且无 stale 时,产物未被替换(流水线刚审过),跳过全目录解码——
+	// 否则每次续跑 qc 阶段都把整集视频再解一遍(纯浪费)。产物变更/未判分镜头存在时才全目录终检。
+	st := loadAgentState(ctx.project)
+	allPassed := true
+	for _, s := range selected {
+		if !fileExists(filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))) {
+			continue
+		}
+		j := st.Shots[strconv.Itoa(s.ID)]
+		if j == nil || (j.Status != "pass" && j.Status != "fixed" && j.Status != "accepted") {
+			allPassed = false
+			break
+		}
+		if ctx.shotManifestStatus(s) == "stale" {
+			allPassed = false
+			break
+		}
+	}
+	var finalBad map[int][]string
+	if allPassed {
+		lg.logf("  ⏭ 终检跳过:全部镜头已判分通过且产物未变(无替换/变更风险)")
+	} else {
+		finalBad, _ = ctx.runQCJSON(lg, clipsEp, "")
+	}
 	if len(finalBad) > 0 {
 		var needRejudge []manjuShot
 		for _, s := range selected {
@@ -1464,7 +1632,6 @@ func agentJudgeRemaining(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 		}
 	}
 	// 补审:有产物但无判分记录的镜头(流水线被中断后续跑)
-	st := loadAgentState(ctx.project)
 	var missed []manjuShot
 	for _, s := range selected {
 		if !fileExists(filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))) {
@@ -1525,6 +1692,11 @@ func agentSummarizeJudging(ctx *manjuCtx, lg *manjuLogger) error {
 	manjuAgentMu.Lock()
 	defer manjuAgentMu.Unlock()
 	stm := loadAgentStateLocked(ctx.project)
+	// 审计 M3:同一集只汇总一次——续跑/重复 qc 不再把全量返工轮数与问题再累加一遍
+	if stm.Memory.LastSummarizedEp == ctx.episode {
+		return nil
+	}
+	stm.Memory.LastSummarizedEp = ctx.episode
 	total, cnt := 0.0, 0
 	for _, j := range stm.Shots {
 		if j.Score > 0 {
@@ -1904,7 +2076,8 @@ func manjuAgentReworkRun(w http.ResponseWriter, configPath, episode string, shot
 	writeManjuDiskState(projName, &manjuDiskState{Running: true, Stage: "render", StartedAt: time.Now().Unix(), Episode: episode})
 	_ = os.WriteFile(manjuRunLogPath(projName), nil, 0644)
 
-	go func() {
+	// 定点返工后台任务:panic 兜底(审计 S2——此前无 recover,内部任何 panic 直接崩进程)
+	safeGo("rework", nil, func() {
 		rc := 1
 		runFile, _ := os.OpenFile(manjuRunLogPath(projName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		defer func() {
@@ -1978,7 +2151,7 @@ func manjuAgentReworkRun(w http.ResponseWriter, configPath, episode string, shot
 			lg.logf("✅ 镜头 " + strconv.Itoa(shotID) + " 已重渲染(未配置视觉模型,跳过复审)")
 		}
 		rc = 0
-	}()
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -2016,6 +2189,12 @@ func registerAgentRoutes(mux *http.ServeMux) {
 			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 			return
 		}
+		cp, gerr := manjuGuardConfig(configPath)
+		if gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
+			return
+		}
+		configPath = cp
 		res := agentStatusSummary(configPath)
 		if ctx, err := newManjuCtx(configPath, "", "", "", ""); err == nil {
 			acfg := loadAgentCfg(ctx)
@@ -2037,17 +2216,21 @@ func registerAgentRoutes(mux *http.ServeMux) {
 			}
 		} else {
 			// 项目缺失(目录被删/未创建):不整体失败——仍返回全局默认,前端展示"项目缺失,按全局配置"
+			manjuGlobalAgentMu.RLock()
 			res["projectMissing"] = true
 			res["visionBaseUrl"] = manjuGlobalAgent.VisionBaseURL
 			res["agentEnabled"] = manjuGlobalAgent.Enabled
+			manjuGlobalAgentMu.RUnlock()
 		}
 		// 全局默认(settings.json agent 节):前端展示"项目未配置时使用全局默认"(项目缺失时也返回,避免整块视觉区空白)
+		manjuGlobalAgentMu.RLock()
 		res["globalDefaults"] = map[string]any{
 			"enabled": manjuGlobalAgent.Enabled, "visionModel": manjuGlobalAgent.VisionModel,
 			"visionBaseUrl": manjuGlobalAgent.VisionBaseURL,
 			"passScore":     manjuGlobalAgent.PassScore, "maxRetries": manjuGlobalAgent.MaxRetries,
 			"hasVisionKey": manjuGlobalAgent.VisionAPIKey != "",
 		}
+		manjuGlobalAgentMu.RUnlock()
 		writeJSON(w, http.StatusOK, res)
 	})
 
@@ -2145,7 +2328,7 @@ func registerAgentRoutes(mux *http.ServeMux) {
 		}
 		cfg, err := readManjuConfig(configPath)
 		if err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		A, _ := cfg["agent"].(map[string]any)
@@ -2230,7 +2413,7 @@ func registerAgentRoutes(mux *http.ServeMux) {
 		}
 		ctx, err := newManjuCtx(configPath, str(body["episode"]), "", "", "")
 		if err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		wd := filepath.Clean(ctx.workdir)
@@ -2287,7 +2470,7 @@ func registerAgentRoutes(mux *http.ServeMux) {
 		}
 		ctx, err := newManjuCtx(configPath, episode, "", "", "")
 		if err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)
@@ -2362,7 +2545,7 @@ func registerAgentRoutes(mux *http.ServeMux) {
 		}
 		ctx, err := newManjuCtx(configPath, "", "", "", "")
 		if err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		acfg := loadAgentCfg(ctx)

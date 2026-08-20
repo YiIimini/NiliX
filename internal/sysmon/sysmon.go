@@ -43,6 +43,7 @@ type GPU struct {
 	Temp       float64 `json:"temp"`
 	MemUsed    string  `json:"memUsed"`
 	MemTotal   string  `json:"memTotal"`
+	MemPercent float64 `json:"memPercent"` // 显存使用率(0-100)
 	SharedUsed string  `json:"sharedUsed"`
 }
 
@@ -76,12 +77,11 @@ type Comfy struct {
 	Err     string `json:"err"`
 }
 
-// KB 结构注释更新：KB 是 NiliX 内置知识库(kb_work)状态。
-type KB struct {
-	Online     bool   `json:"online"`
-	Pages      int    `json:"pages"`
-	Categories int    `json:"categories"`
-	Err        string `json:"err"`
+// Harness DeepSeek Harness 服务状态。
+type Harness struct {
+	Online  bool   `json:"online"`
+	Version string `json:"version"`
+	Err     string `json:"err"`
 }
 
 // ZCode ZCode 桌面端状态（进程探测）。
@@ -106,12 +106,13 @@ type Snapshot struct {
 	GPU   GPU   `json:"gpu"`
 	Disk  Disk  `json:"disk"`
 	Net   Net   `json:"net"`
-	KB    KB    `json:"kb"`
 	ZCode ZCode `json:"zcode"`
 	Bot   Bot   `json:"bot"`
 	Comfy Comfy `json:"comfy"`
-	Meta  Meta  `json:"meta"`
-	Ts    string `json:"ts"`
+	// Harness DeepSeek Harness 服务状态(灵动岛 HUD 底部监控;探测独立于 api 包避免循环依赖)
+	Harness Harness `json:"harness"`
+	Meta    Meta    `json:"meta"`
+	Ts      string  `json:"ts"`
 }
 
 // Collector 定时采集器（含差值/缓存）。
@@ -121,19 +122,25 @@ type Collector struct {
 	prevNetTx uint64
 	prevDiskR uint64
 	prevDiskW uint64
-	prevTime  time.Time
-	first     bool
+	// 磁盘/网络速率各自的基准时刻(审计 M1:此前共用 prevTime,diskRate 先跑把基准置为
+	// 当前时刻,netRate 的 elapsed≈0 恒返回 0——灵动岛网络速率永远显示 0 KB/s)
+	prevDiskTime time.Time
+	prevNetTime  time.Time
+	firstDisk    bool
+	firstNet     bool
 
 	cpuTemp    float64
 	cpuTempOK  bool
 	cpuTempAt  time.Time
 	gpuCache   GPU
 	gpuAt      time.Time
+	sharedMem  uint64
+	sharedAt   time.Time // 共享显存独立缓存:PowerShell CIM 查询单次约 1.2s,高频调用会拖垮 /api/stats
 	cfyCache   Comfy
 	cfyAt      time.Time
 	cfyFail    int // 连续探测失败计数(粘滞:连续失败才翻转,防状态灯抖动)
-	kbCache    KB
-	kbAt       time.Time
+	hCache     Harness
+	hAt        time.Time
 	zcodeCache ZCode
 	zcodeAt    time.Time
 	botCache   Bot
@@ -145,7 +152,7 @@ type Collector struct {
 
 // NewCollector 构造采集器。
 func NewCollector() *Collector {
-	c := &Collector{first: true, lhm: NewLHM()}
+	c := &Collector{firstDisk: true, firstNet: true, lhm: NewLHM()}
 	_, _ = cpu.Percent(0, false)
 	return c
 }
@@ -189,7 +196,7 @@ func (c *Collector) Snapshot() *Snapshot {
 
 	s.GPU = c.gpuCached(now)
 	s.Comfy = c.comfyCached(now)
-	s.KB = c.kbCached(now)
+	s.Harness = c.harnessCached(now)
 	s.ZCode = c.zcodeCached(now)
 	s.Bot = c.botCached(now)
 
@@ -226,14 +233,26 @@ func (c *Collector) cpuTempCached(now time.Time) (float64, bool) {
 }
 
 func (c *Collector) gpuCached(now time.Time) GPU {
-	if now.Sub(c.gpuAt) < 2*time.Second {
+	// GPU 利用率/温度 5 秒缓存(无需 2s 精度;nvidia-smi 单次约 50ms 可接受)
+	if now.Sub(c.gpuAt) < 5*time.Second {
 		return c.gpuCache
 	}
 	g := GPUInfo()
-	g.SharedUsed = FormatBytes(SharedGPUMem())
+	g.SharedUsed = c.sharedMemCached(now)
 	c.gpuCache = g
 	c.gpuAt = now
 	return c.gpuCache
+}
+
+// sharedMemCached 共享显存 30 秒缓存:PowerShell CIM 查询单次约 1.2s,
+// 若随 GPU 每次刷新执行,前端 2s 轮询 /api/stats 会被它拖到 1.2s+ 响应——系统监测几乎永远转圈。
+func (c *Collector) sharedMemCached(now time.Time) string {
+	if now.Sub(c.sharedAt) < 30*time.Second {
+		return FormatBytes(c.sharedMem)
+	}
+	c.sharedMem = SharedGPUMem()
+	c.sharedAt = now
+	return FormatBytes(c.sharedMem)
 }
 
 // ComfyURL ComfyUI 服务地址。
@@ -280,37 +299,39 @@ func pollComfy() Comfy {
 	return Comfy{Online: true, Version: s.System.ComfyUIVersion}
 }
 
-// KBURL NiliX 内置知识库（kb_work，zhishiku）的 API。
-const KBURL = "http://127.0.0.1:8787/api/meta"
+// ---- DeepSeek Harness ----
 
-func (c *Collector) kbCached(now time.Time) KB {
-	if now.Sub(c.kbAt) < 5*time.Second {
-		return c.kbCache
+// HarnessURL DeepSeek Harness 服务地址(DSH Web,与 api 包 harness.go 一致)。
+const HarnessURL = "http://127.0.0.1:3080"
+
+func (c *Collector) harnessCached(now time.Time) Harness {
+	if now.Sub(c.hAt) < 5*time.Second {
+		return c.hCache
 	}
-	c.kbCache = pollKB()
-	c.kbAt = now
-	return c.kbCache
+	cur := pollHarness()
+	if cur.Online {
+		c.hCache = cur
+	} else if cur.Err != "" && c.hCache.Online {
+		// 一次失败不立即翻转(DSH 启动慢/重载中),保底由下次轮询确认
+		c.hAt = now
+		return c.hCache
+	}
+	c.hCache = cur
+	c.hAt = now
+	return c.hCache
 }
 
-// pollKB 探测 NiliX 内置知识库（kb_work，zhishiku）的 /api/meta。
-func pollKB() KB {
-	client := http.Client{Timeout: 900 * time.Millisecond}
-	resp, err := client.Get(KBURL)
+func pollHarness() Harness {
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(HarnessURL + "/")
 	if err != nil {
-		return KB{Err: "offline"}
+		return Harness{Err: "offline"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return KB{Err: "http " + http.StatusText(resp.StatusCode)}
+		return Harness{Err: "http " + http.StatusText(resp.StatusCode)}
 	}
-	var m struct {
-		PageCount  int               `json:"pageCount"`
-		Categories []json.RawMessage `json:"categories"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&m) != nil {
-		return KB{Err: "parse"}
-	}
-	return KB{Online: true, Pages: m.PageCount, Categories: len(m.Categories)}
+	return Harness{Online: true}
 }
 
 // ---- ZCode / Bot ----
@@ -413,17 +434,17 @@ func (c *Collector) diskRate(name string) (float64, float64) {
 			break
 		}
 	}
-	elapsed := time.Since(c.prevTime).Seconds()
-	if c.first || elapsed <= 0 {
+	elapsed := time.Since(c.prevDiskTime).Seconds()
+	if c.firstDisk || elapsed <= 0 {
 		c.prevDiskR, c.prevDiskW = ic.ReadBytes, ic.WriteBytes
-		c.prevTime = time.Now()
-		c.first = false
+		c.prevDiskTime = time.Now()
+		c.firstDisk = false
 		return 0, 0
 	}
 	rMB := float64(ic.ReadBytes-c.prevDiskR) / elapsed / 1024 / 1024
 	wMB := float64(ic.WriteBytes-c.prevDiskW) / elapsed / 1024 / 1024
 	c.prevDiskR, c.prevDiskW = ic.ReadBytes, ic.WriteBytes
-	c.prevTime = time.Now()
+	c.prevDiskTime = time.Now()
 	if rMB < 0 {
 		rMB = 0
 	}
@@ -447,11 +468,11 @@ func (c *Collector) netRate() (rxRate, txRate float64, rxTotal, txTotal string) 
 		rx += ic.BytesRecv
 		tx += ic.BytesSent
 	}
-	elapsed := time.Since(c.prevTime).Seconds()
-	if c.first || elapsed <= 0 {
+	elapsed := time.Since(c.prevNetTime).Seconds()
+	if c.firstNet || elapsed <= 0 {
 		c.prevNetRx, c.prevNetTx = rx, tx
-		c.prevTime = time.Now()
-		c.first = false
+		c.prevNetTime = time.Now()
+		c.firstNet = false
 		return 0, 0, FormatBytes(rx), FormatBytes(tx)
 	}
 	rate := func(cur, prev uint64) float64 {
@@ -464,6 +485,6 @@ func (c *Collector) netRate() (rxRate, txRate float64, rxTotal, txTotal string) 
 	rxRate = rate(rx, c.prevNetRx)
 	txRate = rate(tx, c.prevNetTx)
 	c.prevNetRx, c.prevNetTx = rx, tx
-	c.prevTime = time.Now()
+	c.prevNetTime = time.Now()
 	return rxRate, txRate, FormatBytes(rx), FormatBytes(tx)
 }

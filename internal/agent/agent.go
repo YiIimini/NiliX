@@ -51,9 +51,14 @@ func (c *Config) Normalize() {
 	}
 }
 
-// VisionReady 审片官是否可用(视觉模型已配置)
+// VisionReady 审片官是否可用(视觉模型已配置且解析后有合法模型名)
 func (c *Config) VisionReady() bool {
-	return strings.TrimSpace(c.VisionModel) != ""
+	for _, m := range strings.Split(c.VisionModel, ",") {
+		if strings.TrimSpace(m) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- 打分维度(对齐 H3 官方能力) ----

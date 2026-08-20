@@ -339,7 +339,8 @@ func manjuUpscaleRun(w http.ResponseWriter, configPath, episode, shots string) {
 	writeManjuDiskState(projName, &manjuDiskState{Running: true, Stage: "upscale", StartedAt: time.Now().Unix(), Episode: episode})
 	_ = os.WriteFile(manjuRunLogPath(projName), nil, 0644)
 
-	go func() {
+	// 云端 2K 后台任务:panic 兜底(审计 S2——网络/JSON 处理 panic 不崩进程)
+	safeGo("upscale2k", nil, func() {
 		rc := 1
 		runFile, _ := os.OpenFile(manjuRunLogPath(projName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		defer func() {
@@ -416,7 +417,7 @@ func manjuUpscaleRun(w http.ResponseWriter, configPath, episode, shots string) {
 		}
 		lg.logf("🎉 云端 2K 定稿全部完成")
 		rc = 0
-	}()
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -431,7 +432,12 @@ func registerUpscaleRoutes(mux *http.ServeMux) {
 			writeErr(w, http.StatusBadRequest, "missing config")
 			return
 		}
-		ctx, err := newManjuCtx(configPath, episode, "", "", "")
+		cp, gerr := manjuGuardConfig(configPath)
+		if gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
+			return
+		}
+		ctx, err := newManjuCtx(cp, episode, "", "", "")
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
@@ -448,11 +454,16 @@ func registerUpscaleRoutes(mux *http.ServeMux) {
 			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 			return
 		}
-		if _, err := readManjuConfig(configPath); err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		cp, gerr := manjuGuardConfig(configPath)
+		if gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
 			return
 		}
-		manjuUpscaleRun(w, configPath, episode, shots)
+		if _, err := readManjuConfig(cp); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		manjuUpscaleRun(w, cp, episode, shots)
 	})
 }
 
@@ -468,9 +479,14 @@ func manjuJianyingExport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
 	}
-	ctx, err := newManjuCtx(configPath, episode, "", "", "")
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	ctx, err := newManjuCtx(cp, episode, "", "", "")
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	clipsEp := filepath.Join(ctx.clipsDir, ctx.episode)

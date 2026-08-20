@@ -91,6 +91,7 @@
       "「采纳」把候选设为正式定妆照（覆盖旧图 → 缓存指纹失效 → 自动重新预编码/渲染）",
       "采纳后右侧栏「产物」的人物缩略图自动刷新",
       "正脸参考 <code>_face.png</code> 从定妆照切「完整头部+肩部」用于 R2V 锁脸",
+      "<b>多视图</b>：每个角色支持 正面/全身/侧面/细节 四个视图 tab，各视图独立抽卡/采纳；渲染时同一角色多视图全部作为 H3 参考图传入，人物更统一",
       "定妆照固定 <b>1024×1024</b> 标准尺寸（与项目画幅/分辨率档位无关）：同一角色在横屏/竖屏/不同档位项目里形象一致；场景图仍按项目画幅生成",
     ] },
     { ic: "🎬", t: "执行管线", ps: [
@@ -310,7 +311,6 @@
        无内容/无中断/无痕迹 → 彻底移除 DOM(静态 HTML 中不存在该元素,杜绝空提示条)
        质检失败时额外给逃生门:跳过失败镜并续跑 / 接受质检结果并合成(坏镜进成片由用户决策) */
     interruptTipHTML(s) {
-      const st = s.currentStage ? ("上次中断于「" + s.currentStage + "」阶段") : "检测到上次运行中断";
       const m = (s.logTail || "").match(/质检未过镜头\s*([\d,]+)/);
       let qcBtns = "";
       if (s.currentStage === "qc" && m) {
@@ -318,27 +318,38 @@
           `<button id="mi-tip-accept" class="hrs-btn" title="接受当前结果,未过镜头将进成片(风险由你决定)">✅ 接受并合成</button>`;
       }
       // 布局:文字一行在上,按钮一行在下居中(用户明确要求)
-      return `<span class="mi-tip-t">⚠️ ${esc(st)} — 可一键续跑(幂等跳过已完成)${m ? ` · 质检未过镜头 ${esc(m[1])}` : ""}</span>` +
+      return `<span class="mi-tip-t">${this.interruptTipText(s)}</span>` +
         `<span class="mi-tip-actions"><button id="mi-tip-resume" class="hrs-btn hrs-btn-primary">▶ 续跑</button>${qcBtns}</span>`;
     },
     bindInterruptTip(div) {
-      const btn = $("mi-tip-resume");
-      if (btn) btn.addEventListener("click", () => { div.remove(); this.runResume(); });
-      const skipBtn = $("mi-tip-skip");
+      // 局部查询(div 内),避免全局 $() 命中被轮询重建的旧按钮
+      const btn = div.querySelector("#mi-tip-resume");
+      if (btn) btn.addEventListener("click", () => this.resumeFromTip(div));
+      const skipBtn = div.querySelector("#mi-tip-skip");
       if (skipBtn) skipBtn.addEventListener("click", () => {
         const m = ((this.status && this.status.logTail) || "").match(/质检未过镜头\s*([\d,]+)/);
         if (!m || !this.project) { div.remove(); this.runResume(); return; }
+        skipBtn.disabled = true; skipBtn.textContent = "处理中…";
         post("/api/manju/qc/decision", { config: this.project, action: "skip", shots: m[1] })
           .then(() => { div.remove(); this.runResume(); })
-          .catch((e) => this.setErr("跳过失败镜失败: " + e.message));
+          .catch((e) => { skipBtn.disabled = false; skipBtn.textContent = "⏭ 跳过失败镜"; this.setErr("跳过失败镜失败: " + e.message); });
       });
-      const accBtn = $("mi-tip-accept");
+      const accBtn = div.querySelector("#mi-tip-accept");
       if (accBtn) accBtn.addEventListener("click", () => {
         if (!this.project) { div.remove(); this.runResume(); return; }
+        accBtn.disabled = true; accBtn.textContent = "处理中…";
         post("/api/manju/qc/decision", { config: this.project, action: "accept" })
           .then(() => { div.remove(); this.runResume(); })
-          .catch((e) => this.setErr("接受质检结果失败: " + e.message));
+          .catch((e) => { accBtn.disabled = false; accBtn.textContent = "✅ 接受并合成"; this.setErr("接受质检结果失败: " + e.message); });
       });
+    },
+
+    /* 续跑统一入口:立即禁用按钮防连点 + 移除横幅,再启动(避免 poll 重建竞态导致点了没反应) */
+    resumeFromTip(div) {
+      const btn = div ? div.querySelector("#mi-tip-resume") : null;
+      if (btn) { btn.disabled = true; btn.textContent = "启动中…"; }
+      if (div) div.remove();
+      this.runResume();
     },
     renderInterruptTip() {
       const s = this.status || {};
@@ -346,18 +357,23 @@
       // 失败痕迹:日志里真有 ❌/失败/手动停止/⏹ 才提示,防止 rc 残留造成「没内容也显示」
       const hasFail = s.logTail && (/❌|失败|已手动停止|⏹/).test(s.logTail);
       const show = interrupted && this.project && s.logTail && hasFail;
-      const tip = $("manju-interrupt-tip");
+      let tip = $("manju-interrupt-tip");
       if (!show) {
         if (tip) tip.remove(); // 平时 DOM 彻底无此元素
         return;
       }
-      const html = this.interruptTipHTML(s);
-      if (tip) { // 已存在:仅更新内容
-        tip.innerHTML = html;
-        this.bindInterruptTip(tip);
+      if (tip) {
+        // 已存在:仅更新文本区,不动按钮 DOM(保持已绑定的事件,避免轮询重建导致点击丢失)
+        const t = tip.querySelector(".mi-tip-t");
+        if (t) t.textContent = this.interruptTipText(s);
+        const qcOn = s.currentStage === "qc" && (s.logTail || "").match(/质检未过镜头\s*([\d,]+)/);
+        const skipBtn = tip.querySelector(".mi-tip-skip");
+        const accBtn = tip.querySelector(".mi-tip-accept");
+        if (skipBtn) skipBtn.style.display = qcOn ? "" : "none";
+        if (accBtn) accBtn.style.display = qcOn ? "" : "none";
         return;
       }
-      // 动态创建:插到运行状态区 badge 行(第一个 .manju-row)之后
+      const html = this.interruptTipHTML(s);
       const wrap = $("manju-side-body");
       if (!wrap) return;
       const div = document.createElement("div");
@@ -367,6 +383,13 @@
       const firstRow = wrap.querySelector(".manju-row");
       wrap.insertBefore(div, firstRow ? firstRow.nextSibling : wrap.firstChild);
       this.bindInterruptTip(div);
+    },
+
+    /* 横幅文字(不含按钮),供 poll 更新文本时复用 */
+    interruptTipText(s) {
+      const st = s.currentStage ? ("上次中断于「" + s.currentStage + "」阶段") : "检测到上次运行中断";
+      const m = (s.logTail || "").match(/质检未过镜头\s*([\d,]+)/);
+      return `⚠️ ${st} — 可一键续跑(幂等跳过已完成)${m ? ` · 质检未过镜头 ${m[1]}` : ""}`;
     },
 
 
@@ -496,8 +519,20 @@
         $(id).addEventListener("change", () => this.saveDraft());
       });
       $("manju-mosaic-enabled").addEventListener("change", () => this.saveDraft());
-      $("manju-sage").addEventListener("change", () => this.saveDraft());
-      $("manju-draft-judge").addEventListener("change", () => this.saveDraft());
+      $("manju-sage").addEventListener("change", () => { this.syncBoostButtons(); this.saveDraft(); });
+      $("manju-draft-judge").addEventListener("change", () => { this.syncBoostButtons(); this.saveDraft(); });
+      $("manju-fl2va").addEventListener("change", () => { this.syncBoostButtons(); this.saveDraft(); });
+      // 增强胶囊(SageAttn/草稿预审/FL2VA):点击切换隐藏 checkbox 数据源 + 胶囊 on 态
+      const boostMap = { sage: "manju-sage", draft: "manju-draft-judge", fl2va: "manju-fl2va" };
+      document.querySelectorAll("#manju-boost [data-boost]").forEach((b) =>
+        b.addEventListener("click", () => {
+          const cb = $(boostMap[b.dataset.boost]);
+          if (!cb) return;
+          cb.checked = !cb.checked;
+          this.syncBoostButtons();
+          this.saveDraft();
+        })
+      );
 
       // 高级模型折叠
       $("manju-adv-toggle").addEventListener("click", () => {
@@ -907,7 +942,11 @@
                 <button id="manju-apikey-save" class="hrs-btn">存为默认</button>
               </div>
               <div class="manju-set-status" id="manju-llm-svc-hint"></div>
-              <div id="manju-apikey-status" class="manju-set-status">${keyStatus}</div>`;
+              <div id="manju-apikey-status" class="manju-set-status">${keyStatus}</div>
+              <div class="manju-field-row">
+                <button id="manju-llm-test" class="hrs-btn">🔌 测试连接</button>
+                <span id="manju-llm-test-result" class="manju-set-status"></span>
+              </div>`;
               })()}
 
               <div class="manju-set-sub">👁 视觉模型 · 审片官（未配置时仅机械质检，不判分不返工）</div>
@@ -1109,6 +1148,8 @@
       $("manju-apikey-save").addEventListener("click", () => this.saveApiKey(false));
       $("manju-apikey-apply").addEventListener("click", () => this.saveApiKey(true));
       $("manju-llm-svc").addEventListener("change", () => this.syncLLMForm());
+      // 审计升级:设置页「测试连接」——调 /api/settings/test 测全局默认 LLM + ComfyUI 连通性
+      $("manju-llm-test").addEventListener("click", () => this.testLLM());
       $("manju-ag-save").addEventListener("click", () => this.saveAgentCfg());
       $("manju-ag-test").addEventListener("click", () => this.testVision());
       $("manju-ag-global").addEventListener("click", () => this.saveAgentCfgGlobal());
@@ -1186,8 +1227,19 @@
       }).catch((e) => { st.textContent = "❌ " + e.message; })
         .finally(() => { btns.forEach((b) => { b.disabled = false; }); });
     },
-    /* 视觉模型表单联动:预设自动带地址并提示 Key 去处,自定义时展开两行 */
-    syncVisionForm() {
+    /* 审计升级:设置页「测试连接」——/api/settings/test 测全局默认 LLM 与 ComfyUI 连通 */
+    testLLM() {
+      const res = $("manju-llm-test-result");
+      res.textContent = "测试中…";
+      post("/api/settings/test").then((r) => {
+        const parts = [];
+        if (r.llm) parts.push(r.llm.ok ? "✅ LLM " + (r.llm.message || "连通") : "❌ LLM " + (r.llm.message || "失败"));
+        if (r.comfyui) parts.push(r.comfyui.ok ? "✅ ComfyUI " + (r.comfyui.message || "在线") : "❌ ComfyUI " + (r.comfyui.message || "离线"));
+        res.textContent = parts.join(" · ") || "测试完成";
+        res.style.color = parts.some((p) => p.indexOf("❌") >= 0) ? "#f85149" : "#3fb950";
+      }).catch((e) => { res.textContent = "❌ " + e.message; res.style.color = "#f85149"; });
+    },
+    /* 视觉模型表单联动:预设自动带地址并提示 Key 去处,自定义时展开两行 */    syncVisionForm() {
       const sel = $("manju-ag-model");
       if (!sel) return;
       const custom = sel.value === "__custom__";
@@ -1366,6 +1418,7 @@
         R.seed !== undefined && R.seed !== null && R.seed !== "" && "seed：" + R.seed + (R.seed_policy && R.seed_policy !== "fixed" ? "(" + (R.seed_policy === "increment" ? "重试递增" : "重试随机") + ")" : ""),
         R.sage_attention && "⚡SageAttn",
         R.draft_judge && "📐草稿预审",
+        R.fl2va_end_frame && "🖼️FL2VA",
         R.transition && R.transition !== "cut" && "转场:" + ({ fade: "闪黑", dissolve: "叠化" }[R.transition] || R.transition),
         R.bgm && "🎵BGM",
         R.shots_per_take && R.shots_per_take > 1 && "🎥长镜×" + R.shots_per_take,
@@ -1394,6 +1447,7 @@
       d.mosaicEnabled = $("manju-mosaic-enabled").checked;
       d.sageEnabled = $("manju-sage").checked;
       d.draftJudge = $("manju-draft-judge").checked;
+      d.fl2vaEndFrame = $("manju-fl2va").checked;
       try { localStorage.setItem("manju-" + this.draftKey(), JSON.stringify(d)); } catch (e) {}
     },
     loadDraft() {
@@ -1401,6 +1455,15 @@
         const s = localStorage.getItem("manju-" + this.draftKey());
         return s ? JSON.parse(s) : null;
       } catch (e) { return null; }
+    },
+    /* 增强胶囊同步:checkbox 状态 → 胶囊 on 态(风格同款分段控件可视化) */
+    syncBoostButtons() {
+      const map = [["sage", "manju-sage"], ["draft", "manju-draft-judge"], ["fl2va", "manju-fl2va"]];
+      document.querySelectorAll("#manju-boost [data-boost]").forEach((b) => {
+        const id = { sage: "manju-sage", draft: "manju-draft-judge", fl2va: "manju-fl2va" }[b.dataset.boost];
+        const cb = $(id);
+        b.classList.toggle("on", !!(cb && cb.checked));
+      });
     },
     clearDraft() {
       try { localStorage.removeItem("manju-" + this.draftKey()); } catch (e) {}
@@ -1411,8 +1474,10 @@
       $("manju-mosaic-enabled").checked = false;
       $("manju-sage").checked = false;
       $("manju-draft-judge").checked = false;
+      $("manju-fl2va").checked = false;
       $("manju-seed-policy").value = "fixed";
       $("manju-transition").value = "cut";
+      this.syncBoostButtons();
     },
 
     fillForm() {
@@ -1462,6 +1527,7 @@
       set("manju-seed-policy", R.seed_policy || "fixed");
       $("manju-sage").checked = !!R.sage_attention;
       $("manju-draft-judge").checked = !!R.draft_judge;
+      $("manju-fl2va").checked = !!R.fl2va_end_frame;
       num("manju-draft-scale", R.draft_scale != null && R.draft_scale !== "" ? R.draft_scale : 0.5);
       set("manju-transition", R.transition || "cut");
       set("manju-bgm", R.bgm || "");
@@ -1474,9 +1540,11 @@
         if (draft.mosaicEnabled !== undefined) $("manju-mosaic-enabled").checked = !!draft.mosaicEnabled;
         if (draft.sageEnabled !== undefined) $("manju-sage").checked = !!draft.sageEnabled;
         if (draft.draftJudge !== undefined) $("manju-draft-judge").checked = !!draft.draftJudge;
+        if (draft.fl2vaEndFrame !== undefined) $("manju-fl2va").checked = !!draft.fl2vaEndFrame;
       }
       this.renderStyle();
       this.renderRatio();
+      this.syncBoostButtons();
     },
 
     /* 预设按钮渲染:从 STYLE_PRESETS 单一数据源生成(保留下方的「?」帮助按钮) */
@@ -1608,7 +1676,10 @@
         if (r.error) el.innerHTML = `<span class="manju-err-text">${esc(r.error)}</span>`;
         else if (r.count) {
           const overridden = this.novel && this.info && this.info.paths && this.novel !== this.info.paths.novel;
-          el.textContent = "共 " + r.count + " 章（第 " + r.first + "–" + r.last + " 章）· " + (r.chars / 10000).toFixed(2) + " 万字" + (overridden ? " · 已覆盖默认配置" : "");
+          // 默认(章节/集数=0)会每章一集全渲染:明确告知任务规模,防误触超长任务
+          const epHint = (!this.chapters || this.chapters === "0") && (!this.episode || this.episode === "0")
+            ? " · 默认将渲染 " + r.count + " 集（每章一集）" : "";
+          el.textContent = "共 " + r.count + " 章（第 " + r.first + "–" + r.last + " 章）· " + (r.chars / 10000).toFixed(2) + " 万字" + epHint + (overridden ? " · 已覆盖默认配置" : "");
         } else el.textContent = "";
       }).catch(() => { this.novelInfo = null; });
     },
@@ -1634,6 +1705,7 @@
       body.seed_policy = this.strVal("manju-seed-policy") || "fixed";
       body.sage_attention = $("manju-sage").checked;
       body.draft_judge = $("manju-draft-judge").checked;
+      body.fl2va_end_frame = $("manju-fl2va").checked;
       const ds = parseFloat($("manju-draft-scale").value);
       if (!isNaN(ds)) body.draft_scale = ds;
       body.transition = this.strVal("manju-transition") || "cut";
@@ -1674,6 +1746,7 @@
       set("manju-seed-policy", R.seed_policy || "fixed");
       $("manju-sage").checked = !!R.sage_attention;
       $("manju-draft-judge").checked = !!R.draft_judge;
+      $("manju-fl2va").checked = !!R.fl2va_end_frame;
       set("manju-draft-scale", R.draft_scale != null && R.draft_scale !== "" ? R.draft_scale : 0.5);
       set("manju-transition", R.transition || "cut");
       set("manju-bgm", R.bgm || "");
@@ -1681,6 +1754,7 @@
       set("manju-take", R.shots_per_take != null && R.shots_per_take !== "" ? R.shots_per_take : 1);
       this.renderStyle();
       this.renderRatio();
+      this.syncBoostButtons();
     },
 
     /* 配置管理弹窗:导出 / 导入 / 恢复默认 */
@@ -1805,6 +1879,7 @@
     runStage(phase) {
       if (this.denyNoProject()) return;
       if (this.denyIfRunning()) return;
+      this._agentRun = false; // 单阶段执行不是 AI 一条龙
       this.setErr("");
       this.logNote("(启动 " + phase + " ...)");
       post("/api/manju/run", {
@@ -1817,6 +1892,7 @@
     runResume() {
       if (this.denyNoProject()) return;
       if (this.denyIfRunning()) return;
+      this._agentRun = false; // 续跑按普通一条龙
       this.setErr("");
       const last = this.status && this.status.currentStage ? this.status.currentStage : "";
       const hint = last ? "，上次中断于「" + last + "」阶段" : "";
@@ -1874,8 +1950,11 @@
     runAgentFlow() {
       if (this.denyNoProject()) return;
       if (this.denyIfRunning()) return;
+      this._agentRun = true; // 标记本次为 AI 一条龙(按钮动态文字仅此模式显示)
       this.setErr("");
-      this.logNote("(🤖 AI 一条龙启动: 剧本复核 → 渲染 → 审片官判分 → 未达标自动返工 ...)");
+      const draft = !!$("manju-draft-judge") && $("manju-draft-judge").checked;
+      this.logNote("(🤖 AI 一条龙启动: 剧本复核 → 渲染 → 审片官判分 → 未达标自动返工 → 终审拍板"
+        + (draft ? "，草稿预审: 审片轮缩放草稿 → 落定后全分辨率定稿" : "") + " ...)");
       post("/api/manju/run", {
         config: this.project, chapters: this.chapters, episode: this.episode,
         phase: "all", only: this.only, novel: this.novel, agent: true,
@@ -2175,6 +2254,8 @@
     /* ---- 状态轮询 ---- */
     poll() {
       if (!document.getElementById("view-manju").classList.contains("is-active")) return;
+      // 系统监测 + ComfyUI 状态灯不依赖项目选择:无项目也必须刷新(否则"检测中…"永不更新)
+      this.pollSysmon();
       if (!this.project) {
         // 无项目:显示空闲,不请求后端旧状态(避免 run.state.json 残留的旧项目状态污染)
         this.status = { running: false, stage: "", currentStage: "", stageIdx: -1, shotCur: 0, shotTotal: 0, progress: 0, done: false, rc: null, stopped: false, elapsedSec: 0, logTail: "" };
@@ -2189,9 +2270,9 @@
         this.agent = s.agent || null;
         this.renderStatus();
         if (!s.running && s.done) this.refreshOutputs();
+        else if (s.running) this.refreshOutputs(); // 运行中也刷新产物(镜头/定稿实时出现),完成后 badge 即时显示成片
         this.reportMascot(s);
       }).catch(() => {});
-      this.pollSysmon();
     },
 
     /* 本机系统状态(CPU/内存/GPU 占用+温度):每轮轮询顺带刷新(2s),不单独起计时器 */
@@ -2208,14 +2289,27 @@
           const em = wrap.querySelector(`[data-k="${k}"] em`);
           if (em) { em.textContent = v; em.className = cls || ""; }
         };
+        /* 底部进度条:负载百分比 → 填充宽度 + 负载色(GPU 无数据保持空) */
+        const setBar = (k, v, present) => {
+          const fill = wrap.querySelector(`[data-k="${k}"] .ms-fill`);
+          if (!fill) return;
+          if (!present || typeof v !== "number") { fill.style.width = "0%"; fill.className = "ms-fill"; return; }
+          fill.style.width = Math.max(0, Math.min(100, v)) + "%";
+          fill.className = "ms-fill " + (v >= 90 ? "crit" : v >= 70 ? "hot" : "");
+        };
         const pct = (v) => (typeof v === "number" ? Math.round(v) + "%" : "--");
-        const temp = (v, has) => (has && typeof v === "number" ? Math.round(v) + "℃" : "--");
+        const temp = (v, has) => (has && typeof v === "number" ? Math.round(v) + "℃" : "N/A");
         set("cpu", pct(c.usage), c.usage >= 90 ? "crit" : c.usage >= 70 ? "hot" : "");
         setT("cpu", temp(c.temp, c.hasTemp), c.temp >= 85 ? "crit" : c.temp >= 70 ? "hot" : "");
+        setBar("cpu", c.usage, true);
         set("mem", pct(m.percent), m.percent >= 90 ? "crit" : m.percent >= 75 ? "hot" : "");
-        setT("mem", m.temp ? temp(m.temp, m.hasTemp) : "--");
-        set("gpu", g.present ? pct(g.usage) : "N/A", g.present ? (g.usage >= 95 ? "hot" : "") : "");
-        setT("gpu", g.present ? temp(g.temp, g.temp > 0) : "--", g.temp >= 85 ? "crit" : g.temp >= 70 ? "hot" : "");
+        setT("mem", m.temp ? temp(m.temp, m.hasTemp) : "N/A");
+        setBar("mem", m.percent, true);
+        // GPU:优先显示显存使用率(H3 渲染显存常满、算力利用率波动无参考性);无显卡显示 N/A
+        const gpuPct = g.present ? (g.memPercent != null && g.memPercent > 0 ? g.memPercent : g.usage) : null;
+        set("gpu", gpuPct != null ? Math.round(gpuPct) + "%" : "N/A", gpuPct != null ? (gpuPct >= 90 ? "crit" : gpuPct >= 70 ? "hot" : "") : "");
+        setT("gpu", g.present ? temp(g.temp, g.temp > 0) : "N/A", g.temp >= 85 ? "crit" : g.temp >= 70 ? "hot" : "");
+        setBar("gpu", gpuPct != null ? gpuPct : 0, g.present);
         // ComfyUI 服务状态灯(视频管理页顶部:ComfyUI · 运行中/已停止)
         const cfy = r.comfy || {};
         const cDot = document.querySelector("#manju-cfy-status .hrs-dot");
@@ -2247,8 +2341,14 @@
         const stageName = this.stageCN(s.stage || s.currentStage || "");
         dot.className = "hrs-dot on";
         txt.textContent = "运行中 · " + stageName;
+        // AI 一条龙运行中:badge 附审片进度(已判/总数,实时可感知智能体闭环)
+        let agentNote = "";
+        if (this.agent && (this.agent.shots || []).length) {
+          const judged = this.agent.shots.filter((x) => x.status !== "pending").length;
+          agentNote = ` · 审片 ${judged}/${this.agent.shots.length}`;
+        }
         badge.className = "manju-badge manju-badge-run";
-        badge.innerHTML = '<span class="manju-spinner"></span><span>' + stageName + " 运行中 " + fmtTime(s.elapsedSec) + "</span>";
+        badge.innerHTML = '<span class="manju-spinner"></span><span>' + stageName + " 运行中 " + fmtTime(s.elapsedSec) + agentNote + "</span>";
         stopBtn.disabled = false;
       } else {
         dot.className = "hrs-dot off";
@@ -2258,8 +2358,18 @@
           badge.className = "manju-badge manju-badge-stop";
           badge.textContent = "⏹ 已手动停止 · 总耗时 " + fmtTime(s.elapsedSec);
         } else if (s.rc !== null && s.rc !== undefined) {
-          if (s.rc === 0) { badge.className = "manju-badge manju-badge-ok"; badge.textContent = "✅ 上次任务成功 · 总耗时 " + fmtTime(s.elapsedSec); }
-          else { badge.className = "manju-badge manju-badge-err"; badge.textContent = "❌ 上次任务 rc=" + s.rc + " · 总耗时 " + fmtTime(s.elapsedSec); }
+          if (s.rc === 0) {
+            // 成片就绪:badge 附「查看成片」直达入口(从产物区取本集成片路径)
+            const finalP = this.finalVideoPath();
+            if (finalP) {
+              badge.className = "manju-badge manju-badge-ok manju-badge-done";
+              badge.innerHTML = '✅ 成片已生成 · ' + fmtTime(s.elapsedSec) +
+                ' <button id="manju-badge-final" class="manju-badge-btn" title="播放成片">▶ 查看成片</button>';
+            } else {
+              badge.className = "manju-badge manju-badge-ok";
+              badge.textContent = "✅ 上次任务成功 · 总耗时 " + fmtTime(s.elapsedSec);
+            }
+          } else { badge.className = "manju-badge manju-badge-err"; badge.textContent = "❌ 上次任务 rc=" + s.rc + " · 总耗时 " + fmtTime(s.elapsedSec); }
         } else {
           badge.className = "manju-badge manju-badge-idle";
           badge.textContent = "空闲";
@@ -2271,7 +2381,60 @@
       this.renderInterruptTip();
       this.renderProgress();
       this.renderFlow();
+      this.renderStageButtons();
       this.renderAgent();
+      // badge「查看成片」直达播放
+      const fb = $("manju-badge-final");
+      if (fb) fb.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const p = this.finalVideoPath();
+        if (p) this.previewVideo(p, "成片");
+      });
+    },
+
+    /* 当前集/最近集的成片路径(产物区已加载时),无则空串 */
+    finalVideoPath() {
+      if (!this.outputs || !this.outputs.episodes || !this.outputs.episodes.length) return "";
+      const eps = this.outputs.episodes;
+      const cur = this.episode || "";
+      let hit = eps.find((e) => e.episode === cur) || eps[eps.length - 1];
+      if (hit && hit.final) return hit.final.path;
+      // 单集时可能 final 在顶层(兼容旧结构)
+      if (this.outputs.final) return this.outputs.final.path;
+      return "";
+    },
+
+    /* 阶段按钮运行态:当前阶段高亮 + 已完成阶段打 ✓(与流程图同步,直观点选入口) */
+    renderStageButtons() {
+      const s = this.status || {};
+      const cur = s.currentStage || "";
+      const running = !!s.running;
+      const done = s.done && s.rc !== null && s.rc !== undefined && s.rc !== 0;
+      const STAGE_ORDER = ["env", "plan", "assets", "encode", "render", "qc", "assemble"];
+      let curIdx = STAGE_ORDER.indexOf(cur);
+      document.querySelectorAll("#view-manju [data-phase]").forEach((b) => {
+        const ph = b.dataset.phase;
+        b.classList.remove("mj-ph-run", "mj-ph-done", "mj-ph-fail");
+        if (ph === "all") return; // 一条龙按钮不加阶段态
+        const idx = STAGE_ORDER.indexOf(ph);
+        if (idx < 0) return;
+        if (curIdx >= 0 && idx === curIdx) {
+          if (running) b.classList.add("mj-ph-run");
+          else if (done) b.classList.add("mj-ph-fail");
+          else b.classList.add("mj-ph-done");
+        } else if (curIdx >= 0 && idx < curIdx) {
+          b.classList.add("mj-ph-done");
+        }
+      });
+      const agentBtn = $("manju-agent-run");
+      // 仅 AI 一条龙(agent 模式)运行时按钮显示动态文字;普通一条龙/单阶段/续跑保持原名
+      if (agentBtn && running && this._agentRun) {
+        const st = s.currentStage || s.stage || "";
+        agentBtn.textContent = st === "qc" ? "🤖 AI 一条龙 · 审片中…" :
+          (st === "render" ? "🤖 AI 一条龙 · 渲染中…" : "🤖 AI 一条龙 · 运行中…");
+      } else if (agentBtn && agentBtn.textContent !== "🤖 AI 一条龙") {
+        agentBtn.textContent = "🤖 AI 一条龙";
+      }
     },
 
     /* 实时进度条:运行中显示阶段+镜头进度,结束后收成 100% 或隐藏 */
@@ -2354,12 +2517,21 @@
       get("/api/manju/plan?config=" + encodeURIComponent(this.project) + "&episode=" + encodeURIComponent(this.episode)).then((r) => {
         if (reqProject !== this.project || reqEp !== this.episode) return;
         this.plan = r;
-        // 合并磁盘抽卡历史(后端扫 _gacha 候选,跨会话保留);本会话已抽的不覆盖
+        // 合并磁盘抽卡历史(后端按视图分组扫描 _gacha 候选,跨会话保留);本会话已抽的不覆盖
         (r.characters || []).forEach((c) => {
-          if (!this.gacha[c.id]) {
-            const list = (c.gacha || []).map((g) => ({ image: g.image, seed: g.seed }));
-            this.gacha[c.id] = { list, sel: list.length ? 0 : -1 };
+          if (!this.gacha[c.id]) this.gacha[c.id] = { views: {}, cur: "" };
+          (c.views || []).forEach((v) => {
+            const key = v.view || "";
+            if (this.gacha[c.id].views[key]) return;
+            const list = (v.gacha || []).map((g) => ({ image: g.image, seed: g.seed }));
+            this.gacha[c.id].views[key] = { list, sel: list.length ? 0 : -1, ready: !!v.ready };
+          });
+          // 旧结构迁移:单视图历史并入主视图(front)
+          if (!this.gacha[c.id].views[""] && c.gacha && c.gacha.length) {
+            const list = c.gacha.map((g) => ({ image: g.image, seed: g.seed }));
+            this.gacha[c.id].views[""] = { list, sel: list.length ? 0 : -1, ready: !!this.officialChar(c.id) };
           }
+          if (!this.gacha[c.id].views[""]) this.gacha[c.id].views[""] = { list: [], sel: -1, ready: !!this.officialChar(c.id) };
         });
         if (cb) cb(); else this.renderGacha();
       }).catch(() => {});
@@ -2377,7 +2549,8 @@
     renderGacha() {
       const el = $("manju-gacha");
       if (!el) return;
-      const adopted = (this.outputs && this.outputs.characters) || [];
+      const adopted = ((this.outputs && this.outputs.characters) || [])
+        .filter((c) => !/(_face|_full|_side|_detail)\./i.test(c.name || ""));
       const fileUrl = (p) => "/api/fs/file?path=" + encodeURIComponent(p);
       let html = "";
       if (!adopted.length) {
@@ -2429,9 +2602,38 @@
       return m ? m.path : "";
     },
 
+    /* 指定视图的正式图路径:主视图=定妆照;full/side/detail=对应视图文件
+       (outputs.characters 含全部视图 png,按文件名 <id>_<view>.png 匹配) */
+    charViewOfficial(id, view) {
+      if (!view) return this.officialChar(id);
+      const m = ((this.outputs && this.outputs.characters) || [])
+        .find((c) => (c.name || "").replace(/\.[^.]+$/, "") === id + "_" + view);
+      return m ? m.path : "";
+    },
+
+    /* 主视图(front)定妆照是否就绪(有正式主图文件) */
+    charMainReady(id) {
+      const g = this.gacha[id];
+      if (g && g.views && g.views[""]) {
+        if (g.views[""].ready) return true;
+        // 兜底:outputs 里已有正式主图但 plan 未同步(如 assets 刚生成)
+        return !!this.officialChar(id);
+      }
+      return !!this.officialChar(id);
+    },
+
+    /* 指定视图正式文件是否就绪(主视图=定妆照;其余=对应视图文件) */
+    charViewReady(id, view) {
+      if (!view) return this.charMainReady(id);
+      const g = this.gacha[id];
+      if (g && g.views && g.views[view] && g.views[view].ready) return true;
+      return !!this.charViewOfficial(id, view);
+    },
+
     renderGachaModal() {
       const p = this.plan || {};
       const fileUrl = (p2) => "/api/fs/file?path=" + encodeURIComponent(p2);
+      const VIEWS = [["", "正面", "🎭"], ["full", "全身", "🧍"], ["side", "侧面", "↔️"], ["detail", "细节", "🔍"]];
       let html = "";
       if (!p.exists) {
         html = `<div class="manju-empty">
@@ -2441,40 +2643,57 @@
         </div>`;
       } else {
         const chars = p.characters || [];
-        const pending = chars.filter((c) => !this.officialChar(c.id)); // 还没有正式定妆照的角色
+        const pending = chars.filter((c) => !this.charMainReady(c.id)); // 还没有主视图定妆照的角色
         const cntSaved = ls("gachaCount") || "4";
         html = chars.length
           ? `<div class="manju-gacha-toolbar">
               <span class="manju-meta">每次</span>
               <select id="mg-count">${[1, 2, 4, 6].map((n) => `<option value="${n}"${String(n) === cntSaved ? " selected" : ""}>${n} 张</option>`).join("")}</select>
               <button id="mg-draw-all" class="hrs-btn"${pending.length ? "" : " disabled"}>🎲 全员抽卡${pending.length ? `（${pending.length} 位未定妆）` : ""}</button>
-              <span class="manju-meta" style="margin-left:auto">候选累积保留 · 点缩略图切换 · 采纳当前选中</span>
+              <span class="manju-meta" style="margin-left:auto">多视图独立抽卡 · 采纳当前选中</span>
             </div>
           <div class="manju-gacha-grid">` + chars.map((c) => {
-              const g = this.gacha[c.id] || (this.gacha[c.id] = { list: [], sel: -1 });
-              const cur = g.sel >= 0 && g.list[g.sel] ? g.list[g.sel] : null;
-              const official = this.officialChar(c.id);
-              const img = (cur && cur.image) || official;
-              const preview = img ? `<img class="manju-char-img" src="${fileUrl(img)}" alt="${esc(c.id)}" data-img="${esc(img)}" data-name="${esc(c.id)}" title="点击预览大图">` : '<div class="manju-gacha-ph">未抽卡</div>';
-              const strip = g.list.length
-                ? `<div class="manju-cand-strip">` + g.list.map((it, i) =>
-                    `<button class="manju-cand${i === g.sel ? " sel" : ""}" data-cand="${esc(c.id)}" data-idx="${i}" title="seed ${it.seed}"><img src="${fileUrl(it.image)}" loading="lazy" alt=""></button>`).join("") + `</div>`
+              const g = this.gacha[c.id] || (this.gacha[c.id] = { views: {}, cur: "" });
+              const curView = g.cur || "";
+              // 视图 tab
+              const tabs = VIEWS.map(([v, label, icon]) => {
+                const vg = g.views[v] || (g.views[v] = { list: [], sel: -1, ready: false });
+                const tag = vg.ready || this.charViewOfficial(c.id, v) ? "✓" : "";
+                return `<button class="manju-view-tab${v === curView ? " sel" : ""}" data-viewtab="${esc(c.id)}" data-view="${esc(v)}" title="${esc(label)}">${icon}${esc(label)}${tag ? `<i class="manju-view-ok">${tag}</i>` : ""}</button>`;
+              }).join("");
+              const vg = g.views[curView] || (g.views[curView] = { list: [], sel: -1, ready: false });
+              const cur = vg.sel >= 0 && vg.list[vg.sel] ? vg.list[vg.sel] : null;
+              // 当前视图已采纳的正式图(主视图=定妆照;full/side/detail=对应视图文件)
+              const official = this.charViewOfficial(c.id, curView);
+              const img = (cur && cur.image) || official || "";
+              // 预览区状态角标:已定 ✓ / 未抽卡提示(悬浮在图片上方)
+              const badge = img
+                ? (vg.ready || official ? `<span class="manju-char-badge ok">✓ 已定</span>` : `<span class="manju-char-badge">候选</span>`)
+                : (vg.ready ? `<span class="manju-char-badge ok">✓ 已定</span>` : "");
+              const preview = img
+                ? `<img class="manju-char-img" src="${fileUrl(img)}" alt="${esc(c.id)}" data-img="${esc(img)}" data-name="${esc(c.id)}" title="点击预览大图" onerror="this.classList.add('img-err');this.insertAdjacentHTML('afterend','<div class=&quot;img-err-ph&quot;>🖼 图片加载失败</div>');">${badge}`
+                : `<div class="manju-gacha-ph">${vg.ready ? "✓ 已定" : "未抽卡"}</div>${badge}`;
+              const strip = vg.list.length
+                ? `<div class="manju-cand-strip">` + vg.list.map((it, i) =>
+                    `<button class="manju-cand${i === vg.sel ? " sel" : ""}" data-cand="${esc(c.id)}" data-view="${esc(curView)}" data-idx="${i}" title="seed ${it.seed}"><img src="${fileUrl(it.image)}" loading="lazy" alt=""></button>`).join("") + `</div>`
                 : "";
+              const readyTag = vg.ready ? `<span class="manju-gacha-oktag">✓</span>` : "";
               return `<div class="manju-char">
                 <div class="manju-char-head">
-                  <span class="manju-char-name">${esc(c.id)}</span>
-                  <span class="manju-char-tag">${official ? "✅ " : ""}${esc(c.gender || "")}${c.age ? "·" + esc(c.age) : ""}</span>
+                  <span class="manju-char-name" title="${esc(c.id)}">${esc(c.id)}</span>
+                  <span class="manju-char-tag">${readyTag}${esc(c.gender || "")}${c.age ? "·" + esc(c.age) : ""}</span>
                 </div>
+                <div class="manju-view-tabs">${tabs}</div>
                 <div class="manju-char-preview">${preview}</div>
                 ${strip}
                 <div class="manju-char-actions">
-                  <button class="hrs-btn" data-gacha="${esc(c.id)}">🎲 抽卡</button>
-                  <button class="hrs-btn" data-upload="${esc(c.id)}" title="上传本地角色图并采纳为正式定妆照">📤 上传</button>
-                  <button class="hrs-btn hrs-btn-primary" data-adopt="${esc(c.id)}" ${cur ? "" : "disabled"}>采纳</button>
+                  <button class="hrs-btn" data-gacha="${esc(c.id)}" data-view="${esc(curView)}">🎲 抽卡</button>
+                  <button class="hrs-btn" data-upload="${esc(c.id)}" data-view="${esc(curView)}" title="上传本地角色图并采纳为正式定妆照">📤 上传</button>
+                  <button class="hrs-btn hrs-btn-primary" data-adopt="${esc(c.id)}" data-view="${esc(curView)}" ${cur ? "" : "disabled"}>采纳</button>
                 </div>
               </div>`;
             }).join("") + `</div>
-          <div class="manju-meta" style="margin-top:8px">📤 上传：选择本地图片，保存为正式定妆照并自动生成正脸参考，后续渲染以此为准。</div>
+          <div class="manju-meta" style="margin-top:8px">📤 上传：选择本地图片，保存为正式定妆照并自动生成正脸参考，后续渲染以此为准。多视图（正面/全身/侧面/细节）让 H3 参考更完整，人物更统一。</div>
           <input id="manju-upload-file" type="file" accept="image/png,image/jpeg,image/webp" style="display:none">`
           : '<div class="manju-empty">方案中无角色</div>';
       }
@@ -2486,23 +2705,34 @@
       const da = $("mg-draw-all");
       if (da) da.addEventListener("click", () => this.drawAllGacha());
       document.querySelectorAll("#manju-modal [data-gacha]").forEach((b) =>
-        b.addEventListener("click", () => this.drawGacha(b.dataset.gacha, b))
+        b.addEventListener("click", () => this.drawGacha(b.dataset.gacha, b, b.dataset.view || ""))
       );
       document.querySelectorAll("#manju-modal [data-upload]").forEach((b) =>
-        b.addEventListener("click", () => this.uploadCharPick(b.dataset.upload))
+        b.addEventListener("click", () => this.uploadCharPick(b.dataset.upload, b.dataset.view || ""))
       );
       const upFile = $("manju-upload-file");
       if (upFile) upFile.addEventListener("change", (e) => this.uploadCharFile(e.target.files[0]));
       document.querySelectorAll("#manju-modal [data-adopt]").forEach((b) =>
-        b.addEventListener("click", () => this.adoptGacha(b.dataset.adopt))
+        b.addEventListener("click", () => this.adoptGacha(b.dataset.adopt, b.dataset.view || ""))
       );
-      // 候选缩略图点选:切换当前查看/采纳的候选
+      // 视图 tab 切换
+      document.querySelectorAll("#manju-modal [data-viewtab]").forEach((b) =>
+        b.addEventListener("click", () => {
+          const g = this.gacha[b.dataset.viewtab];
+          if (!g) return;
+          g.cur = b.dataset.view || "";
+          this.renderGachaModal();
+        })
+      );
+      // 候选缩略图点选:切换当前查看/采纳的候选(按视图)
       document.querySelectorAll("#manju-modal [data-cand]").forEach((b) =>
         b.addEventListener("click", () => {
           const g = this.gacha[b.dataset.cand];
           if (!g) return;
+          const vg = g.views[b.dataset.view || ""];
+          if (!vg) return;
           const idx = parseInt(b.dataset.idx, 10);
-          if (idx >= 0 && idx < g.list.length) { g.sel = idx; this.renderGachaModal(); }
+          if (idx >= 0 && idx < vg.list.length) { vg.sel = idx; this.renderGachaModal(); }
         })
       );
       // 角色照片点击预览大图
@@ -2518,25 +2748,26 @@
       return parseInt(ls("gachaCount") || "4", 10) || 4;
     },
 
-    /* 新候选并入抽卡历史并自动选中第一张新卡(历史不覆盖,旧候选一直可回看) */
-    gachaAdd(charId, imgs) {
-      const g = this.gacha[charId] || (this.gacha[charId] = { list: [], sel: -1 });
-      const start = g.list.length;
-      imgs.forEach((im) => g.list.push({ image: im.image, seed: im.seed }));
-      g.sel = start;
+    /* 新候选并入对应视图抽卡历史并自动选中第一张新卡(历史不覆盖,旧候选一直可回看) */
+    gachaAdd(charId, view, imgs) {
+      const g = this.gacha[charId] || (this.gacha[charId] = { views: {}, cur: "" });
+      const vg = g.views[view || ""] || (g.views[view || ""] = { list: [], sel: -1, ready: false });
+      const start = vg.list.length;
+      imgs.forEach((im) => vg.list.push({ image: im.image, seed: im.seed }));
+      vg.sel = start;
     },
 
-    drawGacha(charId, btn) {
+    drawGacha(charId, btn, view) {
       if (!this.project) return;
       if (this.denyIfRunning()) return; // 抽卡走 ComfyUI 出图,渲染任务运行中不抢 GPU
       const gen = this._modalGen; // 代次守卫:抽卡耗时期间弹窗被关闭则不回弹
       const n = this.gachaCount();
       if (btn) { btn.textContent = "抽卡中…"; btn.disabled = true; }
-      post("/api/manju/gacha", { config: this.project, episode: this.episode, char: charId, count: n }).then((r) => {
+      post("/api/manju/gacha", { config: this.project, episode: this.episode, char: charId, view: view || "", count: n }).then((r) => {
         if (btn) { btn.textContent = "🎲 抽卡"; btn.disabled = false; }
         if (gen !== this._modalGen) return;
         if (r.ok && r.images && r.images.length) {
-          this.gachaAdd(charId, r.images);
+          this.gachaAdd(charId, view || "", r.images);
           this.renderGachaModal();
         } else this.setErr((r.error || "抽卡失败").trim());
       }).catch((e) => {
@@ -2545,11 +2776,11 @@
       });
     },
 
-    /* 全员抽卡:为所有还没有正式定妆照的角色各连抽一轮(串行逐个出卡,实时刷新进度) */
+    /* 全员抽卡:为所有还没有主视图定妆照的角色各连抽一轮主视图(串行逐个出卡,实时刷新进度) */
     async drawAllGacha() {
       if (!this.project) return;
       if (this.denyIfRunning()) return;
-      const chars = ((this.plan && this.plan.characters) || []).filter((c) => !this.officialChar(c.id));
+      const chars = ((this.plan && this.plan.characters) || []).filter((c) => !this.charMainReady(c.id));
       if (!chars.length) return;
       const gen = this._modalGen;
       const n = this.gachaCount();
@@ -2558,9 +2789,9 @@
         const btn = $("mg-draw-all");
         if (btn) { btn.disabled = true; btn.textContent = `抽卡中 ${i + 1}/${chars.length}（${chars[i].id}）…`; }
         try {
-          const r = await post("/api/manju/gacha", { config: this.project, episode: this.episode, char: chars[i].id, count: n });
+          const r = await post("/api/manju/gacha", { config: this.project, episode: this.episode, char: chars[i].id, view: "", count: n });
           if (gen !== this._modalGen) return;
-          if (r.ok && r.images && r.images.length) this.gachaAdd(chars[i].id, r.images);
+          if (r.ok && r.images && r.images.length) this.gachaAdd(chars[i].id, "", r.images);
           else this.setErr((r.error || chars[i].id + " 抽卡失败").trim());
         } catch (e) { this.setErr(e.message); }
         if (gen !== this._modalGen) return;
@@ -2572,12 +2803,13 @@
       }
     },
 
-    adoptGacha(charId) {
+    adoptGacha(charId, view) {
       const g = this.gacha[charId];
-      const cur = g && g.sel >= 0 && g.list[g.sel] ? g.list[g.sel] : null;
+      const vg = g && g.views[view || ""];
+      const cur = vg && vg.sel >= 0 && vg.list[vg.sel] ? vg.list[vg.sel] : null;
       if (!this.project || !cur) return;
       const gen = this._modalGen; // 代次守卫:采纳请求期间弹窗被关闭则不回弹
-      post("/api/manju/gacha/adopt", { config: this.project, episode: this.episode, char: charId, image: cur.image }).then((r) => {
+      post("/api/manju/gacha/adopt", { config: this.project, episode: this.episode, char: charId, view: view || "", image: cur.image }).then((r) => {
         if (gen !== this._modalGen) return;
         if (r.ok) {
           this.renderGachaModal();
@@ -2587,8 +2819,9 @@
     },
 
     /* 上传本地角色图:选图后直接采纳为正式定妆照(自动生成正脸参考) */
-    uploadCharPick(charId) {
+    uploadCharPick(charId, view) {
       this._uploadChar = charId;
+      this._uploadView = view || "";
       const f = $("manju-upload-file");
       if (!f) return;
       f.value = "";
@@ -2597,20 +2830,23 @@
     uploadCharFile(file) {
       if (!file || !this._uploadChar) return;
       const charId = this._uploadChar;
+      const view = this._uploadView || "";
       this._uploadChar = "";
+      this._uploadView = "";
       if (this.denyIfRunning()) return; // 渲染任务运行中不上传/覆盖定妆照
       const gen = this._modalGen; // 代次守卫:上传耗时期间弹窗被关闭则不回弹
       const fd = new FormData();
       fd.append("config", this.project);
       fd.append("episode", this.episode);
       fd.append("char", charId);
+      fd.append("view", view);
       fd.append("file", file);
       fetch("/api/manju/gacha/upload", { method: "POST", body: fd, cache: "no-store", headers: { "X-NiliX-Token": nilixTok() } })
         .then((r) => r.json())
         .then((r) => {
           if (this._modalGen !== gen) return; // 代次守卫:上传耗时期间弹窗被关闭则不回弹
           if (r.ok) {
-            this.gacha[charId] = { list: [{ image: r.image, seed: 0 }], sel: 0 };
+            this.gachaAdd(charId, view, [{ image: r.image, seed: 0 }]);
             this.renderGachaModal();
             this.refreshOutputs();
           } else this.setErr("上传采纳失败: " + (r.error || ""));
@@ -2633,8 +2869,8 @@
 
     renderOutputs() {
       const o = this.outputs;
-      // 人物只显示正式定妆照(排除 _face.png 正脸参考,避免重复)
-      const chars = (o.characters || []).filter((c) => !/_face\./i.test(c.name || ""));
+      // 人物只显示正式定妆照(排除 _face/_full/_side/_detail 视图与正脸参考,避免重复)
+      const chars = (o.characters || []).filter((c) => !/(_face|_full|_side|_detail)\./i.test(c.name || ""));
       const scenes = o.scenes || [];
       const eps = o.episodes || [];
       const fileUrl = (p) => "/api/fs/file?path=" + encodeURIComponent(p);

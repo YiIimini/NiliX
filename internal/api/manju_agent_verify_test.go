@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"nilix/internal/agent"
 	"nilix/internal/config"
@@ -26,7 +27,12 @@ const verifyProj = "zz_agent_verify"
 // verifyConfig 构造临时项目:cfgPath 的目录名即项目名(agent_state 落盘用)
 func verifyConfig(t *testing.T, llmKey string) (dir, cfgPath string) {
 	t.Helper()
-	dir = t.TempDir()
+	// 建在 ManjuRootDir 之下:审计 S1 的 config 白名单校验要求 config 归属项目根目录
+	dir = filepath.Join(ManjuRootDir, fmt.Sprintf("t-%d", time.Now().UnixNano()))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	cfgPath = filepath.Join(dir, "config.json")
 	novel := filepath.Join(dir, "novel.md")
 	var novelContent string

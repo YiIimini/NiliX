@@ -6,8 +6,10 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -80,6 +82,11 @@ func NewVisionClient(baseURL, apiKey, model string, timeout time.Duration) *Visi
 			seen[m] = true
 			models = append(models, m)
 		}
+	}
+	// 空模型(如 vision_model="," 拆分后无合法名):返回 nil,调用方降级跳过判分——
+	// 此前直接 models[0] 越界 panic 崩掉整个服务(审计 S2)
+	if len(models) == 0 {
+		return nil
 	}
 	if len(models) == 1 {
 		// 单模型:自动补内置降级链(如 glm-4.6v-flash → glm-4v-flash)
@@ -266,10 +273,17 @@ func retryable(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	if strings.Contains(msg, "HTTP 429") || strings.Contains(msg, "HTTP 5") ||
+	// 审计 M1:显式识别 context.DeadlineExceeded;错误文本先小写化再匹配——
+	// net/http 超时错误是 "Client.Timeout exceeded"(大写 T),大小写敏感匹配不到会
+	// 跳过退避/降级直接整链失败+熔断,高峰期每镜一次瞬时超时即停摆
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "http 429") || strings.Contains(msg, "http 5") ||
 		strings.Contains(msg, "请求失败") || strings.Contains(msg, "connection") ||
-		strings.Contains(msg, "EOF") || strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out") {
+		strings.Contains(msg, "eof") || strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "timed out") || strings.Contains(msg, "deadline exceeded") {
 		return true
 	}
 	return false

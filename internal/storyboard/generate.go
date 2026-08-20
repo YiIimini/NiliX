@@ -69,6 +69,12 @@ func Generate(ctx context.Context, llm *backend.LLMClient, novel, style string) 
 		anchor = style
 	}
 
+	// 审计 H16:小说内容超长时截断——整本 120 万字直接灌单条 prompt 必超上下文/巨额 token,
+	// 服务端收口(此前无任何长度控制)。保留开头(通常含主角设定与开局),提示按章分段更稳
+	const novelBudget = 12000
+	if rn := []rune(novel); len(rn) > novelBudget {
+		novel = string(rn[:novelBudget]) + "\n\n[注:原文过长已截断,如需完整章节请按章分段生成]"
+	}
 	prompt := strings.ReplaceAll(scriptPromptTemplate, "{anchor}", anchor)
 	prompt = strings.ReplaceAll(prompt, "{novel}", novel)
 
@@ -109,8 +115,10 @@ func extractJSON(s string) string {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	// rune 截断(审计:字节截断会切断 UTF-8 多字节字符出乱码)
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(r[:n]) + "..."
 }

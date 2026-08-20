@@ -358,7 +358,6 @@ func main() {
 	cfgPath := flag.String("config", "settings.json", "设置文件路径")
 	kbRoot := flag.String("kb", `C:\Mi\Ai\WorkBench\zhishiku`, "知识库根目录")
 	flag.Parse()
-
 	// 高 DPI 感知：必须在任何窗口（托盘/胶囊）创建前设置，否则窗口尺寸与圆角裁剪错乱。
 	island.EnablePerMonitorDPI()
 
@@ -367,6 +366,9 @@ func main() {
 		log.SetOutput(f)
 		defer f.Close()
 	}
+	// 审计 M13:主进程启动即清理旧看门狗标记——上一轮看门狗自身被杀/系统重启残留的
+	// graceful_exit 会在本进程崩溃时让新看门狗误判"用户主动退出"而不重启
+	_ = os.Remove(filepath.Join("logs", "graceful_exit"))
 
 	// 单实例看门狗：防止重复启动。
 	guard, err := watchdog.SingleInstance("NiliX")
@@ -430,7 +432,17 @@ func main() {
 	// HTTP 服务放后台 goroutine，托盘图标阻塞主流程。
 	go func() {
 		log.Printf("NiliX 已启动，控制台: %s", url)
-		if err := http.ListenAndServe(addr, srv.Routes()); err != nil {
+		// 审计 M14:服务超时配置(防 slowloris 挂死连接/超大头占内存);
+		// WriteTimeout 不设——LLM/渲染为长任务,写超时反而误杀
+		srv := &http.Server{
+			Addr:              addr,
+			Handler:           srv.Routes(),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       5 * time.Minute,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    1 << 20,
+		}
+		if err := srv.ListenAndServe(); err != nil {
 			log.Printf("HTTP 服务退出: %v", err)
 			systray.Quit()
 		}
@@ -456,26 +468,26 @@ func main() {
 		}
 	}()
 
-	// 崩溃恢复续跑:渲染中异常退出(崩溃/被杀/断电)后,启动时自动检测上次中断于渲染链路的项目,
-	// 环境无问题(ComfyUI 可拉起)则自动继续渲染(幂等跳过已完成,检查点收回未收产物)。
-	go func() {
-		time.Sleep(3 * time.Second) // 等服务/ComfyUI 拉起就绪
-		api.AutoRecoverRendering()
-	}()
+	// 崩溃恢复续跑已禁用(用户要求取消自动续跑):渲染中异常退出后不再自动恢复,
+	// 用户可在工作台手动点「续跑」按需恢复(幂等跳过已完成,检查点收回未收产物)。
+	// go func() {
+	// 	time.Sleep(3 * time.Second) // 等服务/ComfyUI 拉起就绪
+	// 	api.AutoRecoverRendering()
+	// }()
 
-	// 看门狗守护:spawn 独立进程监控本进程,崩溃/被强杀自动重启(用户主动退出不重启)。
-	// 与 ComfyUI 自动拉起并列,在服务就绪后启动。
-	go func() {
-		time.Sleep(2 * time.Second)
-		exe, err := os.Executable()
-		if err != nil {
-			return
-		}
-		args := append([]string{"--watchdog", strconv.Itoa(os.Getpid())}, os.Args[1:]...)
-		cmd := exec.Command(exe, args...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		_ = cmd.Start()
-	}()
+	// 看门狗守护已禁用:崩溃自动重启会导致"启动即反复拉起进程 → 窗口反复闪黑"。
+	// 保留单实例锁(防止多开);进程崩溃后由用户手动重新启动,不再无限自愈。
+	// go func() {
+	// 	time.Sleep(2 * time.Second)
+	// 	exe, err := os.Executable()
+	// 	if err != nil {
+	// 		return
+	// 	}
+	// 	args := append([]string{"--watchdog", strconv.Itoa(os.Getpid())}, os.Args[1:]...)
+	// 	cmd := exec.Command(exe, args...)
+	// 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	// 	_ = cmd.Start()
+	// }()
 
 	// 灵动岛悬浮胶囊（WebView2）
 	go func() {
@@ -497,6 +509,10 @@ func main() {
 			StopZCode:  stopZCode,
 			StopBot:    stopBot,
 			RestartBot: stopBot, // 同 stop：kill 后 ZCode 约 5s 自动重建接管
+			// DeepSeek Harness:启动/重启/访问(浏览器打开 DSH Web)
+			StartHarness:   api.HarnessStart,
+			RestartHarness: api.HarnessRestart,
+			OpenHarness:    func() { openBrowser("http://127.0.0.1:3080") },
 		}
 		if err := island.Run(url+"/island/", func() {
 			log.Println("退出触发: 灵动岛关闭按钮(X)") // 诊断:莫名退出时定位触发源

@@ -21,7 +21,15 @@ import (
 	"nilix/internal/config"
 )
 
-const novelRootDir = `C:\Mi\Ai\WorkBench\Novel`
+// novelRoot 小说库根目录(审计 H13):一律读可配置的 NovelRootDir(main 按 settings/自包含
+// 解析注入),不再硬编码 C:\Mi\Ai\WorkBench\Novel——此前设置改 novel_root 后网页小说仍写
+// 旧目录,fs 白名单/书架/转剧本全线脱节
+func novelRoot() string {
+	if strings.TrimSpace(NovelRootDir) != "" {
+		return NovelRootDir
+	}
+	return `C:\Mi\Ai\WorkBench\novel`
+}
 
 var (
 	novelTitleSan = regexp.MustCompile(`[\\/:*?"<>|]`)
@@ -32,7 +40,7 @@ var (
 )
 
 func novelProjDir(title string) string {
-	return filepath.Join(novelRootDir, novelTitleSan.ReplaceAllString(strings.TrimSpace(title), ""))
+	return filepath.Join(novelRoot(), novelTitleSan.ReplaceAllString(strings.TrimSpace(title), ""))
 }
 
 // handleNovelCreate 立项:生成设定集与大纲(同步,约 30-90s),幂等(已有大纲直接返回)。
@@ -390,11 +398,21 @@ func reviewChapterCore(cfg config.Settings, proj, title string, no int, content 
 	if err := json.Unmarshal([]byte(stripJSONFence(raw)), &out); err != nil || len(out.Dims) == 0 {
 		return novelChapterReview{}, fmt.Errorf("评章解析失败,请重试")
 	}
+	// 审计 S2:score 缺失/越界按"评审无效"处理——LLM 输出缺 score 字段时零值 0.0,
+	// 若不拦截会被调用方 `<70 删稿重写` 误删刚写完并过 QA 的好章
+	if out.Score <= 0 || out.Score > 100 {
+		return novelChapterReview{}, fmt.Errorf("评章分数缺失或非法(%.2f),评审无效", out.Score)
+	}
 	rv := novelChapterReview{Score: out.Score, Dims: out.Dims, Issues: out.Issues,
 		Suggestion: out.Suggestion, At: time.Now().Format("2006-01-02 15:04")}
+	// 审计 S4:novel_state 读写并入按书互斥锁——此前 auto 卷间并行(4 goroutine)同时
+	// read-modify-write novel_state.json,后写覆盖先写,审稿结论互相丢失
+	unlock := novelTitleLock(title)
+	unlock.Lock()
 	st := loadNovelState(proj)
 	st.Reviews[no] = rv
 	saveNovelState(proj, st)
+	unlock.Unlock()
 	return rv, nil
 }
 
@@ -495,17 +513,35 @@ func renderNovelCover(proj, prompt string, cfg config.Settings) {
 	}
 }
 
-// appendToFullBook 纯追加一章进全本(O(1):不重读旧文、不重扫目录——600 章续写原来是
-// 每章整读整写+全树 Walk 的 O(n²));目录由 rebuildFullBookTOC 在续写完成/手动触发时重建。
-// 追加前去重:全本已含同章号标题则跳过(手动与自动并发写同章的护栏,写锁之外的二道防线)。
+// appendToFullBook 追加一章进全本,按章号定位:已存在同号段则替换(返工重写后全本与正文一致,
+// 不会保留旧坏稿也不会同章重复——审计 S3 此前用整文件 Contains 判重,标题变化即重复追加);
+// 不存在则纯追加。目录由 rebuildFullBookTOC 在续写完成/手动触发时重建。
 func appendToFullBook(proj, title string, no int, chTitle, content string) {
 	fullDir := filepath.Join(proj, "全本")
 	_ = os.MkdirAll(fullDir, 0755)
 	fp := filepath.Join(fullDir, novelTitleSan.ReplaceAllString(title, "")+"·全本.md")
-	head := fmt.Sprintf("第%03d章 %s", no, chTitle)
-	if b, err := os.ReadFile(fp); err == nil && strings.Contains(string(b), "\n## "+head) {
-		return // 已收录(并发/重复调用护栏)
+	block := fmt.Sprintf("\n\n## 第%03d章 %s\n\n%s\n", no, chTitle, content)
+	marker := fmt.Sprintf("## 第%03d章", no)
+	if b, err := os.ReadFile(fp); err == nil {
+		s := string(b)
+		if i := strings.Index(s, marker); i >= 0 {
+			// 定位该章段:起点=i,终点=下一 "\n## 第" 段起点(或文末)
+			start := i
+			next := strings.Index(s[start+len(marker):], "\n## 第")
+			end := len(s)
+			if next >= 0 {
+				end = start + len(marker) + next
+			}
+			// 替换该段(含结尾换行:block 自带 \n\n 前导,去掉被替换段的旧结尾换行避免空行堆积)
+			newS := s[:start] + block + s[end:]
+			if strings.HasPrefix(newS, "\n\n") {
+				newS = newS[2:]
+			}
+			_ = os.WriteFile(fp, []byte(newS), 0644)
+			return
+		}
 	}
+	// 全本不存在或该章未收录:追加(保留 O(1) 追加语义)
 	f, err := os.OpenFile(fp, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return
@@ -515,7 +551,7 @@ func appendToFullBook(proj, title string, no int, chTitle, content string) {
 	if err != nil || st.Size() == 0 {
 		_, _ = f.WriteString(fmt.Sprintf("# %s(全本)\n\n> 爽文一条龙 · 每章 ≥1280 字\n", title))
 	}
-	_, _ = f.WriteString(fmt.Sprintf("\n\n## 第%03d章 %s\n\n%s\n", no, chTitle, content))
+	_, _ = f.WriteString(block)
 }
 
 // rebuildFullBookTOC 重建全本目录(头部目录区):续写完成/手动生成后调用一次。
@@ -612,12 +648,12 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 	t = &novelAutoTask{Title: req.Title, Running: true, stop: make(chan struct{}), ctx: ctx, cancel: cancel}
 	novelAutoTasks[dirKey] = t
 	novelAutoMu.Unlock()
-	go func() {
+	// auto 后台任务:panic 兜底(审计 S2——原 _ = recover() 吞 panic 无日志,改用 safeGo 记 crash)
+	safeGo("novel-auto", nil, func() {
 		defer func() {
 			novelAutoMu.Lock()
 			t.Running = false
 			novelAutoMu.Unlock()
-			_ = recover()
 		}()
 		proj := novelProjDir(req.Title)
 		// 技能阶段3 并行写卷:未写章按卷分组,卷内串行(保证卷内衔接),卷间并行(卷与卷只靠
@@ -634,12 +670,29 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		})
-		total := 600
+		total := 0
 		if b, err := os.ReadFile(filepath.Join(proj, "设定集", "设定集与大纲.md")); err == nil {
 			if m := reNovelPlan.FindStringSubmatch(string(b)); len(m) > 1 {
 				if v, e := strconv.Atoi(m[1]); e == nil && v > 0 {
 					total = v
 				}
+			}
+		}
+		// 审计 H14:无「计划 N 章」标注时不再默认狂写 600 章——按已写最大章号 + 一卷(7) 收敛,
+		// 硬上限 200(旧书/大纲格式变化的书不再触发大规模 LLM 消耗与 429)
+		if total <= 0 {
+			maxNo := 0
+			for n := range have {
+				if n > maxNo {
+					maxNo = n
+				}
+			}
+			total = maxNo + 7
+			if total > 200 {
+				total = 200
+			}
+			if total < 14 {
+				total = 14 // 至少一卷
 			}
 		}
 		groups := map[int][]int{}
@@ -687,14 +740,29 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 									}
 									note += rv.Suggestion
 								}
-								_ = os.Remove(f)
-								if res2, err2 := writeNovelChapter(t.ctx, req.Title, no, cfg, note); err2 == nil && res2["exists"] == false {
+								// 审计 S3:先写后删——此前先 os.Remove 再写,LLM 失败/停止即静默丢章。
+								// 改为:rename 原子移走旧稿 → 写新稿 → 成功删备份 / 失败恢复旧稿并显式报错
+								backup := f + ".bak-rewrite"
+								renamed := os.Rename(f, backup) == nil
+								res2, err2 := writeNovelChapter(t.ctx, req.Title, no, cfg, note)
+								if err2 == nil && res2["exists"] == false {
+									// 新稿落盘成功:清理备份
+									_ = os.Remove(backup)
 									if f2, _ := findChapter(proj, no); f2 != "" {
 										if c2, e2 := os.ReadFile(f2); e2 == nil {
 											_, _ = reviewChapterCore(cfg, proj, req.Title, no, string(c2)) // 重写稿复审(归档)
 										}
 									}
+								} else if renamed {
+									// 重写失败且旧稿已移走:恢复旧稿,不再静默吞错误
+									_ = os.Rename(backup, f)
+									novelAutoMu.Lock()
+									if t.Err == "" {
+										t.Err = fmt.Sprintf("审稿返工重写失败(第 %d 章): %v", no, err2)
+									}
+									novelAutoMu.Unlock()
 								}
+								// renamed==false(旧稿未移走):旧稿仍在原处,重写失败亦无损失
 							}
 						}
 					}
@@ -711,7 +779,7 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 		var wg sync.WaitGroup
 		for _, nos := range groups {
 			wg.Add(1)
-			go func(nos []int) {
+			safeGo("novel-vol", nil, func() {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
@@ -720,7 +788,7 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 				}
-			}(nos)
+			})
 		}
 		wg.Wait()
 		select {
@@ -742,7 +810,7 @@ func (s *Server) handleNovelAuto(w http.ResponseWriter, r *http.Request) {
 			t.QA = strings.Join(lines, " | ")
 			novelAutoMu.Unlock()
 		}
-	}()
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": true})
 }
 
@@ -777,7 +845,7 @@ func (s *Server) handleNovelAutoStatus(w http.ResponseWriter, r *http.Request) {
 // handleNovelStatusAll 全量创作状态(书架信号灯:绿=全本完/蓝=续作中/黄=断点/红=未完成)
 func (s *Server) handleNovelStatusAll(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{}
-	entries, err := os.ReadDir(novelRootDir)
+	entries, err := os.ReadDir(novelRoot())
 	if err != nil {
 		writeJSON(w, http.StatusOK, out)
 		return
@@ -789,7 +857,7 @@ func (s *Server) handleNovelStatusAll(w http.ResponseWriter, r *http.Request) {
 			continue // 跳过文件与隐藏杂物目录(.tools/.git 等)
 		}
 		title := e.Name()
-		proj := filepath.Join(novelRootDir, title)
+		proj := filepath.Join(novelRoot(), title)
 		chapters := 0
 		_ = filepath.Walk(filepath.Join(proj, "正文"), func(p string, info os.FileInfo, err error) error {
 			if err == nil && !info.IsDir() && strings.HasSuffix(info.Name(), ".md") {
@@ -829,6 +897,51 @@ func (s *Server) handleNovelStatusAll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleNovelDelete 彻底删除小说项目(设定集/正文/素材/封面/全本/创作档案)。
+// 安全护栏:目录必须位于小说库根目录之下;同时清理该书的自动连载后台任务。
+func (s *Server) handleNovelDelete(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "请求体解析失败: "+err.Error())
+		return
+	}
+	title := strings.TrimSpace(body.Title)
+	if title == "" {
+		writeErr(w, http.StatusBadRequest, "缺少 title(书名)")
+		return
+	}
+	safe := novelTitleSan.ReplaceAllString(title, "")
+	dir := filepath.Join(novelRoot(), safe)
+	rootClean := filepath.Clean(novelRoot())
+	if filepath.Clean(dir) == rootClean || !strings.HasPrefix(filepath.Clean(dir), rootClean+string(filepath.Separator)) {
+		writeErr(w, http.StatusForbidden, "目标不在小说库根目录内,拒绝删除")
+		return
+	}
+	if !dirExists(dir) {
+		writeErr(w, http.StatusNotFound, "小说不存在: "+safe)
+		return
+	}
+	// 清理自动连载任务(停止在途 LLM 调用)
+	dirKey := filepath.Base(dir)
+	novelAutoMu.Lock()
+	if t, ok := novelAutoTasks[dirKey]; ok {
+		if t.Running {
+			t.Running = false
+			t.cancel()
+			close(t.stop)
+		}
+		delete(novelAutoTasks, dirKey)
+	}
+	novelAutoMu.Unlock()
+	if err := os.RemoveAll(dir); err != nil {
+		writeErr(w, http.StatusInternalServerError, "删除失败: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": dir})
+}
+
 // ================= 创作状态存档(按小说 ID=目录名 持久化) =================
 // novelChapterReview 单章审稿结论(8 维 + 加权总分 + 问题清单)
 type novelChapterReview struct {
@@ -866,7 +979,13 @@ func loadNovelState(proj string) novelState {
 func saveNovelState(proj string, st novelState) {
 	st.UpdatedAt = time.Now().Format("2006-01-02 15:04")
 	b, _ := json.MarshalIndent(st, "", "  ")
-	_ = os.WriteFile(novelStateFile(proj), b, 0644)
+	// 原子写(审计 S4):temp+rename,崩溃不留半写文件
+	tmp := novelStateFile(proj) + ".tmp"
+	if err := os.WriteFile(tmp, b, 0644); err == nil {
+		_ = os.Rename(tmp, novelStateFile(proj))
+	} else {
+		_ = os.Remove(tmp)
+	}
 }
 
 func touchNovelState(proj, title string, no int) {
@@ -1006,7 +1125,13 @@ func writeNovelChapter(ctx context.Context, title string, no int, cfg config.Set
 			var vno int
 			var vtitle string
 			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "- 卷"), "%d %s", &vno, &vtitle); err == nil && vno == vol {
-				volName = fmt.Sprintf("卷%02d_%s", vol, vtitle)
+				// 审计 H4:卷名消毒——LLM 卷名含 :?/<>|* 等 Windows 保留字符时
+				// MkdirAll 整卷失败;此前章节名消毒了卷名漏网
+				vt := novelTitleSan.ReplaceAllString(vtitle, "")
+				if vt == "" {
+					vt = "卷" + strconv.Itoa(vol)
+				}
+				volName = fmt.Sprintf("卷%02d_%s", vol, vt)
 				break
 			}
 		}

@@ -24,6 +24,15 @@ import json
 import os
 import sys
 
+# 强制 stdout/stderr 用 UTF-8 且 errors="replace":
+# Windows 控制台/管道默认 GBK,脚本里 print emoji(✂️✅🎨) 在 GBK 下抛 UnicodeEncodeError
+# → 退出码非 0 → Go 侧报"媒体处理退出码非 0"。此处无论 PYTHONIOENCODING 是否生效都兜底。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 
 def check_video(path, threshold=0.5):
     import av
@@ -63,8 +72,15 @@ def check_video(path, threshold=0.5):
         cut = max(1, int(len(samples) * 0.05))
         samples = samples[:-cut]
     audio_rms = rms_sum / max(rms_n, 1)
+    # 音轨规格(H3 原生规格 32kHz 立体声;审计升级 P0:静音/单声道/采样率异常在合成前拦截)
+    audio_rate = 0
+    audio_channels = 0
+    if a0 is not None:
+        audio_rate = int(getattr(a0, "rate", 0) or 0)
+        audio_channels = int(getattr(a0, "channels", 0) or 0)
     return {
         "duration_s": dur, "resolution": res, "audio_streams": len(a),
+        "audio_rate": audio_rate, "audio_channels": audio_channels,
         "dark_ratio": round(sum(samples) / max(len(samples), 1), 3), "decoded_frames": n,
         "audio_rms": round(audio_rms, 4), "audio_frames": rms_n,
     }
@@ -108,6 +124,10 @@ def cmd_qc(args):
                 flags.append("无音轨")
             elif r["audio_rms"] < 0.02:
                 flags.append(f"静音(rms {r['audio_rms']:.3f})")
+            elif r["audio_rate"] > 0 and r["audio_rate"] != 32000:
+                flags.append(f"音轨采样率异常({r['audio_rate']}Hz≠32000)")
+            elif r["audio_channels"] > 0 and r["audio_channels"] != 2:
+                flags.append(f"音轨非立体声({r['audio_channels']}ch≠2)")
             if r["dark_ratio"] > args.threshold:
                 flags.append(f"近黑帧{r['dark_ratio']*100:.0f}%")
             if r["decoded_frames"] == 0:
@@ -115,10 +135,11 @@ def cmd_qc(args):
             if r["duration_s"] < 0.5:
                 flags.append("时长过短")
             status = "OK" if not flags else "⚠️ " + ",".join(flags)
-            print(f"  {f:12s} {r['duration_s']:6.2f}s {r['resolution']} 音轨:{r['audio_streams']} 响度:{r['audio_rms']:.3f} 近黑:{r['dark_ratio']*100:3.0f}% {status}")
+            print(f"  {f:12s} {r['duration_s']:6.2f}s {r['resolution']} 音轨:{r['audio_streams']}@{r['audio_rate']}Hz/{r['audio_channels']}ch 响度:{r['audio_rms']:.3f} 近黑:{r['dark_ratio']*100:3.0f}% {status}")
             report["shots"][f] = {
                 "ok": not flags, "flags": flags, "duration_s": r["duration_s"],
                 "dark_ratio": r["dark_ratio"], "audio_streams": r["audio_streams"],
+                "audio_rate": r["audio_rate"], "audio_channels": r["audio_channels"],
                 "audio_rms": r["audio_rms"], "decoded_frames": r["decoded_frames"], "error": "",
             }
             if flags:

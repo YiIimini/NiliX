@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -104,10 +105,60 @@ func (c *comfyClient) history(promptID string) map[string]any {
 	return h[promptID]
 }
 
+// inQueue 查询任务是否仍在 ComfyUI 队列(running 或 pending)——审计 M1:
+// history 无记录可能是"还在长队列排队"而非"任务丢失";tryReclaim 据此避免
+// 90s 误判后重新提交造成同一镜头双任务烧两遍 GPU
+func (c *comfyClient) inQueue(promptID string) bool {
+	resp, err := c.client.Get(c.base + "/queue")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	var q struct {
+		QueueRunning []map[string]any `json:"queue_running"`
+		QueuePending []map[string]any `json:"queue_pending"`
+	}
+	if json.Unmarshal(data, &q) != nil {
+		return false
+	}
+	for _, it := range q.QueueRunning {
+		if id, _ := it["prompt_id"].(string); id == promptID {
+			return true
+		}
+	}
+	for _, it := range q.QueuePending {
+		if id, _ := it["prompt_id"].(string); id == promptID {
+			return true
+		}
+	}
+	return false
+}
+
 // wait 轮询执行完成;中断/错误返回错误(含异常信息,供调用方判断是否重试)
-func (c *comfyClient) wait(promptID string, timeout, poll time.Duration) error {
+// wait 轮询执行完成;中断/错误返回错误(含异常信息,供调用方判断是否重试)。
+// stopped 为可选停止感知回调:用户点「停止」后立即返回"已停止"错误,
+// 不再死等 ComfyUI(尤其卡在模型加载/排队的任务,/interrupt 无法中断它们)。
+// 停止感知用 500ms 细粒度轮询(不随 poll 间隔变慢——poll 可能 10s,停止要立即生效)。
+func (c *comfyClient) wait(promptID string, timeout, poll time.Duration, stopped ...func() bool) error {
+	isStopped := func() bool {
+		for _, fn := range stopped {
+			if fn != nil && fn() {
+				return true
+			}
+		}
+		return false
+	}
 	deadline := time.Now().Add(timeout)
+	// 停止检查节拍:远小于 poll(停止响应不被长轮询拖慢),但也避免空转忙等
+	stopTick := time.Duration(500 * time.Millisecond)
+	if poll < stopTick {
+		stopTick = poll
+	}
 	for {
+		if isStopped() {
+			return fmt.Errorf("已停止")
+		}
 		entry := c.history(promptID)
 		if entry != nil {
 			if st, _ := entry["status"].(map[string]any); st != nil {
@@ -122,7 +173,19 @@ func (c *comfyClient) wait(promptID string, timeout, poll time.Duration) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("ComfyUI 等待超时(%s)", timeout)
 		}
-		time.Sleep(poll)
+		// 细粒度停止感知:分段 sleep,期间持续检查 stopped
+		waited := time.Duration(0)
+		for waited < poll {
+			if isStopped() {
+				return fmt.Errorf("已停止")
+			}
+			step := poll - waited
+			if step > stopTick {
+				step = stopTick
+			}
+			time.Sleep(step)
+			waited += step
+		}
 	}
 }
 
@@ -278,8 +341,28 @@ func wfAdd(workflow map[string]any, classType string, inputs map[string]any) str
 	return id
 }
 
+// fl2vaNodeOK FL2VA 双帧节点可用性探测(审计升级 P1:空镜可选首尾双图插值,官方
+// FL2VA 单镜连续更稳;节点缺失自动回退单图,零风险)。带缓存,进程生命周期内探测一次。
+var (
+	fl2vaNodeOnce sync.Once
+	fl2vaNodeOK   bool
+)
+
+func fl2vaNodeAvailable() bool {
+	fl2vaNodeOnce.Do(func() {
+		c := newComfyClient(comfyParams.url)
+		resp, err := c.client.Get(c.base + "/object_info/MiniMaxH3Fl2VA")
+		if err == nil {
+			defer resp.Body.Close()
+			fl2vaNodeOK = resp.StatusCode == 200
+		}
+	})
+	return fl2vaNodeOK
+}
+
 // h3EncWorkflow 预编码工作流(只跑 Qwen3-VL,无 UNET;输出 CondSave 缓存 .pt)
-// hasChar: 有角色 → MiniMaxH3ReferenceToVideo(角色+场景多参考);空镜 → MiniMaxH3ImageToVideo(场景首帧)
+// hasChar: 有角色 → MiniMaxH3ReferenceToVideo(角色+场景多参考);空镜 → MiniMaxH3ImageToVideo(场景首帧),
+// 若 R["_scene_end"] 提供尾帧且节点可用 → MiniMaxH3Fl2VA 首尾双帧插值(审计升级 P1)
 // charRefs: 全部登场角色的参考图(正脸优先),多角色同镜逐一传入锁身份
 func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs []string, sceneRef, cacheName string, hasChar bool) map[string]any {
 	wf := map[string]any{}
@@ -309,14 +392,28 @@ func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs [
 		if sceneRef != "" {
 			sceneLoad = wfAdd(wf, "LoadImage", map[string]any{"image": sceneRef})
 		}
-		inputs := map[string]any{
-			"clip": refOf(clip), "vae": refOf(vae),
-			"prompt": prompt, "width": w, "height": h, "length": length,
+		// FL2VA 双帧:尾帧图存在且节点可用 → 首尾双图插值;否则回退单图 I2VA
+		if end := strings.TrimSpace(str(R["_scene_end"])); end != "" && fileExists(end) && fl2vaNodeAvailable() {
+			endLoad := wfAdd(wf, "LoadImage", map[string]any{"image": end})
+			inputs := map[string]any{
+				"clip": refOf(clip), "vae": refOf(vae),
+				"prompt": prompt, "width": w, "height": h, "length": length,
+			}
+			if sceneLoad != "" {
+				inputs["first_frame"] = refOf(sceneLoad)
+			}
+			inputs["last_frame"] = refOf(endLoad)
+			condID = wfAdd(wf, "MiniMaxH3Fl2VA", inputs)
+		} else {
+			inputs := map[string]any{
+				"clip": refOf(clip), "vae": refOf(vae),
+				"prompt": prompt, "width": w, "height": h, "length": length,
+			}
+			if sceneLoad != "" {
+				inputs["first_frame"] = refOf(sceneLoad)
+			}
+			condID = wfAdd(wf, "MiniMaxH3ImageToVideo", inputs)
 		}
-		if sceneLoad != "" {
-			inputs["first_frame"] = refOf(sceneLoad)
-		}
-		condID = wfAdd(wf, "MiniMaxH3ImageToVideo", inputs)
 	}
 	wfAdd(wf, "MiniMaxH3CondSave", map[string]any{"conditioning": refOf(condID), "cache_name": cacheName})
 	return wf
@@ -374,8 +471,14 @@ func manjuResTierDims(tier string, w, h int) (int, int, bool) {
 // + EmptyMiniMaxH3LatentAV 空 AV latent + Turbo LoRA + 可选 MotionContext 接缝。
 // 有角色用 ref2va 模型,空镜用 fl2va;接缝时 LoadLatent(prevIdx) → MotionContext → Trim,
 // 无论是否接缝都 SaveLatent(curIdx),供下一镜续接。
+// latent 命名空间取自 R["_latent_ns"](审计 S6):output/h3_context/<ns>/clip_NNNNN,
+// 防跨项目/跨方案/草稿定稿分辨率互相串接;缺省回退 default(测试兼容)。
 func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName string, hasChar, chained bool, prevIdx, curIdx int) map[string]any {
 	wf := map[string]any{}
+	latentNS := strings.TrimSpace(str(R["_latent_ns"]))
+	if latentNS == "" {
+		latentNS = "default"
+	}
 	unetName := str(R["unet_ref2va"])
 	if !hasChar {
 		unetName = str(R["unet_fl2va"])
@@ -425,7 +528,7 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 	// 接缝:MotionContext(condLoad 条件 + 上一镜 latent)→ conditioning + trim_frames
 	trimFramesID := ""
 	if chained {
-		latLoad := wfAdd(wf, "MiniMaxH3MotionContextLoadLatent", map[string]any{"latent_path": "h3_context", "clip_index": prevIdx})
+		latLoad := wfAdd(wf, "MiniMaxH3MotionContextLoadLatent", map[string]any{"latent_path": "h3_context/" + latentNS, "clip_index": prevIdx})
 		mc := wfAdd(wf, "MiniMaxH3MotionContext", map[string]any{
 			"conditioning": refOf(condID), "vae": refOf(vae), "latent": refOf(latentID),
 			"context_length": "22", "audio_context_length": 24,
@@ -461,9 +564,9 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 	video := wfAdd(wf, "CreateVideo", map[string]any{"images": refOf(imgID), "fps": float64(h3Fps(R)), "audio": refOf(audID)})
 	wfAdd(wf, "SaveVideo", map[string]any{"video": refOf(video), "filename_prefix": "manju", "format": "auto", "codec": "auto"})
 
-	// 保存当前镜 latent 供下一镜续接(总是保存,即使未接缝)
+	// 保存当前镜 latent 供下一镜续接(总是保存,即使未接缝);按命名空间隔离(审计 S6)
 	wfAdd(wf, "MiniMaxH3MotionContextSaveLatent", map[string]any{
-		"latent": refOf(samp), "filename_prefix": "h3_context/clip", "clip_index": curIdx,
+		"latent": refOf(samp), "filename_prefix": "h3_context/" + latentNS + "/clip", "clip_index": curIdx,
 	})
 	return wf
 }
@@ -476,9 +579,10 @@ func h3Fps(R map[string]any) int {
 	return fps
 }
 
-// h3ContextLatentPath 上一镜 latent 落盘路径(output/h3_context/clip_%05d.safetensors)
-func h3ContextLatentPath(comfyOutput string, idx int) string {
-	return filepath.Join(comfyOutput, "h3_context", fmt.Sprintf("clip_%05d.safetensors", idx))
+// h3ContextLatentPath 上一镜 latent 落盘路径(output/h3_context/<ns>/clip_%05d.safetensors);
+// ns 为命名空间(项目_集,审计 S6 防跨项目串接)
+func h3ContextLatentPath(comfyOutput, ns string, idx int) string {
+	return filepath.Join(comfyOutput, "h3_context", ns, fmt.Sprintf("clip_%05d.safetensors", idx))
 }
 
 func h3CachePath(sharedModels, cacheName string) string {

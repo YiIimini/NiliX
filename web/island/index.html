@@ -49,10 +49,6 @@
           </div>
         </div>
         <div class="set-row">
-          <span class="set-lbl">KB 状态行</span>
-          <label class="set-switch"><input type="checkbox" id="set-kb"><span class="tk"></span></label>
-        </div>
-        <div class="set-row">
           <span class="set-lbl">炫酷特效</span>
           <label class="set-switch"><input type="checkbox" id="set-fx"><span class="tk"></span></label>
         </div>
@@ -116,16 +112,6 @@
           <div class="sub mono cap" id="comfy-meta"></div>
         </div>
 
-        <div class="row" id="kb-row">
-          <div class="lbl">K_B</div>
-          <div class="io">
-            <span id="kb-dot" class="kb-dot"></span>
-            <span class="mono kb-txt" id="kb-txt">检测中…</span>
-            <button id="kb-open" class="kb-start hidden">工作台</button>
-          </div>
-          <div class="sub mono cap" id="kb-meta"></div>
-        </div>
-
         <div class="row" id="zcode-row">
           <div class="lbl">Z_C</div>
           <div class="io">
@@ -147,6 +133,18 @@
           </div>
           <div class="sub mono cap" id="bot-meta"></div>
         </div>
+
+        <div class="row" id="harness-row">
+          <div class="lbl">DSH</div>
+          <div class="io">
+            <span id="harness-dot" class="kb-dot"></span>
+            <span class="mono kb-txt" id="harness-txt">检测中…</span>
+            <button id="harness-start" class="kb-start hidden">启动</button>
+            <button id="harness-restart" class="kb-start kb-stop hidden">重启</button>
+            <button id="harness-open" class="kb-start hidden">访问</button>
+          </div>
+          <div class="sub mono cap" id="harness-meta"></div>
+        </div>
       </div>
 
       <footer class="foot">
@@ -158,6 +156,6 @@
     </div>
 
   </div>
-  <script src="js/app.js?v=20260818"></script>
+  <script src="js/app.js?v=20260902"></script>
 </body>
 </html>

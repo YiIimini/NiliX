@@ -99,13 +99,18 @@ func (ctx *manjuCtx) tryReclaim(pid, dst string, lg *manjuLogger) (bool, error) 
 				}
 			}
 			// 队列中/执行中:正常长等待,完成后回到上面 completed 分收取产物
-			if err := ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second); err != nil {
+			if err := ctx.comfy.wait(pid, 3600*time.Second, 10*time.Second, lg.stopped); err != nil {
 				return false, err
 			}
 			continue
 		}
 		if time.Now().After(deadline) {
-			return false, nil // 任务丢失:history 无记录且超窗
+			// 审计 M1:超窗且确认不在队列才判定"任务丢失"——忙队列长排队时 history 持续为空,
+			// 直接判丢失会重新提交 → 原任务仍在队列 → 同一镜头双任务烧两遍 GPU
+			if !ctx.comfy.inQueue(pid) {
+				return false, nil // 任务丢失:history 无记录、队列无此任务、超窗
+			}
+			deadline = time.Now().Add(30 * time.Second) // 仍在队列:延长观察窗
 		}
 		time.Sleep(3 * time.Second)
 	}

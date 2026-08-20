@@ -2,10 +2,14 @@
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
+  // 灵动岛启用状态(系统设置弹窗开关;disabled 时 body 加 island-disabled 隐藏胶囊)
+  let islandEnabled = true;
+  let islandCheckCount = 0;
 
   /* ========== 灵动岛展开/收起 ========== */
   let expanded = false;
   let lastCollapseAt = 0; // 收起时间戳:防收起动画后鼠标仍在胶囊位置导致闪烁重开
+  let collapseTimer = null; // 收起淡出阶段计时器(170ms 后切 collapsed)
   // 展开面板内容高度(#full 为自然高度,设置面板/行显隐变化后重新测量)
   function islandHeight() {
     const el = $("full");
@@ -20,13 +24,26 @@
   function setExpanded(on) {
     if (on === expanded) return;
     if (on && Date.now() - lastCollapseAt < 350) return;
-    expanded = on;
-    document.body.classList.toggle("island-collapsed", !on);
-    document.body.classList.toggle("island-expanded", on);
-    if (!on) lastCollapseAt = Date.now();
-    if (typeof setIsland === "function") {
-      if (on) setIsland(true, 380, islandHeight()); // 展开即时触发窗口动画,无延迟
-      else setIsland(false, 0, 0); // Go 侧窗口尺寸动画 + 圆角裁剪
+    if (on) {
+      expanded = true;
+      clearTimeout(collapseTimer); // 取消待处理的收起切换(淡出中鼠标又移入)
+      document.body.classList.remove("island-closing");
+      document.body.classList.add("island-expanded");
+      document.body.classList.remove("island-collapsed");
+      if (typeof setIsland === "function") setIsland(true, 380, islandHeight()); // 展开即时触发窗口动画,无延迟
+    } else {
+      // 收起:先播面板淡出(island-closing),170ms 后再切 collapsed——与窗口缩小动画同步,
+      // 避免"内容瞬间消失"的生硬切换(升级动效)
+      expanded = false;
+      lastCollapseAt = Date.now();
+      document.body.classList.add("island-closing");
+      if (typeof setIsland === "function") setIsland(false, 0, 0); // Go 侧窗口尺寸动画 + 圆角裁剪
+      clearTimeout(collapseTimer);
+      collapseTimer = setTimeout(() => {
+        document.body.classList.remove("island-closing");
+        document.body.classList.add("island-collapsed");
+        document.body.classList.remove("island-expanded");
+      }, 170);
     }
   }
   // 悬停胶囊展开;展开后鼠标落在面板内,离开面板才缩回
@@ -96,7 +113,6 @@
     document.querySelectorAll(".set-btn[data-theme]").forEach((b) =>
       b.classList.toggle("on", (b.dataset.theme === "light") === light)
     );
-    $("set-kb").checked = localStorage.getItem("sysmon-show-kb") !== "0";
     $("set-fx").checked = localStorage.getItem("sysmon-effects") === "1"; // 默认关闭
     document.body.classList.toggle("no-effects", !$("set-fx").checked);
   }
@@ -108,21 +124,14 @@
       syncSetUI();
     })
   );
-  $("set-kb").addEventListener("change", () => {
-    const show = $("set-kb").checked;
-    localStorage.setItem("sysmon-show-kb", show ? "1" : "0");
-    $("kb-row").style.display = show ? "" : "none";
-    syncIslandSize(); // 行显隐改变内容高度,展开态下自适应窗口
-  });
   $("set-fx").addEventListener("change", () => {
     const on = $("set-fx").checked;
     localStorage.setItem("sysmon-effects", on ? "1" : "0");
     document.body.classList.toggle("no-effects", !on);
   });
 
-  // 初始化:主题 / KB 行显示 / 特效
+  // 初始化:主题 / 特效
   applySysTheme(localStorage.getItem("sysmon-theme") === "light");
-  $("kb-row").style.display = localStorage.getItem("sysmon-show-kb") !== "0" ? "" : "none";
   syncSetUI();
 
   /* ========== 渲染 ========== */
@@ -192,6 +201,22 @@
   }
 
   async function tick() {
+    // 灵动岛启用状态(系统设置弹窗开关 → settings.json):disabled 时 CSS 隐藏整个胶囊
+    // (窗口保留但内容全透明;不用 SW_HIDE——与 Go 侧 SetWindowPos/重绘冲突会导致启动黑窗闪烁)
+    // 每 5 次轮询(约 7.5s)查一次,避免频繁请求
+    if (++islandCheckCount % 5 === 1) {
+      try {
+        const ir = await fetch("/api/island", { cache: "no-store" });
+        if (ir.ok) {
+          const id = await ir.json();
+          const on = !id || id.enabled !== false;
+          if (on !== islandEnabled) {
+            islandEnabled = on;
+            document.body.classList.toggle("island-disabled", !on);
+          }
+        }
+      } catch (e) { /* 静默:后端不可达保持现状 */ }
+    }
     let s;
     try {
       const r = await fetch("/api/stats", { cache: "no-store" });
@@ -226,7 +251,7 @@
       ct.textContent = Math.round(s.cpu.temp) + "°C";
       ct.className = "temp mono " + tempClass(s.cpu.temp);
     } else {
-      ct.textContent = "";
+      ct.textContent = "N/A"; // 无传感器显示 N/A(与内存/视频管理一致)
       ct.className = "temp mono";
     }
     renderCores(s.cpu.cores);
@@ -240,7 +265,11 @@
     };
     setPill("pi-cpu", "pill-cpu", s.cpu.usage);
     setPill("pi-mem", "pill-mem", s.mem.percent);
-    setPill("pi-gpu", "pill-gpu", g0 && g0.present ? g0.usage : 0);
+    // GPU 胶囊:与展开态/视频管理一致显示显存使用率(渲染场景主指标)
+    const pillGpu = g0 && g0.present
+      ? (g0.memPercent != null && g0.memPercent > 0 ? g0.memPercent : g0.usage)
+      : 0;
+    setPill("pi-gpu", "pill-gpu", pillGpu);
 
     // MEM(温度依赖硬件传感器,经 LHM 读取;无传感器显示 N/A)
     setMetric($("mem-fill"), $("mem-val"), s.mem.percent, 0);
@@ -253,20 +282,30 @@
     }
     $("mem-sub").textContent = "已用 " + s.mem.used + " / " + s.mem.total + " · 可用 " + s.mem.available;
 
-    // GPU
+    // GPU:主数值/进度条 = 显存使用率(与视频管理运行状态一致;H3 渲染显存常满、
+    // 算力利用率波动,显存占用率更有参考性);温度照常;副行显存与算力并列
     const g = s.gpu;
     if (g && g.present) {
-      setMetric($("gpu-fill"), $("gpu-val"), g.usage, 0);
+      const gpuPct = g.memPercent != null && g.memPercent > 0 ? g.memPercent : g.usage;
+      setMetric($("gpu-fill"), $("gpu-val"), gpuPct, 0);
       const gt = $("gpu-temp");
-      gt.textContent = Math.round(g.temp) + "°C";
-      gt.className = "temp mono " + tempClass(g.temp);
+      // 温度 >0 才显示;nvidia-smi 偶发返回 0(查询竞态)时显示 N/A,不显示"0°C"误导
+      if (g.temp > 0) {
+        gt.textContent = Math.round(g.temp) + "°C";
+        gt.className = "temp mono " + tempClass(g.temp);
+      } else {
+        gt.textContent = "N/A";
+        gt.className = "temp mono";
+      }
+      // 显存:占用/总量(主数值已是显存使用率,小字不再重复百分比)+ 算力利用率
+      const useStr = g.usage >= 0 ? " · 算力 " + Math.round(g.usage) + "%" : "";
       $("gpu-mem").textContent =
-        "显存 " + g.memUsed + " / " + g.memTotal + (g.sharedUsed ? " · 共享 " + g.sharedUsed : "");
+        "显存 " + g.memUsed + " / " + g.memTotal + useStr + (g.sharedUsed ? " · 共享 " + g.sharedUsed : "");
     } else {
       $("gpu-fill").className = "fill";
       $("gpu-val").className = "val mono";
       $("gpu-val").textContent = "N/A";
-      $("gpu-temp").textContent = "";
+      $("gpu-temp").textContent = "N/A";
       $("gpu-mem").textContent = "未检测到 NVIDIA GPU";
     }
 
@@ -280,24 +319,6 @@
     $("net-d").textContent = "↓ " + fmtRate(s.net.rxRate);
     $("net-u").textContent = "↑ " + fmtRate(s.net.txRate);
     $("net-total").textContent = "下行 " + s.net.rxTotal + " · 上行 " + s.net.txTotal;
-
-    // KB 服务状态（NiliX 内置知识库，随服务常驻在线，仅提供"访问"）
-    const kb = s.kb,
-      dot = $("kb-dot"),
-      txt = $("kb-txt"),
-      meta = $("kb-meta"),
-      btnOpen = $("kb-open");
-    if (kb.online) {
-      dot.className = "kb-dot on";
-      txt.textContent = "在线";
-      meta.textContent = kb.pages + " 页 · " + kb.categories + " 类";
-      btnOpen.classList.remove("hidden");
-    } else {
-      dot.className = "kb-dot off";
-      txt.textContent = "离线";
-      meta.textContent = "";
-      btnOpen.classList.add("hidden");
-    }
 
     // ZCode 桌面端状态
     const z = s.zcode || {},
@@ -373,6 +394,35 @@
       cfOpen.classList.add("hidden");
     }
 
+    // DeepSeek Harness 服务状态(底部监控;启动/重启/访问按钮)
+    const hs = s.harness || {},
+      hDot = $("harness-dot"),
+      hTxt = $("harness-txt"),
+      hMeta = $("harness-meta"),
+      hStart = $("harness-start"),
+      hRestart = $("harness-restart"),
+      hOpen = $("harness-open");
+    if (hs.online) {
+      hDot.className = "kb-dot on";
+      hTxt.textContent = "在线";
+      hMeta.textContent = ":3080" + (hs.version ? " · " + hs.version : "");
+      hStart.classList.add("hidden");
+      hRestart.classList.remove("hidden");
+      hOpen.classList.remove("hidden");
+      if (harnessStarting) {
+        harnessStarting = false;
+        hStart.textContent = "启动";
+        hStart.disabled = false;
+      }
+    } else {
+      hDot.className = "kb-dot off";
+      hTxt.textContent = harnessStarting ? "启动中…" : "离线";
+      hMeta.textContent = "";
+      hStart.classList.remove("hidden");
+      hRestart.classList.add("hidden");
+      hOpen.classList.add("hidden");
+    }
+
   // 页脚
   $("foot-uptime").textContent = "运行 " + s.meta.uptime;
   $("foot-procs").textContent = "进程 " + s.meta.procs;
@@ -393,11 +443,6 @@
     const pclock = $("pill-clock");
     if (pclock) pclock.textContent = p(d.getHours()) + ":" + p(d.getMinutes()) + " " + wd;
   }
-
-  // KB 访问按钮:默认浏览器打开知识库
-  $("kb-open").addEventListener("click", () => {
-    if (typeof openKB === "function") openKB();
-  });
 
   // ZCode 启动按钮
   $("zcode-start").addEventListener("click", function () {
@@ -519,6 +564,71 @@
   $("comfy-open").addEventListener("click", () => {
     if (typeof openComfy === "function") openComfy();
   });
+
+  // DeepSeek Harness:启动 / 重启 / 访问(桥接 Go 注入函数;状态由 tick() 轮询刷新)
+  let harnessStarting = false;
+  const bindHarnessBtn = (id, fn, busyLabel) => {
+    $(id).addEventListener("click", function () {
+      if (typeof fn !== "function") return;
+      const btn = this;
+      const label = btn.textContent;
+      btn.textContent = busyLabel;
+      btn.disabled = true;
+      fn()
+        .then(() => {
+          setTimeout(() => {
+            btn.textContent = label;
+            btn.disabled = false;
+          }, 5000);
+        })
+        .catch(() => {
+          btn.textContent = "失败";
+          setTimeout(() => {
+            btn.textContent = label;
+            btn.disabled = false;
+          }, 1500);
+        });
+    });
+  };
+  $("harness-start").addEventListener("click", function () {
+    if (typeof startHarness !== "function" || harnessStarting) return;
+    const btn = this;
+    harnessStarting = true;
+    btn.textContent = "启动中…";
+    btn.disabled = true;
+    startHarness()
+      .then(() => {
+        setTimeout(() => {
+          if (harnessStarting) {
+            harnessStarting = false;
+            btn.textContent = "启动";
+            btn.disabled = false;
+          }
+        }, 30000);
+      })
+      .catch(() => {
+        harnessStarting = false;
+        btn.textContent = "失败";
+        setTimeout(() => {
+          btn.textContent = "启动";
+          btn.disabled = false;
+        }, 1500);
+      });
+  });
+  bindHarnessBtn("harness-restart", () => (typeof restartHarness === "function" ? restartHarness() : Promise.reject()), "重启中…");
+  $("harness-open").addEventListener("click", () => {
+    if (typeof openHarness === "function") openHarness();
+  });
+
+  // 启动即查灵动岛启用状态(不等 5 次轮询):若系统设置已禁用,立即隐藏,避免黑底胶囊残留
+  fetch("/api/island", { cache: "no-store" })
+    .then((r) => r.json())
+    .then((id) => {
+      const on = !id || id.enabled !== false;
+      islandEnabled = on;
+      document.body.classList.toggle("island-disabled", !on);
+    })
+    .catch(() => {});
 
   tick();
   setInterval(tick, 1500);

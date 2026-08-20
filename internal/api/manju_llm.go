@@ -27,6 +27,15 @@ type manjuLLM struct {
 	client      *http.Client
 	// onUsage 每次成功调用回抛 token 用量(项目级 llm_stats.json 记账;可为 nil)
 	onUsage func(model string, u agent.Usage)
+	// stopped 停止感知回调(用户点「停止」后 LLM 请求立即放弃,不再等 300s 超时;可为 nil)
+	stopped func() bool
+}
+
+// SetStopped 注入停止感知回调(渲染管线 newManjuCtx 时设置;LLM 长请求是"停止无反应"的残留点)
+func (l *manjuLLM) SetStopped(fn func() bool) {
+	if l != nil {
+		l.stopped = fn
+	}
 }
 
 // manjuLLMFromCfg 从 config.json 构造 LLM 客户端(服务/模型缺省时回退到存为默认的服务,再回退 DeepSeek)
@@ -107,38 +116,61 @@ func (l *manjuLLM) chat(system, user string, temp float64) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+l.apiKey)
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("LLM 请求失败: %w", err)
+	// 审计 H12:瞬时失败(429/5xx/网络抖动)指数退避重试,单次抖动不再打崩整条管线
+	// (此前零重试:plan 一次 429 即中断 AI 一条龙;修复师失败按原提示词白烧 GPU)
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// 停止感知:用户点「停止」后立即放弃(LLM 请求最长 300s,卡住时停止必须生效)
+		if l.stopped != nil && l.stopped() {
+			return "", fmt.Errorf("已停止")
+		}
+		resp, err := l.client.Do(req)
+		if err == nil {
+			data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+			_ = resp.Body.Close()
+			if resp.StatusCode == 200 {
+				var r struct {
+					Choices []struct {
+						FinishReason string `json:"finish_reason"`
+						Message      struct {
+							Content string `json:"content"`
+						} `json:"message"`
+					} `json:"choices"`
+					Usage agent.Usage `json:"usage"`
+				}
+				if err := json.Unmarshal(data, &r); err != nil {
+					return "", fmt.Errorf("LLM 响应解析失败: %w", err)
+				}
+				if len(r.Choices) == 0 {
+					return "", fmt.Errorf("LLM 空响应")
+				}
+				// 输出打满 max_tokens:JSON 被截断,直接判失败(调用方可精简重试)
+				if r.Choices[0].FinishReason == "length" {
+					return "", errLLMTruncated
+				}
+				if l.onUsage != nil && r.Usage.TotalTokens > 0 {
+					l.onUsage(l.model, r.Usage)
+				}
+				return r.Choices[0].Message.Content, nil
+			}
+			// 429/5xx:退避重试
+			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+				lastErr = fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+				if attempt < maxAttempts {
+					time.Sleep(time.Duration(attempt*2) * time.Second)
+					continue
+				}
+				return "", lastErr
+			}
+			return "", fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		}
+		lastErr = fmt.Errorf("LLM 请求失败: %w", err)
+		if attempt < maxAttempts {
+			time.Sleep(time.Duration(attempt*2) * time.Second)
+		}
 	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-	}
-	var r struct {
-		Choices []struct {
-			FinishReason string `json:"finish_reason"`
-			Message      struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Usage agent.Usage `json:"usage"`
-	}
-	if err := json.Unmarshal(data, &r); err != nil {
-		return "", fmt.Errorf("LLM 响应解析失败: %w", err)
-	}
-	if len(r.Choices) == 0 {
-		return "", fmt.Errorf("LLM 空响应")
-	}
-	// 输出打满 max_tokens:JSON 被截断,直接判失败(调用方可精简重试)
-	if r.Choices[0].FinishReason == "length" {
-		return "", errLLMTruncated
-	}
-	if l.onUsage != nil && r.Usage.TotalTokens > 0 {
-		l.onUsage(l.model, r.Usage)
-	}
-	return r.Choices[0].Message.Content, nil
+	return "", lastErr
 }
 
 // chatJSON 请求 JSON 对象(剥离可能的 ```json 围栏)
@@ -391,7 +423,7 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
 【输出 JSON（严格）】：
 {
   "episode_title": "集标题",
-  "characters": [{"id": "角色名", "gender": "男/女", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，逐字从原文提炼，具体到可渲染）", "costume": "完整服装描述", "image_prompt": "给图片模型的英文文生图提示词（半身立绘，` + assetStyle + ` 风格，正面正脸、头部完整居中（含发顶到下巴），含完整外观/服装/性别强化）"}],
+  "characters": [{"id": "角色名", "gender": "男/女", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，逐字从原文提炼，具体到可渲染）", "costume": "完整服装描述", "image_prompt": "给图片模型的英文文生图提示词（半身立绘，` + assetStyle + ` 风格，正面正脸、头部完整居中（含发顶到下巴），含完整外观/服装/性别强化）", "views": {"front": "英文文生图提示词：正面特写（头肩构图，正脸居中含发顶到肩，面部五官/发型/领口细节清晰，` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面轮廓（侧脸 90 度，发型/脸型/服装侧面轮廓清晰，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）"}}],
   "scenes": [{"id": "场景名（取自原文）", "description": "空间结构/材质/光线/氛围", "image_prompt": "给图片模型的英文文生图提示词（空场景无人物，明亮清晰，` + assetStyle + ` 风格）"}],
   "shots": [
     {
@@ -433,11 +465,13 @@ func manjuStyleShot1(style string) string {
 
 const manjuRef2vaTpl = `【Ref2VA 六段式(有角色,锁人物),严格此顺序】:
 subject_definitions:
-<Subject 1> is the character in <Picture 1> with [完整外观：逐字引用角色卡 appearance（发型/眼睛/疤痕/气质/道具等全部特征逐项覆盖，禁止省略/概括/编造）；服装 costume 全字段；【性别强化】女=feminine facial structure, soft delicate features, long hair（禁男性化），男=masculine jawline, strong brow, broad shoulders（禁女性化）]
-[多角色镜:每个登场角色一行 <Subject N> is the character in <Picture N>…,与参考图顺序一致(角色在前场景在后);画面里谁先出现谁 Subject 号靠前]
-[参考图纪律·强制:ref_available 名单的顺序就是参考图传入顺序;<Picture 1..N> 严格对应名单第 1..N 个角色,Subject 编号与之一一对应(Subject 1=名单第 1 个角色,依次),禁止调换/跳过/合并;名单外的登场角色(本镜参考图不足)写 <Subject N> is [角色名] with 外观描述(不引用任何 Picture),并保持与参考角色不串脸]
+<Subject 1> is the character in <Picture 1> and <Picture 2> ... with [完整外观：逐字引用角色卡 appearance（发型/眼睛/疤痕/气质/道具等全部特征逐项覆盖，禁止省略/概括/编造）；服装 costume 全字段；【性别强化】女=feminine facial structure, soft delicate features, long hair（禁男性化），男=masculine jawline, strong brow, broad shoulders（禁女性化）]
+[同一角色多视图:该角色有几个参考图就引用几张——<Subject 1> is the character in <Picture 1> (正面/正脸特写), <Picture 2> (全身/侧面/细节), ...;每张视图对应一个 <Picture N> 标签,顺序与 ref_available 该角色的视图顺序一致,全部引用后统一写 with [外观...]]
+[多角色镜:每个登场角色一行 <Subject N> is the character in <Picture A> and <Picture B> ...,与参考图顺序一致(角色在前场景在后);画面里谁先出现谁 Subject 号靠前]
+[参考图纪律·强制:ref_available 是「角色+视图」的平铺清单,顺序就是参考图传入顺序;<Picture 1..N> 严格对应清单第 1..N 项(同一角色多视图占多个 Picture 编号),Subject 编号与角色一一对应(Subject 1=清单第 1 个角色,依次),禁止调换/跳过/合并视图;清单外的登场角色(本镜参考图不足)写 <Subject N> is [角色名] with 外观描述(不引用任何 Picture),并保持与参考角色不串脸]
 [外观锁定·强制:每个角色的外观只允许出现角色卡 appearance+costume 里的特征,且逐项覆盖(发型/眼睛/疤痕/服装/道具缺一不可);禁止 generic 泛化词(ordinary/plain/sturdy/average/young man 等),禁止编造角色卡没有的特征(白发/换装/错误年龄);多角色镜严禁把其他角色的特征写进本角色(谁的特征写谁)]
-<Subject N+1> is the [场景名] environment in <Picture N+1>, with [空间结构/材质/光线客观描述，引用场景卡]
+[场景编号·强制:场景的 Picture 编号 = 全部角色视图总数 + 1(如 2 角色各 2 视图 → 场景在 <Picture 5>);Subject 编号 = 角色数 + 1]
+<Subject N+1> is the [场景名] environment in <Picture M>(M=角色视图总数+1), with [空间结构/材质/光线客观描述，引用场景卡]
 [关键道具：<Subject M> is the [道具名] in <Picture M>, with 外观描述；说明与角色互动]
 
 summary:
@@ -446,7 +480,7 @@ summary:
 retention_analysis:
 <Subject 1> (appears in [Shot 1]): fully_preserved - 面部/发型/服装与 <Picture 1> 完全一致
 [多角色镜:每个角色一行 retention_analysis,全部 fully_preserved]
-<Subject N+1> (appears in [Shot 1]): fully_preserved - 场景布局/光线/背景与 <Picture N+1> 一致
+<Subject N+1> (appears in [Shot 1]): fully_preserved - 场景布局/光线/背景与 <Picture M>(场景编号,同 subject_definitions) 一致
 [道具行同理]（标记只用官方固定四值：fully_preserved / partially_preserved / attribute_transfer / weak_reference；【官方规范】retention_analysis 内禁写 (Sx) 说话者 ID）
 
 detailed_description:

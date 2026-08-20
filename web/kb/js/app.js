@@ -69,6 +69,21 @@ const App = {
       const e2 = el(id);
       if (e2) e2.addEventListener("change", () => { P[k] = cast(e2.value); apply(); });
     });
+    // 灵动岛开关:读取后端 settings(默认启用),切换时写回(灵动岛轮询自动隐藏/显示)
+    const islandToggle = el("set-island-on");
+    if (islandToggle) {
+      fetch("/api/island", { cache: "no-store" })
+        .then((r) => r.json())
+        .then((d) => { if (d && typeof d.enabled === "boolean") islandToggle.checked = d.enabled; })
+        .catch(() => {});
+      islandToggle.addEventListener("change", () => {
+        fetch("/api/island", {
+          method: "POST",
+          headers: Object.assign({ "Content-Type": "application/json" }, this.nilixHeaders ? this.nilixHeaders({}) : {}),
+          body: JSON.stringify({ enabled: islandToggle.checked }),
+        }).catch(() => {});
+      });
+    }
     apply();
   },
 
@@ -211,7 +226,7 @@ const App = {
         pick.disabled = true;
         pick.textContent = I18N.t("dir.picking");
         try {
-          const r = await fetch("/api/fs/select", { cache: "no-store" });
+          const r = await fetch("/api/fs/select", { method: "POST", cache: "no-store", headers: { "X-NiliX-Token": (window.NILIX_TOKEN || "") } });
           if (!r.ok) throw new Error("select failed");
           const d = await r.json();
           if (d.dir) {
@@ -382,15 +397,17 @@ const App = {
       }
       if (this._ttTarget !== t) return; // 已移开,丢弃过期结果
       const cat = p.category || "未分类";
+      // 审计 H6:title/category 来自本地 md/README 文件(不可信输入),必须转义——
+      // 恶意标题含 <img onerror=...> 悬停即 XSS,且页面内 window.NILIX_TOKEN 可直接读取
       html =
-        `<div class="gt-line"><span class="gt-dot" style="background:${this.catColor(cat)}"></span>${this.catEmoji(cat)} ${cat}</div>` +
-        `<div class="gt-title">${p.title || t.dataset.page}</div>` +
+        `<div class="gt-line"><span class="gt-dot" style="background:${this.catColor(cat)}"></span>${this.catEmoji(cat)} ${esc(cat)}</div>` +
+        `<div class="gt-title">${esc(p.title || t.dataset.page)}</div>` +
         `<div class="gt-meta">↗ ${(p.links || []).length} 关联 · ${p.words || 0} 字 · ${this.fmtDate(p.mtime)}</div>`;
     } else {
       // 分类 tag:图例/侧栏分组标题/分类头
       const name = t.dataset.cat || t.textContent.trim();
       html =
-        `<div class="gt-line">${this.catEmoji(name)}<span>${name}</span></div>` +
+        `<div class="gt-line">${this.catEmoji(name)}<span>${esc(name)}</span></div>` +
         `<div class="gt-meta">知识分类 · 点击查看内容</div>`;
     }
     const tt = this._tt;
@@ -850,16 +867,25 @@ const App = {
     }, 3500);
   },
 
-  /* 全站提示气泡:所有 title 属性 → 精致气泡(替换浏览器丑原生提示) */
+  /* 全站提示气泡:所有 title/data-tip 属性 → 精致小弹窗(替换浏览器丑原生提示)
+     方案:悬停时读取 title → 迁移到 data-tip 并清空 title(抑制原生气泡,之后 title 属性
+     不再存在但 data-tip 持久)→ 350ms 后于元素旁显示自定义气泡;离开元素即收起。
+     动态生成内容由事件委托全覆盖,无需逐个初始化。 */
   initTips() {
     if (this._tipsInit) return;
     this._tipsInit = true;
     let tip = null, timer = null, cur = null;
+    const hide = () => {
+      clearTimeout(timer);
+      cur = null;
+      if (tip) { tip.remove(); tip = null; }
+    };
     const show = (el, x, y) => {
       if (tip) tip.remove();
       tip = document.createElement("div");
       tip.className = "tip-bubble";
-      tip.textContent = el.getAttribute("title") || el.dataset.tip || "";
+      tip.textContent = el.dataset.tip || "";
+      if (!tip.textContent.trim()) { tip = null; return; }
       document.body.appendChild(tip);
       const r = tip.getBoundingClientRect();
       let tx = x - r.width / 2, ty = y - r.height - 12;
@@ -870,26 +896,44 @@ const App = {
       tip.classList.add("show");
     };
     document.addEventListener("mouseover", (e) => {
-      const el = e.target.closest("[title], [data-tip]");
+      const t = e.target instanceof Element ? e.target : e.target.parentElement;
+      const el = t ? t.closest("[title], [data-tip]") : null;
       if (!el) return;
+      if (el === cur) return;                        // 已在展示(子元素间移动不重置)
+      hide();                                        // 切目标:收起上一个
       cur = el;
-      clearTimeout(timer);
+      // 首次悬停:title → data-tip 迁移并清空原生 title(抑制浏览器原生气泡,仅一次)
+      if (el.hasAttribute("title") && !el.dataset.tip) {
+        el.dataset.tip = el.getAttribute("title");
+        el.removeAttribute("title");
+      }
       timer = setTimeout(() => { if (cur === el) show(el, e.clientX, e.clientY); }, 350);
     });
+    // 气泡锚定目标元素(不跟随鼠标跳动):目标中心上方
     document.addEventListener("mousemove", (e) => {
-      if (cur && tip) {
-        const r = tip.getBoundingClientRect();
-        tip.style.left = Math.max(8, Math.min(innerWidth - r.width - 8, e.clientX - r.width / 2)) + "px";
-        tip.style.top = (e.clientY - r.height - 12) + "px";
-      }
+      if (!cur || !tip) return;
+      const el = cur;
+      const r = el.getBoundingClientRect();
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      let tx = r.left + r.width / 2 - tw / 2;
+      tx = Math.max(8, Math.min(innerWidth - tw - 8, tx));
+      let ty = r.top - th - 12;
+      if (ty < 8) ty = r.bottom + 12;
+      tip.style.left = tx + "px";
+      tip.style.top = ty + "px";
     });
     document.addEventListener("mouseout", (e) => {
-      if (e.target.closest("[title], [data-tip]") === cur) {
-        clearTimeout(timer);
-        cur = null;
-        if (tip) { tip.remove(); tip = null; }
+      const el = e.target instanceof Element ? e.target.closest("[title], [data-tip]") : null;
+      const rt = e.relatedTarget instanceof Element ? e.relatedTarget : null;
+      // 仅在真正离开当前目标(移入非 title 且非其子元素)时收起;进入子元素/另一 title 元素不闪
+      const stillInside = cur && rt && (cur.contains(rt) || rt.closest("[title], [data-tip]"));
+      if (el === cur && !stillInside) {
+        hide();
       }
     });
+    // 滚动/点击时收起,防气泡悬挂(弹窗开关/内容切换都会触发)
+    document.addEventListener("scroll", hide, true);
+    document.addEventListener("click", () => hide(), true);
   },
 
   /* 悬浮 AI 小助手:云朵播报;点击跳工作台 */
@@ -915,9 +959,10 @@ const App = {
     }
   },
 
-  /* 当前路由:comfy / novel / manju(默认视频管理;关系图谱页已移除) */
+  /* 当前路由:harness / comfy / novel / manju(默认视频管理) */
   currentRoute() {
     const hash = location.hash || "#/manju";
+    if (hash.startsWith("#/harness")) return "harness";
     if (hash.startsWith("#/comfy")) return "comfy";
     if (hash.startsWith("#/novel")) return "novel";
     return "manju";
@@ -925,10 +970,11 @@ const App = {
 
   route() {
     const route = this.currentRoute();
+    document.getElementById("view-harness").classList.toggle("is-active", route === "harness");
     document.getElementById("view-comfy").classList.toggle("is-active", route === "comfy");
     document.getElementById("view-novel").classList.toggle("is-active", route === "novel");
     document.getElementById("view-manju").classList.toggle("is-active", route === "manju");
-    document.body.classList.toggle("view-comfy-active", route === "comfy");
+    document.body.classList.toggle("view-comfy-active", route === "harness" || route === "comfy");
     document.body.classList.toggle("view-dir-active", route === "novel" || route === "manju");
     document.querySelectorAll(".nav-link").forEach((a) =>
       a.classList.toggle("is-active", a.dataset.route === route)
@@ -936,7 +982,9 @@ const App = {
     // 路由切换时关闭管理页遗留弹窗(宽阅读器/单视频弹窗)
     if (typeof NovelView !== "undefined") NovelView.closeReader();
     if (typeof ManjuView !== "undefined") ManjuView.closeFilmModal();
-    if (route === "comfy") ComfyView.enter();
+    if (route === "harness") {
+      this.ensureHarnessScript().then(() => HarnessView.enter());
+    } else if (route === "comfy") ComfyView.enter();
     else if (route === "novel") NovelView.enter();
     else {
       ManjuView.enter();
@@ -945,6 +993,18 @@ const App = {
     // 离开视频管理页时停止其轮询(iframe/状态常驻仅在本页需要)
     if (route !== "manju" && typeof ManjuWorkbench !== "undefined") ManjuWorkbench.leave();
     this.mascotOnRoute(route);
+  },
+
+  /* 动态加载 harness.js(未加载过才注入,避免首屏多请求) */
+  ensureHarnessScript() {
+    if (typeof HarnessView !== "undefined") return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "/js/harness.js?v=20260820c6";
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("harness.js 加载失败"));
+      document.head.appendChild(s);
+    });
   },
 
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,20 +22,17 @@ import (
 
 // Server 持有配置存储与内存态。
 type Server struct {
-	mu          sync.RWMutex
-	store       *config.Store
-	cfg         *config.Settings
-	indexHTML   []byte
-	renderMgr   *render.Manager
-	sysmon      *sysmon.Collector
-	kbStore     *kb_work.Store
-	kbGraphMu   sync.RWMutex
-	kbGraphJSON []byte
-	kbGraphGen  time.Time
-	kbRoot      string
-	kbFS        fs.FS
-	islandFS    fs.FS
-	outDir      string
+	mu        sync.RWMutex
+	store     *config.Store
+	cfg       *config.Settings
+	indexHTML []byte
+	renderMgr *render.Manager
+	sysmon    *sysmon.Collector
+	kbStore   *kb_work.Store
+	kbRoot    string
+	kbFS      fs.FS
+	islandFS  fs.FS
+	outDir    string
 }
 
 // NewServer 构造服务。
@@ -56,20 +54,26 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 	mux.HandleFunc("POST /api/settings/test", s.handleTest)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
-	mux.HandleFunc("GET /api/meta", s.handleKBMeta)
-	mux.HandleFunc("GET /api/graph", s.handleKBGraph)
 	mux.HandleFunc("GET /api/page", s.handleKBPage)
 	mux.HandleFunc("GET /api/asset", s.handleKBAsset)
-	mux.HandleFunc("POST /api/reload", s.handleKBReload)
 	mux.HandleFunc("GET /api/comfy", s.handleComfy)
 	mux.HandleFunc("POST /api/comfy/start", s.handleComfyStart)
 	mux.HandleFunc("POST /api/comfy/stop", s.handleComfyStop)
 	mux.HandleFunc("POST /api/comfy/install", comfyInstallStart)
 	mux.HandleFunc("GET /api/comfy/install/status", comfyInstallStatus)
 	mux.HandleFunc("POST /api/comfy/install/stop", comfyInstallStop)
+	// DeepSeek Harness 服务(监控/启动/重启,灵动岛 + 应用内嵌窗口共用)
+	mux.HandleFunc("GET /api/harness", s.handleHarness)
+	mux.HandleFunc("POST /api/harness/start", s.handleHarnessStart)
+	mux.HandleFunc("POST /api/harness/restart", s.handleHarnessRestart)
+	// 灵动岛配置(系统设置弹窗开关 ↔ settings.json;灵动岛轮询自身显隐)
+	mux.HandleFunc("GET /api/island", s.handleIslandGet)
+	mux.HandleFunc("POST /api/island", s.handleIslandPost)
 	mux.HandleFunc("GET /api/fs/list", s.handleFSList)
 	mux.HandleFunc("GET /api/fs/analyze", s.handleFSAnalyze)
-	mux.HandleFunc("GET /api/fs/select", s.handleFSSelect)
+	// 审计 M12:选目录弹系统对话框改 POST——GET 未鉴权且会启动阻塞式 STA 对话框,
+	// 恶意网页 <img src=".../fs/select"> 即可在用户桌面弹窗骚扰/诱导选择目录
+	mux.HandleFunc("POST /api/fs/select", s.handleFSSelect)
 	mux.HandleFunc("GET /api/fs/read", s.handleFSRead)
 	mux.HandleFunc("GET /api/fs/file", s.handleFSFile)
 	mux.HandleFunc("GET /api/fs/media", s.handleFSMedia)
@@ -79,6 +83,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/novel/analyze", s.handleNovelAnalyze)
 	mux.HandleFunc("POST /api/novel/review", s.handleNovelReview)
 	mux.HandleFunc("POST /api/novel/chapter", s.handleNovelChapter)
+	mux.HandleFunc("POST /api/novel/delete", s.handleNovelDelete)
 	mux.HandleFunc("GET /api/novel/progress", s.handleNovelProgress)
 	mux.HandleFunc("POST /api/novel/auto", s.handleNovelAuto)
 	mux.HandleFunc("POST /api/novel/auto/stop", s.handleNovelAutoStop)
@@ -101,7 +106,33 @@ func (s *Server) Routes() http.Handler {
 		// 所有写请求带错误 token 被 auth 拦成 401「会话失效」
 		mux.Handle("/", noCacheHTML(s.tokenInject(http.FileServer(http.FS(s.kbFS)))))
 	}
-	return s.auth(mux)
+	return s.localHostOnly(s.auth(mux))
+}
+
+// localHostOnly DNS rebinding 防线(审计 H1):只接受本机 Host。
+// 恶意域名 A 记录指向 127.0.0.1 时,浏览器同源策略把它视为同源,服务端渲染进 HTML 的
+// 会话 token 会被攻击者页面读到——Host 头校验是第一道闸,拒绝一切非本机来源。
+func (s *Server) localHostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !validLocalHost(r.Host) {
+			writeErr(w, http.StatusForbidden, "非法 Host,仅接受本机访问")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// validLocalHost 判断 Host 头是否为本机地址(兼容带/不带端口)
+func validLocalHost(hostPort string) bool {
+	h := hostPort
+	if host, _, err := net.SplitHostPort(hostPort); err == nil {
+		h = host
+	}
+	switch h {
+	case "127.0.0.1", "localhost", "::1", "[::1]":
+		return true
+	}
+	return false
 }
 
 // tokenInject 对 HTML 响应替换会话令牌占位符 /*__NILIX_TOKEN__*/ → 真实 token。
@@ -109,6 +140,18 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) tokenInject(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		isHTML := r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") || strings.HasSuffix(r.URL.Path, "/index.html")
+		if isHTML {
+			// 审计 H6:CSP——本地页面含用户可控 md 内容,XSS 后果放大;frame-ancestors 防嵌入。
+			// frame-src 必须放行 ComfyUI(默认 127.0.0.1:8190,可自定义端口/地址)——此前缺
+			// frame-src 回退 default-src 'self',跨源 iframe(ComfyUI)被浏览器阻止
+			// "已阻止此内容。请与网站所有者联系以解决此问题。"
+			w.Header().Set("Content-Security-Policy",
+				"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
+					"img-src 'self' data: blob:; media-src 'self' blob:; "+
+					"frame-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; "+
+					"frame-ancestors 'none'; base-uri 'self'")
+			w.Header().Set("X-Frame-Options", "DENY")
+		}
 		if sessionToken == "" || !isHTML {
 			next.ServeHTTP(w, r)
 			return
@@ -202,6 +245,12 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	view := *s.cfg
 	set := view.LLM.APIKey != ""
 	view.LLM.APIKey = maskKey(view.LLM.APIKey)
+	if view.Agent != nil {
+		// 深拷贝 Agent 节：浅拷贝下 view.Agent 仍指向共享配置，掩码会写回原值
+		ag := *view.Agent
+		ag.VisionAPIKey = maskKey(ag.VisionAPIKey)
+		view.Agent = &ag
+	}
 	s.mu.RUnlock()
 
 	writeJSON(w, http.StatusOK, getSettingsResponse{Settings: view, APIKeySet: set})

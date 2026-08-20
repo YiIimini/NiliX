@@ -53,7 +53,16 @@ func (m *Manager) SetComfyURL(url string) {
 }
 
 // Submit 提交一部脚本的渲染任务并异步执行；每次提交用最新渲染配置。
+// 审计 M7:并发上限——单 GPU 一次只允许 1 个 running 任务,连点提交不再全部压向 ComfyUI。
 func (m *Manager) Submit(script *storyboard.Script, seed int, cfg config.Settings, outDir string) *Job {
+	m.mu.Lock()
+	for _, j := range m.jobs {
+		if j.Status == "running" {
+			busy := &Job{ID: "busy", Title: script.Title, Status: "busy", Error: "已有渲染任务运行中,请等待完成或先停止"}
+			m.mu.Unlock()
+			return busy
+		}
+	}
 	job := &Job{
 		ID:      fmt.Sprintf("%d", time.Now().UnixNano()),
 		Title:   script.Title,
@@ -61,7 +70,6 @@ func (m *Manager) Submit(script *storyboard.Script, seed int, cfg config.Setting
 		Total:   len(script.Shots),
 		Started: time.Now(),
 	}
-	m.mu.Lock()
 	m.jobs[job.ID] = job
 	m.mu.Unlock()
 
@@ -161,10 +169,17 @@ func (m *Manager) Status(id string) (*Job, bool) {
 	return j, ok
 }
 
-// List 返回所有任务（新在前）。
+// List 返回所有任务（新在前）。审计 M7:顺带 TTL 清理——完成/失败超过 1 小时的旧任务移除,
+// 防 jobs map 只增不减内存增长与 /api/render/jobs 响应膨胀
 func (m *Manager) List() []*Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	cutoff := time.Now().Add(-time.Hour)
+	for id, j := range m.jobs {
+		if (j.Status == "completed" || j.Status == "failed") && j.Started.Before(cutoff) {
+			delete(m.jobs, id)
+		}
+	}
 	out := make([]*Job, 0, len(m.jobs))
 	for _, j := range m.jobs {
 		out = append(out, j)

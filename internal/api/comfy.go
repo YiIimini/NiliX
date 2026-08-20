@@ -187,11 +187,29 @@ func startComfy() error {
 	defer f.Close()
 	cmd.Stdout = f
 	cmd.Stderr = f
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// 审计 H4:记录本服务启动的 PID,停止时优先按 PID 杀(此前按端口 taskkill 会误杀
+	// 占用同端口的无关进程;也防"改端口后停不掉自己的实例")
+	comfyProcPID = cmd.Process.Pid
+	return nil
 }
 
+// comfyProcPID 本服务启动的 ComfyUI 进程 PID(0=非本服务启动/未启动)
+var comfyProcPID int
+
 func stopComfy() error {
-	// 用当前生效端口找进程(与启动一致;写死 8190 会导致改端口后停不掉真进程)
+	// 优先杀本服务启动的进程(审计 H4:防误杀同端口第三方进程)
+	if pid := comfyProcPID; pid > 0 {
+		comfyProcPID = 0
+		cmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+	}
+	// 兜底:按当前生效端口找(可能用户手动重启过 ComfyUI,进程非本服务启动)
 	pid := findPortPID(currentPort())
 	if pid == 0 {
 		return errors.New("comfy not running")

@@ -24,7 +24,17 @@ func manjuCleanupRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing targets(gacha/frames/2k)")
 		return
 	}
-	ctx, err := newManjuCtx(configPath, "", "", "", "")
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	// 运行中禁止清理(审计 S7:与渲染并发撕扯产物)
+	if manjuStateRunningFor(cp) {
+		writeErr(w, http.StatusConflict, "该项目正在渲染中,请先停止再清理")
+		return
+	}
+	ctx, err := newManjuCtx(cp, "", "", "", "")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return

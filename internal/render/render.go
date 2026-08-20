@@ -69,6 +69,11 @@ func (r *Renderer) RenderShot(ctx context.Context, prompt string, durationSec fl
 	if err := os.MkdirAll(r.outDir, 0o755); err != nil {
 		return "", err
 	}
+	// 审计 H3:shotID 落盘前白名单化,防路径穿越写出 outDir
+	shotID = safeName(shotID)
+	if shotID == "" || shotID == "." || shotID == ".." {
+		return "", fmt.Errorf("非法镜头标识")
+	}
 	length := durationToFrames(durationSec, r.cfg.FPS)
 	var wf map[string]any
 	if len(refImages) > 0 {

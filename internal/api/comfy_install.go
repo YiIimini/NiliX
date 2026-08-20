@@ -22,6 +22,7 @@ import (
 type comfyInstallState struct {
 	mu      sync.Mutex
 	running bool
+	cancelled bool // 审计 M6:用户点停止后置位,下载/克隆循环检查并中断(此前只改状态,后台照跑)
 	step    string // portable / tool / node / model / media / done
 	item    string // 当前下载项
 	done    bool
@@ -124,10 +125,15 @@ func downloadFile(url, dst string, st *comfyInstallState, label string) error {
 	if err != nil {
 		return err
 	}
-	// 流式写,进度按已落盘字节数汇报(下载大文件时前端可见在动)
+	// 流式写,进度按已落盘字节数汇报(下载大文件时前端可见在动);审计 M6:每块检查取消
 	buf := make([]byte, 256<<10)
 	var written int64
 	for {
+		if st.cancelled {
+			f.Close()
+			_ = os.Remove(tmp)
+			return fmt.Errorf("安装已取消")
+		}
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
 			if _, werr := f.Write(buf[:n]); werr != nil {
@@ -257,6 +263,14 @@ func installComfyUI() error {
 				rc = 1
 				return
 			}
+			// 解压前完整性校验(审计 H2):7z t 测试归档——下载中断/损坏的压缩包直接解压会
+			// 静默产出残缺程序;下载源校验和待发布方提供后填入 downloadFile 的 sha256 参数
+			st.setStep("portable", "校验压缩包完整性")
+			if out, err := exec.Command(sz, "t", arc, "-y", "-bso0", "-bsp0").CombinedOutput(); err != nil {
+				st.err = "压缩包完整性校验失败(下载可能损坏,请重试): " + err.Error() + " " + truncate(string(out), 200)
+				rc = 1
+				return
+			}
 			// 解压
 			st.setStep("portable", "解压 ComfyUI(约2分钟)")
 			st.instNote("📦 解压 ComfyUI ...")
@@ -270,8 +284,8 @@ func installComfyUI() error {
 			}
 			// 定位 portable 解压出的 ComfyUI 目录并移动到目标
 			src := filepath.Join(stage, "ComfyUI_windows_portable", "ComfyUI")
-			if !dirExists(src) {
-				st.err = "解压结构异常(未找到 ComfyUI 目录)"
+			if !dirExists(src) || !fileExists(filepath.Join(src, "main.py")) {
+				st.err = "解压结构异常(未找到 ComfyUI/main.py)"
 				rc = 1
 				return
 			}
@@ -357,11 +371,14 @@ func comfyInstallStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, comfyInstallStatusView())
 }
 
-// comfyInstallStop POST 停止安装(检查点退出)
+// comfyInstallStop POST 停止安装(审计 M6:置 cancelled,下载/克隆循环据此真正中断——
+// 此前只改 running/done 状态,后台 goroutine 的 downloadFile 从不检查,点停止后
+// 下载照常跑完、文件照常落盘,还因 ComfyRootDir 已存在无法重装)
 func comfyInstallStop(w http.ResponseWriter, r *http.Request) {
 	st := &comfyInstallSt
 	st.mu.Lock()
 	st.running = false
+	st.cancelled = true
 	st.done = true
 	st.rc = -1
 	st.err = "已手动停止"
