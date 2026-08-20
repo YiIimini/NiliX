@@ -1052,31 +1052,3 @@ const App = {
 };
 
 document.addEventListener("DOMContentLoaded", () => App.init());
-
-/* ===== frameless 窗口控制(wails 主窗口,外部 URL 无 wails runtime → HTTP 8799) =====
-   像灵动岛胶囊一样在页面主 JS 绑定按钮,确保执行——此前放 index.html inline script
-   未生效(按钮无功能)。最小化/最大化/关闭 + topbar 空白区拖拽(/move 增量)。 */
-document.addEventListener("DOMContentLoaded", function () {
-  function ctl(act) { fetch("http://127.0.0.1:8799/" + act).catch(function () {}); }
-  var min = document.getElementById("tb-min"), max = document.getElementById("tb-max"), close = document.getElementById("tb-close");
-  if (min) min.addEventListener("click", function () { ctl("minimize"); });
-  if (max) max.addEventListener("click", function () { ctl("maximize"); });
-  if (close) close.addEventListener("click", function () { ctl("close"); });
-  var topbar = document.querySelector(".topbar");
-  if (topbar) {
-    var dragging = false, lastX = 0, lastY = 0;
-    topbar.addEventListener("mousedown", function (e) {
-      if (e.target.closest(".controls, .nav, a, button, input, select, label")) return;
-      dragging = true;
-      lastX = e.screenX; lastY = e.screenY;
-      e.preventDefault();
-    });
-    window.addEventListener("mousemove", function (e) {
-      if (!dragging) return;
-      var dx = e.screenX - lastX, dy = e.screenY - lastY;
-      lastX = e.screenX; lastY = e.screenY;
-      if (dx !== 0 || dy !== 0) fetch("http://127.0.0.1:8799/move?dx=" + dx + "&dy=" + dy).catch(function () {});
-    });
-    window.addEventListener("mouseup", function () { dragging = false; });
-  }
-});

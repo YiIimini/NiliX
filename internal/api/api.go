@@ -146,9 +146,13 @@ func (s *Server) tokenInject(next http.Handler) http.Handler {
 			// frame-src 必须放行 ComfyUI(默认 127.0.0.1:8190,可自定义端口/地址)——此前缺
 			// frame-src 回退 default-src 'self',跨源 iframe(ComfyUI)被浏览器阻止
 			// "已阻止此内容。请与网站所有者联系以解决此问题。"
+			// connect-src 必须放行本地控制端口 8799(主窗口按钮)/8788(胶囊)——此前缺
+			// connect-src 回退 default-src 'self',跨端口 fetch 被 CSP 拦截,
+			// 最小化/最大化/关闭按钮点击无效(页面 JS 静默失败,按钮无功能)。
 			w.Header().Set("Content-Security-Policy",
 				"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
 					"img-src 'self' data: blob:; media-src 'self' blob:; "+
+					"connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; "+
 					"frame-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; "+
 					"frame-ancestors 'none'; base-uri 'self'")
 			w.Header().Set("X-Frame-Options", "DENY")
