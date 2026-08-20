@@ -6,6 +6,40 @@
   let islandEnabled = true;
   let islandCheckCount = 0;
 
+  /* ========== 绑定兼容层 ==========
+     go-webview2 旧实现注入 window.setIsland/startComfy 等 Go 绑定;
+     wails 胶囊加载 8787 外部 URL 无注入 → fallback 到 HTTP API:
+       - 窗口尺寸/关闭: 本机 8788(capsule 进程控制端口)
+       - ComfyUI/Harness 启停: 8787 主服务 HTTP API
+       - 打开浏览器: window.open */
+  function httpPost(url) {
+    return fetch(url, { method: "POST" }).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); });
+  }
+  function httpGet(url) {
+    return fetch(url).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); });
+  }
+  if (typeof setIsland !== "function") {
+    window.setIsland = (expanded, w, h) => {
+      const nw = expanded ? 380 : 300, nh = expanded ? 420 : 84;
+      httpGet("http://127.0.0.1:8788/size?w=" + nw + "&h=" + nh).catch(() => {});
+    };
+  }
+  if (typeof closeWin !== "function") {
+    window.closeWin = () => httpGet("http://127.0.0.1:8788/close");
+  }
+  if (typeof startComfy !== "function") window.startComfy = () => httpPost("http://127.0.0.1:8787/api/comfy/start");
+  if (typeof stopComfy !== "function") window.stopComfy = () => httpPost("http://127.0.0.1:8787/api/comfy/stop");
+  if (typeof openComfy !== "function") window.openComfy = () => window.open("http://127.0.0.1:8190");
+  if (typeof openKB !== "function") window.openKB = () => window.open("http://127.0.0.1:8787");
+  if (typeof startHarness !== "function") window.startHarness = () => httpPost("http://127.0.0.1:8787/api/harness/start");
+  if (typeof restartHarness !== "function") window.restartHarness = () => httpPost("http://127.0.0.1:8787/api/harness/restart");
+  if (typeof openHarness !== "function") window.openHarness = () => window.open("http://127.0.0.1:3080");
+  // ZCode/BOT 无 HTTP API:fallback 空操作(按钮保持现状)
+  if (typeof startZCode !== "function") window.startZCode = () => Promise.resolve();
+  if (typeof stopZCode !== "function") window.stopZCode = () => Promise.resolve();
+  if (typeof stopBot !== "function") window.stopBot = () => Promise.resolve();
+  if (typeof restartBot !== "function") window.restartBot = () => Promise.resolve();
+
   /* ========== 灵动岛展开/收起 ========== */
   let expanded = false;
   let lastCollapseAt = 0; // 收起时间戳:防收起动画后鼠标仍在胶囊位置导致闪烁重开

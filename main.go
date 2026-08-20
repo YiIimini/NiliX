@@ -489,40 +489,34 @@ func main() {
 	// 	_ = cmd.Start()
 	// }()
 
-	// 灵动岛悬浮胶囊（WebView2）
+	// 灵动岛悬浮胶囊:由独立 wails v3 进程(NiliX-Capsule.exe)提供——go-webview2 直连
+	// WebView2 的透明/无边框渲染有黑底/画刷 bug(官方 Issue #888/#5492),wails 后端
+	// 成熟处理。NiliX 只负责拉起胶囊进程(独立生命周期,退出不影响主进程)。
 	go func() {
-		// 灵动岛崩溃保护:不让 WebView2/样式回调 panic 崩掉整个主进程
-		defer func() {
-			if r := recover(); r != nil {
-				buf := make([]byte, 64<<10)
-				n := runtime.Stack(buf, false)
-				log.Printf("灵动岛崩溃(panic): %v\n%s", r, buf[:n])
-			}
-		}()
-		time.Sleep(500 * time.Millisecond)
-		actions := island.Actions{
-			StartComfy: api.ComfyStart,
-			StopComfy:  api.ComfyStop,
-			OpenComfy:  func() { openBrowser(api.ComfyURL()) },
-			OpenKB:     func() { showMainWindow(url) },
-			StartZCode: startZCode,
-			StopZCode:  stopZCode,
-			StopBot:    stopBot,
-			RestartBot: stopBot, // 同 stop：kill 后 ZCode 约 5s 自动重建接管
-			// DeepSeek Harness:启动/重启/访问(浏览器打开 DSH Web)
-			StartHarness:   api.HarnessStart,
-			RestartHarness: api.HarnessRestart,
-			OpenHarness:    func() { openBrowser("http://127.0.0.1:3080") },
-		}
-		if err := island.Run(url+"/island/", func() {
-			log.Println("退出触发: 灵动岛关闭按钮(X)") // 诊断:莫名退出时定位触发源
-			systray.Quit()
-		}, actions); err != nil {
-			log.Printf("灵动岛启动失败: %v", err)
-		}
+		time.Sleep(800 * time.Millisecond) // 等服务与主窗口就绪
+		startCapsule()
 	}()
 
 	systray.Run(onReady(url), onExit)
+}
+
+// startCapsule 拉起独立灵动岛胶囊进程(NiliX-Capsule.exe,与主 exe 同目录)。
+func startCapsule() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	capExe := filepath.Join(filepath.Dir(exe), "NiliX-Capsule.exe")
+	if _, err := os.Stat(capExe); err != nil {
+		log.Printf("灵动岛胶囊程序缺失(跳过): %s", capExe)
+		return
+	}
+	cmd := exec.Command(capExe)
+	// 胶囊是 GUI 应用(windowsgui,无 console),不能用 HideWindow——STARTF_USESHOWWINDOW
+	// 会把胶囊的主窗口也隐藏(实测窗口 vis=false)。
+	if err := cmd.Start(); err != nil {
+		log.Printf("灵动岛胶囊启动失败: %v", err)
+	}
 }
 
 func onReady(url string) func() {

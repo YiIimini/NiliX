@@ -97,8 +97,13 @@ body.island-expanded .card {
     linear-gradient(180deg, var(--glass-top) 0%, var(--glass-mid) 42%, var(--glass-bot) 100%);
 }
 /* 收起态:同样深黑玻璃垫底(CSS 圆角裁剪出胶囊;背景绝不能透明——
-   WebView2 默认白底会从胶囊圆角外透出,形成白色块) */
+   WebView2 默认白底会从胶囊圆角外透出,形成白色块)。
+   高度固定 44px(顶部胶囊),底部留透明:窗口高 84px,下方 40px 为投影空间,
+   box-shadow(8px 下移+30px 模糊)在此区域正常显示,不被窗口边界硬裁出"直角边"。 */
 body.island-collapsed .card {
+  height: 44px;
+  top: 0;
+  bottom: auto;
   background:
     linear-gradient(180deg, var(--glass-top) 0%, var(--glass-mid) 55%, var(--glass-bot) 100%);
 }
