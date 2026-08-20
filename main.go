@@ -547,16 +547,21 @@ func onReady(url string) func() {
 		mApp.SetIcon(iconICO)
 		systray.AddSeparator()
 
-		mComfy := systray.AddMenuItem("ComfyUI", "ComfyUI 控制")
-		// 状态灯图标:红=已停止 黄=启动中 绿=运行中(有任务) 蓝=闲置中(在线空闲)。
-		// 定时轮询刷新(3s),ComfyUI 状态变化即时反映在菜单图标。
-		mComfy.SetIcon(dotIcon(235, 70, 60))
+		// ComfyUI 状态灯:独立菜单项(子菜单父项在 Windows 弹出菜单不显示位图,
+		// 只能独立项带图标 + 文字)。红=已停止 黄=启动中 绿=运行中 蓝=闲置中。
+		mComfyStatus := systray.AddMenuItem("ComfyUI 状态…", "ComfyUI 运行状态")
+		mComfyStatus.SetIcon(dotIcon(235, 70, 60))
 		go func() {
 			for {
-				mComfy.SetIcon(comfyStatusLight())
+				icon, label := comfyStatusLight()
+				mComfyStatus.SetIcon(icon)
+				mComfyStatus.SetTitle("ComfyUI " + label)
 				time.Sleep(3 * time.Second)
 			}
 		}()
+		systray.AddSeparator()
+
+		mComfy := systray.AddMenuItem("ComfyUI 控制", "ComfyUI 控制")
 		mComfyOpen := mComfy.AddSubMenuItem("打开面板", "打开 ComfyUI 面板")
 		mComfyStart := mComfy.AddSubMenuItem("启动 ComfyUI", "启动 ComfyUI 服务")
 		mComfyStop := mComfy.AddSubMenuItem("停止 ComfyUI", "停止 ComfyUI 服务")
@@ -640,19 +645,19 @@ func dotIcon(r, g, b uint8) []byte {
 	return buf.Bytes()
 }
 
-// comfyStatusLight 托盘 ComfyUI 状态灯:
+// comfyStatusLight 托盘 ComfyUI 状态灯(图标 + 文字):
 // 红=已停止(离线无进程) 黄=启动中(离线但端口有进程) 绿=运行中(在线且队列有任务) 蓝=闲置中(在线空闲)
-func comfyStatusLight() []byte {
+func comfyStatusLight() ([]byte, string) {
 	if api.ComfyOnline() {
 		if api.ComfyBusy() {
-			return dotIcon(70, 200, 100) // 绿
+			return dotIcon(70, 200, 100), "运行中"
 		}
-		return dotIcon(80, 150, 240) // 蓝
+		return dotIcon(80, 150, 240), "闲置中"
 	}
 	if api.ComfyPortPID() > 0 {
-		return dotIcon(255, 190, 30) // 黄
+		return dotIcon(255, 190, 30), "启动中"
 	}
-	return dotIcon(235, 70, 60) // 红
+	return dotIcon(235, 70, 60), "已停止"
 }
 
 // closeMainWindow 关闭管理主窗口(子进程 WebView2)。用 FindWindowW 精确匹配标题
