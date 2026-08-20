@@ -84,10 +84,11 @@ html, body {
     linear-gradient(180deg, var(--glass-top) 0%, var(--glass-mid) 42%, var(--glass-bot) 100%);
   border-radius: 22px; /* 收起胶囊圆角 ≈ miniR-1 */
   /* 浅色描边用内阴影环(inset box-shadow 沿 border-radius 走,圆角处不丢失;
-     1px border/1px 环在圆角弧线上会被抗锯齿抹掉,故用 2px 环) */
+     1px border/1px 环在圆角弧线上会被抗锯齿抹掉,故用 2px 环)。
+     注意:不加外部投影(0 8px 30px)——半透明黑色投影在 WebView2 透明窗口上
+     会合成成"灰透明长方形"(用户反馈),且需要窗口加高留投影空间。 */
   box-shadow:
-    inset 0 0 0 2px rgba(255, 255, 255, 0.12),
-    0 8px 30px rgba(0, 0, 0, 0.5);
+    inset 0 0 0 2px rgba(255, 255, 255, 0.12);
   overflow: hidden;
 }
 /* 展开态:四角直角,深黑玻璃背景 */
@@ -97,13 +98,8 @@ body.island-expanded .card {
     linear-gradient(180deg, var(--glass-top) 0%, var(--glass-mid) 42%, var(--glass-bot) 100%);
 }
 /* 收起态:同样深黑玻璃垫底(CSS 圆角裁剪出胶囊;背景绝不能透明——
-   WebView2 默认白底会从胶囊圆角外透出,形成白色块)。
-   高度固定 44px(顶部胶囊),底部留透明:窗口高 84px,下方 40px 为投影空间,
-   box-shadow(8px 下移+30px 模糊)在此区域正常显示,不被窗口边界硬裁出"直角边"。 */
+   WebView2 默认白底会从胶囊圆角外透出,形成白色块)。窗口=胶囊 300x44,无投影空间。 */
 body.island-collapsed .card {
-  height: 44px;
-  top: 0;
-  bottom: auto;
   background:
     linear-gradient(180deg, var(--glass-top) 0%, var(--glass-mid) 55%, var(--glass-bot) 100%);
 }
@@ -161,8 +157,8 @@ body.island-closing #pill { display: none; }
     linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 38%, rgba(0, 0, 0, 0.22) 100%),
     linear-gradient(180deg, var(--glass-top) 0%, var(--glass-mid) 55%, var(--glass-bot) 100%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 6px 22px rgba(0, 0, 0, 0.5);
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  /* 无外部投影:透明窗口上半透明黑投影会合成成灰矩形 */
 }
 /* 流动光泽:常驻的流体高光(黑玻璃上反光) */
 .pill::before {

@@ -20,7 +20,7 @@
   }
   if (typeof setIsland !== "function") {
     window.setIsland = (expanded, w, h) => {
-      const nw = expanded ? 380 : 300, nh = expanded ? 420 : 84;
+      const nw = expanded ? 380 : 300, nh = expanded ? 420 : 44;
       httpGet("http://127.0.0.1:8788/size?w=" + nw + "&h=" + nh).catch(() => {});
     };
   }
