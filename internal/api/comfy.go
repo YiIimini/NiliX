@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -236,6 +237,32 @@ func ComfyOnline() bool {
 	c := newComfyClient(comfyParams.url)
 	_, err := c.online()
 	return err == nil
+}
+
+// ComfyPortPID 生效端口上监听的进程 PID(0=无进程)。托盘状态灯判"启动中"用:
+// 离线但端口有进程 = 正在启动(黄);离线且无进程 = 已停止(红)。
+func ComfyPortPID() int {
+	return findPortPID(currentPort())
+}
+
+// ComfyBusy ComfyUI 队列是否有任务(running/pending 任一非空)。
+// 托盘状态灯判"运行中(绿) vs 闲置(蓝)"用。
+func ComfyBusy() bool {
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(comfyParams.url + "/queue")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	var q struct {
+		QueueRunning []map[string]any `json:"queue_running"`
+		QueuePending []map[string]any `json:"queue_pending"`
+	}
+	if json.Unmarshal(body, &q) != nil {
+		return false
+	}
+	return len(q.QueueRunning) > 0 || len(q.QueuePending) > 0
 }
 
 func (s *Server) handleComfy(w http.ResponseWriter, r *http.Request) {

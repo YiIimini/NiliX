@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"embed"
 	"encoding/json"
 	"errors"
 	"flag"
+	"image"
+	"image/color"
+	"image/png"
 	"io/fs"
 	"log"
 	"net"
@@ -544,7 +548,15 @@ func onReady(url string) func() {
 		systray.AddSeparator()
 
 		mComfy := systray.AddMenuItem("ComfyUI", "ComfyUI 控制")
-		mComfy.SetIcon(iconICO)
+		// 状态灯图标:红=已停止 黄=启动中 绿=运行中(有任务) 蓝=闲置中(在线空闲)。
+		// 定时轮询刷新(3s),ComfyUI 状态变化即时反映在菜单图标。
+		mComfy.SetIcon(dotIcon(235, 70, 60))
+		go func() {
+			for {
+				mComfy.SetIcon(comfyStatusLight())
+				time.Sleep(3 * time.Second)
+			}
+		}()
 		mComfyOpen := mComfy.AddSubMenuItem("打开面板", "打开 ComfyUI 面板")
 		mComfyStart := mComfy.AddSubMenuItem("启动 ComfyUI", "启动 ComfyUI 服务")
 		mComfyStop := mComfy.AddSubMenuItem("停止 ComfyUI", "停止 ComfyUI 服务")
@@ -610,6 +622,37 @@ func hideCapsule() {
 		return
 	}
 	_ = resp.Body.Close()
+}
+
+// dotIcon 生成 16x16 实心圆点状态灯 PNG(托盘菜单项图标)
+func dotIcon(r, g, b uint8) []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			dx, dy := float64(x)-7.5, float64(y)-7.5
+			if dx*dx+dy*dy <= 7*7 {
+				img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
+			}
+		}
+	}
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
+
+// comfyStatusLight 托盘 ComfyUI 状态灯:
+// 红=已停止(离线无进程) 黄=启动中(离线但端口有进程) 绿=运行中(在线且队列有任务) 蓝=闲置中(在线空闲)
+func comfyStatusLight() []byte {
+	if api.ComfyOnline() {
+		if api.ComfyBusy() {
+			return dotIcon(70, 200, 100) // 绿
+		}
+		return dotIcon(80, 150, 240) // 蓝
+	}
+	if api.ComfyPortPID() > 0 {
+		return dotIcon(255, 190, 30) // 黄
+	}
+	return dotIcon(235, 70, 60) // 红
 }
 
 // closeMainWindow 关闭管理主窗口(子进程 WebView2)。用 FindWindowW 精确匹配标题
