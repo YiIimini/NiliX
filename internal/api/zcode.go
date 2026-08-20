@@ -6,6 +6,7 @@ package api
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -49,9 +50,11 @@ func BotStop() error {
 }
 
 // registerZcodeRoutes 胶囊服务按钮的 HTTP 端点(与原版 isl island.Actions 一一对应)
+// 错误同时写响应与运行日志(用户报障时能查原因)。
 func (s *Server) registerZcodeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/zcode/start", func(w http.ResponseWriter, r *http.Request) {
 		if err := ZCodeStart(); err != nil {
+			log.Printf("[zcode] start 失败: %v", err)
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -59,6 +62,7 @@ func (s *Server) registerZcodeRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /api/zcode/stop", func(w http.ResponseWriter, r *http.Request) {
 		if err := ZCodeStop(); err != nil {
+			log.Printf("[zcode] stop 失败: %v", err)
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -66,6 +70,7 @@ func (s *Server) registerZcodeRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /api/bot/stop", func(w http.ResponseWriter, r *http.Request) {
 		if err := BotStop(); err != nil {
+			log.Printf("[zcode] bot/stop 失败: %v", err)
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -74,6 +79,7 @@ func (s *Server) registerZcodeRoutes(mux *http.ServeMux) {
 	// restart 同 stop(与原版 RestartBot 绑定 stopBot 一致:kill 后 ZCode 自动重建接管)
 	mux.HandleFunc("POST /api/bot/restart", func(w http.ResponseWriter, r *http.Request) {
 		if err := BotStop(); err != nil {
+			log.Printf("[zcode] bot/restart 失败: %v", err)
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}

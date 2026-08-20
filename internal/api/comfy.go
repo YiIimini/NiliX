@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -275,6 +276,7 @@ func (s *Server) handleComfyStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := startComfy(); err != nil {
+		log.Printf("[comfy] 启动失败: %v", err)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -283,6 +285,7 @@ func (s *Server) handleComfyStart(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleComfyStop(w http.ResponseWriter, r *http.Request) {
 	if err := stopComfy(); err != nil {
+		log.Printf("[comfy] 停止失败: %v", err)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}

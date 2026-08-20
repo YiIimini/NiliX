@@ -479,10 +479,14 @@ func main() {
 	// �?DPI 感知：必须在任何窗口（托�?胶囊）创建前设置，否则窗口尺寸与圆角裁剪错乱�?
 	island.EnablePerMonitorDPI()
 
-	// �?windowsgui 方式运行时无控制台，日志写文件�?
-	if f, err := setupLogFile("logs/server.log"); err == nil {
+	// 以 windowsgui 方式运行时无控制台，日志写文件。
+	// 日志固定写到 exe 目录 logs/server.log(相对 cwd 可能因开机自启/快捷方式 cwd 不同而写偏,
+	// 用户找不到日志;用 exe 绝对路径保证可寻址)。
+	logPath := filepath.Join(exeDir(), "logs", "server.log")
+	if f, err := setupLogFile(logPath); err == nil {
 		log.SetOutput(f)
 		defer f.Close()
+		log.Printf("NiliX 日志已开启: %s", logPath)
 	}
 	// 审计 M13:主进程启动即清理旧看门狗标记——上一轮看门狗自身被杀/系统重启残留�?
 	// graceful_exit 会在本进程崩溃时让新看门狗误�?用户主动退�?而不重启
@@ -581,6 +585,12 @@ func main() {
 	gApp = application.New(application.Options{
 		Name:        "NiliX",
 		Description: "NiliX 小说转视频工作台",
+		// 运行日志:捕获 wails/WebView2 运行时错误写入 server.log(用户可见报错)
+		ErrorHandler: func(err error) {
+			if err != nil {
+				log.Printf("[运行时错误] %v", err)
+			}
+		},
 	})
 	// 应用级图标(icon.ico):统一 exe 任务栏/Alt-Tab/窗口图标(rsrc syso 提供 exe 资源,
 	// 此调用补 wails 应用图标,托盘 SetIcon 另设)
@@ -822,9 +832,16 @@ func startControlServers(app *application.App, url string) {
 		w.WriteHeader(200)
 	})
 	mux2.HandleFunc("GET /close", func(w http.ResponseWriter, r *http.Request) {
+		// 灵动岛 ✕ = 整个应用退出(原版语义,防误触:页面已做两段式确认)。
+		// 只关胶囊窗口会让用户以为按钮失效——必须 app.Quit() 触发 onExit 全退。
+		log.Printf("[ctl8788] /close(胶囊✕退出整个应用) from %s", r.RemoteAddr)
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(200)
-		go capsuleWinClose()
+		go func() {
+			if gApp != nil {
+				gApp.Quit()
+			}
+		}()
 	})
 	go func() {
 		if err := http.ListenAndServe("127.0.0.1:8788", mux2); err != nil {
