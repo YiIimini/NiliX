@@ -1504,9 +1504,25 @@ func (ctx *manjuCtx) shotCondFingerprint(s manjuShot) string {
 // shotCondFingerprintAt 指定宽高的条件指纹(草稿/定稿分开记账)
 func (ctx *manjuCtx) shotCondFingerprintAt(s manjuShot, w, h int) string {
 	hh := md5.New()
-	fmt.Fprintf(hh, "p=%s|w=%d|h=%d|len=%d|chars=%s|scene=%s|prompt=%s",
+	// 参考图指纹:预编码把角色/场景参考烧进 .pt,定妆照采纳(或重生成)后必须重编码,
+	// 否则缓存命中跳过、渲染继续用旧角色(换定妆照不生效的隐性根源)
+	refs := []string{}
+	for i, cid := range s.Characters {
+		if i >= 3 {
+			break
+		}
+		if rel := ctx.refRelFor(cid); rel != "" {
+			refs = append(refs, ctx.refStamp(rel))
+		}
+	}
+	if s.Scene != "" {
+		if rel := "scenes/" + s.Scene + ".png"; fileExists(filepath.Join(ctx.assetsDir, rel)) {
+			refs = append(refs, ctx.refStamp(rel))
+		}
+	}
+	fmt.Fprintf(hh, "p=%s|w=%d|h=%d|len=%d|chars=%s|scene=%s|refs=%s|prompt=%s",
 		s.H3Prompt, w, h, h3Length(s.Duration, ctx.fps),
-		strings.Join(s.Characters, ","), s.Scene, s.H3Prompt)
+		strings.Join(s.Characters, ","), s.Scene, strings.Join(refs, ","), s.H3Prompt)
 	sum := fmt.Sprintf("%x", hh.Sum(nil))
 	if len(sum) > 10 {
 		sum = sum[:10]
@@ -1758,18 +1774,37 @@ func (ctx *manjuCtx) charRefNames(s manjuShot) []string {
 		if i >= 3 {
 			break
 		}
-		rel := "characters/" + cid + "_face.png"
-		if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
-			rel = "characters/" + cid + ".png"
-			if !fileExists(filepath.Join(ctx.assetsDir, rel)) {
-				continue
-			}
+		rel := ctx.refRelFor(cid)
+		if rel == "" {
+			continue
 		}
 		name := fmt.Sprintf("dir_char_%d_%d.png", s.ID, i)
 		_ = copyFile(filepath.Join(ctx.assetsDir, rel), filepath.Join(ctx.comfyInput, name))
 		out = append(out, name)
 	}
 	return out
+}
+
+// refRelFor 角色参考图相对路径:优先正脸特写(身份锁定强),缺省回退全身定妆照,都没有则空串
+func (ctx *manjuCtx) refRelFor(cid string) string {
+	rel := "characters/" + cid + "_face.png"
+	if fileExists(filepath.Join(ctx.assetsDir, rel)) {
+		return rel
+	}
+	rel = "characters/" + cid + ".png"
+	if fileExists(filepath.Join(ctx.assetsDir, rel)) {
+		return rel
+	}
+	return ""
+}
+
+// refStamp 参考图时效戳(路径@mtime纳秒:大小):采纳/重生成参考图后指纹自动变化,条件缓存随之重建
+func (ctx *manjuCtx) refStamp(rel string) string {
+	fi, err := os.Stat(filepath.Join(ctx.assetsDir, rel))
+	if err != nil {
+		return rel
+	}
+	return fmt.Sprintf("%s@%d:%d", rel, fi.ModTime().UnixNano(), fi.Size())
 }
 
 func (ctx *manjuCtx) sceneRefName(s manjuShot) string {
@@ -2323,15 +2358,21 @@ func fileMD5Hex(p string) string {
 	return fmt.Sprintf("%x", h)
 }
 
-// ensureFaceCrop 确保角色有正脸特写参考(缺失或仍是主图副本时用 PIL 裁剪生成)
+// ensureFaceCrop 确保角色有正脸特写参考(缺失/仍是主图副本/主图已更新时用 PIL 重裁)
 func (ctx *manjuCtx) ensureFaceCrop(cid string, lg *manjuLogger) error {
 	mainP := filepath.Join(ctx.assetsDir, "characters", cid+".png")
 	faceP := filepath.Join(ctx.assetsDir, "characters", cid+"_face.png")
 	if !fileExists(mainP) {
 		return nil
 	}
-	if fileExists(faceP) && !filesEqual(faceP, mainP) {
-		return nil // 已有独立正脸
+	// 跳过条件:正脸内容独立(≠主图副本)且不早于主图;
+	// 采纳新定妆照/重生成主图后主图 mtime 变新 → 旧正脸不再匹配,自动重裁保证身份参考与主图同步
+	if fileExists(faceP) {
+		mf, e1 := os.Stat(mainP)
+		ff, e2 := os.Stat(faceP)
+		if e1 == nil && e2 == nil && !ff.ModTime().Before(mf.ModTime()) && !filesEqual(faceP, mainP) {
+			return nil // 已有与主图同步的独立正脸
+		}
 	}
 	if err := ctx.runMedia(lg, "facecrop", "--src", mainP, "--dst", faceP, "--ratio", fmt.Sprintf("%dx%d", ctx.w, ctx.h)); err != nil {
 		return fmt.Errorf("角色 %s 正脸裁剪失败: %w", cid, err)
