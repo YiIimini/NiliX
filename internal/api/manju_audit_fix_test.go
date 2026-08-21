@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,6 +45,45 @@ func TestManjuLLMStopCancelsInFlight(t *testing.T) {
 	case <-time.After(8 * time.Second):
 		t.Fatal("stopped 后请求未被取消,仍在等待(停止无反应)")
 	}
+}
+
+// 回归:LLM 200 响应 body 正常读取(修复 5.2 误伤——读完 body 前 cancel context
+// 会中断 chunked 流式传输,ReadAll 读到空 → "unexpected end of JSON input",
+// 用户实测「深度分析失败: LLM 响应解析失败: unexpected end of JSON input」)
+func TestManjuLLMReadsChunkedBody(t *testing.T) {
+	payload := `{"choices":[{"finish_reason":"stop","message":{"content":"{\"style\":\"2.5d+ink\",\"reason\":\"ok\"}"}}],"usage":{"total_tokens":10}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 分块写入并 flush:模拟服务端 chunked transfer-encoding(响应头先到、body 后到)
+		fl, _ := w.(http.Flusher)
+		for i := 0; i < len(payload); i += 16 {
+			_, _ = w.Write([]byte(payload[i:min(i+16, len(payload))]))
+			if fl != nil {
+				fl.Flush()
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}))
+	defer srv.Close()
+
+	llm := &manjuLLM{
+		baseURL: srv.URL, model: "test", apiKey: "k",
+		temperature: 0.4, maxTokens: 100, timeout: 30 * time.Second,
+		client: &http.Client{Timeout: 30 * time.Second},
+	}
+	text, err := llm.chat("sys", "user", 0)
+	if err != nil {
+		t.Fatalf("chat 失败(body 被截断): %v", err)
+	}
+	if !strings.Contains(text, "2.5d+ink") {
+		t.Fatalf("content 未完整读取: %q", text)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // 审计 P2 回归:条件缓存指纹必须包含 FL2VA 尾帧维度——

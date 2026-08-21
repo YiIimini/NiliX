@@ -163,10 +163,14 @@ func (l *manjuLLM) chat(system, user string, temp float64) (string, error) {
 			}
 			continue
 		}
-		reqCancel()
+		// 注意:不能在此立即 reqCancel()——响应头到达不代表 body 已读完,
+		// context 取消会中断正在流式传输的响应体(chunked),ReadAll 读到空/截断
+		// → json.Unmarshal "unexpected end of JSON input"(实测 bug)。
+		// 读完 body 并关闭后再 cancel(同时让监听 goroutine 退出)。
 		if resp.StatusCode == 200 {
 			data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 			_ = resp.Body.Close()
+			reqCancel()
 			var r struct {
 				Choices []struct {
 					FinishReason string `json:"finish_reason"`
@@ -194,6 +198,7 @@ func (l *manjuLLM) chat(system, user string, temp float64) (string, error) {
 		// 429/5xx:退避重试
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 		_ = resp.Body.Close()
+		reqCancel()
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 			if attempt < maxAttempts {
