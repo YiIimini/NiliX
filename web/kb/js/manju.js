@@ -1576,17 +1576,26 @@
         .map((s) => STYLE_CN[s] || s).join(" + ");
     },
 
-    /* 风格切换:点击切换选中态(可多选叠加,至少保留一个);组合 key 以 + 分隔存 this.style */
+    /* 风格切换:点击切换选中态(预设与自定义 TAG 是累加关系——切换预设不得丢失
+       自定义词,含总集风格解析出的独立 tag)。组合以 + 分隔存 this.style。 */
     toggleStyle(key, multi) {
-      const keys = this.styleKeys();
+      const words = this.styleWords();          // 全部元素(预设 + 自定义)
+      const keys = this.styleKeys();            // 预设部分
       if (multi) {
-        if (keys.has(key)) keys.delete(key); else keys.add(key);
-        if (keys.size === 0) keys.add(key); // 至少保留一个预设
+        if (keys.has(key)) {
+          // 取消该预设:仅移除 key,自定义词保留
+          const rest = words.filter((w) => w !== key);
+          this.style = rest.length ? rest.join("+") : "2.5d";
+        } else {
+          // 选中该预设:累加在自定义词之后(不重复)
+          if (!words.includes(key)) words.push(key);
+          this.style = words.join("+");
+        }
       } else {
-        keys.clear();
-        keys.add(key);
+        // 单选:清掉其他预设,保留选中预设 + 全部自定义词
+        const customs = words.filter((w) => STYLE_CN[w] === undefined);
+        this.style = [key].concat(customs).join("+");
       }
-      this.style = [...keys].join("+");
       this.renderStyle();
       this.saveDraft();
     },
