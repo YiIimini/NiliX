@@ -626,3 +626,119 @@ func TestNovelFingerprintIncludesAssets(t *testing.T) {
 		t.Fatalf("指纹应含正文路径: %s", f3)
 	}
 }
+
+// TestParseRenderPromptMaster 渲染提示词总集.md 解析:按节提取风格/负面/角色/场景/H3母版
+// (用户规则:提示词集中单文件,渲染管线直接识别)
+func TestParseRenderPromptMaster(t *testing.T) {
+	content := `# 测试书 渲染提示词总集
+
+## 一、漫剧渲染风格提示词（全剧风格统一，注入每镜）
+\` + "```" + `
+Cinematic film still, photorealistic, xianxia fantasy, cinematic lighting, 8k
+\` + "```" + `
+
+## 二、全局负面提示词（所有画面统一追加）
+\` + "```" + `
+anime, cartoon, watermark, text, blurry
+\` + "```" + `
+
+## 三、角色提示词
+
+### 3.1 陈鱼（主角）
+\` + "```" + `
+Cinematic film still, photorealistic, a lean young man with dead-fish eyes, 85mm lens, 8k
+\` + "```" + `
+
+### 3.2 苏苏（女主）
+\` + "```" + `
+Cinematic film still, photorealistic, a fierce young woman, phoenix eyes, 85mm lens, 8k
+\` + "```" + `
+
+## 四、场景提示词
+
+| 场景 | 提示词 |
+|---|---|
+| 山门 | \` + "`" + `Cinematic, empty scene of mountain gate, 8k\` + "`" + ` |
+
+## 五、H3 Ref2VA 六段式母版
+\` + "```" + `
+subject_definitions: <Subject 1> is ...
+\` + "```" + `
+`
+	a := parseRenderPromptMaster(content)
+	if a == nil {
+		t.Fatalf("总集解析返回 nil")
+	}
+	if !strings.Contains(a.StylePrompt, "photorealistic") {
+		t.Errorf("StylePrompt = %q", a.StylePrompt)
+	}
+	if !strings.Contains(a.NegPrompt, "anime") || !strings.Contains(a.NegPrompt, "watermark") {
+		t.Errorf("NegPrompt = %q", a.NegPrompt)
+	}
+	if !strings.Contains(a.CharPrompt, "陈鱼") || !strings.Contains(a.CharPrompt, "苏苏") {
+		t.Errorf("CharPrompt 缺角色: %q", a.CharPrompt)
+	}
+	if !strings.Contains(a.ScenePrompt, "山门") {
+		t.Errorf("ScenePrompt = %q", a.ScenePrompt)
+	}
+	if !strings.Contains(a.ExtraPrompt, "subject_definitions") {
+		t.Errorf("H3母版未入 ExtraPrompt: %q", a.ExtraPrompt)
+	}
+	// 无有效节 → nil
+	if a2 := parseRenderPromptMaster("随便一段没有分节的内容"); a2 != nil {
+		t.Fatalf("无分节应返回 nil")
+	}
+}
+
+// TestScanNovelAssetsPrefersMaster 总集优先:素材目录同时有 总集 和 分散文件时,
+// 角色/场景取自总集(不重复、不冲突),分散文件仅兜底未覆盖段。
+func TestScanNovelAssetsPrefersMaster(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "素材"), 0755)
+	_ = os.MkdirAll(filepath.Join(dir, "封面"), 0755)
+	_ = os.MkdirAll(filepath.Join(dir, "设定集"), 0755)
+	// 总集(统一单文件)
+	_ = os.WriteFile(filepath.Join(dir, "素材", "渲染提示词总集.md"), []byte(`## 一、漫剧渲染风格提示词
+`+"```"+`
+master style, 8k
+`+"```"+`
+
+## 三、角色提示词
+### 3.1 总集角色
+`+"```"+`
+master char prompt
+`+"```"+`
+
+## 四、场景提示词
+| 场景 | 提示词 |
+|---|---|
+| 总集场景 | `+"`"+`master scene`+"`"+` |
+`), 0644)
+	// 分散文件(旧约定,应被总集覆盖)
+	_ = os.WriteFile(filepath.Join(dir, "素材", "人物生成提示词.md"), []byte("人物:旧分散角色"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "素材", "场景提示词.md"), []byte("场景:旧分散场景"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "封面", "封面提示词.md"), []byte("封面:写实"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "设定集", "设定集与大纲.md"), []byte("世界观:修仙"), 0644)
+
+	a := scanNovelAssets(dir)
+	// 角色/场景来自总集(优先)
+	if !strings.Contains(a.CharPrompt, "总集角色") {
+		t.Errorf("CharPrompt 未取总集: %q", a.CharPrompt)
+	}
+	if strings.Contains(a.CharPrompt, "旧分散角色") {
+		t.Errorf("CharPrompt 混入分散文件: %q", a.CharPrompt)
+	}
+	if !strings.Contains(a.ScenePrompt, "总集场景") {
+		t.Errorf("ScenePrompt 未取总集: %q", a.ScenePrompt)
+	}
+	if !strings.Contains(a.StylePrompt, "master style") {
+		t.Errorf("StylePrompt = %q", a.StylePrompt)
+	}
+	// 封面/设定集仍从各自目录取(总集不覆盖)
+	if !strings.Contains(a.CoverPrompt, "写实") {
+		t.Errorf("CoverPrompt 未取: %q", a.CoverPrompt)
+	}
+	if !strings.Contains(a.Setting, "修仙") {
+		t.Errorf("Setting 未取: %q", a.Setting)
+	}
+}

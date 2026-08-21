@@ -1039,6 +1039,12 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 		if assets.Setting != "" {
 			sys += "\n\n【小说设定集·世界观/大纲/创作规范(角色设定/场景设定/剧情线/文风必须贴合,禁止与设定冲突;未知细节以本章原文为准)】\n" + assets.Setting
 		}
+		if assets.StylePrompt != "" {
+			sys += "\n\n【渲染风格提示词(全剧统一风格,注入每镜 detailed_description 前缀,逐镜必须保留本段基调)】\n" + assets.StylePrompt
+		}
+		if assets.NegPrompt != "" {
+			sys += "\n\n【全局负面提示词(生图/画面禁入项;H3 转正面约束:把禁入项改写为 no ... 排除句并入 detailed_description 末尾)】\n" + assets.NegPrompt
+		}
 		if assets.CharPrompt != "" {
 			sys += "\n\n【小说素材·人物生成提示词(角色 image_prompt 必须贴合此文件的人物描述——外观/服装/气质/记忆点以其为准,再结合章节原文细节;不要照抄整段,提炼为可渲染英文)】\n" + assets.CharPrompt
 		}
@@ -1046,7 +1052,7 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 			sys += "\n\n【小说素材·场景提示词(场景 image_prompt 必须贴合此文件的场景描述,再结合本章原文)】\n" + assets.ScenePrompt
 		}
 		if assets.ExtraPrompt != "" {
-			sys += "\n\n【小说素材·其它提示词(道具/氛围等,如有相关镜头尽量贴合)】\n" + assets.ExtraPrompt
+			sys += "\n\n【小说素材·其它提示词(道具/氛围/H3 母版等,如有相关镜头尽量贴合)】\n" + assets.ExtraPrompt
 		}
 		if assets.CoverPrompt != "" {
 			sys += "\n\n【封面提示词参考(全剧美术基调与封面一致)】\n" + assets.CoverPrompt

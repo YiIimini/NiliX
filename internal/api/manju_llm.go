@@ -312,6 +312,7 @@ func manjuAssetStyle(style string) string {
 }
 
 // manjuNovelAssets 完整解析小说目录素材(数据驱动,命名约定只改候选表):
+//  渲染提示词总集.md(优先,统一单文件) → 风格/负面/角色/场景/H3母版全量
 //  素材/人物生成提示词.md(含 角色/人物 的 md) → CharPrompt  角色定妆照提示词
 //  素材/场景*.md(含 场景 的 md)              → ScenePrompt 场景图提示词
 //  素材/其它 md                              → ExtraPrompt 道具/氛围等素材
@@ -324,6 +325,8 @@ type manjuNovelAssets struct {
 	ExtraPrompt string
 	Setting     string
 	CoverPrompt string
+	StylePrompt string // 渲染风格提示词(总集一节,注入每镜 detailed_description 前缀)
+	NegPrompt   string // 全局负面提示词(总集二节,转 H3 正面约束 / 本地生图直接使用)
 	Files       []string // 发现的素材文件清单(日志展示)
 }
 
@@ -351,13 +354,28 @@ func scanNovelAssets(root string) manjuNovelAssets {
 			out.Files = append(out.Files, name)
 		}
 	}
-	// 素材/ 目录:按文件名语义归类
+	// 渲染提示词总集.md:统一单文件,优先解析(存在则角色/场景/风格/负面都从这里取,
+	// 不再依赖分散的 人物生成提示词/场景提示词;分散文件仍兼容回退)。
+	if c := readTrunc(filepath.Join(root, "素材", "渲染提示词总集.md")); c != "" {
+		if a := parseRenderPromptMaster(c); a != nil {
+			out.StylePrompt = a.StylePrompt
+			out.NegPrompt = a.NegPrompt
+			out.CharPrompt = a.CharPrompt
+			out.ScenePrompt = a.ScenePrompt
+			out.ExtraPrompt = a.ExtraPrompt
+			out.Files = append(out.Files, "素材/渲染提示词总集.md(统一单文件)")
+		}
+	}
+	// 素材/ 目录:按文件名语义归类(总集未覆盖的段/或兼容旧项目)
 	if entries, err := os.ReadDir(filepath.Join(root, "素材")); err == nil {
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
 				continue
 			}
 			low := strings.ToLower(e.Name())
+			if strings.Contains(low, "渲染提示词总集") {
+				continue // 已解析
+			}
 			content := readTrunc(filepath.Join(root, "素材", e.Name()))
 			switch {
 			case strings.Contains(low, "人物") || strings.Contains(low, "角色"):
@@ -407,6 +425,74 @@ func scanNovelAssets(root string) manjuNovelAssets {
 		out.Files = append(out.Files, "封面/封面提示词.md")
 	}
 	return out
+}
+
+// parseRenderPromptMaster 解析「渲染提示词总集.md」统一单文件(用户规则:提示词集中单文件,渲染管线直接识别):
+//  一、渲染风格提示词(代码块全文)           → StylePrompt(注入每镜 detailed_description 前缀)
+//  二、全局负面提示词(代码块全文)           → NegPrompt(生图直接使用;H3 转正面约束由调用方处理)
+//  三、角色提示词(### 3.N 标题 + 代码块)    → CharPrompt(角色定妆照参考)
+//  四、场景提示词(表格 场景|提示词)         → ScenePrompt(场景图参考)
+//  五、H3 Ref2VA 六段式母版(代码块)        → ExtraPrompt(附到素材供 H3 提示词生成参考)
+// 返回 nil 表示文件无有效节(调用方回退分散文件)。
+func parseRenderPromptMaster(content string) *manjuNovelAssets {
+	a := &manjuNovelAssets{}
+	code := func(sec string) string { // 提取节内第一个 ``` 代码块
+		idx := strings.Index(sec, "```")
+		if idx < 0 {
+			return ""
+		}
+		rest := sec[idx+3:]
+		end := strings.Index(rest, "```")
+		if end < 0 {
+			return ""
+		}
+		return strings.TrimSpace(rest[:end])
+	}
+	// 按 ## N、标题 切节
+	sections := map[string]string{}
+	lines := strings.Split(content, "\n")
+	cur := ""
+	for _, ln := range lines {
+		if strings.HasPrefix(ln, "## ") {
+			cur = ln
+			sections[cur] = ""
+		} else if cur != "" {
+			sections[cur] += ln + "\n"
+		}
+	}
+	var styleSec, negSec, charSec, sceneSec, masterSec string
+	for name, body := range sections {
+		switch {
+		case strings.Contains(name, "一") && strings.Contains(name, "风格"):
+			styleSec = body
+		case strings.Contains(name, "二") && (strings.Contains(name, "负面") || strings.Contains(name, "负向")):
+			negSec = body
+		case strings.Contains(name, "三") && strings.Contains(name, "角色"):
+			charSec = body
+		case strings.Contains(name, "四") && strings.Contains(name, "场景"):
+			sceneSec = body
+		case strings.Contains(name, "五") && strings.Contains(name, "H3"):
+			masterSec = body
+		}
+	}
+	if styleSec == "" && charSec == "" && sceneSec == "" {
+		return nil // 无有效节
+	}
+	a.StylePrompt = code(styleSec)
+	a.NegPrompt = code(negSec)
+	// 三、角色:整节作为 CharPrompt(### 角色名 + 代码块提示词原样,LLM 从中提炼)
+	if charSec != "" {
+		a.CharPrompt = strings.TrimSpace(charSec)
+	}
+	// 四、场景:表格 场景|提示词 → 原样注入(LLM 读表格)
+	if sceneSec != "" {
+		a.ScenePrompt = strings.TrimSpace(sceneSec)
+	}
+	// 五、H3 母版:附到 ExtraPrompt(供逐镜 H3 提示词生成参考)
+	if masterSec != "" {
+		a.ExtraPrompt = strings.TrimSpace(masterSec)
+	}
+	return a
 }
 
 func manjuDirectSystem(cfg map[string]any, style string) string {
