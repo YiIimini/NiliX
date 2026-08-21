@@ -761,6 +761,29 @@
     })
     .catch(() => {});
 
+  // 启动自检:页面初始为收起态(collapsed),强制窗口回到 300x44——
+  // 防"胶囊以 HUD 卡片高度展示"(历史展开尺寸残留/上次退出时未收起)。
+  // 延迟到 Go 侧窗口就绪(impl 已建)再调,否则 SetSize 无效。
+  setTimeout(function () {
+    if (!expanded && typeof setIsland === "function") {
+      setIsland(false, 0, 0); // 强制收起(8788 /size?w=300&h=44)
+    }
+  }, 600);
+
+  // tick 兜底:收起态但窗口高度异常(>60)时强制收回——防偶发"收起动画被
+  // 打断/收起 fetch 失败"导致窗口停留在展开高度(内容已隐藏=大黑框)。
+  function enforceCollapsedSize() {
+    if (expanded || document.body.classList.contains("island-expanded")) return;
+    if (typeof setIsland !== "function") return;
+    var card = $("card");
+    if (!card) return;
+    // 仅当窗口确实过大时收回(通过 islandHeight 无法知道窗口高,用页面可见性判断:
+    // collapsed 态 #full display:none,若窗口被撑高,背景卡片会盖住胶囊以外区域)
+    // 直接无条件校正一次(幂等,SetSize 300x44 无副作用)
+    setIsland(false, 0, 0);
+  }
+  setInterval(enforceCollapsedSize, 3000);
+
   tick();
   setInterval(tick, 1500);
   renderClock();

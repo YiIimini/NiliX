@@ -1000,7 +1000,7 @@ func animateCapsule(toW, toH int) {
 		}
 		for i := 1; i <= steps; i++ {
 			if atomic.LoadInt32(&capsuleAnimGen) != gen {
-				return
+				return // 被新请求取代(快速 展开/收起 切换)
 			}
 			w := sw + (toW-sw)*i/steps
 			h := sh + (toH-sh)*i/steps
@@ -1008,6 +1008,13 @@ func animateCapsule(toW, toH int) {
 			capsuleWinRef.SetPosition(x, 0)
 			capsuleWinRef.SetSize(w, h)
 			time.Sleep(12 * time.Millisecond)
+		}
+		// 兜底:动画结束后强制最终尺寸(防累加误差/被打断残留中间值,
+		// 导致胶囊以展开高度展示但内容已隐藏=大黑框)
+		if atomic.LoadInt32(&capsuleAnimGen) == gen {
+			x := (int(int32(vw)) - toW) / 2
+			capsuleWinRef.SetPosition(x, 0)
+			capsuleWinRef.SetSize(toW, toH)
 		}
 	}()
 }
