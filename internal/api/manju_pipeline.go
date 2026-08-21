@@ -1536,6 +1536,20 @@ func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map
 func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]map[string]any, fix string) (string, error) {
 	hasChar := len(s.Characters) > 0
 	sys := manjuShotPromptSystem(hasChar, ctx.style)
+	// 小说素材·渲染提示词总集注入逐镜 H3(方案生成已注入角色/场景 image_prompt;
+	// 这里补 全局风格 + 全局负面——否则总集的风格/负面只在方案生成参考,
+	// 逐镜视频渲染提示词不读,用户配的全局风格/负面白配)。
+	if assets := scanNovelAssets(ctx.novelRootDir()); len(assets.Files) > 0 {
+		if assets.StylePrompt != "" {
+			sys += "\n\n【全局渲染风格提示词(总集·强制注入每镜 detailed_description 前缀:detailed_description 必须以本段风格开头,再展开该镜画面;运镜/音画风格同样遵守)】\n" + assets.StylePrompt
+		}
+		if assets.NegPrompt != "" {
+			sys += "\n\n【全局负面提示词(总集·强制:把每项禁入内容改写为 no ... 正面排除句,逐条并入 detailed_description 末尾;本地生图模型则直接使用本段)】\n" + assets.NegPrompt
+		}
+		if assets.ExtraPrompt != "" && strings.Contains(assets.ExtraPrompt, "subject_definitions") {
+			sys += "\n\n【H3 Ref2VA 六段式母版(总集·参考:subject_definitions/retention_analysis/summary 的写法与风格,逐镜沿用其结构纪律)】\n" + assets.ExtraPrompt
+		}
+	}
 	shotObj := map[string]any{
 		"shot_id": s.ID, "shot_size": s.ShotSize, "camera": s.Camera, "action": s.Action,
 		"dialogue": s.Dialogue, "narration": s.Narration, "duration": s.Duration,
