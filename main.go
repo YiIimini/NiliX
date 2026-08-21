@@ -284,6 +284,7 @@ var (
 	procGetWindowRect    = user32Lazy.NewProc("GetWindowRect")
 	procLoadImageW       = user32Lazy.NewProc("LoadImageW")
 	procSendMessageW     = user32Lazy.NewProc("SendMessageW")
+	procIsZoomed         = user32Lazy.NewProc("IsZoomed") // 主窗口最大化/全屏判断(层级高于灵动岛)
 )
 
 // msedgePath 定位 Edge 浏览�?系统自带;WebView2 运行时本就依赖同一 Edge)
@@ -751,6 +752,31 @@ func createMainWindow(app *application.App, url string) *application.WebviewWind
 	}
 	win.OnWindowEvent(events.Common.WindowDidMove, func(*application.WindowEvent) { saveWin() })
 	win.OnWindowEvent(events.Common.WindowDidResize, func(*application.WindowEvent) { saveWin() })
+	// 用户规则(2026-08):主应用窗口最大化/全屏时,显示层级必须高于灵动岛——
+	// 灵动岛默认 AlwaysOnTop(常驻置顶),会盖在全屏主窗口上方。
+	// 监听最大化/全屏事件取消灵动岛置顶;还原(非最大化)时恢复置顶。
+	win.OnWindowEvent(events.Common.WindowMaximise, func(*application.WindowEvent) {
+		if c := getCapsuleWin(); c != nil {
+			c.SetAlwaysOnTop(false)
+		}
+	})
+	win.OnWindowEvent(events.Common.WindowFullscreen, func(*application.WindowEvent) {
+		if c := getCapsuleWin(); c != nil {
+			c.SetAlwaysOnTop(false)
+		}
+	})
+	win.OnWindowEvent(events.Common.WindowDidResize, func(*application.WindowEvent) {
+		// 还原:窗口不再最大化/全屏(尺寸小于虚拟屏幕)时恢复灵动岛置顶
+		if isMainWinMaximized(win) {
+			if c := getCapsuleWin(); c != nil {
+				c.SetAlwaysOnTop(false)
+			}
+		} else {
+			if c := getCapsuleWin(); c != nil {
+				c.SetAlwaysOnTop(true)
+			}
+		}
+	})
 	win.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
 		// 退出/关闭前兜底保存最后一次尺寸位置(拖动后直接关窗的场景,
 		// WM_EXITSIZEMOVE 若未触发,保证下次启动仍用用户最后调整的尺寸)
@@ -758,6 +784,17 @@ func createMainWindow(app *application.App, url string) *application.WebviewWind
 		mainWinClosed.Store(true)
 	})
 	return win
+}
+
+// isMainWinMaximized 判断主窗口是否处于最大化/全屏(用 Win32 IsZoomed;
+// 最大化与全屏都会返回 true)
+func isMainWinMaximized(win *application.WebviewWindow) bool {
+	ptr := win.NativeWindow()
+	if ptr == nil {
+		return false
+	}
+	r, _, _ := procIsZoomed.Call(uintptr(unsafe.Pointer(ptr)))
+	return r != 0
 }
 
 // createCapsuleWindow 创建灵动岛胶囊窗口(透明 + 隐藏任务栏 + 顶部居中贴边 300x44)

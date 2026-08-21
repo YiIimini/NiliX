@@ -668,17 +668,19 @@ class DirView {
       if (!reader.classList.contains("is-open")) return;
       if (e.target.closest(".rt-item, .rn-btn")) return;
       this.closeTypePop();
-      if (e.target === reader || !reader.contains(e.target)) this.closeReader();
+      // 用户规则(2026-08):详情弹窗只有点关闭按钮才能关闭——遮罩点击不再关闭
+      // (防止误点遮罩丢失阅读进度/正在查看的内容)
+      // 旧行为: if (e.target === reader || !reader.contains(e.target)) this.closeReader();
     });
     document.addEventListener("keydown", (e) => {
       if (!reader.classList.contains("is-open")) return;
       const chs = (this._toc || {}).chapters || [];
       const idx = this._current ? this._current.chIdx : -1;
       if (e.key === "Escape") {
-        // 先关排版面板,再关阅读器
+        // 用户规则(2026-08):Esc 只关排版面板,不再关闭弹窗(只有关闭按钮能关)
         const pop = document.getElementById("reader-type-pop");
         if (pop && pop.classList.contains("is-on")) return this.closeTypePop();
-        return this.closeReader();
+        return; // 不再 closeReader()
       }
       if (e.key === "ArrowLeft" && idx > 0) this.loadChapter(chs[idx - 1], idx - 1);
       else if (e.key === "ArrowRight" && idx >= 0 && idx < chs.length - 1) this.loadChapter(chs[idx + 1], idx + 1);
