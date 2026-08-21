@@ -173,9 +173,17 @@ func currentStartup() StartupInfo {
 }
 
 func startComfy() error {
-	py := filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe")
+	// 审计升级:用 pythonw.exe(无控制台版)替代 python.exe——ComfyUI 的
+	// multiprocessing 会 spawn 子进程,子进程不继承 CREATE_NO_WINDOW 标志,
+	// 启动瞬间弹出黑色控制台窗口(用户反馈"NiliX 黑窗闪退";实际是 ComfyUI
+	// 启动窗)。pythonw 是 GUI 子系统,主进程与 spawn 子进程都永不创建控制台。
+	py := filepath.Join(ComfyRootDir, ".venv", "Scripts", "pythonw.exe")
 	if _, err := os.Stat(py); err != nil {
-		return err
+		// pythonw 缺失(罕见)回退 python.exe + CREATE_NO_WINDOW
+		py = filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe")
+		if _, err := os.Stat(py); err != nil {
+			return err
+		}
 	}
 	cp := comfyParams()
 	in, out := cp.in, cp.out
