@@ -173,17 +173,13 @@ func currentStartup() StartupInfo {
 }
 
 func startComfy() error {
-	// 审计升级:用 pythonw.exe(无控制台版)替代 python.exe——ComfyUI 的
-	// multiprocessing 会 spawn 子进程,子进程不继承 CREATE_NO_WINDOW 标志,
-	// 启动瞬间弹出黑色控制台窗口(用户反馈"NiliX 黑窗闪退";实际是 ComfyUI
-	// 启动窗)。pythonw 是 GUI 子系统,主进程与 spawn 子进程都永不创建控制台。
-	py := filepath.Join(ComfyRootDir, ".venv", "Scripts", "pythonw.exe")
+	// 启动解释器:必须用 python.exe(不能用 pythonw.exe)——pythonw 的
+	// stdout/stderr 是 None(无控制台流),ComfyUI 日志全部丢失
+	// (实测 comfy.log 0 字节,启动失败原因不可见)。黑窗问题见下方
+	// 窗口隐藏逻辑(CREATE_NO_WINDOW + HideWindow)。
+	py := filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe")
 	if _, err := os.Stat(py); err != nil {
-		// pythonw 缺失(罕见)回退 python.exe + CREATE_NO_WINDOW
-		py = filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe")
-		if _, err := os.Stat(py); err != nil {
-			return err
-		}
+		return err
 	}
 	cp := comfyParams()
 	in, out := cp.in, cp.out
@@ -302,11 +298,18 @@ func comfyLogTail() string {
 func ComfyStart() error { return startComfy() }
 func ComfyStop() error  { return stopComfy() }
 
-// ComfyOnline 检查 ComfyUI 是否在线(应用启动自动拉起/渲染前兜底用;地址=生效配置端口)
+// ComfyOnline 检查 ComfyUI 是否在运行(应用启动自动拉起/渲染前兜底用;地址=生效配置端口)
+// 审计升级:判断标准 = 端口有监听进程(ComfyPortPID>0),而非 HTTP 可达——
+// ComfyUI 冷启动加载模型需 10-60s,期间 HTTP 不响应,用 HTTP 探测会把
+// "正在启动"误判为"未运行" → NiliX 反复拉起 → 多实例抢 db 锁 → 黑窗反复闪。
+// 端口有进程 = 已有一个实例在,绝不再拉起(即使它还在加载)。
 func ComfyOnline() bool {
-	c := newComfyClient(comfyParams().url)
-	_, err := c.online()
-	return err == nil
+	// 若 ComfyUI 由本服务启动且在跑,直接视为在线
+	if pid := comfyProcPID.Load(); pid > 0 && isPidAlive(int(pid)) {
+		return true
+	}
+	// 兜底:端口有进程即在线(外部启动的实例/加载中的实例)
+	return ComfyPortPID() > 0
 }
 
 // ComfyPortPID 生效端口上监听的进程 PID(0=无进程)。托盘状态灯判"启动中"用:
