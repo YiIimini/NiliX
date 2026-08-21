@@ -14,7 +14,7 @@ func TestManjuPortraitFixedSize(t *testing.T) {
 		{"portrait", 768, 1344},
 	} {
 		ctx := &manjuCtx{style: "2.5d+ink", w: c.w, h: c.h, R: map[string]any{"char_models": map[string]any{"男": "animagine-xl-3.1.safetensors"}, "animagine_ckpt": "animagine-xl-3.1.safetensors"}}
-		wf := ctx.portraitWF("a boy", 123, "manju_asset", map[string]any{"gender": "男"}, "")
+		wf := ctx.portraitWF("a boy", 123, "manju_asset", map[string]any{"gender": "男"}, "", 0)
 		var w, h int
 		for _, node := range wf {
 			m, _ := node.(map[string]any)
@@ -39,7 +39,7 @@ func TestPortraitWFImg2Img(t *testing.T) {
 	ctx := &manjuCtx{style: "real", R: map[string]any{
 		"z_image_unet": "u.safetensors", "z_image_clip": "c.safetensors", "z_image_vae": "v.safetensors",
 	}}
-	wf := ctx.portraitWF("side view", 42, "manju_asset", map[string]any{"gender": "女"}, "dir_char_main_zz.png")
+	wf := ctx.portraitWF("side view", 42, "manju_asset", map[string]any{"gender": "女"}, "dir_char_main_zz.png", 0.8)
 	hasLoad, hasEnc, hasEmpty := false, false, false
 	denoise := -1.0
 	for _, node := range wf {
@@ -69,11 +69,11 @@ func TestPortraitWFImg2Img(t *testing.T) {
 	if hasEmpty {
 		t.Fatalf("img2img 不应使用 EmptyLatent")
 	}
-	if denoise != 0.6 {
-		t.Fatalf("img2img denoise 应为 0.6,得到 %v", denoise)
+	if denoise != 0.8 {
+		t.Fatalf("img2img denoise 应为 0.8,得到 %v", denoise)
 	}
 	// 无 initImage → 纯文生图(EmptyLatent + denoise 1.0)
-	wf2 := ctx.portraitWF("portrait", 1, "manju_asset", map[string]any{"gender": "女"}, "")
+	wf2 := ctx.portraitWF("portrait", 1, "manju_asset", map[string]any{"gender": "女"}, "", 0)
 	hasEmpty2, d2 := false, -1.0
 	for _, node := range wf2 {
 		m, _ := node.(map[string]any)

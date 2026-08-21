@@ -288,7 +288,9 @@ func h3Length(seconds, fps int) int {
 // wfImage 通用图生图工作流(SDXL checkpoint 或 Z-Image unet),返回 SaveImage 节点 id
 // initImage 非空时走 img2img:主图作 latent 起点(VAEEncode),denoise 0.6 保留身份、
 // 按提示词重绘视角/构图(定妆照多视图与主图保持同一人,防"侧面/全身变成不相干新角色")
-func wfImage(workflow map[string]any, typ, prompt, neg string, seed, w, h, steps int, cfg float64, ckpt, unet, clipName, clipType, vae, prefix, initImage string) string {
+// 审计升级:denoise 0.6 对 Z-Image(turbo 8 步)重绘量太小,四视图全变正面——
+// 视图换视角需要更高 denoise(0.8),用 initStrength 参数(缺省 0.6)
+func wfImage(workflow map[string]any, typ, prompt, neg string, seed, w, h, steps int, cfg float64, ckpt, unet, clipName, clipType, vae, prefix, initImage string, initStrength float64) string {
 	n := len(workflow) + 1
 	add := func(classType string, inputs map[string]any) string {
 		id := itoa(n)
@@ -313,7 +315,11 @@ func wfImage(workflow map[string]any, typ, prompt, neg string, seed, w, h, steps
 	if initImage != "" {
 		load := add("LoadImage", map[string]any{"image": initImage})
 		latentID = add("VAEEncode", map[string]any{"pixels": refOf(load), "vae": refOf(vaeID)})
-		denoise = 0.6
+		if initStrength > 0 && initStrength < 1 {
+			denoise = initStrength
+		} else {
+			denoise = 0.6
+		}
 	} else if typ == "sdxl" {
 		latentID = add("EmptyLatentImage", map[string]any{"width": w, "height": h, "batch_size": 1})
 	} else {
@@ -344,18 +350,18 @@ func mustAtoi(s string) int {
 }
 
 // wfSDXL 人物定妆照/抽卡(SDXL checkpoint;写实风格用 Z-Image 时走 wfZImage)
-// initImage 非空 → img2img(保留身份重绘视角;视图生成用)
-func wfSDXL(prompt, ckpt string, seed, w, h int, prefix, neg, initImage string) map[string]any {
+// initImage 非空 → img2img(保留身份重绘视角;视图生成用);initStrength 0-1(缺省 0.6)
+func wfSDXL(prompt, ckpt string, seed, w, h int, prefix, neg, initImage string, initStrength float64) map[string]any {
 	wf := map[string]any{}
-	wfImage(wf, "sdxl", prompt, neg, seed, w, h, 25, 7.0, ckpt, "", "", "", "", prefix, initImage)
+	wfImage(wf, "sdxl", prompt, neg, seed, w, h, 25, 7.0, ckpt, "", "", "", "", prefix, initImage, initStrength)
 	return wf
 }
 
 // wfZImage 场景图/写实定妆照(8 步 turbo;neg 为负面提示词,缺省空串)
-// initImage 非空 → img2img(保留身份重绘视角;视图生成用)
-func wfZImage(prompt, unet, clipName, vae string, seed, w, h int, prefix, neg, initImage string) map[string]any {
+// initImage 非空 → img2img(保留身份重绘视角;视图生成用);initStrength 0-1(缺省 0.6)
+func wfZImage(prompt, unet, clipName, vae string, seed, w, h int, prefix, neg, initImage string, initStrength float64) map[string]any {
 	wf := map[string]any{}
-	wfImage(wf, "zimage", prompt, neg, seed, w, h, 8, 1.0, "", unet, clipName, "qwen_image", vae, prefix, initImage)
+	wfImage(wf, "zimage", prompt, neg, seed, w, h, 8, 1.0, "", unet, clipName, "qwen_image", vae, prefix, initImage, initStrength)
 	return wf
 }
 

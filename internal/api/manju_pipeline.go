@@ -1688,12 +1688,14 @@ const manjuPortraitW, manjuPortraitH = 1024, 1024
 
 // portraitWF 定妆照工作流按风格分流:含写实元素用 Z-Image(真人级),其余用 SDXL checkpoint。
 // 尺寸固定为标准 1024×1024(与项目画幅无关);正脸参考(ensureFaceCrop)再从该图按视频比例裁切。
-// initImage 非空 → img2img(主图作 latent 起点保留身份,视图 full/side/detail 用,防生成不相干新角色)
-func (ctx *manjuCtx) portraitWF(prompt string, seed int, prefix string, char map[string]any, initImage string) map[string]any {
+// initImage 非空 → img2img(主图作 latent 起点保留身份,视图 full/side/detail 用,
+// 防生成不相干新角色)。initStrength:denoise 强度——视图换视角需要更高(0.8)才不像主图正面,
+// 0.6 对 turbo 模型重绘量太小(四视图全变正面,用户反馈)。
+func (ctx *manjuCtx) portraitWF(prompt string, seed int, prefix string, char map[string]any, initImage string, initStrength float64) map[string]any {
 	if manjuStyleHas(ctx.style, "real") {
-		return wfZImage(prompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt(), initImage)
+		return wfZImage(prompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt(), initImage, initStrength)
 	}
-	return wfSDXL(prompt, ctx.characterCkpt(char), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt(), initImage)
+	return wfSDXL(prompt, ctx.characterCkpt(char), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt(), initImage, initStrength)
 }
 
 // comfyGenImage 提交图片工作流并复制结果到 dst,返回输出文件相对路径
@@ -1759,7 +1761,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		dst := filepath.Join(ctx.assetsDir, "characters", cid+".png")
 		if !fileExists(dst) {
 			lg.logf("🎨 角色定妆照: " + cid + " ...")
-			wf := ctx.portraitWF(str(m["image_prompt"]), charSeed(cid, "main"), "manju_asset", m, "")
+			wf := ctx.portraitWF(str(m["image_prompt"]), charSeed(cid, "main"), "manju_asset", m, "", 0)
 			if err := ctx.comfyGenImage(wf, dst, lg, "角色 "+cid); err != nil {
 				return fmt.Errorf("角色 %s 定妆照失败: %w", cid, err)
 			}
@@ -1783,6 +1785,9 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 				mainRef = refName
 			}
 		}
+		// 视图换视角的 denoise 强度:full/side 需大幅改变构图/视角(0.8),detail 局部特写
+		// 稍低(0.7)——0.6 对 turbo 模型重绘量太小,四视图全变正面(用户反馈)
+		viewStrength := map[string]float64{"full": 0.8, "side": 0.8, "detail": 0.7}
 		for _, view := range []string{"full", "side", "detail"} {
 			p := str(vs[view])
 			if p == "" {
@@ -1790,8 +1795,12 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 			}
 			vDst := filepath.Join(ctx.assetsDir, "characters", cid+"_"+view+".png")
 			if !fileExists(vDst) {
-				lg.logf("🎨 角色 " + cid + " " + view + " 视图(基于主图 img2img 保持同一人) ...")
-				wf := ctx.portraitWF(p, charSeed(cid, view), "manju_asset", m, mainRef)
+				st := 0.8
+				if s, ok := viewStrength[view]; ok {
+					st = s
+				}
+				lg.logf(fmt.Sprintf("🎨 角色 %s %s 视图(基于主图 img2img %.2f 保持同一人) ...", cid, view, st))
+				wf := ctx.portraitWF(p, charSeed(cid, view), "manju_asset", m, mainRef, st)
 				if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"("+view+")"); err != nil {
 					lg.logf("  ⚠️ " + view + " 视图生成失败(回退主图+正脸): " + err.Error())
 					continue
@@ -1813,7 +1822,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		dst := filepath.Join(ctx.assetsDir, "scenes", sid+".png")
 		if !fileExists(dst) {
 			lg.logf("🎨 场景图: " + sid + " ...")
-			wf := wfZImage(str(m["image_prompt"]), str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), 8000+i, ctx.w, ctx.h, "manju_asset", ctx.negPrompt(), "")
+			wf := wfZImage(str(m["image_prompt"]), str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), 8000+i, ctx.w, ctx.h, "manju_asset", ctx.negPrompt(), "", 0)
 			if err := ctx.comfyGenImage(wf, dst, lg, "场景 "+sid); err != nil {
 				return fmt.Errorf("场景 %s 失败: %w", sid, err)
 			}
@@ -1826,7 +1835,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 			if !fileExists(endDst) {
 				lg.logf("🎨 场景尾帧(FL2VA): " + sid + " ...")
 				endPrompt := str(m["image_prompt"]) + ", the same scene at a slightly later moment, subtle motion of elements (leaves drifting, water rippling, light shifting), consistent layout and lighting"
-				wf := wfZImage(endPrompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), 9000+i, ctx.w, ctx.h, "manju_asset", ctx.negPrompt(), "")
+				wf := wfZImage(endPrompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), 9000+i, ctx.w, ctx.h, "manju_asset", ctx.negPrompt(), "", 0)
 				if err := ctx.comfyGenImage(wf, endDst, lg, "场景尾帧 "+sid); err != nil {
 					lg.logf("  ⚠️ 场景尾帧生成失败(回退单图 I2VA): " + err.Error())
 				}
@@ -3286,7 +3295,7 @@ func manjuGachaDraw(configPath, episode, char, view string, count int) ([]map[st
 	for i := 0; i < count; i++ {
 		seed := randSeed()
 		// 抽卡=换装探索,保持随机多样性(不基于主图 img2img;采纳后定妆照覆盖)
-		wf := ctx.portraitWF(prompt, seed, "manju_gacha", charInfo, "")
+		wf := ctx.portraitWF(prompt, seed, "manju_gacha", charInfo, "", 0)
 		vTag := ""
 		if view != "" {
 			vTag = "_" + view

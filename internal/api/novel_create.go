@@ -493,7 +493,7 @@ func renderNovelCover(proj, prompt string, cfg config.Settings) {
 	if seed == 0 {
 		seed = 1688
 	}
-	wf := wfZImage(prompt, cfg.Render.ZImageUnet, cfg.Render.ZImageClip, cfg.Render.ZImageVae, seed, 768, 1024, "novel_cover", neg, "")
+	wf := wfZImage(prompt, cfg.Render.ZImageUnet, cfg.Render.ZImageClip, cfg.Render.ZImageVae, seed, 768, 1024, "novel_cover", neg, "", 0)
 	pid, err := c.submit(wf)
 	if err != nil {
 		log.Printf("封面渲染提交失败: %v", err)
