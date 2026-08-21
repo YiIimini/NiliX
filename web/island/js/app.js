@@ -18,10 +18,19 @@
     try { return localStorage.getItem("nilix_token") || ""; } catch (e) { return ""; }
   }
   function httpPost(url) {
+    // POST 到 8787 主服务:写请求需要 X-NiliX-Token 鉴权
     return fetch(url, { method: "POST", headers: nilixTok() ? { "X-NiliX-Token": nilixTok() } : {} }).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); });
   }
   function httpGet(url) {
+    // GET 到 8787 主服务(同源,无 CORS 预检)
     return fetch(url, { headers: nilixTok() ? { "X-NiliX-Token": nilixTok() } : {} }).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); });
+  }
+  // 控制端口(8788/8799)调用:本地无鉴权,不带自定义头——
+  // 带 X-NiliX-Token 的自定义头会让跨端口 fetch 触发 CORS 预检(OPTIONS),
+  // 而 8788 只注册 GET /size,无 OPTIONS handler → 预检失败 → fetch 被浏览器拦截,
+  // 导致 HUD 展开/收起失效(用户反馈"展开只到胶囊大小"的真根因)。
+  function ctlGet(url) {
+    return fetch(url).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); });
   }
   if (typeof setIsland !== "function") {
     window.setIsland = (expanded, w, h) => {
@@ -29,11 +38,12 @@
       // 收起回胶囊 300x44
       const nw = expanded ? (w && w >= 200 ? w : 380) : 300;
       const nh = expanded ? (h && h >= 40 ? h : 420) : 44;
-      httpGet("http://127.0.0.1:8788/size?w=" + nw + "&h=" + nh).catch(() => {});
+      ctlGet("http://127.0.0.1:8788/size?w=" + nw + "&h=" + nh).catch(() => {});
     };
   }
   if (typeof closeWin !== "function") {
-    window.closeWin = () => httpGet("http://127.0.0.1:8788/close");
+    // 8788 控制端口:不带自定义头(避免 CORS 预检,见 ctlGet 注释)
+    window.closeWin = () => ctlGet("http://127.0.0.1:8788/close");
   }
   if (typeof startComfy !== "function") window.startComfy = () => httpPost("http://127.0.0.1:8787/api/comfy/start");
   if (typeof stopComfy !== "function") window.stopComfy = () => httpPost("http://127.0.0.1:8787/api/comfy/stop");

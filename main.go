@@ -835,6 +835,14 @@ func exeDir() string {
 func startControlServers(app *application.App, url string) {
 	// 8799:主窗口控�?页面按钮/拖拽,同进程直接调窗口 API)
 	mux := http.NewServeMux()
+	// CORS 预检兜底:页面若带自定义头(如 X-NiliX-Token)跨端口 fetch 会先发 OPTIONS,
+	// 必须响应允许,否则请求被浏览器拦截(历史 bug:胶囊展开失效的真根因之一)。
+	mux.HandleFunc("OPTIONS /", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "X-NiliX-Token, Content-Type")
+		w.WriteHeader(204)
+	})
 	mux.HandleFunc("GET /open", func(w http.ResponseWriter, r *http.Request) {
 		// 单实例唤起:第二个实例经 HTTP 请求本进程(同进程 gApp 有效)打开/重建主窗口
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -902,6 +910,12 @@ func startControlServers(app *application.App, url string) {
 
 	// 8788:胶囊控制(展开/收起动画 SetSize + 关闭)
 	mux2 := http.NewServeMux()
+	mux2.HandleFunc("OPTIONS /", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "X-NiliX-Token, Content-Type")
+		w.WriteHeader(204)
+	})
 	mux2.HandleFunc("GET /size", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		q := r.URL.Query()
