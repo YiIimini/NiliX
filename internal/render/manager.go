@@ -78,7 +78,12 @@ func (m *Manager) Submit(script *storyboard.Script, seed int, cfg config.Setting
 }
 
 func (m *Manager) run(job *Job, script *storyboard.Script, seed int, cfg config.Settings, outDir string) {
-	renderer := NewRenderer(m.comfy, cfg.Render, outDir, cfg.Paths.ComfyInput)
+	// 审计 F9:锁内取 comfy 引用快照(SetComfyURL 可能并发替换)——run 全程用快照,
+	// 避免 goroutine 内无锁读 m.comfy 的数据竞争
+	m.mu.Lock()
+	comfy := m.comfy
+	m.mu.Unlock()
+	renderer := NewRenderer(comfy, cfg.Render, outDir, cfg.Paths.ComfyInput)
 
 	// 1. 资产生成：为每个角色生成参考图（用于 R2V 锁脸）。
 	var refImages []string

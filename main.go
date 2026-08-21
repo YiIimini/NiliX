@@ -25,6 +25,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -640,7 +641,7 @@ func main() {
 	createMainWindow(gApp, url)
 
 	// 灵动岛胶囊窗�?透明悬浮 + 隐藏任务�?展开/收起�?8788 同进程动�?SetSize)
-	capsuleWinRef = createCapsuleWindow(gApp, url)
+	setCapsuleWin(createCapsuleWindow(gApp, url))
 
 	// 控制端口(同进程直接调窗口,进程常驻 = 端口常驻,按钮可靠)
 	startControlServers(gApp, url)
@@ -680,16 +681,46 @@ var (
 
 // openMainWindow 打开主窗�?已关闭则重建,已存在则显示置前
 func openMainWindow(url string) {
-	if mainWinClosed.Load() || mainWinRef == nil {
+	if mainWinClosed.Load() || getMainWin() == nil {
 		createMainWindow(gApp, url)
 	} else {
-		mainWinRef.Show()
-		mainWinRef.Focus()
+		getMainWin().Show()
+		getMainWin().Focus()
 	}
 }
 
 // mainWinRef 当前主窗�?关闭后重建用)
-var mainWinRef *application.WebviewWindow
+// 审计 F9:窗口引用在控制端口 handler(HTTP goroutine)/托盘回调/动画 goroutine 间共享,
+// 裸指针读写是数据竞争(go build -race 可检出)——读写统一走 winRefMu 保护的 getter/setter
+var (
+	winRefMu    sync.RWMutex
+	mainWinRef  *application.WebviewWindow
+	capsuleWinRef *application.WebviewWindow
+)
+
+func getMainWin() *application.WebviewWindow {
+	winRefMu.RLock()
+	defer winRefMu.RUnlock()
+	return mainWinRef
+}
+
+func setMainWin(w *application.WebviewWindow) {
+	winRefMu.Lock()
+	mainWinRef = w
+	winRefMu.Unlock()
+}
+
+func getCapsuleWin() *application.WebviewWindow {
+	winRefMu.RLock()
+	defer winRefMu.RUnlock()
+	return capsuleWinRef
+}
+
+func setCapsuleWin(w *application.WebviewWindow) {
+	winRefMu.Lock()
+	capsuleWinRef = w
+	winRefMu.Unlock()
+}
 
 // mainWinClosed 主窗口是否已关闭(托盘「工作台」重�?
 var mainWinClosed atomic.Bool
@@ -708,8 +739,8 @@ func createMainWindow(app *application.App, url string) *application.WebviewWind
 		BackgroundColour: application.NewRGB(10, 15, 30),
 		URL:              url + "/?_=" + strconv.FormatInt(time.Now().UnixNano(), 36),
 	})
-	mainWinRef = win
 	mainWinClosed.Store(false)
+	setMainWin(win)
 	// 记忆窗口尺寸/位置(与旧 mainwin.json 语义一�?
 	statePath := filepath.Join(exeDir(), "mainwin.json")
 	saveWin := func() {
@@ -845,7 +876,7 @@ func startControlServers(app *application.App, url string) {
 		// N_X 监测:主应用窗口是否打开(HUD 工作台按钮状态;同进程判断 mainWinRef
 		// 或枚举标题 NiliX,托盘可重建)。右侧附文本:版本/端口/PID。
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		open := mainWinRef != nil && !mainWinClosed.Load()
+		open := getMainWin() != nil && !mainWinClosed.Load()
 		if !open && findMainWindow() != 0 {
 			open = true // 兜底:窗口枚举确认(旧引用失效场景)
 		}
@@ -863,24 +894,24 @@ func startControlServers(app *application.App, url string) {
 		log.Printf("[ctl8799] /minimize from %s", r.RemoteAddr)
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(200)
-		if mainWinRef != nil {
-			go mainWinRef.Minimise()
+		if win := getMainWin(); win != nil {
+			go win.Minimise()
 		}
 	})
 	mux.HandleFunc("GET /maximize", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ctl8799] /maximize from %s", r.RemoteAddr)
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(200)
-		if mainWinRef != nil {
-			go mainWinRef.ToggleMaximise()
+		if win := getMainWin(); win != nil {
+			go win.ToggleMaximise()
 		}
 	})
 	mux.HandleFunc("GET /close", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ctl8799] /close from %s", r.RemoteAddr)
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(200)
-		if mainWinRef != nil {
-			go mainWinRef.Close() // 关闭主窗口,应用(托盘+胶囊)继续,托盘可重建
+		if win := getMainWin(); win != nil {
+			go win.Close() // 关闭主窗口,应用(托盘+胶囊)继续,托盘可重建
 		}
 	})
 	mux.HandleFunc("GET /move", func(w http.ResponseWriter, r *http.Request) {
@@ -888,9 +919,9 @@ func startControlServers(app *application.App, url string) {
 		q := r.URL.Query()
 		dx, _ := strconv.Atoi(q.Get("dx"))
 		dy, _ := strconv.Atoi(q.Get("dy"))
-		if (dx != 0 || dy != 0) && mainWinRef != nil {
-			cx, cy := mainWinRef.Position()
-			go mainWinRef.SetPosition(cx+dx, cy+dy)
+		if (dx != 0 || dy != 0) && getMainWin() != nil {
+			cx, cy := getMainWin().Position()
+			go getMainWin().SetPosition(cx+dx, cy+dy)
 		}
 		w.WriteHeader(200)
 	})
@@ -907,8 +938,8 @@ func startControlServers(app *application.App, url string) {
 		if nh < 600 {
 			nh = 600
 		}
-		if mainWinRef != nil {
-			go mainWinRef.SetSize(nw, nh)
+		if win := getMainWin(); win != nil {
+			go win.SetSize(nw, nh)
 		}
 		w.WriteHeader(200)
 	})
@@ -958,12 +989,9 @@ func startControlServers(app *application.App, url string) {
 	}()
 }
 
-// capsuleWinRef 当前胶囊窗口引用
-var capsuleWinRef *application.WebviewWindow
-
 func capsuleWinClose() {
-	if capsuleWinRef != nil {
-		capsuleWinRef.Close() // 关闭胶囊窗口(托盘开关可重建)
+	if win := getCapsuleWin(); win != nil {
+		win.Close() // 关闭胶囊窗口(托盘开关可重建)
 	}
 }
 
@@ -972,11 +1000,12 @@ var capsuleAnimGen int32
 
 // animateCapsule 胶囊展开/收起动画:分段 SetSize + 居中
 func animateCapsule(toW, toH int) {
-	if capsuleWinRef == nil {
+	win := getCapsuleWin()
+	if win == nil {
 		return
 	}
 	vw, _, _ := procGetSystemMetrics.Call(uintptr(smCXVirtual))
-	sw, sh := capsuleWinRef.Size()
+	sw, sh := win.Size()
 	if sw <= 0 {
 		sw = 300
 	}
@@ -996,16 +1025,16 @@ func animateCapsule(toW, toH int) {
 			w := sw + (toW-sw)*i/steps
 			h := sh + (toH-sh)*i/steps
 			x := (int(int32(vw)) - w) / 2
-			capsuleWinRef.SetPosition(x, 0)
-			capsuleWinRef.SetSize(w, h)
+			win.SetPosition(x, 0)
+			win.SetSize(w, h)
 			time.Sleep(12 * time.Millisecond)
 		}
 		// 兜底:动画结束后强制最终尺寸(防累加误差/被打断残留中间值,
 		// 导致胶囊以展开高度展示但内容已隐藏=大黑框)
 		if atomic.LoadInt32(&capsuleAnimGen) == gen {
 			x := (int(int32(vw)) - toW) / 2
-			capsuleWinRef.SetPosition(x, 0)
-			capsuleWinRef.SetSize(toW, toH)
+			win.SetPosition(x, 0)
+			win.SetSize(toW, toH)
 		}
 	}()
 }
@@ -1062,7 +1091,7 @@ func buildTray(app *application.App, url string) {
 			capsuleWinClose()
 			mCapsule.SetChecked(false)
 		} else {
-			capsuleWinRef = createCapsuleWindow(app, url)
+			setCapsuleWin(createCapsuleWindow(app, url))
 			mCapsule.SetChecked(true)
 		}
 	})

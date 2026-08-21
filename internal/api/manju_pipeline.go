@@ -1186,7 +1186,7 @@ func (ctx *manjuCtx) novelFingerprint() string {
 	parts := []string{}
 	if ctx.novel != "" {
 		if st, err := os.Stat(ctx.novel); err == nil {
-			parts = append(parts, fmt.Sprintf("%s|%d|%d", ctx.novel, st.Size(), st.ModTime().Unix()))
+			parts = append(parts, fmt.Sprintf("%s|%d|%d", ctx.novel, st.Size(), st.ModTime().UnixNano()))
 		}
 	}
 	// 素材目录指纹:人物生成提示词/场景提示词/设定集/封面提示词,全部计入
@@ -1214,7 +1214,7 @@ func (ctx *manjuCtx) novelFingerprint() string {
 					strings.Contains(low, "场景") || strings.Contains(low, "封面") ||
 					strings.Contains(rel, "设定集") {
 					if st, err := os.Stat(p); err == nil {
-						parts = append(parts, fmt.Sprintf("%s|%d|%d", p, st.Size(), st.ModTime().Unix()))
+						parts = append(parts, fmt.Sprintf("%s|%d|%d", p, st.Size(), st.ModTime().UnixNano()))
 					}
 				}
 			}
@@ -1831,7 +1831,7 @@ func (ctx *manjuCtx) assetsFingerprint() string {
 			if err != nil {
 				continue
 			}
-			parts = append(parts, e.Name()+"@"+strconv.FormatInt(info.ModTime().Unix(), 10))
+			parts = append(parts, e.Name()+"@"+strconv.FormatInt(info.ModTime().UnixNano(), 10)+"|"+strconv.FormatInt(info.Size(), 10))
 		}
 	}
 	sort.Strings(parts)

@@ -2,10 +2,49 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+// 审计 5.2 回归:stopped 回调触发后,在飞 LLM 请求被 context 取消立即返回
+// (旧实现等满 300s 超时——"停止无反应"残留点)
+func TestManjuLLMStopCancelsInFlight(t *testing.T) {
+	// 慢服务器:收到请求后挂起,不响应(模拟 LLM 卡住/慢响应)
+	var started atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started.Store(true)
+		time.Sleep(30 * time.Second) // 长挂起
+	}))
+	defer srv.Close()
+
+	llm := &manjuLLM{
+		baseURL: srv.URL, model: "test", apiKey: "k",
+		temperature: 0.4, maxTokens: 100, timeout: 60 * time.Second,
+		client: &http.Client{Timeout: 60 * time.Second},
+	}
+	// 停止回调:立即返回 true(模拟用户已点停止)
+	llm.SetStopped(func() bool { return true })
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := llm.chat("sys", "user", 0)
+		done <- err
+	}()
+	// 应在几秒内返回"已停止"(不能等 30s 服务器响应/60s 超时)
+	select {
+	case err := <-done:
+		if err == nil || err.Error() != "已停止" {
+			t.Fatalf("应返回已停止,得到: %v", err)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("stopped 后请求未被取消,仍在等待(停止无反应)")
+	}
+}
 
 // 审计 P2 回归:条件缓存指纹必须包含 FL2VA 尾帧维度——
 // fl2va_end_frame 开关切换 / 尾帧图变更后指纹变化(旧缓存失效,不串用双帧/单帧模式)

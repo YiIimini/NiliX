@@ -5,6 +5,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -114,6 +115,8 @@ func (l *manjuLLM) chat(system, user string, temp float64) (string, error) {
 	// (此前零重试:plan 一次 429 即中断 AI 一条龙;修复师失败按原提示词白烧 GPU)
 	// 修复:http.Request 的 Body 只能读一次——每次重试必须重建请求(新 bytes.Reader),
 	// 否则第 2/3 次尝试发送空 body,退避重试实际失效(审查 P1)。
+	// 审计 5.2:请求带 context——stopped 回调触发即 cancel,在飞 LLM 请求(最长 300s)
+	// 立即中断,不再"停止后还要干等请求自然结束"(停止无反应的最后一个残留点)。
 	const maxAttempts = 3
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -121,56 +124,85 @@ func (l *manjuLLM) chat(system, user string, temp float64) (string, error) {
 		if l.stopped != nil && l.stopped() {
 			return "", fmt.Errorf("已停止")
 		}
-		req, err := http.NewRequest("POST", l.baseURL+"/chat/completions", bytes.NewReader(b))
+		// 每次尝试独立 context:stopped 转 true 时取消在途请求
+		reqCtx, reqCancel := context.WithCancel(context.Background())
+		if l.stopped != nil {
+			go func() {
+				t := time.NewTicker(200 * time.Millisecond)
+				defer t.Stop()
+				for {
+					select {
+					case <-reqCtx.Done():
+						return
+					case <-t.C:
+						if l.stopped() {
+							reqCancel()
+							return
+						}
+					}
+				}
+			}()
+		}
+		req, err := http.NewRequestWithContext(reqCtx, "POST", l.baseURL+"/chat/completions", bytes.NewReader(b))
 		if err != nil {
+			reqCancel()
 			return "", err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+l.apiKey)
 		resp, err := l.client.Do(req)
-		if err == nil {
+		if err != nil {
+			reqCancel()
+			// 停止触发导致 context 取消:报告为已停止(而非"请求失败")
+			if l.stopped != nil && l.stopped() {
+				return "", fmt.Errorf("已停止")
+			}
+			lastErr = fmt.Errorf("LLM 请求失败: %w", err)
+			if attempt < maxAttempts {
+				time.Sleep(time.Duration(attempt*2) * time.Second)
+			}
+			continue
+		}
+		reqCancel()
+		if resp.StatusCode == 200 {
 			data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 			_ = resp.Body.Close()
-			if resp.StatusCode == 200 {
-				var r struct {
-					Choices []struct {
-						FinishReason string `json:"finish_reason"`
-						Message      struct {
-							Content string `json:"content"`
-						} `json:"message"`
-					} `json:"choices"`
-					Usage agent.Usage `json:"usage"`
-				}
-				if err := json.Unmarshal(data, &r); err != nil {
-					return "", fmt.Errorf("LLM 响应解析失败: %w", err)
-				}
-				if len(r.Choices) == 0 {
-					return "", fmt.Errorf("LLM 空响应")
-				}
-				// 输出打满 max_tokens:JSON 被截断,直接判失败(调用方可精简重试)
-				if r.Choices[0].FinishReason == "length" {
-					return "", errLLMTruncated
-				}
-				if l.onUsage != nil && r.Usage.TotalTokens > 0 {
-					l.onUsage(l.model, r.Usage)
-				}
-				return r.Choices[0].Message.Content, nil
+			var r struct {
+				Choices []struct {
+					FinishReason string `json:"finish_reason"`
+					Message      struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+				Usage agent.Usage `json:"usage"`
 			}
-			// 429/5xx:退避重试
-			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-				lastErr = fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-				if attempt < maxAttempts {
-					time.Sleep(time.Duration(attempt*2) * time.Second)
-					continue
-				}
-				return "", lastErr
+			if err := json.Unmarshal(data, &r); err != nil {
+				return "", fmt.Errorf("LLM 响应解析失败: %w", err)
 			}
-			return "", fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+			if len(r.Choices) == 0 {
+				return "", fmt.Errorf("LLM 空响应")
+			}
+			// 输出打满 max_tokens:JSON 被截断,直接判失败(调用方可精简重试)
+			if r.Choices[0].FinishReason == "length" {
+				return "", errLLMTruncated
+			}
+			if l.onUsage != nil && r.Usage.TotalTokens > 0 {
+				l.onUsage(l.model, r.Usage)
+			}
+			return r.Choices[0].Message.Content, nil
 		}
-		lastErr = fmt.Errorf("LLM 请求失败: %w", err)
-		if attempt < maxAttempts {
-			time.Sleep(time.Duration(attempt*2) * time.Second)
+		// 429/5xx:退避重试
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+			if attempt < maxAttempts {
+				time.Sleep(time.Duration(attempt*2) * time.Second)
+				continue
+			}
+			return "", lastErr
 		}
+		return "", fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	return "", lastErr
 }
@@ -182,17 +214,34 @@ func (l *manjuLLM) chatJSON(system, user string, temp float64) (map[string]any, 
 		return nil, err
 	}
 	text = strings.TrimSpace(text)
-	if i := strings.Index(text, "{"); i > 0 {
-		text = text[i:]
-	}
-	if i := strings.LastIndex(text, "}"); i >= 0 {
-		text = text[:i+1]
-	}
+	// 审计 5.3:先整体解析——输出正文若先出现 `{`(错误说明/示例),直接截取会切到
+	// 错误位置;整体解析失败才做围栏/花括号剥离(容错启发式)
 	var out map[string]any
-	if err := json.Unmarshal([]byte(text), &out); err != nil {
-		return nil, fmt.Errorf("LLM 输出非 JSON: %v (前 200 字: %s)", err, truncate(text, 200))
+	if err := json.Unmarshal([]byte(text), &out); err == nil {
+		return out, nil
 	}
-	return out, nil
+	// 剥 ```json 围栏
+	if i := strings.Index(text, "```"); i >= 0 {
+		if j := strings.Index(text[i+3:], "```"); j >= 0 {
+			text = text[i+3 : i+3+j]
+		} else {
+			text = text[i+3:]
+		}
+		text = strings.TrimSpace(text)
+		if err := json.Unmarshal([]byte(text), &out); err == nil {
+			return out, nil
+		}
+	}
+	// 最后兜底:截取首个 { 到末个 } 之间
+	if i := strings.Index(text, "{"); i >= 0 {
+		if j := strings.LastIndex(text, "}"); j > i {
+			text = text[i : j+1]
+			if err := json.Unmarshal([]byte(text), &out); err == nil {
+				return out, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("LLM 输出非 JSON: %v (前 200 字: %s)", err, truncate(text, 200))
 }
 
 func truncate(s string, n int) string {

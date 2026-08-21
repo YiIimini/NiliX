@@ -110,7 +110,19 @@ func (s *Server) Routes() http.Handler {
 		// 所有写请求带错误 token 被 auth 拦成 401「会话失效」
 		mux.Handle("/", noCacheHTML(s.tokenInject(http.FileServer(http.FS(s.kbFS)))))
 	}
-	return s.localHostOnly(s.auth(mux))
+	return s.localHostOnly(limitRequestBody(s.auth(mux)))
+}
+
+// limitRequestBody 请求体大小上限(审计:JSON 请求体普遍无限制,恶意大 body 占满内存;
+// 上传类接口(定妆照/抽卡)内部另有 MaxBytesReader 更严格上限,此处兜底防超大 body)
+func limitRequestBody(next http.Handler) http.Handler {
+	const maxBody = 64 << 20 // 64MB 兜底(正常 API 请求远小于此,仅防恶意灌入)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // localHostOnly DNS rebinding 防线(审计 H1):只接受本机 Host。
