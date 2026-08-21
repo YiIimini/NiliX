@@ -170,7 +170,7 @@ func startComfy() error {
 	}
 	args := []string{
 		filepath.Join(ComfyRootDir, "main.py"),
-		"--listen", "127.0.0.1",
+		"--listen", "0.0.0.0", // 局域网设备可经 http://<本机IP>:8190 访问
 		"--port", currentPort(),
 		"--disable-auto-launch",
 		"--output-directory", out,

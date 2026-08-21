@@ -590,3 +590,39 @@ func TestScanNovelAssets(t *testing.T) {
 		t.Fatalf("文件清单应 6 项: %v", a.Files)
 	}
 }
+
+// TestNovelFingerprintIncludesAssets 方案指纹必须含素材:素材文件变更 → 指纹变化
+// (修复「素材/人物生成提示词.md 准备了却不生效」——旧方案被 ensurePlan 复用,素材白准备)
+func TestNovelFingerprintIncludesAssets(t *testing.T) {
+	dir := t.TempDir()
+	// 正文(全本) + 素材
+	_ = os.MkdirAll(filepath.Join(dir, "素材"), 0755)
+	_ = os.MkdirAll(filepath.Join(dir, "正文", "卷一"), 0755)
+	novelPath := filepath.Join(dir, "全本", "书·全本.md")
+	_ = os.MkdirAll(filepath.Dir(novelPath), 0755)
+	_ = os.WriteFile(novelPath, []byte("第一章 内容"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "素材", "人物生成提示词.md"), []byte("人物:陈鱼,死鱼眼"), 0644)
+
+	ctx := &manjuCtx{novel: novelPath}
+	f1 := ctx.novelFingerprint()
+	if f1 == "" {
+		t.Fatalf("指纹为空")
+	}
+	// 改素材文件 → 指纹必须变化
+	time.Sleep(1100 * time.Millisecond) // 确保 mtime 秒级变化
+	_ = os.WriteFile(filepath.Join(dir, "素材", "人物生成提示词.md"), []byte("人物:陈鱼,死鱼眼,泪痣"), 0644)
+	f2 := ctx.novelFingerprint()
+	if f2 == f1 {
+		t.Fatalf("素材变更后指纹未变化: %s", f1)
+	}
+	// 新增素材文件 → 指纹变化
+	_ = os.WriteFile(filepath.Join(dir, "素材", "场景提示词.md"), []byte("场景:山门"), 0644)
+	f3 := ctx.novelFingerprint()
+	if f3 == f2 {
+		t.Fatalf("新增素材后指纹未变化")
+	}
+	// 正文无关子目录(如 封面/全本外)不干扰:仍含正文指纹
+	if !strings.Contains(f3, novelPath) {
+		t.Fatalf("指纹应含正文路径: %s", f3)
+	}
+}

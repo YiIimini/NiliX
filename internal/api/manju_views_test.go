@@ -110,3 +110,24 @@ func TestCharViewPromptFor(t *testing.T) {
 		t.Fatalf("主视图 = %q, want %q", got, "front base")
 	}
 }
+
+// TestCharSeedUnique 角色定妆照 seed:不同角色/视图 seed 不同,同角色跨调用稳定
+// (防"多部小说主角 seed 相近 → 面容雷同"——此前固定 7000+i 递增)。
+func TestCharSeedUnique(t *testing.T) {
+	// 同角色同视图:稳定
+	if s1, s2 := charSeed("顾青梧", "main"), charSeed("顾青梧", "main"); s1 != s2 {
+		t.Fatalf("同角色 seed 不稳定: %d vs %d", s1, s2)
+	}
+	// 不同角色:不同 seed
+	if s1, s2 := charSeed("顾青梧", "main"), charSeed("陈鱼", "main"); s1 == s2 {
+		t.Fatalf("不同主角 seed 相同: %d", s1)
+	}
+	// 同角色不同视图:不同 seed
+	if s1, s2 := charSeed("顾青梧", "main"), charSeed("顾青梧", "front"); s1 == s2 {
+		t.Fatalf("同角色视图 seed 相同: %d", s1)
+	}
+	// 中文名与英文名不撞
+	if s1, s2 := charSeed("陈鱼", "main"), charSeed("ChenYu", "main"); s1 == s2 {
+		t.Fatalf("中文/英文同名 seed 相同: %d", s1)
+	}
+}

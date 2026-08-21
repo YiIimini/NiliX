@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"os"
 	"os/exec"
@@ -1149,15 +1150,53 @@ func (ctx *manjuCtx) validatePlan(plan map[string]any, shots []manjuShot) []stri
 
 // novelFingerprint 小说正文指纹(大小+mtime):方案复用校验的依据,
 // 正文变化后旧方案视为过期,强制重新生成,保证视频内容与小说同步。
+// novelFingerprint 方案内容指纹 = 正文 + 小说素材(素材/人物生成提示词.md、场景*.md、设定集/、封面/封面提示词.md)。
+// 素材文件是方案角色/场景 image_prompt 的注入源:改了素材必须重新生成方案,
+// 否则「素材白准备」——旧方案继续复用(如 8 角色素材文件 + 4 角色旧方案)。
 func (ctx *manjuCtx) novelFingerprint() string {
-	if ctx.novel == "" {
+	parts := []string{}
+	if ctx.novel != "" {
+		if st, err := os.Stat(ctx.novel); err == nil {
+			parts = append(parts, fmt.Sprintf("%s|%d|%d", ctx.novel, st.Size(), st.ModTime().Unix()))
+		}
+	}
+	// 素材目录指纹:人物生成提示词/场景提示词/设定集/封面提示词,全部计入
+	root := ctx.novelRootDir()
+	if root != "" {
+		var walk func(dir string)
+		walk = func(dir string) {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return
+			}
+			for _, e := range entries {
+				p := filepath.Join(dir, e.Name())
+				if e.IsDir() {
+					walk(p)
+					continue
+				}
+				if !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+					continue
+				}
+				// 只纳入与方案相关的素材(排除正文/全本章节文件——正文由 ctx.novel 指纹覆盖)
+				low := strings.ToLower(e.Name())
+				rel := strings.ToLower(strings.TrimPrefix(p, root))
+				if strings.Contains(low, "人物") || strings.Contains(low, "角色") ||
+					strings.Contains(low, "场景") || strings.Contains(low, "封面") ||
+					strings.Contains(rel, "设定集") {
+					if st, err := os.Stat(p); err == nil {
+						parts = append(parts, fmt.Sprintf("%s|%d|%d", p, st.Size(), st.ModTime().Unix()))
+					}
+				}
+			}
+		}
+		walk(root)
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	st, err := os.Stat(ctx.novel)
-	if err != nil {
-		return ""
-	}
-	return fmt.Sprintf("%d|%d", st.Size(), st.ModTime().Unix())
+	sort.Strings(parts) // 稳定顺序(目录遍历顺序不定,排序保证指纹一致)
+	return strings.Join(parts, ";")
 }
 
 func anyArr(v any) []any {
@@ -1644,7 +1683,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		smap = map[string]any{}
 	}
 	chars, _ := plan["characters"].([]any)
-	for i, c := range chars {
+	for _, c := range chars {
 		m, ok := c.(map[string]any)
 		if !ok {
 			continue
@@ -1656,7 +1695,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		dst := filepath.Join(ctx.assetsDir, "characters", cid+".png")
 		if !fileExists(dst) {
 			lg.logf("🎨 角色定妆照: " + cid + " ...")
-			wf := ctx.portraitWF(str(m["image_prompt"]), 7000+i, "manju_asset", m)
+			wf := ctx.portraitWF(str(m["image_prompt"]), charSeed(cid, "main"), "manju_asset", m)
 			if err := ctx.comfyGenImage(wf, dst, lg, "角色 "+cid); err != nil {
 				return fmt.Errorf("角色 %s 定妆照失败: %w", cid, err)
 			}
@@ -1678,7 +1717,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 			vDst := filepath.Join(ctx.assetsDir, "characters", cid+"_"+view+".png")
 			if !fileExists(vDst) {
 				lg.logf("🎨 角色 " + cid + " " + view + " 视图 ...")
-				wf := ctx.portraitWF(p, 7100+i*10, "manju_asset", m)
+				wf := ctx.portraitWF(p, charSeed(cid, view), "manju_asset", m)
 				if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"("+view+")"); err != nil {
 					lg.logf("  ⚠️ " + view + " 视图生成失败(回退主图+正脸): " + err.Error())
 					continue
@@ -3105,6 +3144,16 @@ func charPromptFor(ctx *manjuCtx, char string) string {
 
 // manjuViewOrder 角色视图优先级(参考图传入顺序 = prompt Picture 编号顺序)
 var manjuViewOrder = []string{"front", "full", "detail", "side"}
+
+// charSeed 角色定妆照/视图的稳定随机种子:由角色名+视图派生(散列)。
+// 同一角色跨重跑/跨项目 seed 稳定(定妆照不漂移),不同角色/不同视图 seed 不同
+// (消除"多部小说主角 seed 相近 → 面容雷同"的根因——此前用固定 7000+i 递增,
+// 相似 prompt + 相近 seed 生成相似面容)。
+func charSeed(cid, view string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(cid + "|" + view))
+	return int(h.Sum32() & 0x7fffffff)
+}
 
 // manjuViewRel 视图 → 资产相对路径(front 正脸特写,其余独立视图文件)
 func manjuViewRel(cid, view string) string {
