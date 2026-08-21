@@ -583,6 +583,14 @@ func manjuStyleAnalyzeRun(configPath, episode, chapters, novel string) (map[stri
 		return nil, fmt.Errorf("小说内容太少,无法深度分析")
 	}
 	old := str(ctx.cfg["style"])
+	// AI 一条龙(用户规则 2026-08):解析小说「渲染提示词总集」的风格/负面提示词,
+	// 作为分析输入——LLM 综合 用户当前配置 + 小说总集提示词 + 章节内容,
+	// 给出最优渲染配置。总集负面在分析后写回 render.neg_prompt。
+	masterStyle, masterNeg := "", ""
+	if assets := scanNovelAssets(ctx.novelRootDir()); len(assets.Files) > 0 {
+		masterStyle = assets.StylePrompt
+		masterNeg = assets.NegPrompt
+	}
 	sys := `你是漫剧(竖屏短剧)渲染风格与参数分析师,根据小说章节内容判断最匹配的渲染风格与渲染参数。
 【铁律】用户当前风格是用户主动选择的基底,必须完整保留、绝不能替换或丢弃;你的任务是在此基底上补充题材元素词,让风格更贴合本章节。
 【分析要点】题材类型(古装/现代/玄幻/科幻/都市/悬疑…)、叙事基调(热血/治愈/暗黑/甜宠…)、场景与美术特征、目标观众画风偏好、节奏密度(对话交锋/转场频率)。
@@ -590,6 +598,7 @@ func manjuStyleAnalyzeRun(configPath, episode, chapters, novel string) (map[stri
 style 取值规则(基底 + 补充,禁止替换基底):
 - 开头必须原样包含用户当前基底风格(用户输入的全部元素词,一个不丢)
 - 在其后追加 2-4 个题材元素词(取材于小说内容,英文短语):时代/文化氛围(如 ancient Chinese aesthetic / cyberpunk / steampunk)、美术质感(如 watercolor / oil painting / film grain)、光影气质(如 moody cinematic lighting / bright pastel);语义冲突的组合不要
+- 若小说「渲染提示词总集」提供了风格提示词,优先吸收其中与本章节契合的英文元素词(如 photorealistic / cinematic color grading / volumetric lighting),去重后并入
 - 整体用 + 连接(如 ink+ancient Chinese aesthetic+watercolor / 2.5d+cyberpunk+neon lighting),总元素不超过 7 个
 - 所有新增题材元素词必须是英文(H3 提示词直接使用),中文风格词自行翻译
 params 取值规则(渲染优化参数,按题材节奏判断,全部给出):
@@ -604,7 +613,14 @@ reason: 不超过 100 字中文,说明在用户基底风格上补充了哪些元
 	if strings.TrimSpace(old) == "" {
 		baseDesc = "(未设置,直接按题材推荐 3-5 个元素)"
 	}
-	user := "用户当前基底风格(必须保留,为空则直接推荐): " + baseDesc + "\n需渲染章节: " + ctx.chapters + " / 集 " + ctx.episode + "\n\n小说章节内容(节选):\n" + truncate(text, 12000)
+	masterBlock := ""
+	if masterStyle != "" {
+		masterBlock += "\n\n【小说渲染提示词总集·风格提示词(参考吸收契合元素,不整体照抄)】" + masterStyle
+	}
+	if masterNeg != "" {
+		masterBlock += "\n\n【小说渲染提示词总集·负面提示词(参考:将其中禁入项转为正面约束并入详细描述;负面本身将写入配置)】" + masterNeg
+	}
+	user := "用户当前基底风格(必须保留,为空则直接推荐): " + baseDesc + masterBlock + "\n需渲染章节: " + ctx.chapters + " / 集 " + ctx.episode + "\n\n小说章节内容(节选):\n" + truncate(text, 12000)
 	out, err := ctx.llm.chatJSON(sys, user, 0.3)
 	if err != nil {
 		return nil, fmt.Errorf("深度分析失败: %w", err)
@@ -659,6 +675,16 @@ reason: 不超过 100 字中文,说明在用户基底风格上补充了哪些元
 				params["长镜"] = fmt.Sprintf("%d镜/组", n)
 			}
 		}
+	}
+	// AI 一条龙:小说总集负面提示词写回 render.neg_prompt(用户规则:仅此路径
+	// 解析总集;普通管线用用户配置的负面,不受影响)
+	if masterNeg != "" {
+		RN, _ := ctx.cfg["render"].(map[string]any)
+		if RN == nil {
+			RN = map[string]any{}
+			ctx.cfg["render"] = RN
+		}
+		RN["neg_prompt"] = masterNeg
 	}
 	if err := writeManjuConfig(configPath, ctx.cfg); err != nil {
 		return nil, fmt.Errorf("写入渲染配置失败: %w", err)

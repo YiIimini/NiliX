@@ -56,10 +56,10 @@ func TestShotRefRoles(t *testing.T) {
 	}
 }
 
-// TestShotPromptInjectsMaster 逐镜 H3 提示词生成必须注入总集的全局风格/负面/角色:
-// 一条龙/AI一条龙/执行管线 三条流程都经 genShotPromptRaw——总集风格/负面若只注入
-// 方案生成(角色/场景 image_prompt),逐镜视频渲染提示词不读 → 用户全局风格/负面白配。
-func TestShotPromptInjectsMaster(t *testing.T) {
+// TestShotPromptKeepsUserConfig 普通执行管线/一条龙(用户规则 2026-08):逐镜 H3
+// 提示词**不**注入总集的风格/负面——渲染风格/负面一律用用户配置(config.style /
+// render.neg_prompt)。仅 AI 一条龙分析时读总集并写回配置。
+func TestShotPromptKeepsUserConfig(t *testing.T) {
 	dir := t.TempDir()
 	// 小说目录 + 总集(风格/负面/角色)
 	_ = os.MkdirAll(filepath.Join(dir, "素材"), 0755)
@@ -74,7 +74,6 @@ func TestShotPromptInjectsMaster(t *testing.T) {
 	// mock LLM:捕获系统提示词,返回合法 h3_prompt
 	var gotSys string
 	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 读请求体拿 system
 		var req struct {
 			Messages []struct {
 				Role    string `json:"role"`
@@ -112,10 +111,19 @@ func TestShotPromptInjectsMaster(t *testing.T) {
 	if hp == "" {
 		t.Fatalf("h3_prompt 为空")
 	}
-	// 系统提示词必须含总集注入段
-	for _, want := range []string{"全局渲染风格提示词", "Cinematic film still, photorealistic", "全局负面提示词", "anime", "watermark"} {
-		if !strings.Contains(gotSys, want) {
-			t.Errorf("逐镜 H3 系统提示词缺总集注入 %q", want)
+	// 普通管线:系统提示词**不得**含总集注入段(风格/负面用用户配置,不自动解析总集)
+	// 注:内置默认负面(manjuNegPrompt)含 anime 等词,此处只查总集特有的段落标记
+	for _, forbid := range []string{"全局渲染风格提示词", "全局负面提示词(总集", "渲染提示词总集", "总集·强制"} {
+		if strings.Contains(gotSys, forbid) {
+			t.Errorf("普通管线不应注入总集内容,系统提示词含 %q", forbid)
 		}
+	}
+	// 总集风格提示词不应整体进入
+	if strings.Contains(gotSys, "Cinematic film still, photorealistic, xianxia") {
+		t.Errorf("普通管线不应注入总集风格提示词")
+	}
+	// 用户配置的风格应体现在系统提示词(2.5d 风格措辞)
+	if !strings.Contains(gotSys, "2.5D") && !strings.Contains(gotSys, "2.5d") {
+		t.Errorf("系统提示词缺用户配置风格(2.5d): %q", gotSys[:min(200, len(gotSys))])
 	}
 }

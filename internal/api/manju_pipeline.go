@@ -195,17 +195,10 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	if P == nil {
 		P = map[string]any{}
 	}
-	// 渲染提示词总集注入渲染配置(用户反馈:总集风格/负面只进 LLM 提示词,
-	// 渲染配置界面「风格」「负面提示词」仍显示旧值,本地生图也用内置默认负面)。
-	// 规则:总集存在时,style 为空 → 写总集风格;neg_prompt 为空或仍为内置默认 → 写总集负面。
-	// 用户显式配置过(非空/非默认)则尊重用户,不覆盖。幂等:已注入的 config 不会再写。
-	if manjuInjectPromptMaster(cfg, R, P) {
-		// 写回 config.json(per-config 锁防并发;失败静默——仅影响配置界面展示,不影响本次渲染)
-		cfgLock := manjuConfigLock(configPath)
-		cfgLock.Lock()
-		_ = writeManjuConfig(configPath, cfg)
-		cfgLock.Unlock()
-	}
+	// 用户规则(2026-08):普通执行管线/一条龙 渲染配置参数一律用用户自己配置的
+	// style/neg_prompt(config.json),不自动解析小说总集覆盖;仅「AI 一条龙」(
+	// manjuAgentStyleAnalyze)才解析小说提示词/负面提示词并分析给出最优配置。
+	// 因此这里不再调用 manjuInjectPromptMaster 自动写回 config。
 	epEff := orDefault(episode, str(R["episode"]))
 	// ComfyUI 输入/输出目录:优先用「生效启动参数」(comfyParams.in/out,与 ComfyUI 实际
 	// 启动命令同步)——项目 config 里的 comfy_input/comfy_output 可能是旧路径(创建项目时
@@ -1068,16 +1061,12 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 	sys := manjuDirectSystem(ctx.cfg, ctx.style)
 	// 小说素材完整注入(通用目录约定:素材/人物生成提示词.md、素材/场景*.md、素材/其它、设定集/*.md、封面/封面提示词.md):
 	// 方案生成时全部参考——角色/场景 image_prompt 贴合素材,世界观/创作规范贴合设定集,避免「素材白准备」
+	// 用户规则(2026-08):不注入总集的 风格/负面(StylePrompt/NegPrompt)——渲染风格/负面
+	// 一律用用户配置(config.style / render.neg_prompt);仅 AI 一条龙分析时读总集并写回配置。
 	if assets := scanNovelAssets(ctx.novelRootDir()); len(assets.Files) > 0 {
 		lg.logf("📎 已利用小说素材: " + strings.Join(assets.Files, "、"))
 		if assets.Setting != "" {
 			sys += "\n\n【小说设定集·世界观/大纲/创作规范(角色设定/场景设定/剧情线/文风必须贴合,禁止与设定冲突;未知细节以本章原文为准)】\n" + assets.Setting
-		}
-		if assets.StylePrompt != "" {
-			sys += "\n\n【渲染风格提示词(全剧统一风格,注入每镜 detailed_description 前缀,逐镜必须保留本段基调)】\n" + assets.StylePrompt
-		}
-		if assets.NegPrompt != "" {
-			sys += "\n\n【全局负面提示词(生图/画面禁入项;H3 转正面约束:把禁入项改写为 no ... 排除句并入 detailed_description 末尾)】\n" + assets.NegPrompt
 		}
 		if assets.CharPrompt != "" {
 			sys += "\n\n【小说素材·人物生成提示词(角色 image_prompt 必须贴合此文件的人物描述——外观/服装/气质/记忆点以其为准,再结合章节原文细节;不要照抄整段,提炼为可渲染英文)】\n" + assets.CharPrompt
@@ -1574,20 +1563,9 @@ func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map
 func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]map[string]any, fix string) (string, error) {
 	hasChar := len(s.Characters) > 0
 	sys := manjuShotPromptSystem(hasChar, ctx.style)
-	// 小说素材·渲染提示词总集注入逐镜 H3(方案生成已注入角色/场景 image_prompt;
-	// 这里补 全局风格 + 全局负面——否则总集的风格/负面只在方案生成参考,
-	// 逐镜视频渲染提示词不读,用户配的全局风格/负面白配)。
-	if assets := scanNovelAssets(ctx.novelRootDir()); len(assets.Files) > 0 {
-		if assets.StylePrompt != "" {
-			sys += "\n\n【全局渲染风格提示词(总集·强制注入每镜 detailed_description 前缀:detailed_description 必须以本段风格开头,再展开该镜画面;运镜/音画风格同样遵守)】\n" + assets.StylePrompt
-		}
-		if assets.NegPrompt != "" {
-			sys += "\n\n【全局负面提示词(总集·强制:把每项禁入内容改写为 no ... 正面排除句,逐条并入 detailed_description 末尾;本地生图模型则直接使用本段)】\n" + assets.NegPrompt
-		}
-		if assets.ExtraPrompt != "" && strings.Contains(assets.ExtraPrompt, "subject_definitions") {
-			sys += "\n\n【H3 Ref2VA 六段式母版(总集·参考:subject_definitions/retention_analysis/summary 的写法与风格,逐镜沿用其结构纪律)】\n" + assets.ExtraPrompt
-		}
-	}
+	// 用户规则(2026-08):普通执行管线/一条龙不解析小说总集——风格/负面一律用
+	// 用户配置(config.style / render.neg_prompt)。仅「AI 一条龙」在
+	// manjuAgentStyleAnalyze 分析时读总集并写回配置,此后再由本处使用配置值。
 	shotObj := map[string]any{
 		"shot_id": s.ID, "shot_size": s.ShotSize, "camera": s.Camera, "action": s.Action,
 		"dialogue": s.Dialogue, "narration": s.Narration, "duration": s.Duration,
@@ -1647,15 +1625,12 @@ func manjuTimecode(sec float64) string {
 
 // ---- 资产(定妆照 SDXL + 场景图 Z-Image,已存在复用) ----
 
-// negPrompt 负面提示词(角色/场景图生成):优先渲染提示词总集的全局负面(总集是
-// 用户规则单文件,负面应为最高优先),其次配置 render.neg_prompt,最后内置默认。
+// negPrompt 负面提示词(角色/场景图生成):优先配置 render.neg_prompt(用户配置),
+// 空则用内置默认。用户规则(2026-08):普通管线不解析小说总集负面——
+// 总集负面仅在「AI 一条龙」分析时读入并写回配置。
 func (ctx *manjuCtx) negPrompt() string {
 	if s := strings.TrimSpace(str(ctx.R["neg_prompt"])); s != "" {
 		return s
-	}
-	// 总集负面兜底:config 未写回(如旧项目从未跑过 newManjuCtx)时本地生图也要用总集负面
-	if assets := scanNovelAssets(ctx.novelRootDir()); assets.NegPrompt != "" {
-		return assets.NegPrompt
 	}
 	return manjuNegPrompt
 }

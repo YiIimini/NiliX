@@ -386,50 +386,6 @@ type manjuNovelAssets struct {
 	Files       []string // 发现的素材文件清单(日志展示)
 }
 
-// manjuInjectPromptMaster 把「渲染提示词总集.md」的风格/负面注入渲染配置(幂等写回):
-//   - cfg.style 为空,或当前 style 不含总集风格特征词(Cinematic)——总集风格优先级最高
-//     (总集是用户规则单文件,标题注明「渲染管线直用」),写入总集风格提示词
-//   - cfg.render.neg_prompt 为空或仍为内置默认 → 写入总集负面提示词
-// 注入后置 render._prompt_master_synced=true 标记:用户随后在配置界面保存
-// (manjuSaveRender 清标记)即视为用户接管,不再自动覆盖用户后续修改。
-// 返回是否发生写回。调用时机:newManjuCtx(每次构建上下文)。
-func manjuInjectPromptMaster(cfg map[string]any, R map[string]any, P map[string]any) bool {
-	root := str(P["novel_dir"])
-	if root == "" {
-		root = filepath.Dir(str(P["novel"]))
-	}
-	if root == "" {
-		return false
-	}
-	assets := scanNovelAssets(root)
-	if len(assets.Files) == 0 {
-		return false // 无总集,不注入
-	}
-	changed := false
-	// 风格:总集存在且 style 尚未用总集风格时注入(以特征词判断,避免覆盖用户已接管的值)
-	curStyle := strings.TrimSpace(str(cfg["style"]))
-	if curStyle == "" || !strings.Contains(curStyle, "Cinematic") {
-		if assets.StylePrompt != "" && curStyle != assets.StylePrompt {
-			cfg["style"] = assets.StylePrompt
-			changed = true
-		}
-	}
-	// 负面:仅当为空或仍为内置默认时注入(用户自定义的负面尊重用户)
-	curNeg := strings.TrimSpace(str(R["neg_prompt"]))
-	if curNeg == "" || curNeg == manjuNegPrompt {
-		if assets.NegPrompt != "" {
-			R["neg_prompt"] = assets.NegPrompt
-			cfg["render"] = R
-			changed = true
-		}
-	}
-	if changed {
-		R["_prompt_master_synced"] = true
-		cfg["render"] = R
-	}
-	return changed
-}
-
 func scanNovelAssets(root string) manjuNovelAssets {	var out manjuNovelAssets
 	if root == "" {
 		return out
