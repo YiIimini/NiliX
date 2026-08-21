@@ -111,14 +111,20 @@ func TestSageAttnGuard(t *testing.T) {
 	if ctx.sageChecked {
 		t.Fatal("sage_attention 关闭时不应探测节点")
 	}
-	// 2. 开关开 + 节点缺失(连接不上的地址 → hasNode false):自动降级关闭
+	// 2. 开关开 + 节点缺失(连接不上的地址 → hasNode false):自动降级
+	// (审计 3.3:降级结果在 ctx 字段,applySageToR 注入 R 副本——不直接写共享 R)
 	ctx2 := &manjuCtx{R: map[string]any{"sage_attention": true}, comfy: newComfyClient("http://127.0.0.1:1")}
 	ctx2.sageAttnGuard(lg)
 	if !ctx2.sageChecked {
 		t.Fatal("开关开启时应探测一次")
 	}
-	if b, _ := ctx2.R["sage_attention"].(bool); b {
-		t.Fatal("节点缺失时应自动关闭 sage_attention")
+	if ctx2.sageOK || ctx2.sageNodeName != "" {
+		t.Fatal("节点缺失时 sageOK 应为 false")
+	}
+	rCopy := map[string]any{"sage_attention": true}
+	ctx2.applySageToR(rCopy)
+	if b, _ := rCopy["sage_attention"].(bool); b {
+		t.Fatal("applySageToR 应在副本上关闭 sage_attention")
 	}
 	// 3. 已探测过:不再重复探测(再次调用不改变状态)
 	ctx2.sageAttnGuard(lg)

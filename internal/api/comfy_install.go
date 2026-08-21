@@ -129,7 +129,11 @@ func downloadFile(url, dst string, st *comfyInstallState, label string) error {
 	buf := make([]byte, 256<<10)
 	var written int64
 	for {
-		if st.cancelled {
+		// 审计 F8:取消标志在锁下读取(与 stop 写入同步)
+		st.mu.Lock()
+		cancelled := st.cancelled
+		st.mu.Unlock()
+		if cancelled {
 			f.Close()
 			_ = os.Remove(tmp)
 			return fmt.Errorf("安装已取消")
@@ -224,6 +228,12 @@ func installComfyUI() error {
 		rc := 0
 		defer func() {
 			st.mu.Lock()
+			// 审计 F8:用户已点停止(cancelled=true)时,goroutine 收尾不得覆盖停止终态——
+			// 否则当前步骤收尾成功会把 "已手动停止" 改写成 "完成"(UI 状态跳变)
+			if st.cancelled {
+				st.mu.Unlock()
+				return
+			}
 			st.running = false
 			st.done = true
 			st.rc = rc

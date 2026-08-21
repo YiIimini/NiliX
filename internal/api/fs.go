@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -226,7 +227,13 @@ func isTextFile(name string) bool {
 }
 
 func textWords(path string) int {
-	b, err := os.ReadFile(path)
+	// 审计:单文件整读设上限(4MB)——analyzeDir 扫大库时超大文件不 OOM
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 4<<20))
 	if err != nil {
 		return 0
 	}

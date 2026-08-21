@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -27,7 +28,8 @@ const (
 )
 
 // harnessProcPID 本服务启动的 Harness 进程 PID(0=非本服务启动/未启动)
-var harnessProcPID int
+// 审计 F7:启动/停止跨 goroutine 并发,裸 int 读写是数据竞争
+var harnessProcPID atomic.Int32
 
 // HarnessStatus Harness 服务状态(与 sysmon 探测/灵动岛展示共用)
 type HarnessStatus struct {
@@ -107,15 +109,15 @@ func startHarness() error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	harnessProcPID = cmd.Process.Pid
+	harnessProcPID.Store(int32(cmd.Process.Pid))
 	return nil
 }
 
 // stopHarness 停止 Harness 服务(优先按本服务 PID;兜底按端口)
 func stopHarness() error {
-	if pid := harnessProcPID; pid > 0 {
-		harnessProcPID = 0
-		cmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+	if pid := harnessProcPID.Load(); pid > 0 {
+		harnessProcPID.Store(0)
+		cmd := exec.Command("taskkill", "/PID", strconv.FormatInt(int64(pid), 10), "/T", "/F")
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		if err := cmd.Run(); err == nil {
 			return nil

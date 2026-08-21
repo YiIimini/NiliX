@@ -272,6 +272,13 @@ func manjuHealthFix(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config/key"}`, http.StatusBadRequest)
 		return
 	}
+	// 审计 F4:一键修复会写回 config.json,config 必须过 guard
+	if cp, gerr := manjuGuardConfig(configPath); gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	} else {
+		configPath = cp
+	}
 	applied, err := manjuApplyHealthFix(configPath, key)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())

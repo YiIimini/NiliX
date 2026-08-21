@@ -132,8 +132,8 @@ func validLocalHost(hostPort string) bool {
 	if host, _, err := net.SplitHostPort(hostPort); err == nil {
 		h = host
 	}
-	switch h {
-	case "127.0.0.1", "localhost", "::1", "[::1]":
+	switch strings.ToLower(strings.Trim(h, "[]")) {
+	case "127.0.0.1", "localhost", "::1":
 		return true
 	}
 	return false
@@ -234,6 +234,14 @@ type testResponse struct {
 
 func (s *Server) handleManage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 审计:F10 缺口——/manage/ 此前完全无 CSP(只有 / 与 /island/ 有);与 tokenInject 同策略
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
+			"img-src 'self' data: blob:; media-src 'self' blob:; "+
+			"connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; "+
+			"frame-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; "+
+			"frame-ancestors 'none'; base-uri 'self'")
+	w.Header().Set("X-Frame-Options", "DENY")
 	out := s.indexHTML
 	// 注入会话令牌(前端 window.NILIX_TOKEN + localStorage),供所有 API 写请求带 X-NiliX-Token
 	if sessionToken != "" {
@@ -274,7 +282,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	// 掩码表示"未修改"，沿用已有 key；空串表示清空。
-	if strings.Contains(in.LLM.APIKey, "****") {
+	// 审计:用 maskKey 精确匹配掩码值(旧实现 strings.Contains "****" 会把真实 key
+	// 含 "****" 的值误判为掩码吞掉)
+	if in.LLM.APIKey != "" && in.LLM.APIKey == maskKey(s.cfg.LLM.APIKey) {
 		in.LLM.APIKey = s.cfg.LLM.APIKey
 	}
 	if err := s.store.Save(&in); err != nil {

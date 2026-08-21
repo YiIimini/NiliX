@@ -134,6 +134,6 @@ func manjuPathsPost(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(comfyOut) == "" {
 		comfyOut = filepath.Join(ComfySharedDir, "output")
 	}
-	SetComfyParams(comfyParams.url, comfyIn, comfyOut)
+	SetComfyParams(comfyParams().url, comfyIn, comfyOut)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

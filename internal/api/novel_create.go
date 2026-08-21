@@ -40,7 +40,13 @@ var (
 )
 
 func novelProjDir(title string) string {
-	return filepath.Join(novelRoot(), novelTitleSan.ReplaceAllString(strings.TrimSpace(title), ""))
+	safe := novelTitleSan.ReplaceAllString(strings.TrimSpace(title), "")
+	// 审计 F5:过滤非法字符后仍可能残留 ".."——直接拼接会把项目建/写到小说库根之外
+	// (title=".." → novelRoot()/.. = 父目录),必须拒绝
+	if safe == "" || safe == "." || safe == ".." || strings.Contains(safe, "..") {
+		return filepath.Join(novelRoot(), "_非法书名_")
+	}
+	return filepath.Join(novelRoot(), safe)
 }
 
 // handleNovelCreate 立项:生成设定集与大纲(同步,约 30-90s),幂等(已有大纲直接返回)。

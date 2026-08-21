@@ -149,6 +149,24 @@ func (c *comfyClient) wait(promptID string, timeout, poll time.Duration, stopped
 		}
 		return false
 	}
+	// 审计 P3/7.1:停止感知触发时主动 POST /interrupt——仅 return"已停止"会让
+	// ComfyUI 继续把当前任务跑完(逐镜 10-70min 白烧 GPU),中断是停止的完整语义
+	stoppedOnce := false
+	interruptOnStop := func() bool {
+		if isStopped() && !stoppedOnce {
+			stoppedOnce = true
+			req, err := http.NewRequest("POST", c.base+"/interrupt", nil)
+			if err == nil {
+				if resp, err := c.client.Do(req); err == nil {
+					_ = resp.Body.Close()
+				}
+			}
+		}
+		return isStopped()
+	}
+	// 审计 7.1:任务丢失检测——ComfyUI 重启后 history 一直无记录且不在队列,
+	// 继续死等满超时毫无意义;连续 5 次轮询(约 5×poll)既无 history 又不在队列即判丢失
+	missTicks := 0
 	deadline := time.Now().Add(timeout)
 	// 停止检查节拍:远小于 poll(停止响应不被长轮询拖慢),但也避免空转忙等
 	stopTick := time.Duration(500 * time.Millisecond)
@@ -156,11 +174,12 @@ func (c *comfyClient) wait(promptID string, timeout, poll time.Duration, stopped
 		stopTick = poll
 	}
 	for {
-		if isStopped() {
+		if interruptOnStop() {
 			return fmt.Errorf("已停止")
 		}
 		entry := c.history(promptID)
 		if entry != nil {
+			missTicks = 0
 			if st, _ := entry["status"].(map[string]any); st != nil {
 				if ss, _ := st["status_str"].(string); ss == "error" {
 					return fmt.Errorf("ComfyUI 任务失败: %s", comfyErrMsg(st))
@@ -169,6 +188,13 @@ func (c *comfyClient) wait(promptID string, timeout, poll time.Duration, stopped
 					return nil
 				}
 			}
+		} else if !c.inQueue(promptID) {
+			missTicks++
+			if missTicks >= 5 {
+				return fmt.Errorf("ComfyUI 任务丢失(可能服务已重启): %s", promptID)
+			}
+		} else {
+			missTicks = 0
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("ComfyUI 等待超时(%s)", timeout)
@@ -176,7 +202,7 @@ func (c *comfyClient) wait(promptID string, timeout, poll time.Duration, stopped
 		// 细粒度停止感知:分段 sleep,期间持续检查 stopped
 		waited := time.Duration(0)
 		for waited < poll {
-			if isStopped() {
+			if interruptOnStop() {
 				return fmt.Errorf("已停止")
 			}
 			step := poll - waited
@@ -350,7 +376,7 @@ var (
 
 func fl2vaNodeAvailable() bool {
 	fl2vaNodeOnce.Do(func() {
-		c := newComfyClient(comfyParams.url)
+		c := newComfyClient(comfyParams().url)
 		resp, err := c.client.Get(c.base + "/object_info/MiniMaxH3Fl2VA")
 		if err == nil {
 			defer resp.Body.Close()
@@ -393,7 +419,8 @@ func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs [
 			sceneLoad = wfAdd(wf, "LoadImage", map[string]any{"image": sceneRef})
 		}
 		// FL2VA 双帧:尾帧图存在且节点可用 → 首尾双图插值;否则回退单图 I2VA
-		if end := strings.TrimSpace(str(R["_scene_end"])); end != "" && fileExists(end) && fl2vaNodeAvailable() {
+		// (审计 4.2:尾帧已由调用方复制进 comfyInput 并传文件名,此处仅判非空)
+		if end := strings.TrimSpace(str(R["_scene_end"])); end != "" && fl2vaNodeAvailable() {
 			endLoad := wfAdd(wf, "LoadImage", map[string]any{"image": end})
 			inputs := map[string]any{
 				"clip": refOf(clip), "vae": refOf(vae),

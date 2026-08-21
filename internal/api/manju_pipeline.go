@@ -66,6 +66,7 @@ type manjuCtx struct {
 	forceAttempt int     // 定点返工等外部路径传入的重试序号(seed 策略用它换 seed;0=首渲)
 	sageChecked  bool    // SageAttn 节点探测已完成(每 run 一次,避免逐镜 HTTP 探测)
 	sageOK       bool    // PatchSageAttentionKJ 节点存在
+	sageNodeName string  // 实际存在的 SageAttn 节点名(Pathch/Patch 拼写兼容;审计 3.3 从 R 移出)
 	qcRerender   map[int]int // 质检自愈重渲轮数(镜头号 → 已重渲次数;换 seed 重渲,上限后提示逃生门)
 	visionOnce   sync.Once
 	vision       *agent.VisionClient // 每 run 共享(粘性降级状态跨镜头保留)
@@ -74,8 +75,10 @@ type manjuCtx struct {
 // sageAttnGuard 检查 SageAttention 节点可用性:ComfyUI 未装对应节点时
 // 硬提交会 400 missing_node_type 失败——可选加速项不阻塞渲染,自动降级关闭并提示。
 // 每 run 只探测一次(逐镜探测太慢);装好节点后 config 里开关仍是开的,下次 run 自动恢复。
-// 注意 KJNodes 上游把类名拼错为 PathchSageAttentionKJ(非 Patch),两个名字都探测取实际存在者,
-// 实际名写入 R["sage_node_name"] 供 h3RenderWorkflow 使用(未来上游修拼写也兼容)。
+// 注意 KJNodes 上游把类名拼错为 PathchSageAttentionKJ(非 Patch),两个名字都探测取实际存在者。
+// 审计 3.3:探测结果写入 ctx 字段而非 ctx.R——预编码 goroutine 与渲染主 goroutine 并发,
+// 各自通过 applySageToR 把结果注入自己的 R 副本,消除"主流程写 R 时 goroutine 读 R"的
+// 并发 map 读写(此前靠调用顺序侥幸规避)
 func (ctx *manjuCtx) sageAttnGuard(lg *manjuLogger) {
 	b, _ := ctx.R["sage_attention"].(bool)
 	if !b || ctx.sageChecked {
@@ -85,12 +88,25 @@ func (ctx *manjuCtx) sageAttnGuard(lg *manjuLogger) {
 	for _, n := range []string{"PathchSageAttentionKJ", "PatchSageAttentionKJ"} {
 		if ctx.comfy.hasNode(n) {
 			ctx.sageOK = true
-			ctx.R["sage_node_name"] = n
+			ctx.sageNodeName = n
 			return
 		}
 	}
-	ctx.R["sage_attention"] = false
+	ctx.sageOK = false
+	ctx.sageNodeName = ""
 	lg.logf("  ⚠️ ComfyUI 缺少 PatchSageAttentionKJ/PathchSageAttentionKJ 节点(未装 ComfyUI-KJNodes),SageAttn 已自动关闭继续渲染;装好节点或关闭「渲染参数→SageAttn」后恢复")
+}
+
+// applySageToR 把 sageAttnGuard 探测结果写入给定 R(调用方自己的副本/私有 map)
+func (ctx *manjuCtx) applySageToR(R map[string]any) {
+	if !ctx.sageChecked {
+		return
+	}
+	if ctx.sageOK && ctx.sageNodeName != "" {
+		R["sage_node_name"] = ctx.sageNodeName
+	} else {
+		R["sage_attention"] = false
+	}
 }
 
 // ensureComfyReady 渲染/资产/编码等需 Comfy 的阶段前,确保 ComfyUI 在线:
@@ -185,14 +201,14 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	// 写入的硬编码 Desktop 共享目录),而 ComfyUI 现在按自包含目录启动,两处不一致时
 	// 任务"完成"但从错误目录读产物,报「open ... output\xxx.png: not found」。
 	// comfyParams 为空(未注入)时回退 config;config 也空则回退共享目录 output/input。
-	comfyOut := comfyParams.out
+	comfyOut := comfyParams().out
 	if comfyOut == "" {
 		comfyOut = str(P["comfy_output"])
 	}
 	if comfyOut == "" {
 		comfyOut = filepath.Join(ComfySharedDir, "output")
 	}
-	comfyIn := comfyParams.in
+	comfyIn := comfyParams().in
 	if comfyIn == "" {
 		comfyIn = str(P["comfy_input"])
 	}
@@ -242,8 +258,15 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	ctx.clipsDir = filepath.Join(ctx.workdir, "clips")
 	// fs 白名单:项目 config paths 里的绝对路径动态注册(小说/工作目录/Comfy 目录等,
 	// 前端经 /api/fs/* 预览产物/封面才不会被白名单拦截)
+	// 审查 F1 收紧:novel/novel_dir 若不在小说库根内不注册(防历史/恶意 config 指向任意
+	// 目录后,经 GET 免 token 入口 newManjuCtx 动态扩白名单 → GET /api/fs/read 任意文件读)
 	for _, k := range []string{"novel", "novel_dir", "workdir", "analysis", "assets", "clips", "comfy_input", "comfy_output"} {
 		if v := strings.TrimSpace(str(P[k])); v != "" && filepath.IsAbs(v) {
+			if k == "novel" || k == "novel_dir" {
+				if _, gerr := manjuGuardNovel(v); gerr != nil {
+					continue // 越界小说路径不扩白名单
+				}
+			}
 			addFSRoot(v)
 		}
 	}
@@ -1295,7 +1318,11 @@ func (ctx *manjuCtx) clearEpisodeArtifacts(lg *manjuLogger) {
 			lg.logf("  🧹 已清空该集旧镜头 " + strconv.Itoa(n) + " 个: " + clipsEp)
 		}
 	}
-	prefix := reNonWord.ReplaceAllString(ctx.project, "_") + "_" + reNonWord.ReplaceAllString(ctx.episode, "_") + "_a" + ctx.assetsFingerprint() + "_s"
+	// 审计 P4:缓存名是 <项目>_v2_c<指纹>(不含集号),旧的"项目_集号_a指纹_s"前缀
+	// 永不匹配任何缓存名——"已清空该集旧条件缓存"从不生效,旧 .pt 只增不减。
+	// 方案章节范围变化意味着本项目条件指纹整体失效,按项目前缀清理(等价 manjuClearProject
+	// 的缓存部分;缓存名以项目为前缀,不误删其他项目)
+	prefix := reNonWord.ReplaceAllString(ctx.project, "_") + "_"
 	condDir := filepath.Join(ctx.sharedModels, "conditioning")
 	if entries, err := os.ReadDir(condDir); err == nil {
 		n := 0
@@ -1309,7 +1336,7 @@ func (ctx *manjuCtx) clearEpisodeArtifacts(lg *manjuLogger) {
 			}
 		}
 		if n > 0 {
-			lg.logf("  🧹 已清空该集旧条件缓存 " + strconv.Itoa(n) + " 个(将自动重新编码)")
+			lg.logf("  🧹 已清空该项目旧条件缓存 " + strconv.Itoa(n) + " 个(将自动重新编码)")
 		}
 	}
 	// 接缝 latent 随集清理(审计 S6):删本集命名空间目录,防旧方案 latent 残留串接
@@ -1859,9 +1886,21 @@ func (ctx *manjuCtx) shotCondFingerprintAt(s manjuShot, w, h int) string {
 			refs = append(refs, ctx.refStamp(rel))
 		}
 	}
-	fmt.Fprintf(hh, "p=%s|w=%d|h=%d|len=%d|chars=%s|scene=%s|refs=%s|prompt=%s",
-		s.H3Prompt, w, h, h3Length(s.Duration, ctx.fps),
-		strings.Join(s.Characters, ","), s.Scene, strings.Join(refs, ","), s.H3Prompt)
+	// 审计 P2:FL2VA 尾帧维度——空镜 + fl2va_end_frame 开关时编码输入多一张 _end.png
+	// (单图 I2VA → 双帧 Fl2VA),开关切换或尾帧图重新生成后缓存必须失效,
+	// 否则旧模式缓存被新模式复用(双帧锚点丢失/多余),开关等于摆设
+	endFrame := false
+	if b, _ := ctx.R["fl2va_end_frame"].(bool); b && len(s.Characters) == 0 {
+		endFrame = true
+		if s.Scene != "" {
+			if rel := "scenes/" + s.Scene + "_end.png"; fileExists(filepath.Join(ctx.assetsDir, rel)) {
+				refs = append(refs, "end:"+ctx.refStamp(rel))
+			}
+		}
+	}
+	fmt.Fprintf(hh, "w=%d|h=%d|len=%d|chars=%s|scene=%s|refs=%s|fl2va_end=%t|prompt=%s",
+		w, h, h3Length(s.Duration, ctx.fps),
+		strings.Join(s.Characters, ","), s.Scene, strings.Join(refs, ","), endFrame, s.H3Prompt)
 	sum := fmt.Sprintf("%x", hh.Sum(nil))
 	if len(sum) > 10 {
 		sum = sum[:10]
@@ -1878,7 +1917,17 @@ func (ctx *manjuCtx) ensureEncoded(s manjuShot, cacheName string, lg *manjuLogge
 // manjuEncSingleflight 预编码 singleflight(审计 M2):同条件缓存并发提交只跑一次——
 // 相邻镜头同 prompt/角色/场景时,预编码 goroutine 与渲染路径的 ensureEncodedAt 同时
 // fileExists 未命中会双提交同 cacheName.pt,白白烧一次 Qwen3-VL 编码
-var manjuEncSingleflight sync.Map // cacheName → chan struct{}
+// 审计 P7:用带引用计数的门闩(encGate)——释放执行权与删除表项不再是非原子两步:
+// 旧实现 defer{<-gate; Delete} 在"释放后、删除前"窗口内,等待者 B 拿到旧门闩成为新执行者,
+// 同时新调用者 C 已 LoadOrStore 新门闩 → 同 cacheName 双任务各烧一次编码。
+// encGate.refs 计数所有等待者,全部退出后才 Delete,窗口消除。
+type encGate struct {
+	mu   sync.Mutex
+	gate chan struct{}
+	refs int
+}
+
+var manjuEncSingleflight sync.Map // cacheName → *encGate
 
 // ensureEncodedAt 指定宽高的预编码(草稿/定稿各自的条件缓存)
 func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg *manjuLogger) error {
@@ -1888,12 +1937,24 @@ func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg
 	// singleflight:同 cacheName 并发去重(先到者执行,后到者等文件出现或接力)。
 	// 必须用缓冲 1 的 chan:无缓冲 chan 的发送在无接收者时永不成功,select 恒走 default,
 	// 所有调用者都在等文件、没人真正执行编码 → 1900s 后全部"等待预编码完成超时"(必挂)。
-	ch, _ := manjuEncSingleflight.LoadOrStore(cacheName, make(chan struct{}, 1))
-	gate := ch.(chan struct{})
+	v, _ := manjuEncSingleflight.LoadOrStore(cacheName, &encGate{gate: make(chan struct{}, 1)})
+	g := v.(*encGate)
+	g.mu.Lock()
+	g.refs++
+	g.mu.Unlock()
+	// 引用计数:全部调用者(执行者+等待者)退出后才删表项
+	defer func() {
+		g.mu.Lock()
+		g.refs--
+		if g.refs == 0 {
+			manjuEncSingleflight.Delete(cacheName)
+		}
+		g.mu.Unlock()
+	}()
 	acquired := false
 	for !acquired {
 		select {
-		case gate <- struct{}{}: // 拿到执行权
+		case g.gate <- struct{}{}: // 拿到执行权
 			acquired = true
 		default:
 			// 执行权被占:轮询等文件出现;执行者失败释放执行权(文件未生成)则接力重试
@@ -1903,7 +1964,7 @@ func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg
 					return nil
 				}
 				select {
-				case gate <- struct{}{}:
+				case g.gate <- struct{}{}:
 					acquired = true
 				default:
 					time.Sleep(2 * time.Second)
@@ -1914,10 +1975,7 @@ func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg
 			}
 		}
 	}
-	defer func() {
-		<-gate
-		manjuEncSingleflight.Delete(cacheName)
-	}()
+	defer func() { <-g.gate }() // 释放执行权(等文件出现提前返回时不持有)
 	// 渲染输入副本(FL2VA 尾帧等每镜变量写入副本,防并发预编码 goroutine 竞态 ctx.R)
 	r2 := map[string]any{}
 	for k, v := range ctx.R {
@@ -1925,12 +1983,25 @@ func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg
 	}
 	// FL2VA 尾帧(审计升级 P1):空镜镜头 + 开关开启 → 本镜场景的 _end.png 作尾帧锚点;
 	// 有角色镜头删尾帧(Ref2VA 无此概念)
+	// 审计 4.2:尾帧复制进 comfyInput 再传文件名(与场景图同口径)——本地绝对路径直传
+	// LoadImage 在 ComfyUI 远程/容器化部署时读取失败,且与其它参考图语义不一致
 	if len(s.Characters) == 0 {
-		if b, _ := ctx.R["fl2va_end_frame"].(bool); b {
-			r2["_scene_end"] = filepath.Join(ctx.assetsDir, "scenes", s.Scene+"_end.png")
+		if b, _ := ctx.R["fl2va_end_frame"].(bool); b && s.Scene != "" {
+			src := filepath.Join(ctx.assetsDir, "scenes", s.Scene+"_end.png")
+			if fileExists(src) {
+				name := fmt.Sprintf("dir_scene_%d_end.png", s.ID)
+				if copyFile(src, filepath.Join(ctx.comfyInput, name)) == nil {
+					r2["_scene_end"] = name
+				}
+			}
 		}
 	}
 	lg.logf("  预编码提交...")
+	// 审计 P3:停止后不提交新编码任务(预编码 goroutine 可能在停止瞬间拿到执行权,
+	// 提交后 wait 立即感知停止,但 ComfyUI 仍会跑完该任务)
+	if lg.stopped() {
+		return fmt.Errorf("已停止")
+	}
 	wf := h3EncWorkflow(r2, s.H3Prompt, w, h, h3Length(s.Duration, ctx.fps),
 		ctx.charRefNames(s), ctx.sceneRefName(s), cacheName, len(s.Characters) > 0)
 	pid, err := ctx.comfy.submit(wf)
@@ -2380,12 +2451,23 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 	if fresh {
 		lg.logf("  ♻️ 镜头 " + strconv.Itoa(s.ID) + " 返工重渲:独立生成(不接缝)")
 	}
+	// 审计 P3:停止后严禁再提交——tryReclaim 等待期间用户可能已点停止,
+	// 此时重提交会让 ComfyUI 继续烧 GPU 且无人打断
+	if lg.stopped() {
+		return fmt.Errorf("已停止")
+	}
 	submit := func() (string, error) {
 		seed := ctx.seedFor(attempt)
 		if attempt > 0 && ctx.seedPolicy != "fixed" {
 			lg.logf(fmt.Sprintf("  🎲 镜头 %d 第 %d 次尝试 seed=%d(策略 %s)", s.ID, attempt+1, seed, ctx.seedPolicy))
 		}
-		wf := h3RenderWorkflow(ctx.R, seed, w, h, h3Length(s.Duration, ctx.fps),
+		// 审计 3.3:R 副本注入 sage 结果(不写共享 ctx.R,防预编码 goroutine 并发读)
+		rCopy := make(map[string]any, len(ctx.R)+2)
+		for k, v := range ctx.R {
+			rCopy[k] = v
+		}
+		ctx.applySageToR(rCopy)
+		wf := h3RenderWorkflow(rCopy, seed, w, h, h3Length(s.Duration, ctx.fps),
 			ctx.steps, cacheName, len(s.Characters) > 0, chained, idx-1, idx)
 		return ctx.comfy.submit(wf)
 	}
@@ -2712,6 +2794,34 @@ func stageAssemble(ctx *manjuCtx, lg *manjuLogger) error {
 		lg.logf("  ⏭ 该集无镜头可合成，跳过")
 		return nil
 	}
+	// 审计 1.3:合成前比对方案镜头数与产物数——渲染中断/失败后直接点合成,
+	// 成片会静默缺镜;缺镜时明确警告(不阻断,用户可见后再决定是否续跑补渲)
+	if plan, _, perr := ctx.loadPlan(); perr == nil {
+		planned := 0
+		if arr, ok := plan["shots"].([]any); ok {
+			for _, x := range arr {
+				if m, ok := x.(map[string]any); ok {
+					if m["take_group"] == nil { // 多切点长镜组头才算一镜(与渲染口径一致)
+						planned++
+					}
+				}
+			}
+		}
+		if planned > 0 {
+			rendered := 0
+			if entries, err := os.ReadDir(clipsEp); err == nil {
+				for _, e := range entries {
+					if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".mp4") {
+						rendered++
+					}
+				}
+			}
+			if rendered < planned {
+				lg.logf(fmt.Sprintf("  ⚠️ 警告: 方案 %d 镜,当前仅 %d 个镜头产物——成片将缺少 %d 镜(若渲染中断,请先续跑/定点重渲再合成)",
+					planned, rendered, planned-rendered))
+			}
+		}
+	}
 	out := filepath.Join(ctx.workdir, ctx.episode+"_成片.mp4")
 	mosaic := 0
 	if MOD, ok := ctx.cfg["moderation"].(map[string]any); ok {
@@ -2926,6 +3036,13 @@ func manjuCreateProject(name, novel, apiKey string) (string, string, bool) {
 	}, strings.TrimSpace(name))
 	if clean == "" || clean == "." {
 		return "❌ 剧名无效\n[exit 1]", "", false
+	}
+	novel = strings.Trim(novel, `" `)
+	// 审计 F1:novel 必须位于小说库根目录内(否则 config.paths.novel 可指向任意文件,
+	// 后续 GET /api/manju/outputs 等免 token 入口经 newManjuCtx 动态扩 fs 白名单 → 任意文件读)
+	if _, gerr := manjuGuardNovel(novel); gerr != nil {
+		out.WriteString("❌ 小说路径必须在小说库根目录内: " + gerr.Error() + "\n[exit 1]")
+		return out.String(), "", false
 	}
 	novelFile, novelDir := resolveNovelPath(novel)
 	if novelFile == "" {

@@ -11,9 +11,9 @@ import (
 // 否则 config 里的旧 comfy_output(硬编码 Desktop 共享目录)与实际输出目录不一致,
 // 任务"完成"但从错误目录读产物报「open ... output\xxx.png: not found」。
 func TestNewManjuCtxComfyOutputPriority(t *testing.T) {
-	oldOut, oldIn := comfyParams.out, comfyParams.in
-	comfyParams.out, comfyParams.in = "", ""
-	defer func() { comfyParams.out, comfyParams.in = oldOut, oldIn }()
+	old := comfyParams()
+	SetComfyParams("", "", "")
+	defer SetComfyParams(old.url, old.in, old.out)
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	cfg := map[string]any{
@@ -35,8 +35,7 @@ func TestNewManjuCtxComfyOutputPriority(t *testing.T) {
 		t.Fatalf("空 comfyParams 时应回退 config: %q", ctx.comfyOutput)
 	}
 	// comfyParams 已注入(实际运行) → 优先于 config 旧值
-	comfyParams.out = filepath.Join(dir, "live-out")
-	comfyParams.in = filepath.Join(dir, "live-in")
+	SetComfyParams("", filepath.Join(dir, "live-in"), filepath.Join(dir, "live-out"))
 	ctx2, err := newManjuCtx(cfgPath, "", "", "", "")
 	if err != nil {
 		t.Fatal(err)

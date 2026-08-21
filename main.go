@@ -395,37 +395,6 @@ func saveWinLoop() {
 	}
 }
 
-// runMainWindow �?Edge App 模式打开管理窗口(独立应用窗口)
-// runMainWindow 以独立子进程(NiliX.exe --mainwin)打开管理窗口:
-// - 子进程内 WebView2 环境与灵动岛(主进�?互不冲突(WebView2 限制的是同进程多环境)
-// - 任务栏图标天然是 NiliX.exe 自己的图�?不再显示 Edge 图标)
-// - 窗口由我们创�?尺寸/标题/位置全部可控,�?Edge 记忆/复用问题
-// - 窗口关闭 �?子进程退�?主进�?托盘/灵动�?后台)不受影响
-// runMainWindow 打开主窗�?由独�?wails 进程(NiliX-Main.exe)提供—�?
-// frameless 自定义标题栏 + WebView2 集成(wails 后端成熟),替代旧的 --mainwin
-// go-webview2 子进程。NiliX-Main.exe 缺失时回退系统浏览器�?
-func runMainWindow(url string) {
-	exe, err := os.Executable()
-	if err != nil {
-		openBrowser(url)
-		return
-	}
-	mainExe := filepath.Join(filepath.Dir(exe), "NiliX-Main.exe")
-	if _, err := os.Stat(mainExe); err != nil {
-		openBrowser(url)
-		return
-	}
-	log.Printf("主窗口(wails 进程)打开: %s", url)
-	cmd := exec.Command(mainExe)
-	// 不能 HideWindow:首个窗口若被创建为隐�?WebView2 环境初始化会卡死(历史教训);
-	// exe �?windowsgui 无控制台,正常显示即可
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
-	if err := cmd.Start(); err != nil {
-		log.Printf("主窗口启动失败: %v(回退系统浏览器)", err)
-		openBrowser(url)
-	}
-}
-
 // setMainWinIcon 加载内嵌 icon.ico 并设置窗口图�?左上角 + Alt-Tab + 任务栏小图标)
 func setMainWinIcon(hwnd uintptr) {
 	if hwnd == 0 || len(iconICO) == 0 {
@@ -516,17 +485,6 @@ func findMainWindow() uintptr {
 	})
 	_, _, _ = procEnumWindows.Call(cb, 0)
 	return found
-}
-
-// showMainWindow 唤起主窗�?已存�?含最小化)则恢复前�?没有则新开�?
-// 跨进程枚举窗�?兼容"再次双击 exe 唤起已运行实例的窗口"�?
-func showMainWindow(url string) {
-	if h := findMainWindow(); h != 0 {
-		procWinShow.Call(h, 9) // SW_RESTORE(最小化时恢复
-		procWinSetForeground.Call(h)
-		return
-	}
-	runMainWindow(url)
 }
 
 func main() {
@@ -830,10 +788,43 @@ func exeDir() string {
 	return filepath.Dir(exe)
 }
 
+// validLocalHost 判断 Host/Origin 主机部分是否为本机地址(兼容带/不带端口)
+// 控制端口 CSRF 防线(F10):与 api.validLocalHost 同口径,main 包自用一份
+func validLocalHost(hostPort string) bool {
+	h := hostPort
+	if host, _, err := net.SplitHostPort(hostPort); err == nil {
+		h = host
+	}
+	switch strings.ToLower(strings.Trim(h, "[]")) {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	}
+	return false
+}
+
 // startControlServers 同进程控制端�?
 // 8799=主窗�?最小化/最大化/关闭/移动),8788=胶囊(展开/收起动画/关闭)�?
 // 进程常驻(wails app.Run),端口不随子进程退出而消失——按钮可靠�?
 func startControlServers(app *application.App, url string) {
+	// 审计 F10:控制端口有副作用(GET /close 可退出整个应用)且无 token——必须防
+	// CSRF/DNS rebinding:仅接受本机 Host + 本机 Origin(外部网页 fetch 127.0.0.1
+	// 会带 Origin: http://evil.com,直接拒绝;本地页面 Origin 为 127.0.0.1 放行)
+	controlGuard := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !validLocalHost(r.Host) {
+				http.Error(w, "非法 Host", http.StatusForbidden)
+				return
+			}
+			if origin := r.Header.Get("Origin"); origin != "" {
+				u, err := neturl.Parse(origin)
+				if err != nil || !validLocalHost(u.Host) {
+					http.Error(w, "非法来源", http.StatusForbidden)
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 	// 8799:主窗口控�?页面按钮/拖拽,同进程直接调窗口 API)
 	mux := http.NewServeMux()
 	// CORS 预检兜底:页面若带自定义头(如 X-NiliX-Token)跨端口 fetch 会先发 OPTIONS,
@@ -922,7 +913,7 @@ func startControlServers(app *application.App, url string) {
 		w.WriteHeader(200)
 	})
 	go func() {
-		if err := http.ListenAndServe("127.0.0.1:8799", mux); err != nil {
+		if err := http.ListenAndServe("127.0.0.1:8799", controlGuard(mux)); err != nil {
 			log.Printf("主窗口控制端口退出: %v", err)
 		}
 	}()
@@ -961,7 +952,7 @@ func startControlServers(app *application.App, url string) {
 		}()
 	})
 	go func() {
-		if err := http.ListenAndServe("127.0.0.1:8788", mux2); err != nil {
+		if err := http.ListenAndServe("127.0.0.1:8788", controlGuard(mux2)); err != nil {
 			log.Printf("胶囊控制端口退出: %v", err)
 		}
 	}()
@@ -1017,30 +1008,6 @@ func animateCapsule(toW, toH int) {
 			capsuleWinRef.SetSize(toW, toH)
 		}
 	}()
-}
-
-// startCapsule 拉起独立灵动岛胶囊进�?NiliX-Capsule.exe,与主 exe 同目�?�?
-// 单实�?胶囊控制端口 8788 已监�?进程在跑)则不重复启动�?
-func startCapsule() {
-	if conn, err := net.DialTimeout("tcp", "127.0.0.1:8788", 200*time.Millisecond); err == nil {
-		_ = conn.Close()
-		return // 胶囊已在运行
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	capExe := filepath.Join(filepath.Dir(exe), "NiliX-Capsule.exe")
-	if _, err := os.Stat(capExe); err != nil {
-		log.Printf("灵动岛胶囊程序缺失(跳过): %s", capExe)
-		return
-	}
-	cmd := exec.Command(capExe)
-	// 胶囊�?GUI 应用(windowsgui,�?console),不能�?HideWindow——STARTF_USESHOWWINDOW
-	// 会把胶囊的主窗口也隐�?实测窗口 vis=false)�?
-	if err := cmd.Start(); err != nil {
-		log.Printf("灵动岛胶囊启动失败: %v", err)
-	}
 }
 
 // buildTray 构建 wails SystemTray 托盘菜单(wails MenuItem 原生位图支持状态灯)�?
@@ -1176,22 +1143,6 @@ func comfyProbeState() comfyState {
 // dotIconAnim 动态状态灯动画�?
 //   - spin:圆环 + 大缺口旋�?加载�?,缺口 137° 随帧转动,环加粗更醒目
 //   - pulse:圆点 + 强外发光光晕,光晕随帧正弦呼吸(明暗差大,动态明�?
-// hideCapsule 隐藏灵动岛胶�?调用胶囊进程控制端口 8788 /close(退出胶囊进�?�?
-// 再次显示由托盘勾选触�?startCapsule 重新拉起�?
-func hideCapsule() {
-	req, err := http.NewRequest("GET", "http://127.0.0.1:8788/close", nil)
-	if err != nil {
-		return
-	}
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("胶囊关闭请求失败(可能未运行): %v", err)
-		return
-	}
-	_ = resp.Body.Close()
-}
-
 // dotIcon 美化的状态球:玻璃质感(径向渐变+左上高光+外发�?亮描�?�?
 // 已停�?�?等静态态用�?动画帧走 dotIconAnim/dotIconBeauty�?
 func dotIcon(r, g, b uint8) []byte {

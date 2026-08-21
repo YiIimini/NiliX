@@ -110,14 +110,10 @@ func (l *manjuLLM) chat(system, user string, temp float64) (string, error) {
 		"stream":          false,
 	}
 	b, _ := json.Marshal(body)
-	req, err := http.NewRequest("POST", l.baseURL+"/chat/completions", bytes.NewReader(b))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+l.apiKey)
 	// 审计 H12:瞬时失败(429/5xx/网络抖动)指数退避重试,单次抖动不再打崩整条管线
 	// (此前零重试:plan 一次 429 即中断 AI 一条龙;修复师失败按原提示词白烧 GPU)
+	// 修复:http.Request 的 Body 只能读一次——每次重试必须重建请求(新 bytes.Reader),
+	// 否则第 2/3 次尝试发送空 body,退避重试实际失效(审查 P1)。
 	const maxAttempts = 3
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -125,6 +121,12 @@ func (l *manjuLLM) chat(system, user string, temp float64) (string, error) {
 		if l.stopped != nil && l.stopped() {
 			return "", fmt.Errorf("已停止")
 		}
+		req, err := http.NewRequest("POST", l.baseURL+"/chat/completions", bytes.NewReader(b))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+l.apiKey)
 		resp, err := l.client.Do(req)
 		if err == nil {
 			data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))

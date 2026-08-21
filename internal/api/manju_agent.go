@@ -709,6 +709,13 @@ func manjuAgentStyleAnalyze(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
 	}
+	// 审计 F4:深度分析会写回 config.json,config 必须过 guard
+	if cp, gerr := manjuGuardConfig(configPath); gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	} else {
+		configPath = cp
+	}
 	res, err := manjuStyleAnalyzeRun(configPath, str(body["episode"]), str(body["chapters"]), str(body["novel"]))
 	if err != nil {
 		code := http.StatusBadRequest
@@ -856,7 +863,7 @@ func (ctx *manjuCtx) runQCJSON(lg *manjuLogger, clipsEp, onlyShots string) (map[
 	if onlyShots != "" {
 		args = append(args, "--shots", onlyShots)
 	}
-	if _, err := ctx.runMediaOut(args...); err != nil {
+	if _, err := ctx.runMediaOutStop(args, lg.stopped); err != nil {
 		// 质检脚本自身失败(如目录空):不影响判分流程,视为无机械问题
 		lg.logf("  ⚠️ 机械质检异常(忽略,继续审片): " + err.Error())
 		return map[int][]string{}, nil
@@ -969,7 +976,7 @@ func (ctx *manjuCtx) extractFrames(lg *manjuLogger, clip string, shotID, count i
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
-	out, err := ctx.runMediaOut("frames", "--video", clip, "--out-dir", dir, "--count", strconv.Itoa(count))
+	out, err := ctx.runMediaOutStop([]string{"frames", "--video", clip, "--out-dir", dir, "--count", strconv.Itoa(count)}, lg.stopped)
 	if err != nil {
 		return nil, fmt.Errorf("抽帧失败: %w", err)
 	}
@@ -1598,7 +1605,7 @@ func agentAssembleCheck(ctx *manjuCtx, lg *manjuLogger) {
 		return
 	}
 	// qc 发现问题时 exit 1(不等于执行失败),stdout 仍带完整报告——只看输出内容
-	out, _ := ctx.runMediaOut("qc", "--file", final)
+	out, _ := ctx.runMediaOutStop([]string{"qc", "--file", final}, lg.stopped)
 	for _, ln := range strings.Split(out, "\n") {
 		t := strings.TrimSpace(ln)
 		if t == "" || strings.HasPrefix(t, "质检") {
@@ -2378,6 +2385,13 @@ func registerAgentRoutes(mux *http.ServeMux) {
 			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 			return
 		}
+		// 审计 F3:config 必须归属项目根目录(否则可对任意 JSON 文件读改写)
+		if cp, gerr := manjuGuardConfig(configPath); gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
+			return
+		} else {
+			configPath = cp
+		}
 		cfg, err := readManjuConfig(configPath)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
@@ -2416,6 +2430,13 @@ func registerAgentRoutes(mux *http.ServeMux) {
 			http.Error(w, `{"error":"missing config/shot"}`, http.StatusBadRequest)
 			return
 		}
+		// 审计 F4:config 归属校验(judge)
+		if cp, gerr := manjuGuardConfig(configPath); gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
+			return
+		} else {
+			configPath = cp
+		}
 		manjuState.mu.Lock()
 		running := manjuState.running
 		manjuState.mu.Unlock()
@@ -2443,6 +2464,13 @@ func registerAgentRoutes(mux *http.ServeMux) {
 			http.Error(w, `{"error":"missing config/shot/action(retry|ignore)"}`, http.StatusBadRequest)
 			return
 		}
+		// 审计 F4:config 归属校验(resolve)
+		if cp, gerr := manjuGuardConfig(configPath); gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
+			return
+		} else {
+			configPath = cp
+		}
 		project := filepath.Base(filepath.Dir(configPath))
 		if action == "ignore" {
 			resolveEscalation(project, episode, shotID, "ignore")
@@ -2462,6 +2490,13 @@ func registerAgentRoutes(mux *http.ServeMux) {
 		if configPath == "" || (scope != "file" && scope != "episode") {
 			http.Error(w, `{"error":"missing config/scope(file|episode)"}`, http.StatusBadRequest)
 			return
+		}
+		// 审计 F4:config 归属校验(output/delete;workdir 取自 config,越界可删任意文件)
+		if cp, gerr := manjuGuardConfig(configPath); gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
+			return
+		} else {
+			configPath = cp
 		}
 		ctx, err := newManjuCtx(configPath, str(body["episode"]), "", "", "")
 		if err != nil {
@@ -2519,6 +2554,13 @@ func registerAgentRoutes(mux *http.ServeMux) {
 		if configPath == "" {
 			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 			return
+		}
+		// 审计 F4:config 归属校验(trailer)
+		if cp, gerr := manjuGuardConfig(configPath); gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
+			return
+		} else {
+			configPath = cp
 		}
 		ctx, err := newManjuCtx(configPath, episode, "", "", "")
 		if err != nil {
@@ -2594,6 +2636,13 @@ func registerAgentRoutes(mux *http.ServeMux) {
 		if configPath == "" {
 			http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 			return
+		}
+		// 审计 F4:config 归属校验(vision-test)
+		if cp, gerr := manjuGuardConfig(configPath); gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
+			return
+		} else {
+			configPath = cp
 		}
 		ctx, err := newManjuCtx(configPath, "", "", "", "")
 		if err != nil {

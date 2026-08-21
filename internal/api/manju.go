@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -311,6 +312,22 @@ func manjuNotifySend(msg string) {
 	if !n.Enabled {
 		return
 	}
+	// 审计 SSRF:endpoint 仅允许 https 公网地址,拒绝 http/内网/回环——防止
+	// webhook 地址被配置指向本机服务(盲打内网)
+	safeEndpoint := func(u string) bool {
+		p, err := neturl.Parse(u)
+		if err != nil || p.Scheme != "https" || p.Host == "" {
+			return false
+		}
+		h := p.Hostname()
+		if h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "0.0.0.0" {
+			return false
+		}
+		if ip := net.ParseIP(h); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified()) {
+			return false
+		}
+		return true
+	}
 	switch n.Channel {
 	case "serverchan":
 		manjuPostForm("https://sctapi.ftqq.com/"+n.Token+".send", map[string]string{"title": msg, "desp": msg})
@@ -319,7 +336,7 @@ func manjuNotifySend(msg string) {
 			"token": n.Token, "title": msg, "content": msg, "template": "txt",
 		})
 	case "wecom":
-		if n.Endpoint == "" {
+		if n.Endpoint == "" || !safeEndpoint(n.Endpoint) {
 			return
 		}
 		manjuPostJSON(n.Endpoint, "", map[string]any{
@@ -336,7 +353,7 @@ func manjuNotifySend(msg string) {
 			"appToken": n.Token, "content": msg, "summary": msg, "contentType": 1, "uids": uids,
 		})
 	default: // custom: 通用 webhook(企业微信机器人格式 + 可选 Bearer 鉴权)
-		if n.Endpoint == "" {
+		if n.Endpoint == "" || !safeEndpoint(n.Endpoint) {
 			return
 		}
 		manjuPostJSON(n.Endpoint, n.Token, map[string]any{
@@ -632,6 +649,11 @@ func manjuSaveRender(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	configPath = cp
+	// 审计 P8:config read-modify-write 并发互斥(与 qcAcceptClear 共用 per-config 锁,
+	// 防快速连点保存/停止横幅决策并发覆盖丢更新)
+	cfgLock := manjuConfigLock(configPath)
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
 	cfg, err := readManjuConfig(configPath)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -961,6 +983,9 @@ func manjuSettingsPost(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			cfgPath = cp
+			// 审计 P8:config read-modify-write 并发互斥(与 manjuSaveRender 同锁)
+			cfgLock := manjuConfigLock(cfgPath)
+			cfgLock.Lock()
 			if cfg, err := readManjuConfig(cfgPath); err == nil {
 				L, _ := cfg["llm"].(map[string]any)
 				if L == nil {
@@ -978,6 +1003,7 @@ func manjuSettingsPost(w http.ResponseWriter, r *http.Request) {
 				cfg["llm"] = L
 				_ = writeManjuConfig(cfgPath, cfg)
 			}
+			cfgLock.Unlock()
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "saved": true})
 		return
@@ -1052,7 +1078,18 @@ func manjuNovelSave(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = "未命名小说"
 	}
-	dir := filepath.Join(NovelRootDir, novelTitleSan.ReplaceAllString(strings.TrimSpace(title), ""))
+	// 审计 F5:标题消毒后仍可能残留 "..",直接拼接会把小说写到小说库根之外
+	safeTitle := novelTitleSan.ReplaceAllString(title, "")
+	if safeTitle == "" || safeTitle == "." || safeTitle == ".." || strings.Contains(safeTitle, "..") {
+		writeErr(w, http.StatusBadRequest, "非法书名")
+		return
+	}
+	dir := filepath.Join(NovelRootDir, safeTitle)
+	if filepath.Clean(dir) == filepath.Clean(NovelRootDir) ||
+		!strings.HasPrefix(filepath.Clean(dir), filepath.Clean(NovelRootDir)+string(filepath.Separator)) {
+		writeErr(w, http.StatusForbidden, "目标不在小说库根目录内")
+		return
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1162,7 +1199,10 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 	phase := str(body["phase"])
 	// 集数语义:纯数字 N>0 → 第 N 集(第 N 章,EPxx);0 → 按章节数自动分集(每章一集);
 	// 非数字(旧 EP01 输入)原样兼容
-	epNum, _ := strconv.Atoi(strings.TrimSpace(episode))
+	// 审计 P6:episode 缺省(空串)≠ "0"——空串沿用 config.render.episode(EP01),
+	// 不能触发"每章一集"全本分集(56 章书被切成 56 集逐集渲染,每集一次完整 LLM+GPU)
+	epStr := strings.TrimSpace(episode)
+	epNum, _ := strconv.Atoi(epStr)
 	autoByChapter := false
 	switch {
 	case epNum > 0:
@@ -1171,7 +1211,7 @@ func manjuRun(w http.ResponseWriter, r *http.Request) {
 		// 章节框(如 1-56)是全书章节编号范围,不是渲染范围;否则显式填 1-56 会被
 		// 当成一次渲染 56 章 9 万字(超 20000 上限误报)。集数 0 才走每章一集全渲染。
 		chapters = fmt.Sprintf("%d-%d", epNum, epNum)
-	case epNum == 0:
+	case epStr == "0":
 		autoByChapter = true // 集数 0:按小说章节数计算
 	default:
 		episode = orDefault(episode, "EP01")
@@ -1398,8 +1438,12 @@ func AutoRecoverRendering() {
 			}
 		}
 		episode := orDefault(ds.Episode, "EP01")
+		// 审计 P5:自动分集(episode=0)崩溃恢复——磁盘 Episode 落的是 "0",
+		// 若当作单集续跑会生成 analysis/0_*、clips/0/ 幽灵集并一次塞入全书;
+		// 恢复时识别 "0" → 按原 autoByChapter 语义重建分集
+		autoByChapter := ds.Episode == "0"
 		log.Printf("♻️ 检测到 %s 渲染中断于「%s」阶段,自动续跑…", name, stage)
-		if err := startManjuRun(cfgPath, "", episode, "all", "", "", false, false, false); err != nil {
+		if err := startManjuRun(cfgPath, "", episode, "all", "", "", autoByChapter, false, false); err != nil {
 			log.Printf("♻️ 自动恢复 %s 失败: %v", name, err)
 		}
 		// 注意:startManjuRun 遇"已有任务运行中"返回错误——这是已恢复第一个任务后的正常状态,
@@ -1631,6 +1675,9 @@ func listManjuMedia(dir string, exts map[string]bool) []map[string]any {
 // reManjuEpFile 集产物文件名:EP01_direct_plan.json / EP01_成片.mp4(集号取第一个下划线前段)
 var reManjuEpFile = regexp.MustCompile(`^([^_]+)_(direct_plan|shots_prompts|characters)\.json$|^([^_]+)_成片\.mp4$`)
 
+// reEpisodeSafe 集号参数白名单(审计 4.1):EPxx 或纯数字——拒绝 ..、路径分隔符等穿越
+var reEpisodeSafe = regexp.MustCompile(`^[A-Za-z]{0,4}\d{1,3}$`)
+
 // listManjuEpisodes 检测项目里存在的集号:镜头目录(clips/<ep>)∪ 方案文件 ∪ 成片文件,按集号排序
 func listManjuEpisodes(P map[string]any) []string {
 	set := map[string]bool{}
@@ -1695,6 +1742,13 @@ func manjuEpisodeOutputs(P map[string]any, episode string) map[string]any {
 func manjuOutputs(w http.ResponseWriter, r *http.Request) {
 	configPath := r.URL.Query().Get("config")
 	episode := r.URL.Query().Get("episode") // 空 = 返回全部集
+	// 审计 4.1:episode 拼进文件路径,必须消毒——`..`/分隔符可跨界列目录
+	if episode != "" && episode != "all" {
+		if !reEpisodeSafe.MatchString(episode) {
+			writeErr(w, http.StatusBadRequest, "非法 episode 参数")
+			return
+		}
+	}
 	if configPath == "" {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
@@ -2140,8 +2194,19 @@ func manjuGachaPlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
 		return
 	}
-	// 角色方案生成也读 render.chapters/episode,先写入
-	if err := writeManjuRunParams(configPath, chapters, episode, shots); err != nil {
+	// 审计 F2:config 必须归属项目根目录(否则可对任意 JSON 文件读改写)
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	configPath = cp
+	// 角色方案生成也读 render.chapters/episode,先写入(审计 P8:写 config 加 per-config 锁)
+	cfgLock := manjuConfigLock(configPath)
+	cfgLock.Lock()
+	err := writeManjuRunParams(configPath, chapters, episode, shots)
+	cfgLock.Unlock()
+	if err != nil {
 		http.Error(w, `{"error":"写入参数失败: `+err.Error()+`"}`, http.StatusInternalServerError)
 		return
 	}
@@ -2196,7 +2261,12 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/manju/gacha/adopt", manjuGachaAdopt)
 	mux.HandleFunc("POST /api/manju/gacha/plan", manjuGachaPlan)
 	mux.HandleFunc("GET /api/manju/notify", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, loadManjuNotify())
+		// 审计 F11:Token 明文返回泄漏(serverchan/pushplus/wxpusher 均为密钥)——掩码展示
+		n := loadManjuNotify()
+		n.Endpoint = maskKey(n.Endpoint)
+		n.Token = maskKey(n.Token)
+		n.UID = maskKey(n.UID)
+		writeJSON(w, http.StatusOK, n)
 	})
 	mux.HandleFunc("POST /api/manju/notify", func(w http.ResponseWriter, r *http.Request) {
 		var n manjuNotify
@@ -2210,6 +2280,17 @@ func registerManjuRoutes(mux *http.ServeMux) {
 		n.UID = strings.TrimSpace(n.UID)
 		if n.Channel == "" {
 			n.Channel = "serverchan"
+		}
+		// 掩码回写协议:GET 返回的是掩码值(maskKey),保存时若仍是掩码(=未修改)保留原值
+		old := loadManjuNotify()
+		if strings.Contains(n.Token, "****") {
+			n.Token = old.Token
+		}
+		if strings.Contains(n.Endpoint, "****") {
+			n.Endpoint = old.Endpoint
+		}
+		if strings.Contains(n.UID, "****") {
+			n.UID = old.UID
 		}
 		saveManjuNotify(n)
 		writeJSON(w, http.StatusOK, n)

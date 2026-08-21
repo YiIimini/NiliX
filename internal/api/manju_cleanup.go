@@ -98,7 +98,13 @@ func registerCleanupRoute(mux *http.ServeMux) {
 			writeErr(w, http.StatusBadRequest, "missing config")
 			return
 		}
-		ctx, err := newManjuCtx(configPath, "", "", "", "")
+		// 审计 F4:GET 免 token 且 newManjuCtx 会扩 fs 白名单,config 必须过 guard
+		cp, gerr := manjuGuardConfig(configPath)
+		if gerr != nil {
+			writeErr(w, http.StatusForbidden, gerr.Error())
+			return
+		}
+		ctx, err := newManjuCtx(cp, "", "", "", "")
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return

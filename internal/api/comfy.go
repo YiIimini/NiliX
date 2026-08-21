@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -32,25 +33,38 @@ var (
 
 // comfyParams 启动参数单一数据源:启动时由 main 用 settings.json 注入,
 // HUD 卡片 / Comfy 页面 / 实际启动命令共用同一份,保证同步。
-var comfyParams = struct {
-	url, in, out string
-}{url: comfyURL, in: "", out: ""}
+// 审计 F7:用 atomic.Pointer 快照替代裸 struct 字段——SetComfyParams(写)与
+// probeComfy/currentStartup/newManjuCtx(读)跨 goroutine 并发,裸读写是数据竞争
+// (go build -race 可检出)
+type comfyParamsT struct{ url, in, out string }
+
+var comfyParamsVal atomic.Pointer[comfyParamsT]
+
+// comfyParams 读取当前生效参数快照
+func comfyParams() comfyParamsT {
+	if p := comfyParamsVal.Load(); p != nil {
+		return *p
+	}
+	return comfyParamsT{url: comfyURL}
+}
 
 // SetComfyParams 由 main 在加载 settings.json 后调用,统一注入 ComfyUI 启动参数。
 func SetComfyParams(url, inputDir, outputDir string) {
+	cur := comfyParams()
 	if url != "" {
-		comfyParams.url = url
+		cur.url = url
 	}
 	if inputDir != "" {
-		comfyParams.in = inputDir
+		cur.in = inputDir
 	}
 	if outputDir != "" {
-		comfyParams.out = outputDir
+		cur.out = outputDir
 	}
+	comfyParamsVal.Store(&cur)
 }
 
 // ComfyURL 当前生效的 ComfyUI 地址(托盘/通知等零散入口共用,改设置即同步)
-func ComfyURL() string { return comfyParams.url }
+func ComfyURL() string { return comfyParams().url }
 
 // ServiceStatus 服务状态（含进程、日志与启动参数信息）。
 type ServiceStatus struct {
@@ -111,8 +125,9 @@ func tailFile(path string) string {
 }
 
 func probeComfy() ServiceStatus {
+	cp := comfyParams()
 	client := http.Client{Timeout: 900 * time.Millisecond}
-	resp, err := client.Get(comfyParams.url + "/")
+	resp, err := client.Get(cp.url + "/")
 	if err != nil {
 		return ServiceStatus{Online: false, Err: "offline", LogPath: comfyLogPath, LogTail: comfyLogTail(), Startup: currentStartup()}
 	}
@@ -126,14 +141,14 @@ func probeComfy() ServiceStatus {
 		title = strings.TrimSpace(string(m[1]))
 	}
 	return ServiceStatus{
-		Online: true, Title: title, URL: comfyParams.url, Pid: findPortPID(currentPort()),
+		Online: true, Title: title, URL: cp.url, Pid: findPortPID(currentPort()),
 		LogPath: comfyLogPath, LogTail: comfyLogTail(), Startup: currentStartup(),
 	}
 }
 
 // currentPort 从生效的 comfy_url 解析端口(默认 8190)。
 func currentPort() string {
-	u, err := neturl.Parse(comfyParams.url)
+	u, err := neturl.Parse(comfyParams().url)
 	if err != nil || u.Port() == "" {
 		return "8190"
 	}
@@ -142,7 +157,8 @@ func currentPort() string {
 
 // currentStartup 汇总当前生效的启动参数(供 HUD / Comfy 页面展示,单一数据源)。
 func currentStartup() StartupInfo {
-	in, out := comfyParams.in, comfyParams.out
+	cp := comfyParams()
+	in, out := cp.in, cp.out
 	if in == "" {
 		in = filepath.Join(ComfySharedDir, "input")
 	}
@@ -150,7 +166,7 @@ func currentStartup() StartupInfo {
 		out = filepath.Join(ComfySharedDir, "output")
 	}
 	return StartupInfo{
-		URL: comfyParams.url, Root: ComfyRootDir, Shared: ComfySharedDir,
+		URL: cp.url, Root: ComfyRootDir, Shared: ComfySharedDir,
 		Input: in, Output: out, Python: filepath.Join(ComfyRootDir, ".venv", "Scripts", "python.exe"),
 		Port: currentPort(),
 	}
@@ -161,7 +177,8 @@ func startComfy() error {
 	if _, err := os.Stat(py); err != nil {
 		return err
 	}
-	in, out := comfyParams.in, comfyParams.out
+	cp := comfyParams()
+	in, out := cp.in, cp.out
 	if in == "" {
 		in = filepath.Join(ComfySharedDir, "input")
 	}
@@ -194,18 +211,19 @@ func startComfy() error {
 	}
 	// 审计 H4:记录本服务启动的 PID,停止时优先按 PID 杀(此前按端口 taskkill 会误杀
 	// 占用同端口的无关进程;也防"改端口后停不掉自己的实例")
-	comfyProcPID = cmd.Process.Pid
+	comfyProcPID.Store(int32(cmd.Process.Pid))
 	return nil
 }
 
 // comfyProcPID 本服务启动的 ComfyUI 进程 PID(0=非本服务启动/未启动)
-var comfyProcPID int
+// 审计 F7:启动/停止/探测跨 goroutine 并发,裸 int 读写是数据竞争
+var comfyProcPID atomic.Int32
 
 func stopComfy() error {
 	// 优先杀本服务启动的进程(审计 H4:防误杀同端口第三方进程)
-	if pid := comfyProcPID; pid > 0 {
-		comfyProcPID = 0
-		cmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+	if pid := comfyProcPID.Load(); pid > 0 {
+		comfyProcPID.Store(0)
+		cmd := exec.Command("taskkill", "/PID", strconv.FormatInt(int64(pid), 10), "/T", "/F")
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		if err := cmd.Run(); err == nil {
 			return nil
@@ -235,7 +253,7 @@ func ComfyStop() error  { return stopComfy() }
 
 // ComfyOnline 检查 ComfyUI 是否在线(应用启动自动拉起/渲染前兜底用;地址=生效配置端口)
 func ComfyOnline() bool {
-	c := newComfyClient(comfyParams.url)
+	c := newComfyClient(comfyParams().url)
 	_, err := c.online()
 	return err == nil
 }
@@ -250,7 +268,7 @@ func ComfyPortPID() int {
 // 托盘状态灯判"运行中(绿) vs 闲置(蓝)"用。
 func ComfyBusy() bool {
 	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(comfyParams.url + "/queue")
+	resp, err := client.Get(comfyParams().url + "/queue")
 	if err != nil {
 		return false
 	}

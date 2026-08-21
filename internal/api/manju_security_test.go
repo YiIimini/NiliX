@@ -274,3 +274,73 @@ func TestTokenInjectNoTruncate(t *testing.T) {
 		t.Fatalf("Content-Length 与 body 长度不符: header=%s actual=%d", cl, len(body))
 	}
 }
+
+// TestManjuGuardNovelCreate 审计 F1:创建项目时 novel 必须位于小说库根内——
+// 越界路径被拒绝,不能进入 config(防任意文件读链)
+func TestManjuGuardNovelCreate(t *testing.T) {
+	oldNovel := NovelRootDir
+	root := t.TempDir()
+	NovelRootDir = root
+	defer func() { NovelRootDir = oldNovel }()
+	// 清理测试项目残留(共享测试根,重复运行会"项目已存在")
+	for _, p := range []string{"guard_ok", "guard_bad", "guard_dotdot"} {
+		_ = os.RemoveAll(filepath.Join(ManjuRootDir, p))
+	}
+	defer func() {
+		for _, p := range []string{"guard_ok", "guard_bad", "guard_dotdot"} {
+			_ = os.RemoveAll(filepath.Join(ManjuRootDir, p))
+		}
+	}()
+
+	// 根内小说:允许
+	in := filepath.Join(root, "book.md")
+	_ = os.WriteFile(in, []byte("x"), 0644)
+	out, _, ok := manjuCreateProject("guard_ok", in, "key")
+	if !ok {
+		t.Fatalf("根内 novel 应允许: %s", out)
+	}
+	// 根外文件:拒绝
+	outside := filepath.Join(filepath.Dir(root), "secret.md")
+	_ = os.WriteFile(outside, []byte("sk"), 0644)
+	out2, _, ok2 := manjuCreateProject("guard_bad", outside, "key")
+	if ok2 {
+		t.Fatalf("根外 novel 应拒绝: %s", out2)
+	}
+	// 相对路径穿越:拒绝
+	out3, _, ok3 := manjuCreateProject("guard_dotdot", `..\secret.md`, "key")
+	if ok3 {
+		t.Fatalf("穿越 novel 应拒绝: %s", out3)
+	}
+	_ = os.Remove(outside)
+}
+
+// TestManjuGachaPlanGuard 审计 F2:gacha/plan 的 config 必须归属项目根,
+// 越界 config 被拒(任意 JSON 读改写防护)
+func TestManjuGachaPlanGuard(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "config.json")
+	_ = os.WriteFile(outside, []byte(`{"a":1}`), 0644)
+	w, _ := doReq(t, "POST", "/api/manju/gacha/plan", map[string]any{
+		"config": outside, "chapters": "1-3", "episode": "1",
+	})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("越界 config 应 403,得到 %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestNotifyTokenMasked 审计 F11:GET /api/manju/notify 不得返回明文 Token(掩码)
+func TestNotifyTokenMasked(t *testing.T) {
+	oldFile := manjuNotifyFile
+	dir := t.TempDir()
+	manjuNotifyFile = filepath.Join(dir, "notify.json")
+	defer func() { manjuNotifyFile = oldFile }()
+	_ = os.WriteFile(manjuNotifyFile, []byte(`{"enabled":true,"channel":"serverchan","token":"sk-abcdef1234567890"}`), 0644)
+
+	w, out := doReq(t, "GET", "/api/manju/notify", nil)
+	if w.Code != 200 {
+		t.Fatalf("GET notify 应 200: %d", w.Code)
+	}
+	tok := str(out["token"])
+	if tok == "sk-abcdef1234567890" || !strings.Contains(tok, "****") {
+		t.Fatalf("Token 应掩码返回,得到: %q", tok)
+	}
+}
