@@ -18,6 +18,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -848,6 +849,24 @@ func startControlServers(app *application.App, url string) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		openMainWindow(url)
 		w.WriteHeader(200)
+	})
+	mux.HandleFunc("GET /nx", func(w http.ResponseWriter, r *http.Request) {
+		// N_X 监测:主应用窗口是否打开(HUD 工作台按钮状态;同进程判断 mainWinRef
+		// 或枚举标题 NiliX,托盘可重建)。右侧附文本:版本/端口/PID。
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		open := mainWinRef != nil && !mainWinClosed.Load()
+		if !open && findMainWindow() != 0 {
+			open = true // 兜底:窗口枚举确认(旧引用失效场景)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// 端口从 url 提取(如 http://127.0.0.1:8787 → 8787)
+		nxPort := ""
+		if u, perr := neturl.Parse(url); perr == nil && u.Port() != "" {
+			nxPort = u.Port()
+		}
+		_, _ = w.Write([]byte(fmt.Sprintf(
+			`{"window_open":%t,"version":"1.0.0","port":"%s","pid":%d}`,
+			open, nxPort, os.Getpid())))
 	})
 	mux.HandleFunc("GET /minimize", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ctl8799] /minimize from %s", r.RemoteAddr)

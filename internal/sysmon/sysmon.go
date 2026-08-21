@@ -3,9 +3,11 @@ package sysmon
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +84,13 @@ type Harness struct {
 	Online  bool   `json:"online"`
 	Version string `json:"version"`
 	Err     string `json:"err"`
+}
+
+// NiliX NiliX 主应用窗口状态(主窗口是否打开:控制端口 8799 可达即打开)。
+type NiliX struct {
+	WindowOpen bool   `json:"window_open"` // 主窗口是否打开(托盘可重建)
+	Port       int    `json:"port"`
+	Err        string `json:"err"`
 }
 
 // ZCode ZCode 桌面端状态（进程探测）。
@@ -331,8 +340,36 @@ func pollHarness() Harness {
 	if resp.StatusCode != http.StatusOK {
 		return Harness{Err: "http " + http.StatusText(resp.StatusCode)}
 	}
-	return Harness{Online: true}
+	// 版本号:优先读 DSH npm 包 package.json(比页面 <title> 可靠,SPA 页面无版本);
+	// 兜底从页面标题提取。
+	ver := dshPkgVersion()
+	if ver == "" {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		if m := harnessTitleRe.FindSubmatch(body); len(m) > 1 {
+			ver = strings.TrimSpace(string(m[1]))
+		}
+	}
+	return Harness{Online: true, Version: ver}
 }
+
+// dshPkgVersion 读 DSH npm 包版本(@deepseek-ai/dsh/package.json),与 api 包 harnessRoot 一致。
+func dshPkgVersion() string {
+	p := `C:\Mi\Ai\DeepSeekHarness\node_modules\@deepseek-ai\dsh\package.json`
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	var m struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(b, &m) == nil && m.Version != "" {
+		return m.Version
+	}
+	return ""
+}
+
+// harnessTitleRe 从 Harness 页面标题提取版本号(与 api 包 harness.go 同正则)。
+var harnessTitleRe = regexp.MustCompile(`(?is)<title[^>]*>\s*([^<]*?)\s*</title>`)
 
 // ---- ZCode / Bot ----
 

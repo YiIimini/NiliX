@@ -484,7 +484,9 @@
     if (hs.online) {
       hDot.className = "kb-dot on";
       hTxt.textContent = "在线";
-      hMeta.textContent = ":3080" + (hs.version ? " · " + hs.version : "");
+      // 端口 + 版本号(版本取自 Harness 页面 <title>,如 "DSH · v0.6.3")
+      const hVer = hs.version ? " · " + hs.version.replace(/^v/i, "v") : "";
+      hMeta.textContent = ":3080" + hVer;
       hStart.classList.add("hidden");
       hRestart.classList.remove("hidden");
       hOpen.classList.remove("hidden");
@@ -500,6 +502,37 @@
       hStart.classList.remove("hidden");
       hRestart.classList.add("hidden");
       hOpen.classList.add("hidden");
+    }
+
+    // N_X NiliX 主应用窗口状态(经 8799 /nx 探测;工作台按钮开/关主窗口)
+    const nxDot = $("nilix-dot"),
+      nxTxt = $("nilix-txt"),
+      nxMeta = $("nilix-meta"),
+      nxWb = $("nilix-wb");
+    if (nxDot) {
+      fetch("http://127.0.0.1:8799/nx", { cache: "no-store" })
+        .then((r) => r.json())
+        .then((nx) => {
+          const open = !!nx.window_open;
+          nxDot.className = "kb-dot " + (open ? "on" : "off");
+          nxTxt.textContent = open ? "窗口已开" : "窗口已关";
+          // 右侧文本:版本 + 端口 + PID
+          const nxParts = [];
+          if (nx.version) nxParts.push("v" + nx.version);
+          if (nx.port) nxParts.push(":" + nx.port);
+          if (nx.pid) nxParts.push("PID " + nx.pid);
+          nxMeta.textContent = nxParts.join(" · ");
+          nxWb.classList.remove("hidden");
+          nxWb.textContent = open ? "工作台" : "打开";
+          nxWb.dataset.open = open ? "1" : "0"; // 工作台按钮切换依据
+        })
+        .catch(() => {
+          nxDot.className = "kb-dot off";
+          nxTxt.textContent = "—";
+          nxMeta.textContent = "";
+          nxWb.classList.remove("hidden");
+          nxWb.textContent = "工作台";
+        });
     }
 
   // 页脚
@@ -591,6 +624,25 @@
   };
   bindBotBtn("bot-stop", () => (typeof stopBot === "function" ? stopBot() : Promise.reject()));
   bindBotBtn("bot-restart", () => (typeof restartBot === "function" ? restartBot() : Promise.reject()));
+
+  // N_X 工作台按钮:打开/关闭 NiliX 主应用窗口(经 8799 控制端口;不带头防 CORS 预检)
+  const nxWb = $("nilix-wb");
+  if (nxWb) {
+    nxWb.addEventListener("click", function () {
+      const btn = this;
+      btn.disabled = true;
+      const before = (nxWb.dataset.open === "1");
+      const url = before ? "http://127.0.0.1:8799/close" : "http://127.0.0.1:8799/open";
+      fetch(url, { cache: "no-store" })
+        .then(() => {
+          // 状态由 tick() 轮询 /nx 自动刷新(300ms 后)
+          setTimeout(() => { if (btn) btn.disabled = false; }, 600);
+        })
+        .catch(() => {
+          if (btn) { btn.disabled = false; btn.textContent = "失败"; setTimeout(() => { btn.textContent = "工作台"; }, 1200); }
+        });
+    });
+  }
 
   // ComfyUI 启动按钮:启动中状态由 tick() 检测到在线后自动恢复;30s 兜底复位
   let cfyStarting = false;
