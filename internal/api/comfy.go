@@ -185,10 +185,42 @@ func startComfy() error {
 	if out == "" {
 		out = filepath.Join(ComfySharedDir, "output")
 	}
+	// 端口自动避让(审计升级):Windows 的 IP Helper(iphlpsvc)等服务可能动态占用 8190,
+	// ComfyUI 绑定失败即退出 → NiliX 反复自动拉起 → 多实例抢端口 → 黑窗闪退循环。
+	// 1) 若 8190 已被 ComfyUI 自身占用(本服务或外部启动) → 直接复用,不起新实例;
+	// 2) 若 8190 被非 ComfyUI 进程占用 → 探测 8190-8209 找空闲端口,
+	//    期间若发现某端口已有可用 ComfyUI(HTTP 可达) → 直接复用它,避免重复实例;
+	// 3) 都无 → 用空闲端口启动,同步更新生效参数(ComfyURL/探测/停止全链路跟随)。
+	port := currentPort()
+	if pid := findPortPID(port); pid > 0 && comfyProcPID.Load() != int32(pid) {
+		oldPort := port
+		foundExisting := false
+		for try := 8190; try <= 8209; try++ {
+			u := "http://127.0.0.1:" + strconv.Itoa(try)
+			if probeComfyURL(u) {
+				// 已有 ComfyUI 在跑:直接复用,不重复启动
+				SetComfyParams(u, in, out)
+				cp = comfyParams()
+				log.Printf("端口 %s 被占用(PID %d),复用已运行的 ComfyUI %s", oldPort, pid, u)
+				foundExisting = true
+				break
+			}
+			if findPortPID(strconv.Itoa(try)) == 0 {
+				port = strconv.Itoa(try)
+				break
+			}
+		}
+		if !foundExisting && port != oldPort {
+			newURL := "http://127.0.0.1:" + port
+			SetComfyParams(newURL, in, out)
+			cp = comfyParams()
+			log.Printf("端口 %s 被占用(PID %d,可能是系统服务),ComfyUI 改用 %s", oldPort, pid, port)
+		}
+	}
 	args := []string{
 		filepath.Join(ComfyRootDir, "main.py"),
 		"--listen", "0.0.0.0", // 局域网设备可经 http://<本机IP>:8190 访问
-		"--port", currentPort(),
+		"--port", port,
 		"--disable-auto-launch",
 		"--output-directory", out,
 		"--input-directory", in,
@@ -217,6 +249,17 @@ func startComfy() error {
 
 // comfyProcPID 本服务启动的 ComfyUI 进程 PID(0=非本服务启动/未启动)
 // 审计 F7:启动/停止/探测跨 goroutine 并发,裸 int 读写是数据竞争
+
+// probeComfyURL 探测某地址是否已有可用的 ComfyUI(端口避让时复用,防重复实例)
+func probeComfyURL(url string) bool {
+	client := http.Client{Timeout: 800 * time.Millisecond}
+	resp, err := client.Get(url + "/")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
 var comfyProcPID atomic.Int32
 
 func stopComfy() error {
