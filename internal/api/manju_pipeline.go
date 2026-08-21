@@ -2032,6 +2032,11 @@ func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg
 	// LoadImage 在 ComfyUI 远程/容器化部署时读取失败,且与其它参考图语义不一致
 	if len(s.Characters) == 0 {
 		if b, _ := ctx.R["fl2va_end_frame"].(bool); b && s.Scene != "" {
+			// 节点缺失自动降级:FL2VA 双帧节点不可用时回退单图 I2VA
+			// (fl2vaNodeAvailable 探测空对象——ComfyUI 对不存在节点也返回 200)
+			if !fl2vaNodeAvailable() {
+				lg.logf("  ⚠️ 未检测到 MiniMaxH3Fl2VA 节点(自定义节点缺失),空镜回退单图 I2VA;装好 ComfyUI-MiniMaxH3-Easy 后关闭「FL2VA 尾帧」重开可恢复双帧")
+			}
 			src := filepath.Join(ctx.assetsDir, "scenes", s.Scene+"_end.png")
 			if fileExists(src) {
 				name := fmt.Sprintf("dir_scene_%d_end.png", s.ID)

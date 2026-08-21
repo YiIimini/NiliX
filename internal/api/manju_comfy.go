@@ -415,6 +415,9 @@ func wfAdd(workflow map[string]any, classType string, inputs map[string]any) str
 
 // fl2vaNodeOK FL2VA 双帧节点可用性探测(审计升级 P1:空镜可选首尾双图插值,官方
 // FL2VA 单镜连续更稳;节点缺失自动回退单图,零风险)。带缓存,进程生命周期内探测一次。
+// 修复:ComfyUI 对不存在的节点 /object_info/<name> 也返回 HTTP 200(空 JSON {})——
+// 只判状态码会把缺失节点误判为可用,提交时 400 missing_node_type(用户实测)。
+// 正确判断:响应体非空且含节点定义(长度>2,即有 {"Name": {...}})。
 var (
 	fl2vaNodeOnce sync.Once
 	fl2vaNodeOK   bool
@@ -426,7 +429,12 @@ func fl2vaNodeAvailable() bool {
 		resp, err := c.client.Get(c.base + "/object_info/MiniMaxH3Fl2VA")
 		if err == nil {
 			defer resp.Body.Close()
-			fl2vaNodeOK = resp.StatusCode == 200
+			if resp.StatusCode == 200 {
+				data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+				// 节点存在时响应形如 {"MiniMaxH3Fl2VA": {"input": {...}}}(>2 字节);
+				// 不存在时为空对象 "{}"(恰好 2 字节)
+				fl2vaNodeOK = len(data) > 2 && !bytes.Equal(bytes.TrimSpace(data), []byte("{}"))
+			}
 		}
 	})
 	return fl2vaNodeOK
