@@ -1566,13 +1566,13 @@
 
     /* 当前 style 中选中的预设 key 集合(组合以 + 分隔;不在预设表内的段落视为自定义词) */
     styleKeys() {
-      return new Set(String(this.style || "").split("+").map((s) => s.trim()).filter((s) => s && STYLE_CN[s] !== undefined));
+      return new Set(this.styleWords().filter((s) => STYLE_CN[s] !== undefined));
     },
 
     /* 风格展示:预设转中文名、自定义词原样,多元素以 + 连接(卡片/chips 用) */
     styleLabel(style) {
       if (!style) return "";
-      return String(style).split("+").map((s) => s.trim()).filter(Boolean)
+      return String(style).split(/[+,]+/).map((s) => s.trim()).filter(Boolean)
         .map((s) => STYLE_CN[s] || s).join(" + ");
     },
 
@@ -1595,7 +1595,7 @@
     重复词自动过滤(大小写不敏感/含中文名);输入预设 key 或中文名(如 水墨)归一为
     预设 key(对应按钮点亮);删除词走 TAG 右上角 × */
     combineCustom(v) {
-      const parts = String(this.style || "").split("+").map((s) => s.trim()).filter(Boolean);
+      const parts = this.styleWords();
       const seen = new Set(parts.flatMap((k) => [k.toLowerCase(), (STYLE_CN[k] || "").toLowerCase()]).filter(Boolean));
       String(v).split(/[,+]+/).map((s) => s.trim()).filter(Boolean).forEach((s) => {
         let norm = s;
@@ -1609,16 +1609,23 @@
       return parts.join("+");
     },
 
+    /* 风格元素拆分:预设组合以 + 分隔;总集风格/自定义长句含逗号(Cinematic film still,
+       live-action, photorealistic, ...)——逗号与 + 都拆成独立元素,前端按独立 TAG 展示 */
+    styleWords() {
+      return String(this.style || "").split(/[+,]+/).map((s) => s.trim()).filter(Boolean);
+    },
+
     renderStyle() {
       const keys = this.styleKeys();
       document.querySelectorAll("#manju-style button[data-style]").forEach((b) =>
         b.classList.toggle("on", keys.has(b.dataset.style))
       );
-      // 自定义风格:style 中非预设部分渲染为 TAG 标签(输入框上方,点 × 删除)
+      // 自定义风格:style 中非预设部分渲染为 TAG 标签(输入框上方,点 × 删除);
+      // 总集风格等逗号分隔长句也逐段拆成独立 TAG(用户反馈:风格需拆独立 tag 展示)
       const tags = $("manju-custom-tags");
       if (tags) {
-        const nonPreset = String(this.style || "").split("+").map((s) => s.trim())
-          .filter((s) => s && STYLE_CN[s] === undefined);
+        const nonPreset = this.styleWords()
+          .filter((s) => STYLE_CN[s] === undefined && !STYLE_PRESETS.some(([k]) => k === s.toLowerCase()));
         tags.innerHTML = nonPreset.map((w) =>
           `<span class="style-tag">${esc(w)}<i class="style-tag-x" data-word="${esc(w)}" title="删除该风格">×</i></span>`).join("");
         tags.classList.toggle("has-tags", nonPreset.length > 0);
@@ -1628,10 +1635,10 @@
       }
     },
 
-    /* 删除一个自定义风格 TAG:从 style 组合中移除该词;删空且无预设时回退默认 2.5D */
+    /* 删除一个自定义风格 TAG:从 style 组合中移除该词(逗号/加号分隔均支持);
+       删空且无预设时回退默认 2.5D */
     removeCustomWord(word) {
-      const parts = String(this.style || "").split("+").map((s) => s.trim()).filter(Boolean);
-      const rest = parts.filter((p) => p !== word);
+      const rest = this.styleWords().filter((p) => p !== word);
       this.style = rest.length ? rest.join("+") : "2.5d";
       this.renderStyle();
       this.saveDraft();
