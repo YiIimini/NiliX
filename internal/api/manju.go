@@ -232,7 +232,9 @@ func isPidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	out, err := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH").Output()
+	cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} // 黑窗防护:托盘 3s 轮询高频调用
+	out, err := cmd.Output()
 	if err != nil {
 		return false
 	}

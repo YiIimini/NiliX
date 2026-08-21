@@ -6,7 +6,16 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 )
+
+// hideWindow windowsgui 父进程 spawn 子进程若不隐藏会弹黑窗,统一加 HideWindow
+func hideWindow(cmd *exec.Cmd) *exec.Cmd {
+	if cmd != nil && cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	}
+	return cmd
+}
 
 // defaultFFmpeg 是 winget 安装的默认路径（LookPath 失败时的兜底）。
 var defaultFFmpeg = `C:\Users\Administrator\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0-full_build\bin\ffmpeg.exe`
@@ -66,7 +75,7 @@ func Assemble(clips []string, output string) error {
 		args = append(args, output)
 	}
 
-	out, err := exec.Command(ff, args...).CombinedOutput()
+	out, err := hideWindow(exec.Command(ff, args...)).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("ffmpeg 合成失败: %w（%s）", err, truncate(string(out), 300))
 	}

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -180,6 +181,7 @@ func gitClone(url, dst, name string, st *comfyInstallState) error {
 	st.setStep("node", name)
 	st.instNote("📦 克隆节点 " + name + " ...")
 	cmd := exec.Command("git", "clone", "--depth", "1", url, dst)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} // 黑窗防护
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git clone %s: %v %s", name, err, truncate(string(out), 200))
@@ -197,6 +199,7 @@ func installMediaDeps(st *comfyInstallState) error {
 	st.setStep("media", "av/faster-whisper/pyJianYingDraft")
 	st.instNote("🐍 安装媒体依赖(av, faster-whisper, pyJianYingDraft)...")
 	cmd := exec.Command(py, "-m", "pip", "install", "--no-input", "-q", "av", "faster-whisper", "pyJianYingDraft")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} // 黑窗防护
 	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("pip 安装失败(可稍后手动装): %v %s", err, truncate(string(out), 300))
@@ -276,7 +279,9 @@ func installComfyUI() error {
 			// 解压前完整性校验(审计 H2):7z t 测试归档——下载中断/损坏的压缩包直接解压会
 			// 静默产出残缺程序;下载源校验和待发布方提供后填入 downloadFile 的 sha256 参数
 			st.setStep("portable", "校验压缩包完整性")
-			if out, err := exec.Command(sz, "t", arc, "-y", "-bso0", "-bsp0").CombinedOutput(); err != nil {
+			tcmd := exec.Command(sz, "t", arc, "-y", "-bso0", "-bsp0")
+			tcmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} // 黑窗防护
+			if out, err := tcmd.CombinedOutput(); err != nil {
 				st.err = "压缩包完整性校验失败(下载可能损坏,请重试): " + err.Error() + " " + truncate(string(out), 200)
 				rc = 1
 				return
@@ -287,6 +292,7 @@ func installComfyUI() error {
 			stage := filepath.Join(tmpDir, "stage")
 			_ = os.MkdirAll(stage, 0755)
 			cmd := exec.Command(sz, "x", arc, "-o"+stage, "-y", "-bso0", "-bsp0")
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} // 黑窗防护
 			if out, err := cmd.CombinedOutput(); err != nil {
 				st.err = "解压失败: " + err.Error() + " " + truncate(string(out), 200)
 				rc = 1

@@ -25,7 +25,9 @@ func ZCodeStart() error {
 	if sysmon.ZCodeRunning() {
 		return nil
 	}
-	return exec.Command(exe).Start()
+	cmd := exec.Command(exe)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} // 黑窗防护(GUI 应用启动不闪窗)
+	return cmd.Start()
 }
 
 // ZCodeStop 停止 ZCode 桌面端(结束全部 ZCode.exe 进程树)。

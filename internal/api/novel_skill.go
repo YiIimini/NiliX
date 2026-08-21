@@ -107,6 +107,7 @@ func manjuSkillUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cmd := exec.Command("git", "-C", NovelSkillDir, "pull", "--ff-only")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} // 黑窗防护
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	msg := strings.TrimSpace(string(out))

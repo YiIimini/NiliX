@@ -7,7 +7,17 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"syscall"
 )
+
+// hideWindow windowsgui 父进程 spawn 子进程若不隐藏会弹黑窗(用户反馈"黑窗反复闪"),
+// 所有 exec 统一加 HideWindow。非 Windows 平台忽略。
+func hideWindow(cmd *exec.Cmd) *exec.Cmd {
+	if cmd != nil && cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	}
+	return cmd
+}
 
 var defaultFFprobe = `C:\Users\Administrator\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0-full_build\bin\ffprobe.exe`
 
@@ -50,10 +60,10 @@ func Verify(path string) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := exec.Command(ff, "-v", "error",
+	out, err := hideWindow(exec.Command(ff, "-v", "error",
 		"-show_entries", "stream=codec_type,codec_name",
 		"-show_entries", "format=duration",
-		"-of", "json", path).Output()
+		"-of", "json", path)).Output()
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe 读取失败: %w", err)
 	}
