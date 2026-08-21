@@ -1429,7 +1429,34 @@ body.view-dir-active .top-search { display: none; }
 .reader-tools .detail-close,
 .reader-head > .detail-close {
   position: static;
+  /* 关闭按钮完整样式(修复:此前无基础样式,SVG 图标不可见,
+     用户反馈"小说管理详情页弹窗未看到关闭按钮") */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: var(--chip-bg);
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: color 0.2s, border-color 0.2s, background 0.2s, transform 0.15s;
 }
+.reader-tools .detail-close svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+.reader-tools .detail-close:hover {
+  color: #fff;
+  border-color: #d25c4d;
+  background: #d25c4d;
+  transform: scale(1.06);
+}
+.reader-tools .detail-close:active { transform: scale(0.95); }
 .reader-toc-btn {
   display: inline-flex;
   align-items: center;
