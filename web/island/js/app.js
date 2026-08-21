@@ -85,21 +85,28 @@
       document.body.classList.remove("island-closing");
       document.body.classList.add("island-expanded");
       document.body.classList.remove("island-collapsed");
-      // 展开高度:固定 500px(实测 HUD 面板内容真实高度≈500,CPU/RAM/GPU/SSD/NET+服务状态区)。
-      // 不再依赖 JS 测量:透明窗口收起态 44px,.card{position:fixed;inset:0} 占满视口,
-      // #full 的 offsetHeight 被父容器钳制为 44(历史 bug:展开只到胶囊大小),
-      // scrollHeight 在部分 WebView2 渲染时序下也不可靠——固定高度最稳,内容完整显示。
+      // 展开高度:先展开到 600(足够高,内容完整渲染、scrollHeight 不受父容器钳制),
+      // 再按内容实际高度(scrollHeight)校准——避免固定高度导致底部留白。
+      // 窗口收起态仅 44px,.card{position:fixed;inset:0} 占满视口,#full 的
+      // offsetHeight 被父容器钳制,展开前直接测量会得到 44;先拉高再测才准。
       void document.body.offsetHeight; // 强制同步布局
       if (typeof setIsland === "function") {
-        setIsland(true, 380, 500);
+        setIsland(true, 380, 600);
       }
-      // 兜底:渲染完成后若内容实际更高(未来内容增加),再按 scrollHeight 上调
+      // 内容渲染完成后校准到实际高度(去掉底部空白,贴合内容)
+      // 双重校准:400ms(动画/首帧内容)+ 900ms(数据加载后行高变化)取最大值
       setTimeout(function () {
         if (expanded && typeof setIsland === "function") {
           var h = islandHeight();
-          if (h > 500) setIsland(true, 380, h);
+          setIsland(true, 380, Math.max(300, h + 2));
         }
-      }, 200);
+      }, 400);
+      setTimeout(function () {
+        if (expanded && typeof setIsland === "function") {
+          var h = islandHeight();
+          setIsland(true, 380, Math.max(300, h + 2));
+        }
+      }, 900);
     } else {
       // 收起:先播面板淡出(island-closing),170ms 后再切 collapsed——与窗口缩小动画同步,
       // 避免"内容瞬间消失"的生硬切换(升级动效)

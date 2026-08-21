@@ -1172,46 +1172,69 @@ func dotIcon(r, g, b uint8) []byte {
 	return dotIconBeauty(r, g, b, 90)
 }
 
-// dotIconBeauty 玻璃质感状态球(16x16):
-//   - 球体:径向渐变(光源左上,边缘衰减)+ 暗部衬底,立体�?
-//   - 外发�?状态色柔和光晕(halo 强度可调,呼吸动画�?
-//   - 亮描�?球缘提亮,玻璃�?
+// dotIconBeauty 现代玻璃质感状态球(16x16,托盘菜单位图):
+//   - 球体:径向渐变(光源左上)+ 底部暗部衬底 + 顶部弧形高光(玻璃折射)
+//   - 双层外发光:近层强、远层柔(呼吸动画时明暗变化更灵动)
+//   - 亮描边:球缘提亮,仿玻璃边缘反光
+//   相比旧版:高光更集中(真实球体)、暗部更分明、光晕双层过渡——观感更现代。
 func dotIconBeauty(r, g, b uint8, halo uint8) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	cr := float64(r)
+	cg := float64(g)
+	cb := float64(b)
 	for y := 0; y < 16; y++ {
 		for x := 0; x < 16; x++ {
 			dx, dy := float64(x)-7.5, float64(y)-7.5
 			dist := math.Sqrt(dx*dx + dy*dy)
-			// 外发�?柔和光晕,球体覆盖部分自然叠加)
-			if dist <= 10 && halo > 18 {
-				f := 1 - dist/10.5
-				a := uint8(float64(halo) * f * 0.55)
+			// 外层柔光晕(远)
+			if dist > 8 && dist <= 10.5 && halo > 18 {
+				f := (10.5 - dist) / 2.5
+				a := uint8(float64(halo) * f * 0.22)
 				if a > 0 {
 					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: a})
 				}
 			}
-			// 球体:径向渐变(光源左上 2.8,2.8,边缘衰减)
+			// 内层强光晕(近,呼吸主体)
+			if dist > 6.5 && dist <= 8.2 && halo > 18 {
+				f := (8.2 - dist) / 1.7
+				a := uint8(float64(halo) * f * 0.5)
+				if a > 0 {
+					img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: a})
+				}
+			}
+			// 球体:径向渐变 + 顶部高光 + 底部暗部(玻璃立体感)
 			if dist <= 6.5 {
-				edge := 1 - dist/6.5
-				hld := math.Hypot(float64(x)-2.8, float64(y)-2.8)
-				hl := math.Max(0, 1-hld/9)
-				br := 150*edge + 100 + 65*hl
+				// 基础明度:中心亮、边缘暗
+				base := 1 - dist/6.5*0.55
+				// 顶部高光(光源在左上方 2.5,2.5)
+				hld := math.Hypot(float64(x)-2.5, float64(y)-2.5)
+				hl := math.Max(0, 1-hld/7.5)
+				hl = hl * hl * 1.4 // 高光更集中
+				// 底部暗部(右下角)
+				sh := math.Max(0, (dx+dy)/13.0+0.25)
+				br := 90 + 160*base + 90*hl - 90*sh
+				if br < 40 {
+					br = 40
+				}
 				if br > 255 {
 					br = 255
 				}
+				// 玻璃折射:亮部偏白,暗部偏状态色
+				wb := 0.25 + 0.45*hl // 白色混合度(高光处更白)
 				img.Set(x, y, color.RGBA{
-					R: u8min(float64(r)*br/200 + 45),
-					G: u8min(float64(g)*br/200 + 45),
-					B: u8min(float64(b)*br/200 + 45),
+					R: u8min(cr*(br/255.0)*(1-wb) + 255*wb),
+					G: u8min(cg*(br/255.0)*(1-wb) + 255*wb),
+					B: u8min(cb*(br/255.0)*(1-wb) + 255*wb),
 					A: 255,
 				})
 			}
-			// 亮描�?玻璃�?
-			if dist > 6.5 && dist <= 7.0 {
+			// 亮描边(玻璃边缘反光,上缘更亮)
+			if dist > 6.5 && dist <= 7.1 {
+				edgeBright := 0.75 + 0.35*math.Max(0, -dy/2.5)
 				img.Set(x, y, color.RGBA{
-					R: u8min(float64(r) * 1.7),
-					G: u8min(float64(g) * 1.7),
-					B: u8min(float64(b) * 1.7),
+					R: u8min(cr*edgeBright + 60),
+					G: u8min(cg*edgeBright + 60),
+					B: u8min(cb*edgeBright + 60),
 					A: 255,
 				})
 			}
