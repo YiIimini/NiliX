@@ -496,7 +496,7 @@
         this.style = this.combineCustom(v);
         $("manju-style-custom").value = ""; // 已变成标签,输入框清空待下一次输入
         this.renderStyle();
-        this.saveDraft();
+        this.scheduleAutoSave();
       };
       $("manju-style-apply").addEventListener("click", applyCustom);
       $("manju-style-custom").addEventListener("keydown", (e) => {
@@ -508,20 +508,20 @@
           const wh = RATIOS[b.dataset.ratio];
           if (wh) { $("manju-width").value = wh[0]; $("manju-height").value = wh[1]; }
           this.renderRatio();
-          this.saveDraft();
+          this.scheduleAutoSave();
         })
       );
-      $("manju-width").addEventListener("input", () => { this.renderRatio(); this.saveDraft(); });
-      $("manju-height").addEventListener("input", () => { this.renderRatio(); this.saveDraft(); });
+      $("manju-width").addEventListener("input", () => { this.renderRatio(); this.scheduleAutoSave(); });
+      $("manju-height").addEventListener("input", () => { this.renderRatio(); this.scheduleAutoSave(); });
       // 渲染配置其余字段:变化即本地记忆(input 覆盖输入框,change 覆盖下拉/复选框)
       this.renderInputIds().forEach((id) => {
-        $(id).addEventListener("input", () => this.saveDraft());
-        $(id).addEventListener("change", () => this.saveDraft());
+        $(id).addEventListener("input", () => this.scheduleAutoSave());
+        $(id).addEventListener("change", () => this.scheduleAutoSave());
       });
-      $("manju-mosaic-enabled").addEventListener("change", () => this.saveDraft());
-      $("manju-sage").addEventListener("change", () => { this.syncBoostButtons(); this.saveDraft(); });
-      $("manju-draft-judge").addEventListener("change", () => { this.syncBoostButtons(); this.saveDraft(); });
-      $("manju-fl2va").addEventListener("change", () => { this.syncBoostButtons(); this.saveDraft(); });
+      $("manju-mosaic-enabled").addEventListener("change", () => this.scheduleAutoSave());
+      $("manju-sage").addEventListener("change", () => { this.syncBoostButtons(); this.scheduleAutoSave(); });
+      $("manju-draft-judge").addEventListener("change", () => { this.syncBoostButtons(); this.scheduleAutoSave(); });
+      $("manju-fl2va").addEventListener("change", () => { this.syncBoostButtons(); this.scheduleAutoSave(); });
       // 增强胶囊(SageAttn/草稿预审/FL2VA):点击切换隐藏 checkbox 数据源 + 胶囊 on 态
       const boostMap = { sage: "manju-sage", draft: "manju-draft-judge", fl2va: "manju-fl2va" };
       document.querySelectorAll("#manju-boost [data-boost]").forEach((b) =>
@@ -530,7 +530,7 @@
           if (!cb) return;
           cb.checked = !cb.checked;
           this.syncBoostButtons();
-          this.saveDraft();
+          this.scheduleAutoSave();
         })
       );
 
@@ -1439,8 +1439,23 @@
         "manju-transition", "manju-bgm", "manju-bgm-gain", "manju-take"];
     },
     draftKey() { return "render-" + (this.project || ""); },
-    /* 渲染配置草稿记忆:未点「保存参数」的编辑也随刷新保留,按项目隔离 */
-    saveDraft() {
+    /* 渲染配置自动保存(用户要求:填了参数自动保存,不用手动点保存按钮):
+       1) 立即写 localStorage 草稿(刷新不丢,保留现有机制);
+       2) 防抖 2 秒后静默自动提交到后端 config.json(统一提交,无需手动点)。
+       防重复:同一时刻只允许一个在途请求;运行中不提交(避免与渲染冲突);
+       提交失败保留草稿并提示(下次变化自动重试)。 */
+    autoSaveTimer: null,
+    autoSavePending: false,
+    _autoSaveBusy: false,
+    scheduleAutoSave() {
+      if (!this.project) return;
+      // 立即落本地草稿(刷新不丢)
+      this.saveDraftLocal();
+      // 防抖 2s 统一提交后端
+      clearTimeout(this.autoSaveTimer);
+      this.autoSaveTimer = setTimeout(() => this.autoSaveSubmit(), 2000);
+    },
+    saveDraftLocal() {
       if (!this.project) return;
       const d = { style: this.style };
       this.renderInputIds().forEach((id) => { d[id] = $(id).value; });
@@ -1449,6 +1464,44 @@
       d.draftJudge = $("manju-draft-judge").checked;
       d.fl2vaEndFrame = $("manju-fl2va").checked;
       try { localStorage.setItem("manju-" + this.draftKey(), JSON.stringify(d)); } catch (e) {}
+    },
+    autoSaveSubmit(manual) {
+      if (!this.project || this._autoSaveBusy) return Promise.resolve(false);
+      // 运行中不自动提交(渲染期间改参数下次变化再提交,避免与运行参数冲突);手动保存除外
+      if (!manual && this.status && this.status.running) return Promise.resolve(false);
+      this._autoSaveBusy = true;
+      const body = this.collectRenderConfig();
+      body.config = this.project;
+      return post("/api/manju/render", body).then((r) => {
+        this._autoSaveBusy = false;
+        if (r.ok) {
+          // 成功后同步回填服务端归一化值并清草稿(与手动保存一致)
+          this.info = Object.assign({}, this.info, { render: r.render, style: r.style, moderation: r.moderation });
+          this.clearDraft();
+          this.renderChips();
+          return true;
+        } else {
+          // 失败保留草稿(下次变化自动重试),静默提示不打扰
+          const msg = $("manju-render-msg");
+          if (msg) { msg.textContent = (manual ? "❌ 保存失败: " : "⏳ 自动保存失败(已保留草稿): ") + (r.error || "未知错误"); msg.style.color = manual ? "" : "#e0a64a"; setTimeout(() => { msg.textContent = ""; }, 4000); }
+          return false;
+        }
+      }).catch((e) => {
+        this._autoSaveBusy = false;
+        const msg = $("manju-render-msg");
+        if (msg) { msg.textContent = (manual ? "❌ 保存失败: " : "⏳ 自动保存失败(已保留草稿): ") + e.message; msg.style.color = manual ? "" : "#e0a64a"; setTimeout(() => { msg.textContent = ""; }, 4000); }
+        return false;
+      });
+    },
+    /* 手动保存(兜底:自动保存失败/运行前确保落盘),与自动提交共用逻辑 */
+    saveRender() {
+      if (this.denyNoProject()) return;
+      clearTimeout(this.autoSaveTimer);
+      const msg = $("manju-render-msg");
+      if (msg) { msg.textContent = "保存中…"; msg.style.color = ""; }
+      this.autoSaveSubmit(true).then((ok) => {
+        if (msg && ok) { msg.textContent = "✅ 参数已保存到 config.json"; setTimeout(() => { msg.textContent = ""; }, 3000); }
+      });
     },
     loadDraft() {
       try {
@@ -1598,7 +1651,7 @@
         this.style = [key].concat(customs).join("+");
       }
       this.renderStyle();
-      this.saveDraft();
+      this.scheduleAutoSave();
     },
 
     /* 自定义风格「应用」= 累加:新输入词追加到当前风格(预设+旧自定义 TAG)之后,
@@ -1651,7 +1704,7 @@
       const rest = this.styleWords().filter((p) => p !== word);
       this.style = rest.length ? rest.join("+") : "real";
       this.renderStyle();
-      this.saveDraft();
+      this.scheduleAutoSave();
     },
 
     renderRatio() {
@@ -1794,7 +1847,7 @@
         try {
           const cfg = JSON.parse(reader.result);
           this.applyRenderConfig(cfg);
-          this.saveDraft();
+          this.scheduleAutoSave();
           msg.textContent = "✅ 已导入并应用到表单(点「保存参数」写入项目)";
           msg.style.color = "";
           setTimeout(() => this.closeModal(), 1600);
@@ -1816,24 +1869,6 @@
       this.closeModal();
       const msg = $("manju-render-msg");
       if (msg) { msg.textContent = "✅ 已按当前参数为默认(自定义风格已移除;点「保存参数」写入项目)"; setTimeout(() => { msg.textContent = ""; }, 3000); }
-    },
-
-    saveRender() {
-      if (this.denyNoProject()) return;
-      const body = this.collectRenderConfig();
-      body.config = this.project;
-      const msg = $("manju-render-msg");
-      msg.textContent = "保存中…";
-      post("/api/manju/render", body).then((r) => {
-        if (r.ok) {
-          msg.textContent = "✅ 参数已保存到 config.json";
-          msg.style.color = "";
-          this.info = Object.assign({}, this.info, { render: r.render, style: r.style, moderation: r.moderation });
-          this.clearDraft();
-          this.renderChips();
-          setTimeout(() => { msg.textContent = ""; }, 3000);
-        } else msg.textContent = "❌ " + (r.error || "保存失败");
-      }).catch((e) => { msg.textContent = "❌ " + e.message; });
     },
 
     mapInt(k) {
@@ -1944,7 +1979,7 @@
       }).then((r) => {
         this.style = r.style;
         this.renderStyle();
-        this.saveDraft();
+        this.scheduleAutoSave();
         return r;
       });
     },
