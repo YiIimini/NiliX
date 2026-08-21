@@ -195,6 +195,17 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	if P == nil {
 		P = map[string]any{}
 	}
+	// 渲染提示词总集注入渲染配置(用户反馈:总集风格/负面只进 LLM 提示词,
+	// 渲染配置界面「风格」「负面提示词」仍显示旧值,本地生图也用内置默认负面)。
+	// 规则:总集存在时,style 为空 → 写总集风格;neg_prompt 为空或仍为内置默认 → 写总集负面。
+	// 用户显式配置过(非空/非默认)则尊重用户,不覆盖。幂等:已注入的 config 不会再写。
+	if manjuInjectPromptMaster(cfg, R, P) {
+		// 写回 config.json(per-config 锁防并发;失败静默——仅影响配置界面展示,不影响本次渲染)
+		cfgLock := manjuConfigLock(configPath)
+		cfgLock.Lock()
+		_ = writeManjuConfig(configPath, cfg)
+		cfgLock.Unlock()
+	}
 	epEff := orDefault(episode, str(R["episode"]))
 	// ComfyUI 输入/输出目录:优先用「生效启动参数」(comfyParams.in/out,与 ComfyUI 实际
 	// 启动命令同步)——项目 config 里的 comfy_input/comfy_output 可能是旧路径(创建项目时
@@ -1636,10 +1647,15 @@ func manjuTimecode(sec float64) string {
 
 // ---- 资产(定妆照 SDXL + 场景图 Z-Image,已存在复用) ----
 
-// negPrompt 负面提示词:配置 render.neg_prompt 缺省/为空时用内置默认(角色/场景图生成)
+// negPrompt 负面提示词(角色/场景图生成):优先渲染提示词总集的全局负面(总集是
+// 用户规则单文件,负面应为最高优先),其次配置 render.neg_prompt,最后内置默认。
 func (ctx *manjuCtx) negPrompt() string {
 	if s := strings.TrimSpace(str(ctx.R["neg_prompt"])); s != "" {
 		return s
+	}
+	// 总集负面兜底:config 未写回(如旧项目从未跑过 newManjuCtx)时本地生图也要用总集负面
+	if assets := scanNovelAssets(ctx.novelRootDir()); assets.NegPrompt != "" {
+		return assets.NegPrompt
 	}
 	return manjuNegPrompt
 }

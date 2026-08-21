@@ -79,6 +79,80 @@ func TestManjuLLMReadsChunkedBody(t *testing.T) {
 	}
 }
 
+// 回归:渲染提示词总集 → 渲染配置注入(用户反馈:总集风格/负面未进渲染配置,
+// 界面显示旧值;本地生图用内置默认负面而非总集负面)
+// 总集存在时:style 为空→写总集风格;neg_prompt 空/内置默认→写总集负面;用户自定义不覆盖
+func TestManjuInjectPromptMaster(t *testing.T) {
+	// 构造含总集的小说目录
+	dir := t.TempDir()
+	novelDir := filepath.Join(dir, "素材")
+	_ = os.MkdirAll(novelDir, 0755)
+	master := "# 渲染提示词总集\n\n## 一、漫剧渲染风格提示词（全剧风格统一，注入每镜）\n\n```\nCinematic film still, live-action, photorealistic, modern urban xianxia fantasy aesthetic, cinematic color grading, epic cinematic quality, volumetric lighting, ultra detailed, 8k, HDR\n```\n\n## 二、全局负面提示词（所有画面统一追加）\n\n```\nanime, cartoon, illustration, manga, chibi, doll, 3d render, plastic skin, flat lighting, watermark, text, letters, logo, signature, deformed, extra fingers, extra limbs, low quality, blurry, oversaturated, heavy makeup\n```\n"
+	_ = os.WriteFile(filepath.Join(novelDir, "渲染提示词总集.md"), []byte(master), 0644)
+
+	// 1. style 空 + neg 空 → 都注入
+	cfg := map[string]any{}
+	R := map[string]any{}
+	P := map[string]any{"novel_dir": dir}
+	if !manjuInjectPromptMaster(cfg, R, P) {
+		t.Fatal("总集存在时应发生注入")
+	}
+	if !strings.Contains(str(cfg["style"]), "photorealistic") || !strings.Contains(str(cfg["style"]), "HDR") {
+		t.Fatalf("style 未注入总集风格: %q", cfg["style"])
+	}
+	if !strings.Contains(str(R["neg_prompt"]), "anime") || !strings.Contains(str(R["neg_prompt"]), "heavy makeup") {
+		t.Fatalf("neg_prompt 未注入总集负面: %q", R["neg_prompt"])
+	}
+
+	// 2. 用户 style 已含总集特征词(Cinematic)→ 不覆盖;用户自定义 neg → 不覆盖
+	cfg2 := map[string]any{"style": "Cinematic film still, custom user style"}
+	R2 := map[string]any{"neg_prompt": "user custom negative"}
+	if manjuInjectPromptMaster(cfg2, R2, P) {
+		t.Fatal("style 已含总集特征词/neg 已自定义时不应覆盖")
+	}
+	if cfg2["style"] != "Cinematic film still, custom user style" || R2["neg_prompt"] != "user custom negative" {
+		t.Fatalf("用户配置被覆盖: style=%q neg=%q", cfg2["style"], R2["neg_prompt"])
+	}
+
+	// 2b. 旧 style 不含总集特征词(如 AI 分析的预设组合)→ 注入总集风格
+	cfg2b := map[string]any{"style": "2.5d+real+ink+anime+urban fantasy+neon noir+film grain"}
+	R2b := map[string]any{}
+	if !manjuInjectPromptMaster(cfg2b, R2b, P) {
+		t.Fatal("旧 style 不含总集特征词时应注入总集风格")
+	}
+	if !strings.Contains(str(cfg2b["style"]), "Cinematic") {
+		t.Fatalf("style 未替换为总集风格: %q", cfg2b["style"])
+	}
+	if str(R2b["_prompt_master_synced"]) != "true" && R2b["_prompt_master_synced"] != true {
+		t.Fatalf("注入后应置 _prompt_master_synced 标记: %v", R2b["_prompt_master_synced"])
+	}
+
+	// 3. neg 为内置默认 → 覆盖为总集负面(用户未真正自定义)
+	cfg3 := map[string]any{}
+	R3 := map[string]any{"neg_prompt": manjuNegPrompt}
+	if !manjuInjectPromptMaster(cfg3, R3, P) {
+		t.Fatal("neg 为内置默认时应注入总集负面")
+	}
+	if strings.Contains(str(R3["neg_prompt"]), "lowres") {
+		t.Fatalf("内置默认未被总集负面替换: %q", R3["neg_prompt"])
+	}
+	if !strings.Contains(str(R3["neg_prompt"]), "anime") {
+		t.Fatalf("neg_prompt 未注入总集负面: %q", R3["neg_prompt"])
+	}
+
+	// 4. 无总集 → 不注入
+	emptyDir := t.TempDir()
+	P4 := map[string]any{"novel_dir": emptyDir}
+	cfg4 := map[string]any{}
+	R4 := map[string]any{}
+	if manjuInjectPromptMaster(cfg4, R4, P4) {
+		t.Fatal("无总集不应注入")
+	}
+	if cfg4["style"] != nil || R4["neg_prompt"] != nil {
+		t.Fatalf("无总集仍写入了: style=%v neg=%v", cfg4["style"], R4["neg_prompt"])
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

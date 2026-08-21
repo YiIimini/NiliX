@@ -826,6 +826,12 @@ func manjuSaveRender(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg["moderation"] = MOD
 
+	// 用户手动保存渲染配置 = 接管风格/负面(清除总集自动注入标记,
+	// 下次 newManjuCtx 不再自动覆盖用户修改后的 style/neg_prompt)
+	if R != nil {
+		delete(R, "_prompt_master_synced")
+	}
+
 	if err := writeManjuConfig(configPath, cfg); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
