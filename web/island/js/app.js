@@ -516,9 +516,8 @@
           const open = !!nx.window_open;
           nxDot.className = "kb-dot " + (open ? "on" : "off");
           nxTxt.textContent = open ? "窗口已开" : "窗口已关";
-          // 右侧文本:版本 + 端口 + PID
+          // 右侧文本:端口 + PID(版本号不显示)
           const nxParts = [];
-          if (nx.version) nxParts.push("v" + nx.version);
           if (nx.port) nxParts.push(":" + nx.port);
           if (nx.pid) nxParts.push("PID " + nx.pid);
           nxMeta.textContent = nxParts.join(" · ");

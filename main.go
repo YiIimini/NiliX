@@ -865,7 +865,7 @@ func startControlServers(app *application.App, url string) {
 			nxPort = u.Port()
 		}
 		_, _ = w.Write([]byte(fmt.Sprintf(
-			`{"window_open":%t,"version":"1.0.0","port":"%s","pid":%d}`,
+			`{"window_open":%t,"port":"%s","pid":%d}`,
 			open, nxPort, os.Getpid())))
 	})
 	mux.HandleFunc("GET /minimize", func(w http.ResponseWriter, r *http.Request) {
