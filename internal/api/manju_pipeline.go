@@ -1688,11 +1688,12 @@ const manjuPortraitW, manjuPortraitH = 1024, 1024
 
 // portraitWF 定妆照工作流按风格分流:含写实元素用 Z-Image(真人级),其余用 SDXL checkpoint。
 // 尺寸固定为标准 1024×1024(与项目画幅无关);正脸参考(ensureFaceCrop)再从该图按视频比例裁切。
-func (ctx *manjuCtx) portraitWF(prompt string, seed int, prefix string, char map[string]any) map[string]any {
+// initImage 非空 → img2img(主图作 latent 起点保留身份,视图 full/side/detail 用,防生成不相干新角色)
+func (ctx *manjuCtx) portraitWF(prompt string, seed int, prefix string, char map[string]any, initImage string) map[string]any {
 	if manjuStyleHas(ctx.style, "real") {
-		return wfZImage(prompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt())
+		return wfZImage(prompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt(), initImage)
 	}
-	return wfSDXL(prompt, ctx.characterCkpt(char), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt())
+	return wfSDXL(prompt, ctx.characterCkpt(char), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt(), initImage)
 }
 
 // comfyGenImage 提交图片工作流并复制结果到 dst,返回输出文件相对路径
@@ -1758,7 +1759,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		dst := filepath.Join(ctx.assetsDir, "characters", cid+".png")
 		if !fileExists(dst) {
 			lg.logf("🎨 角色定妆照: " + cid + " ...")
-			wf := ctx.portraitWF(str(m["image_prompt"]), charSeed(cid, "main"), "manju_asset", m)
+			wf := ctx.portraitWF(str(m["image_prompt"]), charSeed(cid, "main"), "manju_asset", m, "")
 			if err := ctx.comfyGenImage(wf, dst, lg, "角色 "+cid); err != nil {
 				return fmt.Errorf("角色 %s 定妆照失败: %w", cid, err)
 			}
@@ -1771,7 +1772,17 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		// 多视图(审计升级:角色管理/一条龙共用同一套视图资产,保障人物统一):
 		// front=正脸特写(ensureFaceCrop 已生成)、full/side/detail 独立视图,
 		// 用方案角色卡 views.<view> 提示词生成;旧方案无 views 则跳过(主图+正脸兜底)。
+		// 用户反馈:视图纯文生图生成"不相干新角色"(含性别漂移)——视图基于主图
+		// img2img(主图复制进 comfyInput 作 latent 起点,denoise 0.6 保留身份)。
 		vs, _ := m["views"].(map[string]any)
+		// 主图复制到 ComfyUI input(供 LoadImage 读取;按角色名安全命名)
+		mainRef := ""
+		if fileExists(dst) {
+			refName := "dir_char_main_" + sanitizeFileName(cid) + ".png"
+			if copyFile(dst, filepath.Join(ctx.comfyInput, refName)) == nil {
+				mainRef = refName
+			}
+		}
 		for _, view := range []string{"full", "side", "detail"} {
 			p := str(vs[view])
 			if p == "" {
@@ -1779,8 +1790,8 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 			}
 			vDst := filepath.Join(ctx.assetsDir, "characters", cid+"_"+view+".png")
 			if !fileExists(vDst) {
-				lg.logf("🎨 角色 " + cid + " " + view + " 视图 ...")
-				wf := ctx.portraitWF(p, charSeed(cid, view), "manju_asset", m)
+				lg.logf("🎨 角色 " + cid + " " + view + " 视图(基于主图 img2img 保持同一人) ...")
+				wf := ctx.portraitWF(p, charSeed(cid, view), "manju_asset", m, mainRef)
 				if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"("+view+")"); err != nil {
 					lg.logf("  ⚠️ " + view + " 视图生成失败(回退主图+正脸): " + err.Error())
 					continue
@@ -1802,7 +1813,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		dst := filepath.Join(ctx.assetsDir, "scenes", sid+".png")
 		if !fileExists(dst) {
 			lg.logf("🎨 场景图: " + sid + " ...")
-			wf := wfZImage(str(m["image_prompt"]), str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), 8000+i, ctx.w, ctx.h, "manju_asset", ctx.negPrompt())
+			wf := wfZImage(str(m["image_prompt"]), str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), 8000+i, ctx.w, ctx.h, "manju_asset", ctx.negPrompt(), "")
 			if err := ctx.comfyGenImage(wf, dst, lg, "场景 "+sid); err != nil {
 				return fmt.Errorf("场景 %s 失败: %w", sid, err)
 			}
@@ -1815,7 +1826,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 			if !fileExists(endDst) {
 				lg.logf("🎨 场景尾帧(FL2VA): " + sid + " ...")
 				endPrompt := str(m["image_prompt"]) + ", the same scene at a slightly later moment, subtle motion of elements (leaves drifting, water rippling, light shifting), consistent layout and lighting"
-				wf := wfZImage(endPrompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), 9000+i, ctx.w, ctx.h, "manju_asset", ctx.negPrompt())
+				wf := wfZImage(endPrompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), 9000+i, ctx.w, ctx.h, "manju_asset", ctx.negPrompt(), "")
 				if err := ctx.comfyGenImage(wf, endDst, lg, "场景尾帧 "+sid); err != nil {
 					lg.logf("  ⚠️ 场景尾帧生成失败(回退单图 I2VA): " + err.Error())
 				}
@@ -3185,7 +3196,8 @@ func resolveNovelPath(novel string) (file, dir string) {
 
 func manjuDefaultConfig(name, novelFile, novelDir, apiKey string) map[string]any {
 	return map[string]any{
-		"style": "2.5d",
+		// 默认风格:写实(real)——总集/画风基准默认写实电影级;旧 2.5d 动漫不是默认
+		"style": "real",
 		"llm": map[string]any{
 			"api_key": apiKey, "base_url": "https://api.deepseek.com",
 			"model": "deepseek-chat", "temperature": 0.4, "max_tokens": 8192, "request_timeout": 300,
@@ -3273,7 +3285,8 @@ func manjuGachaDraw(configPath, episode, char, view string, count int) ([]map[st
 	out := []map[string]any{}
 	for i := 0; i < count; i++ {
 		seed := randSeed()
-		wf := ctx.portraitWF(prompt, seed, "manju_gacha", charInfo)
+		// 抽卡=换装探索,保持随机多样性(不基于主图 img2img;采纳后定妆照覆盖)
+		wf := ctx.portraitWF(prompt, seed, "manju_gacha", charInfo, "")
 		vTag := ""
 		if view != "" {
 			vTag = "_" + view

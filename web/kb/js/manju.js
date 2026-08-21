@@ -265,7 +265,7 @@
     projects: [],
     project: "",
     info: null,
-    style: "2.5d",
+    style: "real",
     chapters: "0", episode: "0", only: "", novel: "",
     _novelProject: "", // 当前小说来源所属的项目,切项目时据此回填该项目的默认小说
     novelInfo: null,
@@ -1483,7 +1483,8 @@
     fillForm() {
       const R = (this.info && this.info.render) || {};
       const draft = this.loadDraft();
-      this.style = (draft && draft.style) || (this.info && this.info.style) || "2.5d";
+      // 默认风格:写实(real)——与后端 manjuDefaultConfig 一致,旧 2.5d 不是默认
+      this.style = (draft && draft.style) || (this.info && this.info.style) || "real";
       const set = (id, v) => { if (v !== undefined && v !== null) $(id).value = v; };
       const num = (id, v) => { $(id).value = (v !== undefined && v !== null && v !== "") ? v : NUM_DEFAULTS[id]; };
       num("manju-width", R.width);
@@ -1585,7 +1586,7 @@
         if (keys.has(key)) {
           // 取消该预设:仅移除 key,自定义词保留
           const rest = words.filter((w) => w !== key);
-          this.style = rest.length ? rest.join("+") : "2.5d";
+          this.style = rest.length ? rest.join("+") : "real";
         } else {
           // 选中该预设:累加在自定义词之后(不重复)
           if (!words.includes(key)) words.push(key);
@@ -1645,10 +1646,10 @@
     },
 
     /* 删除一个自定义风格 TAG:从 style 组合中移除该词(逗号/加号分隔均支持);
-       删空且无预设时回退默认 2.5D */
+       删空且无预设时回退默认 写实(real) */
     removeCustomWord(word) {
       const rest = this.styleWords().filter((p) => p !== word);
-      this.style = rest.length ? rest.join("+") : "2.5d";
+      this.style = rest.length ? rest.join("+") : "real";
       this.renderStyle();
       this.saveDraft();
     },
@@ -1806,11 +1807,10 @@
     },
     resetConfig() {
       // 恢复默认 = 以当前值为默认基准:保留当前表单参数(自定义风格不参与默认),
-      // 仅清空草稿并移除自定义风格标签——不再跳回出厂默认(768×1344/20步/2.5D)
+      // 仅清空草稿并移除自定义风格标签——不再跳回出厂默认(768×1344/20步/写实)
       this.clearDraft();
-      const presets = STYLE_PRESETS.map((p) => p.key);
-      const kept = String(this.style || "").split("+").map((s) => s.trim()).filter((s) => presets.includes(s));
-      this.style = kept.length ? kept.join("+") : "2.5d";
+      const kept = this.styleWords().filter((s) => STYLE_CN[s] !== undefined);
+      this.style = kept.length ? kept.join("+") : "real";
       this.renderStyle();
       this.renderRatio();
       this.closeModal();
@@ -3149,7 +3149,7 @@
     loadStyleDetail() {
       const el = $("manju-style-cur");
       if (!el) return;
-      get("/api/manju/style?style=" + encodeURIComponent(this.style || "2.5d")).then((r) => {
+      get("/api/manju/style?style=" + encodeURIComponent(this.style || "real")).then((r) => {
         if (!el) return;
         if (!r || !r.asset) { el.innerHTML = "当前风格解析失败"; return; }
         const rows = [["定妆照/场景图", r.asset], ["Ref2VA 开头", r.opening], ["空镜 [Shot 1]", r.shot1]]

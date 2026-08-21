@@ -286,7 +286,9 @@ func h3Length(seconds, fps int) int {
 }
 
 // wfImage 通用图生图工作流(SDXL checkpoint 或 Z-Image unet),返回 SaveImage 节点 id
-func wfImage(workflow map[string]any, typ, prompt, neg string, seed, w, h, steps int, cfg float64, ckpt, unet, clipName, clipType, vae string, prefix string) string {
+// initImage 非空时走 img2img:主图作 latent 起点(VAEEncode),denoise 0.6 保留身份、
+// 按提示词重绘视角/构图(定妆照多视图与主图保持同一人,防"侧面/全身变成不相干新角色")
+func wfImage(workflow map[string]any, typ, prompt, neg string, seed, w, h, steps int, cfg float64, ckpt, unet, clipName, clipType, vae, prefix, initImage string) string {
 	n := len(workflow) + 1
 	add := func(classType string, inputs map[string]any) string {
 		id := itoa(n)
@@ -307,7 +309,12 @@ func wfImage(workflow map[string]any, typ, prompt, neg string, seed, w, h, steps
 	pos := add("CLIPTextEncode", map[string]any{"clip": refOf(clipID), "text": prompt})
 	negID := add("CLIPTextEncode", map[string]any{"clip": refOf(clipID), "text": neg})
 	var latentID string
-	if typ == "sdxl" {
+	denoise := 1.0
+	if initImage != "" {
+		load := add("LoadImage", map[string]any{"image": initImage})
+		latentID = add("VAEEncode", map[string]any{"pixels": refOf(load), "vae": refOf(vaeID)})
+		denoise = 0.6
+	} else if typ == "sdxl" {
 		latentID = add("EmptyLatentImage", map[string]any{"width": w, "height": h, "batch_size": 1})
 	} else {
 		latentID = add("EmptySD3LatentImage", map[string]any{"width": w, "height": h, "batch_size": 1})
@@ -315,7 +322,7 @@ func wfImage(workflow map[string]any, typ, prompt, neg string, seed, w, h, steps
 	samp := add("KSampler", map[string]any{
 		"model": refOf(modelID), "positive": refOf(pos), "negative": refOf(negID),
 		"latent_image": refOf(latentID), "seed": seed, "steps": steps, "cfg": cfg,
-		"sampler_name": "euler", "scheduler": "normal", "denoise": 1.0,
+		"sampler_name": "euler", "scheduler": "normal", "denoise": denoise,
 	})
 	dec := add("VAEDecode", map[string]any{"samples": refOf(samp), "vae": refOf(vaeID)})
 	return add("SaveImage", map[string]any{"images": refOf(dec), "filename_prefix": prefix})
@@ -337,16 +344,18 @@ func mustAtoi(s string) int {
 }
 
 // wfSDXL 人物定妆照/抽卡(SDXL checkpoint;写实风格用 Z-Image 时走 wfZImage)
-func wfSDXL(prompt, ckpt string, seed, w, h int, prefix, neg string) map[string]any {
+// initImage 非空 → img2img(保留身份重绘视角;视图生成用)
+func wfSDXL(prompt, ckpt string, seed, w, h int, prefix, neg, initImage string) map[string]any {
 	wf := map[string]any{}
-	wfImage(wf, "sdxl", prompt, neg, seed, w, h, 25, 7.0, ckpt, "", "", "", "", prefix)
+	wfImage(wf, "sdxl", prompt, neg, seed, w, h, 25, 7.0, ckpt, "", "", "", "", prefix, initImage)
 	return wf
 }
 
 // wfZImage 场景图/写实定妆照(8 步 turbo;neg 为负面提示词,缺省空串)
-func wfZImage(prompt, unet, clipName, vae string, seed, w, h int, prefix, neg string) map[string]any {
+// initImage 非空 → img2img(保留身份重绘视角;视图生成用)
+func wfZImage(prompt, unet, clipName, vae string, seed, w, h int, prefix, neg, initImage string) map[string]any {
 	wf := map[string]any{}
-	wfImage(wf, "zimage", prompt, neg, seed, w, h, 8, 1.0, "", unet, clipName, "qwen_image", vae, prefix)
+	wfImage(wf, "zimage", prompt, neg, seed, w, h, 8, 1.0, "", unet, clipName, "qwen_image", vae, prefix, initImage)
 	return wf
 }
 
