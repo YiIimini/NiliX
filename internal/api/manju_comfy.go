@@ -108,10 +108,11 @@ func (c *comfyClient) history(promptID string) map[string]any {
 // inQueue 查询任务是否仍在 ComfyUI 队列(running 或 pending)——审计 M1:
 // history 无记录可能是"还在长队列排队"而非"任务丢失";tryReclaim 据此避免
 // 90s 误判后重新提交造成同一镜头双任务烧两遍 GPU
-func (c *comfyClient) inQueue(promptID string) bool {
+// 返回 (是否在队列, 查询是否成功):查询失败(网络/超时)= ComfyUI 忙,不是"不在队列"
+func (c *comfyClient) inQueue(promptID string) (bool, error) {
 	resp, err := c.client.Get(c.base + "/queue")
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -119,20 +120,32 @@ func (c *comfyClient) inQueue(promptID string) bool {
 		QueueRunning []map[string]any `json:"queue_running"`
 		QueuePending []map[string]any `json:"queue_pending"`
 	}
-	if json.Unmarshal(data, &q) != nil {
-		return false
+	if err := json.Unmarshal(data, &q); err != nil {
+		return false, err
 	}
 	for _, it := range q.QueueRunning {
 		if id, _ := it["prompt_id"].(string); id == promptID {
-			return true
+			return true, nil
 		}
 	}
 	for _, it := range q.QueuePending {
 		if id, _ := it["prompt_id"].(string); id == promptID {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+// comfyReachable ComfyUI 服务本身是否可达(根路径快速探测,200ms 超时)。
+// 丢失检测用它区分"服务忙"(接口超时=可达但忙)与"服务真没了"(不可达)。
+func (c *comfyClient) comfyReachable() bool {
+	client := http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Get(c.base + "/")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // wait 轮询执行完成;中断/错误返回错误(含异常信息,供调用方判断是否重试)
@@ -165,7 +178,14 @@ func (c *comfyClient) wait(promptID string, timeout, poll time.Duration, stopped
 		return isStopped()
 	}
 	// 审计 7.1:任务丢失检测——ComfyUI 重启后 history 一直无记录且不在队列,
-	// 继续死等满超时毫无意义;连续 5 次轮询(约 5×poll)既无 history 又不在队列即判丢失
+	// 继续死等满超时毫无意义。
+	// 修复(用户实测"镜头 1 渲染失败: ComfyUI 任务丢失"误判):history 在任务
+	// 未完成时本就无记录,靠 inQueue 判断是否还在队列;但 ComfyUI 加载大模型
+	// (几十 GB)期间 HTTP 接口会超时,旧逻辑把"查询失败"当"不在队列",
+	// 连续 5 次(~50s)即误判任务丢失。新逻辑:
+	//   - 接口查询失败(网络/超时)= ComfyUI 忙,不算丢失,重置计数
+	//   - 仅当 ComfyUI 可达(根路径 200)且明确不在队列时计 miss
+	//   - 连续 30 次(~5min,轮询 10s)才判丢失,容忍模型加载/接口抖动
 	missTicks := 0
 	deadline := time.Now().Add(timeout)
 	// 停止检查节拍:远小于 poll(停止响应不被长轮询拖慢),但也避免空转忙等
@@ -188,13 +208,24 @@ func (c *comfyClient) wait(promptID string, timeout, poll time.Duration, stopped
 					return nil
 				}
 			}
-		} else if !c.inQueue(promptID) {
-			missTicks++
-			if missTicks >= 5 {
-				return fmt.Errorf("ComfyUI 任务丢失(可能服务已重启): %s", promptID)
-			}
 		} else {
-			missTicks = 0
+			inQ, qerr := c.inQueue(promptID)
+			if qerr != nil {
+				missTicks = 0 // 查询失败=ComfyUI 忙(加载模型/高负载),非任务丢失
+			} else if !inQ {
+				if !c.comfyReachable() {
+					// 服务不可达(可能重启中):连续确认才判丢失
+					missTicks++
+					if missTicks >= 30 {
+						return fmt.Errorf("ComfyUI 任务丢失(服务不可达或已重启): %s", promptID)
+					}
+				} else {
+					// 可达但任务不在队列:任务可能已结束在写 history 的间隙,重置等待
+					missTicks = 0
+				}
+			} else {
+				missTicks = 0
+			}
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("ComfyUI 等待超时(%s)", timeout)

@@ -107,10 +107,15 @@ func (ctx *manjuCtx) tryReclaim(pid, dst string, lg *manjuLogger) (bool, error) 
 		if time.Now().After(deadline) {
 			// 审计 M1:超窗且确认不在队列才判定"任务丢失"——忙队列长排队时 history 持续为空,
 			// 直接判丢失会重新提交 → 原任务仍在队列 → 同一镜头双任务烧两遍 GPU
-			if !ctx.comfy.inQueue(pid) {
-				return false, nil // 任务丢失:history 无记录、队列无此任务、超窗
+			// 查询失败(ComfyUI 忙/接口超时)= 无法确认,不判丢失,延长观察窗
+			inQ, qerr := ctx.comfy.inQueue(pid)
+			if qerr != nil {
+				deadline = time.Now().Add(30 * time.Second)
+			} else if !inQ {
+				return false, nil // 任务丢失:history 无记录、队列明确无此任务、超窗
+			} else {
+				deadline = time.Now().Add(30 * time.Second) // 仍在队列:延长观察窗
 			}
-			deadline = time.Now().Add(30 * time.Second) // 仍在队列:延长观察窗
 		}
 		time.Sleep(3 * time.Second)
 	}

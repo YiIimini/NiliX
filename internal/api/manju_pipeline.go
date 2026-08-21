@@ -1785,9 +1785,16 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 				mainRef = refName
 			}
 		}
-		// 视图换视角的 denoise 强度:full/side 需大幅改变构图/视角(0.8),detail 局部特写
-		// 稍低(0.7)——0.6 对 turbo 模型重绘量太小,四视图全变正面(用户反馈)
-		viewStrength := map[string]float64{"full": 0.8, "side": 0.8, "detail": 0.7}
+		// 视图换视角的 denoise 强度:img2img 换视角需要高 denoise 让模型彻底重绘构图——
+		// 0.8 对 Z-Image(turbo)仍大量保留主图正面构图,四视图全变正面(用户二次反馈)。
+		// 提高:full 0.9(全身重绘)、side 0.92(侧面最难)、detail 0.8(细节特写保留身份)。
+		// 同时提示词前置视角硬锚(英文强约束词,防模型沿主图正面惯性出图)。
+		viewStrength := map[string]float64{"full": 0.9, "side": 0.92, "detail": 0.8}
+		viewAnchor := map[string]string{
+			"full":   "FULL BODY view, standing full figure from head to toe, entire body visible, three-quarter or front view",
+			"side":   "SIDE PROFILE view, face turned exactly 90 degrees to the side, strong profile silhouette, nose and chin clearly in profile",
+			"detail": "EXTREME CLOSE-UP detail shot, zoomed on the single most distinctive feature (ornament/pattern/hairstyle/scar), large detailed close-up composition",
+		}
 		for _, view := range []string{"full", "side", "detail"} {
 			p := str(vs[view])
 			if p == "" {
@@ -1795,12 +1802,14 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 			}
 			vDst := filepath.Join(ctx.assetsDir, "characters", cid+"_"+view+".png")
 			if !fileExists(vDst) {
-				st := 0.8
+				st := 0.9
 				if s, ok := viewStrength[view]; ok {
 					st = s
 				}
-				lg.logf(fmt.Sprintf("🎨 角色 %s %s 视图(基于主图 img2img %.2f 保持同一人) ...", cid, view, st))
-				wf := ctx.portraitWF(p, charSeed(cid, view), "manju_asset", m, mainRef, st)
+				// 视角硬锚前置:与原有提示词拼接(原提示词已含视角描述,再强锚一遍确保权重)
+				anchored := viewAnchor[view] + ", " + p
+				lg.logf(fmt.Sprintf("🎨 角色 %s %s 视图(基于主图 img2img %.2f + 视角锚保持同一人) ...", cid, view, st))
+				wf := ctx.portraitWF(anchored, charSeed(cid, view), "manju_asset", m, mainRef, st)
 				if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"("+view+")"); err != nil {
 					lg.logf("  ⚠️ " + view + " 视图生成失败(回退主图+正脸): " + err.Error())
 					continue
