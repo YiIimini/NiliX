@@ -85,26 +85,27 @@
       document.body.classList.remove("island-closing");
       document.body.classList.add("island-expanded");
       document.body.classList.remove("island-collapsed");
-      // 展开高度:先展开到 600(足够高,内容完整渲染、scrollHeight 不受父容器钳制),
-      // 再按内容实际高度(scrollHeight)校准——避免固定高度导致底部留白。
-      // 窗口收起态仅 44px,.card{position:fixed;inset:0} 占满视口,#full 的
-      // offsetHeight 被父容器钳制,展开前直接测量会得到 44;先拉高再测才准。
-      void document.body.offsetHeight; // 强制同步布局
+      // 展开:加 expanded 类(#full display:flex)后强制同步布局,立即测量
+      // scrollHeight(内容实际高度,不受父容器 44px 视口钳制)——一次到位,
+      // 不要"先弹大再缩"(用户明确反感先高后收的跳变)。
+      // 若测量异常(内容未就绪 scrollHeight 过小)才退回到 600 兜底再校准。
+      void document.body.offsetHeight; // 强制同步布局(读取触发 reflow)
+      var h0 = islandHeight();
       if (typeof setIsland === "function") {
-        setIsland(true, 380, 600);
+        // scrollHeight 正常(内容行已渲染,通常 200+)→ 直接按内容高度展开
+        setIsland(true, 380, Math.max(300, h0 + 2));
       }
-      // 内容渲染完成后校准到实际高度(去掉底部空白,贴合内容)
-      // 双重校准:400ms(动画/首帧内容)+ 900ms(数据加载后行高变化)取最大值
+      // 兜底:内容延迟加载(数据填充后行高变化)时若实际更高则上调,不缩小
       setTimeout(function () {
         if (expanded && typeof setIsland === "function") {
           var h = islandHeight();
-          setIsland(true, 380, Math.max(300, h + 2));
+          if (h + 2 > 300) setIsland(true, 380, h + 2);
         }
       }, 400);
       setTimeout(function () {
         if (expanded && typeof setIsland === "function") {
           var h = islandHeight();
-          setIsland(true, 380, Math.max(300, h + 2));
+          if (h + 2 > 300) setIsland(true, 380, h + 2);
         }
       }, 900);
     } else {
