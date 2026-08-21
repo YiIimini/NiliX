@@ -228,3 +228,38 @@ func TestNewManjuCtxSkipsOutsideNovelFSRoot(t *testing.T) {
 	}
 	_ = ctx
 }
+
+// 回归:空镜双帧(FL2VA)走核心节点 MiniMaxH3ImageToVideo 的 last_frame 参数,
+// 不再依赖不存在的自定义节点 MiniMaxH3Fl2VA(用户实测 400 missing_node_type)
+func TestEncWorkflowDualFrameUsesCoreNode(t *testing.T) {
+	// 真实 h3EncWorkflow:空镜 + 场景首图 + _scene_end 尾帧 → MiniMaxH3ImageToVideo 含 first+last_frame
+	wf := h3EncWorkflow(map[string]any{
+		"unet_fl2va": "f.safetensors", "unet_ref2va": "r.safetensors",
+		"clip": "c.safetensors", "vae_video": "v.safetensors", "vae_audio": "a.safetensors",
+		"_scene_end": "dir_scene_1_end.png",
+	}, "prompt", 768, 1344, 145, nil, "dir_scene_1.png", "cache", false)
+
+	foundDual := false
+	for _, n := range wf {
+		m, _ := n.(map[string]any)
+		if m == nil {
+			continue
+		}
+		ct, _ := m["class_type"].(string)
+		if ct == "MiniMaxH3Fl2VA" {
+			t.Fatal("工作流不应使用不存在的 MiniMaxH3Fl2VA 节点")
+		}
+		if ct == "MiniMaxH3ImageToVideo" {
+			ins, _ := m["inputs"].(map[string]any)
+			if ins["last_frame"] != nil {
+				foundDual = true
+			}
+			if ins["first_frame"] == nil {
+				t.Fatal("空镜首帧缺失:first_frame 应为场景首图")
+			}
+		}
+	}
+	if !foundDual {
+		t.Fatal("双帧应通过 MiniMaxH3ImageToVideo.last_frame 实现,实际未找到")
+	}
+}

@@ -2030,13 +2030,9 @@ func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg
 	// 有角色镜头删尾帧(Ref2VA 无此概念)
 	// 审计 4.2:尾帧复制进 comfyInput 再传文件名(与场景图同口径)——本地绝对路径直传
 	// LoadImage 在 ComfyUI 远程/容器化部署时读取失败,且与其它参考图语义不一致
+	// 双帧实现:核心节点 MiniMaxH3ImageToVideo 支持 last_frame 参数(无需自定义节点)
 	if len(s.Characters) == 0 {
 		if b, _ := ctx.R["fl2va_end_frame"].(bool); b && s.Scene != "" {
-			// 节点缺失自动降级:FL2VA 双帧节点不可用时回退单图 I2VA
-			// (fl2vaNodeAvailable 探测空对象——ComfyUI 对不存在节点也返回 200)
-			if !fl2vaNodeAvailable() {
-				lg.logf("  ⚠️ 未检测到 MiniMaxH3Fl2VA 节点(自定义节点缺失),空镜回退单图 I2VA;装好 ComfyUI-MiniMaxH3-Easy 后关闭「FL2VA 尾帧」重开可恢复双帧")
-			}
 			src := filepath.Join(ctx.assetsDir, "scenes", s.Scene+"_end.png")
 			if fileExists(src) {
 				name := fmt.Sprintf("dir_scene_%d_end.png", s.ID)

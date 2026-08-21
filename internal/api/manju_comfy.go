@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -413,33 +412,6 @@ func wfAdd(workflow map[string]any, classType string, inputs map[string]any) str
 	return id
 }
 
-// fl2vaNodeOK FL2VA 双帧节点可用性探测(审计升级 P1:空镜可选首尾双图插值,官方
-// FL2VA 单镜连续更稳;节点缺失自动回退单图,零风险)。带缓存,进程生命周期内探测一次。
-// 修复:ComfyUI 对不存在的节点 /object_info/<name> 也返回 HTTP 200(空 JSON {})——
-// 只判状态码会把缺失节点误判为可用,提交时 400 missing_node_type(用户实测)。
-// 正确判断:响应体非空且含节点定义(长度>2,即有 {"Name": {...}})。
-var (
-	fl2vaNodeOnce sync.Once
-	fl2vaNodeOK   bool
-)
-
-func fl2vaNodeAvailable() bool {
-	fl2vaNodeOnce.Do(func() {
-		c := newComfyClient(comfyParams().url)
-		resp, err := c.client.Get(c.base + "/object_info/MiniMaxH3Fl2VA")
-		if err == nil {
-			defer resp.Body.Close()
-			if resp.StatusCode == 200 {
-				data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-				// 节点存在时响应形如 {"MiniMaxH3Fl2VA": {"input": {...}}}(>2 字节);
-				// 不存在时为空对象 "{}"(恰好 2 字节)
-				fl2vaNodeOK = len(data) > 2 && !bytes.Equal(bytes.TrimSpace(data), []byte("{}"))
-			}
-		}
-	})
-	return fl2vaNodeOK
-}
-
 // h3EncWorkflow 预编码工作流(只跑 Qwen3-VL,无 UNET;输出 CondSave 缓存 .pt)
 // hasChar: 有角色 → MiniMaxH3ReferenceToVideo(角色+场景多参考);空镜 → MiniMaxH3ImageToVideo(场景首帧),
 // 若 R["_scene_end"] 提供尾帧且节点可用 → MiniMaxH3Fl2VA 首尾双帧插值(审计升级 P1)
@@ -472,29 +444,24 @@ func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs [
 		if sceneRef != "" {
 			sceneLoad = wfAdd(wf, "LoadImage", map[string]any{"image": sceneRef})
 		}
-		// FL2VA 双帧:尾帧图存在且节点可用 → 首尾双图插值;否则回退单图 I2VA
-		// (审计 4.2:尾帧已由调用方复制进 comfyInput 并传文件名,此处仅判非空)
-		if end := strings.TrimSpace(str(R["_scene_end"])); end != "" && fl2vaNodeAvailable() {
-			endLoad := wfAdd(wf, "LoadImage", map[string]any{"image": end})
-			inputs := map[string]any{
-				"clip": refOf(clip), "vae": refOf(vae),
-				"prompt": prompt, "width": w, "height": h, "length": length,
-			}
-			if sceneLoad != "" {
-				inputs["first_frame"] = refOf(sceneLoad)
-			}
-			inputs["last_frame"] = refOf(endLoad)
-			condID = wfAdd(wf, "MiniMaxH3Fl2VA", inputs)
-		} else {
-			inputs := map[string]any{
-				"clip": refOf(clip), "vae": refOf(vae),
-				"prompt": prompt, "width": w, "height": h, "length": length,
-			}
-			if sceneLoad != "" {
-				inputs["first_frame"] = refOf(sceneLoad)
-			}
-			condID = wfAdd(wf, "MiniMaxH3ImageToVideo", inputs)
+		// 双帧(FL2VA 语义)与单帧统一走核心节点 MiniMaxH3ImageToVideo:
+		// ComfyUI 0.33+ 核心节点自带 first_frame + last_frame 双帧插值参数
+		// (last_frame 即尾帧锚点)。不再用自定义节点 MiniMaxH3Fl2VA——
+		// 该节点不存在(ComfyUI 对缺失节点 /object_info 也返回 200 空对象,
+		// 提交时 400 missing_node_type,用户实测)。
+		inputs := map[string]any{
+			"clip": refOf(clip), "vae": refOf(vae),
+			"prompt": prompt, "width": w, "height": h, "length": length,
 		}
+		if sceneLoad != "" {
+			inputs["first_frame"] = refOf(sceneLoad)
+		}
+		// 尾帧存在(fl2va_end_frame 开启 + 场景尾帧已生成) → 首尾双帧插值
+		if end := strings.TrimSpace(str(R["_scene_end"])); end != "" {
+			endLoad := wfAdd(wf, "LoadImage", map[string]any{"image": end})
+			inputs["last_frame"] = refOf(endLoad)
+		}
+		condID = wfAdd(wf, "MiniMaxH3ImageToVideo", inputs)
 	}
 	wfAdd(wf, "MiniMaxH3CondSave", map[string]any{"conditioning": refOf(condID), "cache_name": cacheName})
 	return wf
