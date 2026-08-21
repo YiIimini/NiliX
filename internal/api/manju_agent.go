@@ -541,6 +541,30 @@ func manjuNormalizeStyle(raw string) (string, string) {
 	return strings.Join(out, "+"), strings.Join(notes, "; ")
 }
 
+// manjuMergeStyle 合并用户基底风格与 LLM 补充风格:
+// 用户基底(预设 key + 自定义词)强制保留且在前,LLM 推荐的新元素追加在后,去重。
+// 用户主动选择「是」时绝不替换其预设+自定义风格,只在其上补充题材元素。
+func manjuMergeStyle(base, recommend string) string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, t := range strings.FieldsFunc(base+"+"+recommend, func(r rune) bool { return r == ',' || r == '+' || r == '、' || r == '/' || r == '|' || r == '，' }) {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		low := strings.ToLower(t)
+		if seen[low] {
+			continue
+		}
+		seen[low] = true
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return "2.5d"
+	}
+	return strings.Join(out, "+")
+}
+
 // manjuStyleAnalyzeRun 深度分析小说章节 → LLM 推荐渲染风格 → 写入 config.json + 记忆。
 // HTTP handler 与聊天「推荐风格」共用(聊天入口用 config 内的章节/集号缺省)。
 func manjuStyleAnalyzeRun(configPath, episode, chapters, novel string) (map[string]any, error) {
@@ -560,13 +584,14 @@ func manjuStyleAnalyzeRun(configPath, episode, chapters, novel string) (map[stri
 	}
 	old := str(ctx.cfg["style"])
 	sys := `你是漫剧(竖屏短剧)渲染风格与参数分析师,根据小说章节内容判断最匹配的渲染风格与渲染参数。
+【铁律】用户当前风格是用户主动选择的基底,必须完整保留、绝不能替换或丢弃;你的任务是在此基底上补充题材元素词,让风格更贴合本章节。
 【分析要点】题材类型(古装/现代/玄幻/科幻/都市/悬疑…)、叙事基调(热血/治愈/暗黑/甜宠…)、场景与美术特征、目标观众画风偏好、节奏密度(对话交锋/转场频率)。
 【输出 JSON(严格)】{"style": "...", "reason": "...", "params": {...}}
-style 取值规则(多维组合,禁止只给单一预设):
-- 主体画风:预设 key 2.5d(2.5D动漫半写实) / real(写实真人电影) / 3d(3D CG) / anime(二次元) / handdrawn(手绘) / papercraft(纸艺) / clay(粘土) / ink(水墨),最多 2 个
-- 累加题材元素词(取材于小说内容,英文短语):时代/文化氛围(如 ancient Chinese aesthetic / cyberpunk / steampunk)、美术质感(如 watercolor / oil painting / film grain)、光影气质(如 moody cinematic lighting / bright pastel);2-3 个
-- 整体用 + 连接(如 ink+ancient Chinese aesthetic+watercolor / 2.5d+cyberpunk+neon lighting),总元素 3-5 个,语义冲突的组合不要
-- 所有题材元素词必须是英文(H3 提示词直接使用),中文风格词自行翻译
+style 取值规则(基底 + 补充,禁止替换基底):
+- 开头必须原样包含用户当前基底风格(用户输入的全部元素词,一个不丢)
+- 在其后追加 2-4 个题材元素词(取材于小说内容,英文短语):时代/文化氛围(如 ancient Chinese aesthetic / cyberpunk / steampunk)、美术质感(如 watercolor / oil painting / film grain)、光影气质(如 moody cinematic lighting / bright pastel);语义冲突的组合不要
+- 整体用 + 连接(如 ink+ancient Chinese aesthetic+watercolor / 2.5d+cyberpunk+neon lighting),总元素不超过 7 个
+- 所有新增题材元素词必须是英文(H3 提示词直接使用),中文风格词自行翻译
 params 取值规则(渲染优化参数,按题材节奏判断,全部给出):
 {"res_tier": "standard", "draft_judge": true, "seed_policy": "increment", "transition": "cut", "shots_per_take": 1}
 - res_tier 分辨率档位:常规成片 standard;快速试片/预告优先 draft(约 1/3 像素量);高清大片质感 fhd
@@ -574,14 +599,18 @@ params 取值规则(渲染优化参数,按题材节奏判断,全部给出):
 - seed_policy 返工 seed 策略:increment=每轮返工换 seed 更有效(推荐);fixed=全剧严格同 seed
 - transition 镜头转场:快节奏打脸/爽点短剧 cut(硬切利落);连续叙事/情感递进 dissolve(叠化);古风/意境/回忆 fade(闪黑)
 - shots_per_take 多切点长镜(实验特性):保守 1;同场景对话交锋密集、镜头多机位切换的可给 2
-reason: 不超过 100 字中文,说明题材/基调与各风格元素、参数的匹配理由。`
-	user := "当前渲染风格: " + old + "\n需渲染章节: " + ctx.chapters + " / 集 " + ctx.episode + "\n\n小说章节内容(节选):\n" + truncate(text, 12000)
+reason: 不超过 100 字中文,说明在用户基底风格上补充了哪些元素、与题材/基调的匹配理由。`
+	baseDesc := old
+	if strings.TrimSpace(old) == "" {
+		baseDesc = "(未设置,直接按题材推荐 3-5 个元素)"
+	}
+	user := "用户当前基底风格(必须保留,为空则直接推荐): " + baseDesc + "\n需渲染章节: " + ctx.chapters + " / 集 " + ctx.episode + "\n\n小说章节内容(节选):\n" + truncate(text, 12000)
 	out, err := ctx.llm.chatJSON(sys, user, 0.3)
 	if err != nil {
 		return nil, fmt.Errorf("深度分析失败: %w", err)
 	}
-	style, notes := manjuNormalizeStyle(str(out["style"]))
-	if style == "" {
+	recommend, notes := manjuNormalizeStyle(str(out["style"]))
+	if recommend == "" {
 		return nil, fmt.Errorf("模型未给出有效风格,请重试")
 	}
 	reason := str(out["reason"])
@@ -591,6 +620,8 @@ reason: 不超过 100 字中文,说明题材/基调与各风格元素、参数�
 		}
 		reason += notes
 	}
+	// 合并:用户基底风格强制保留 + LLM 补充元素(去重,保持用户基底在前)
+	style := manjuMergeStyle(old, recommend)
 	ctx.cfg["style"] = style
 	// 参数建议:合法值校验后写 render 节(AI 一条龙全权:渲染参数一并分析落库,启动日志明示)
 	params := map[string]any{}
@@ -641,7 +672,28 @@ reason: 不超过 100 字中文,说明题材/基调与各风格元素、参数�
 	}
 	saveAgentStateLocked(ctx.project, stc)
 	manjuAgentMu.Unlock()
-	return map[string]any{"ok": true, "style": style, "old": old, "reason": reason, "params": params}, nil
+	// added = 合并后新增的元素(基底中不存在的部分),便于前端明示"补充了哪些"
+	added := styleAdded(old, style)
+	return map[string]any{"ok": true, "style": style, "old": old, "added": added, "reason": reason, "params": params}, nil
+}
+
+// styleAdded 返回合并后相对基底新增的元素(按 + 分段,基底中已含的不计)。
+func styleAdded(base, merged string) string {
+	have := map[string]bool{}
+	for _, t := range strings.FieldsFunc(base, func(r rune) bool { return r == '+' || r == ',' || r == '、' }) {
+		t = strings.TrimSpace(t)
+		if t != "" {
+			have[strings.ToLower(t)] = true
+		}
+	}
+	out := []string{}
+	for _, t := range strings.FieldsFunc(merged, func(r rune) bool { return r == '+' || r == ',' || r == '、' }) {
+		t = strings.TrimSpace(t)
+		if t != "" && !have[strings.ToLower(t)] {
+			out = append(out, t)
+		}
+	}
+	return strings.Join(out, "+")
 }
 
 // manjuAgentStyleAnalyze 深度分析小说章节 → LLM 推荐渲染风格与参数 → 写入 config.json。

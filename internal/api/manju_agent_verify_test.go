@@ -411,6 +411,63 @@ func TestAgentStyleAnalyzeFullFlow(t *testing.T) {
 	}
 }
 
+// TestAgentStyleAnalyzeKeepsUserBase 用户已选基底风格时,分析后基底必须完整保留(补充而非替换)。
+func TestAgentStyleAnalyzeKeepsUserBase(t *testing.T) {
+	// mock LLM:推荐 real(写实)——用户基底是 2.5d+ink,必须保留并追加 real
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"style\":\"real, moody cinematic lighting\",\"reason\":\"暗黑题材匹配\"}"},"finish_reason":"stop"}]}`))
+	}))
+	defer llm.Close()
+
+	_, cfgPath := verifyConfig(t, "sk-test")
+	var cfg map[string]any
+	b, _ := os.ReadFile(cfgPath)
+	_ = json.Unmarshal(b, &cfg)
+	L := cfg["llm"].(map[string]any)
+	L["base_url"] = strings.TrimSuffix(llm.URL, "/")
+	cfg["style"] = "2.5d+ink" // 用户已选:2.5D 半写实 + 水墨
+	b, _ = json.MarshalIndent(cfg, "", "  ")
+	_ = os.WriteFile(cfgPath, b, 0644)
+
+	project := filepath.Base(filepath.Dir(cfgPath))
+	stateDir := filepath.Dir(manjuAgentStatePath(project))
+	defer os.RemoveAll(stateDir)
+
+	w, out := doReq(t, "POST", "/api/manju/agent/style", map[string]any{
+		"config": cfgPath, "chapters": "1", "episode": "EP01",
+	})
+	if w.Code != 200 {
+		t.Fatalf("style analyze HTTP %d: %s", w.Code, w.Body.String())
+	}
+	style := str(out["style"])
+	// 基底 2.5d 与 ink 必须保留(用户选择不被替换)
+	for _, want := range []string{"2.5d", "ink"} {
+		if !strings.Contains(style, want) {
+			t.Errorf("style = %q, 用户基底 %s 被丢弃(必须保留)", style, want)
+		}
+	}
+	// 新增元素 real 应补充
+	if !strings.Contains(style, "real") {
+		t.Errorf("style = %q, 新增 real 未补充", style)
+	}
+	// old 应为用户基底
+	if str(out["old"]) != "2.5d+ink" {
+		t.Errorf("old = %q, want 2.5d+ink", str(out["old"]))
+	}
+	// added 应含 real(基底中没有的元素)
+	if !strings.Contains(str(out["added"]), "real") {
+		t.Errorf("added = %q, 应含 real", str(out["added"]))
+	}
+	// config 已写回合并后风格
+	var cfg2 map[string]any
+	b2, _ := os.ReadFile(cfgPath)
+	_ = json.Unmarshal(b2, &cfg2)
+	if str(cfg2["style"]) != style {
+		t.Errorf("config.style = %q, want %q", str(cfg2["style"]), style)
+	}
+}
+
 func TestAgentStyleAnalyzeValidation(t *testing.T) {
 	// 无 LLM Key → 明确报错
 	_, cfgPath := verifyConfig(t, "")

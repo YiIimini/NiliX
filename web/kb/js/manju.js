@@ -1933,13 +1933,15 @@
       });
     },
 
-    /* 「是」分支:深度分析 → 更新渲染风格+渲染参数 → 走 AI 一条龙 */
+    /* 「是」分支:深度分析 → 保留用户基底风格,补充题材元素 → 走 AI 一条龙 */
     agentStyleThenRun() {
-      this.logNote("(🤖 深度分析小说内容，推荐并更新渲染风格与渲染参数 ...)");
+      this.logNote("(🤖 深度分析小说内容，保留你选择的风格为基底，补充题材元素 ...)");
       this.styleAnalyze().then((r) => {
         const ps = r.params && Object.keys(r.params).length
           ? " · 参数: " + Object.entries(r.params).map(([k, v]) => k + "=" + v).join(" / ") : "";
-        this.logNote("(🤖 风格已更新：" + this.styleLabel(r.old) + " → " + this.styleLabel(r.style) +
+        // r.style = 用户基底 + LLM 补充元素(后端合并去重);r.added = 新增元素
+        const added = r.added ? "，新增: " + r.added : "";
+        this.logNote("(🤖 风格已更新：" + this.styleLabel(r.style) + added +
           (r.reason ? "，" + r.reason : "") + ps + "，走渲染流程 ...");
         this.loadProject(); // 参数已写入 config,回填表单与 chips
         this.runAgentFlow();
