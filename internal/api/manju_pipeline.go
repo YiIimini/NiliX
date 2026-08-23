@@ -482,6 +482,13 @@ func manjuPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
 		case "qc":
 			err = stageQC(ctx, lg)
 		case "assemble":
+			// 旁白/画外音后期配音(2026-08-23:H3 本地对画面外音/旁白不生成音轨,edge-tts 兜底):
+			// render.voiceover=true 且 plan 存在时,合成前先给有 narration/画外音的镜补 TTS 配音
+			if ok, _ := ctx.R["voiceover"].(bool); ok {
+				if voErr := ctx.runVoiceover(lg); voErr != nil {
+					lg.logf("⚠️ 旁白/画外音配音跳过: " + voErr.Error())
+				}
+			}
 			err = stageAssemble(ctx, lg)
 			if err == nil {
 				// 成片终检(与 agent 模式一致,报告性质不阻断):时长/黑屏/静音/音轨兜底
@@ -2631,6 +2638,22 @@ func (ctx *manjuCtx) runMedia(lg *manjuLogger, args ...string) error {
 			}
 		}
 	}
+}
+
+// runVoiceover 旁白/画外音后期配音(2026-08-23:H3 本地对画面外音/旁白不生成音轨,
+// edge-tts 兜底;失败返回错误,调用方跳过不阻断合成)
+func (ctx *manjuCtx) runVoiceover(lg *manjuLogger) error {
+	plan := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json")
+	if !fileExists(plan) {
+		return fmt.Errorf("无方案文件 %s", plan)
+	}
+	args := []string{"voiceover", "--plan", plan, "--clips-dir", filepath.Join(ctx.clipsDir, ctx.episode), "--fps", strconv.Itoa(ctx.fps)}
+	// ffmpeg 优先 ComfyUI venv(与渲染同源),否则依赖 PATH
+	if ff := filepath.Join(ComfyRootDir, ".venv", "Scripts", "ffmpeg.exe"); fileExists(ff) {
+		args = append(args, "--ffmpeg", ff)
+	}
+	lg.logf("🎙 旁白/画外音后期配音(edge-tts)...")
+	return ctx.runMedia(lg, args...)
 }
 
 // hasTopLevelClips 集目录是否有顶层镜头 mp4(排除 _draft/2k 等工作子目录)

@@ -1052,6 +1052,80 @@ def cmd_asr(args):
     print(json.dumps({"shots": out}, ensure_ascii=False))
 
 
+# ---- 旁白/画外音后期配音(2026-08-23:H3 本地对画面外音/旁白不生成音轨→edge-tts 兜底) ----
+def _split_dialogue(d):
+    """dialogue 字段「角色:台词」多行拆解 → [(角色, 台词)]"""
+    out = []
+    for line in (d or "").splitlines():
+        line = line.strip()
+        if ":" in line:
+            sp = line.split(":", 1)
+            out.append((sp[0].strip(), sp[1].strip()))
+    return out
+
+
+def manju_voiceover(args):
+    """把每镜的旁白(narration)与画外音台词(说话人不在该镜 characters)用 edge-tts
+    合成并混入该镜音轨(镜头 12%-92% 窗口按字数分配时间点),再用 assemble 重合成。
+    """
+    try:
+        import edge_tts
+    except Exception:
+        print("⚠️ edge_tts 不可用,跳过配音(venv pip install edge-tts)")
+        return
+    import asyncio
+    import subprocess
+    import tempfile
+    import av
+
+    ff = args.ffmpeg or "ffmpeg"
+    plan = json.load(open(args.plan, encoding="utf-8"))
+    done = 0
+    for sh in plan.get("shots", []):
+        sid = sh.get("shot_id")
+        clip = os.path.join(args.clips_dir, "%02d.mp4" % int(sid))
+        if not os.path.exists(clip):
+            continue
+        lines = []
+        if sh.get("narration"):
+            lines.append((sh["narration"], args.voice_narr or "zh-CN-XiaoxiaoNeural"))
+        chars = set(sh.get("characters") or [])
+        for name, text in _split_dialogue(sh.get("dialogue", "")):
+            if name not in chars:  # 画外音:说话人不在画面
+                lines.append((text, args.voice_char or "zh-CN-YunxiNeural"))
+        if not lines:
+            continue
+        with av.open(clip) as c:
+            dur = float(c.duration) / av.time_base if c.duration else 4.0
+        total_len = sum(len(t) for t, _ in lines)
+        win_span = dur * 0.80
+        cur = dur * 0.12
+        for text, voice in lines:
+            w = len(text) / total_len
+            w_start = cur
+            cur = cur + win_span * w
+            delay_ms = int(w_start * 1000)
+            tmp = tempfile.mktemp(suffix=".mp3")
+            asyncio.run(edge_tts.Communicate(text, voice).save(tmp))
+            out = clip + ".vo.mp4"
+            cmd = [ff, "-y", "-i", clip, "-i", tmp,
+                   "-filter_complex",
+                   "[1:a]adelay=%d|%d,volume=%s[a1];[0:a][a1]amix=inputs=2:duration=first:dropout_transition=0[a]" % (delay_ms, delay_ms, args.gain),
+                   "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", out]
+            r = subprocess.run(cmd, capture_output=True)
+            if r.returncode != 0:
+                print(f"  ❌ 镜 {sid} 配音失败: {r.stderr.decode('utf-8', 'ignore')[-200:]}")
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                continue
+            os.replace(out, clip)
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            done += 1
+            print(f"  🎙 镜 {sid} 配音 {w_start:.1f}s: {text[:20]}… ({voice})")
+    print("✅ 旁白/画外音配音完成,共 %d 句" % done)
+
+
 import re as _reGlobal  # noqa: E402
 reASRShot = _reGlobal.compile(r"^(\d+)\.mp4$", _reGlobal.IGNORECASE)
 def _cues_with_weights(lines):
@@ -1482,6 +1556,14 @@ def main():
     a.add_argument("--bgm-duck", type=float, default=0.35, help="对白时段 BGM 压低系数(0-1)")
     a.add_argument("--no-subtitle", action="store_true", default=False,
                    help="不烧录字幕(对白/旁白仅 H3 原生音轨,画面无字幕文字;2026-08-23 用户反馈成片字幕位文字优化)")
+    vo = sub.add_parser("voiceover")
+    vo.add_argument("--plan", required=True, help="分镜方案 JSON(含 shots.narration/dialogue/characters)")
+    vo.add_argument("--clips-dir", required=True, help="镜头目录(直接覆盖该镜 mp4 音轨)")
+    vo.add_argument("--fps", type=int, default=24)
+    vo.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg 可执行文件路径")
+    vo.add_argument("--voice-narr", default="zh-CN-XiaoxiaoNeural", help="旁白语音(默认女声)")
+    vo.add_argument("--voice-char", default="zh-CN-YunxiNeural", help="画外音角色语音(默认男声)")
+    vo.add_argument("--gain", type=float, default=1.2, help="TTS 音量增益(默认 1.2)")
     f = sub.add_parser("facecrop")
     f.add_argument("--src", required=True)
     f.add_argument("--dst", required=True)
@@ -1538,8 +1620,9 @@ def main():
         cmd_asr(args)
     elif args.cmd == "trailer":
         cmd_trailer(args)
-    elif args.cmd == "bgm-pick":
-        cmd_bgm_pick(args)
+    elif args.cmd == "bgm-pick":        cmd_bgm_pick(args)
+    elif args.cmd == "voiceover":
+        manju_voiceover(args)
 
 
 if __name__ == "__main__":

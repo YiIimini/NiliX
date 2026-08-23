@@ -108,7 +108,8 @@ var manjuRenderStrFields = []string{
 // fl2va_end_frame(审计升级 P1):空镜镜头生成场景尾帧走 FL2VA 首尾双帧插值,场景内运动更稳;
 // 默认关闭(场景图成本翻倍,节点缺失自动回退单图)
 // subtitle(2026-08-23 用户反馈成片字幕位文字优化):合成时是否烧录对白字幕,默认 true(保持向后兼容)
-var manjuRenderBoolFields = []string{"sage_attention", "draft_judge", "fl2va_end_frame", "subtitle"}
+// voiceover(2026-08-23 用户反馈 03/06 镜静音):合成前给旁白/画外音补 edge-tts 后期配音,默认 false(需显式开启)
+var manjuRenderBoolFields = []string{"sage_attention", "draft_judge", "fl2va_end_frame", "subtitle", "voiceover"}
 
 // manjuRenderFloatFields 渲染参数浮点字段 + 取值范围 [min,max]
 var manjuRenderFloatFields = map[string][2]float64{
