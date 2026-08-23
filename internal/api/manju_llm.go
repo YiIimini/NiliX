@@ -697,7 +697,8 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 【防同质化变量表·强制】directing 五维必须逐项选择并贯彻到分镜,禁止默认组合「线性+全知+匀速+BGM通铺+空景收」;peak_device 写手法不写题材
 【人物比例/物品清单/动作流畅·强制】(2026-08-23 用户反馈大头/乱入/不流畅)角色一律 full body 全身 7 头身,禁止大头小身/portrait 头像;detailed_description 每物品写数量/位置/关系,不需要的物品写排除句,同镜物品≤3;每镜单一主导动作+小幅+慢速,走位写「已到位」,连续动作拆镜
 【日本人物形象·禁止·强制】(2026-08-23 用户规则)无论风格(含 anime/2.5d)人物一律中式/东方面孔,写 East Asian/Chinese facial features,正面排除 avoid japanese-style facial features, japanese anime eyes;anime 风格词保留,日本式脸型禁止
-【内心戏 Q 版化·强制】(2026-08-23 用户规则)narration 若为角色内心独白(前缀 内心·角色名),该镜 detailed_description 画面主体=该角色 Q 版呆萌形象(引用其 Q 版参考图),画外音 The narrator says in an off-screen voiceover 念内心;非内心旁白保持原画面`
+【内心戏 Q 版化·强制】(2026-08-23 用户规则)narration 若为角色内心独白(前缀 内心·角色名),该镜 detailed_description 画面主体=该角色 Q 版呆萌形象(引用其 Q 版参考图),画外音 The narrator says in an off-screen voiceover 念内心;非内心旁白保持原画面
+【动物禁人脸·强制】(2026-08-23 用户规则)动物/萌宠/妖兽保持动物形态(物种特征),写 animal form + species-specific features + no human face;禁止人脸/人形化(拟人化角色除外)`
 	// 拼接官方六段式/三段式模板与逐镜写作规范,保证直出的 h3_prompt 格式与逐镜生成完全一致
 	opening := manjuStyleDesc(style).opening
 	if opening == "" {
@@ -796,7 +797,8 @@ const manjuShotWritingRules = `
 24. 【动作流畅·强制】(2026-08-23 用户反馈人物镜头不流畅)每镜**单一主导动作**+小幅+慢速(动作太大/太多 H3 易崩);走位/位移写「已到位」+原地姿态微变;连续动作拆成 2 镜或静态+微动;禁止一镜内多个不相干动作堆叠
 25. 【日本人物形象·禁止·强制】(2026-08-23 用户规则:动漫渲染也禁止日本人物形象)无论渲染风格(含 anime/2.5d/动漫),所有人物一律**中式/东方面孔**——detailed_description 人物镜写 East Asian/Chinese facial features(自然眼型,非日漫大眼),正面排除句 avoid japanese-style facial features, japanese anime eyes, big sparkly anime eyes, sharp anime chin;禁止出现日本式脸型/日式动漫大眼/日本风格面容;anime/cartoon **风格词保留**(风格可动漫,脸必须中式东方)
 26. 【内心戏 Q 版化·强制】(2026-08-23 用户规则:内心独白用对应角色 Q 版呆萌形象渲染)narration 若为角色内心独白(前缀 内心·角色名,如「内心·阿拾:…」),detailed_description **画面主体=该角色 Q 版呆萌形象**(圆脸/大眼/短手短脚,保留角色标志特征,引用其 Q 版参考图 <Picture>),画外音 The narrator (S1) says in an off-screen voiceover 念内心内容 while lips closed;内心戏镜的 <Subject> 引用该角色 Q 版图而非正脸图;非内心客观旁白保持原画面+画外音
-27. 【人物微动漫写实·强制】(2026-08-23 用户规则:避免写实人物侵权)写实电影级渲染时,人物形象**微动漫化**——detailed_description 人物写 subtly anime-stylized semi-realistic character, stylized East Asian features(略带动漫风格化:适度圆润/线条化,避免与任何真人肖像高度相似);场景/光影/镜头保持写实电影级(人物微动漫,场景写实);Q 版内心形象不受此限(本就呆萌)`
+27. 【人物微动漫写实·强制】(2026-08-23 用户规则:避免写实人物侵权)写实电影级渲染时,人物形象**微动漫化**——detailed_description 人物写 subtly anime-stylized semi-realistic character, stylized East Asian features(略带动漫风格化:适度圆润/线条化,避免与任何真人肖像高度相似);场景/光影/镜头保持写实电影级(人物微动漫,场景写实);Q 版内心形象不受此限(本就呆萌)
+28. 【动物禁人脸·强制】(2026-08-23 用户规则:动物别乱入人脸)动物/萌宠/妖兽/兽类角色一律保持**动物形态**(物种特征:毛皮/鳞甲/兽瞳/喙/爪/尾/角),禁止人脸/人形化/拟人过头;detailed_description 动物镜写 animal form, species-specific features(如 round ink-black blob spirit with golden bead eyes),并明确 no human face;定妆 image_prompt 动物角色加 animal form 约束;穿衣服的拟人化角色(设定明确)除外`
 
 func manjuShotPromptSystem(hasChar bool, style string) string {
 	sys := "你是 MiniMax H3 视频生成模型的提示词专家。基于给定镜头的分镜信息与角色/场景卡，直出该镜【完整】H3 提示词（英文主体、中文台词/旁白原文）。\n\n输出严格 JSON：{\"h3_prompt\": \"提示词全文\"}\n\n"

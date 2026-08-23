@@ -3374,6 +3374,7 @@ func manjuDefaultConfig(name, novelFile, novelDir, apiKey string) map[string]any
 			"krea2_clip":     "qwen3vl_4b_fp8_scaled.safetensors",
 			"krea2_vae":      "qwen_image_vae.safetensors",
 			"char_engine":    "zimage", // 定妆引擎:zimage(默认写实)/krea2(强指令跟随)/sdxl
+			"voiceover":      false,    // 2026-08-23 用户规则:默认 H3 自带配音;仅角色内心活动(Q版)需后期 TTS 时手动开启
 			"turbo_lora":     "minimax_h3_turbo_4step_ema.safetensors",
 			"animagine_ckpt": "animagine-xl-3.1.safetensors",
 			"char_models":    map[string]any{"男": "sd_xl_base_1.0.safetensors", "女": "animagine-xl-3.1.safetensors"},

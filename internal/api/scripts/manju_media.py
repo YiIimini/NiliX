@@ -1098,12 +1098,19 @@ def manju_voiceover(args):
         except Exception:
             dur, rms = 4.0, 0.0
         lines = []
+        # 2026-08-23 用户规则:只配「角色内心活动」——narration 含「内心·角色名」前缀的行
+        # (角色对话走 H3 原生配音;客观旁白/画外音/渲染脚本内容一律不配 TTS,避免给脚本内容配音)
         if sh.get("narration"):
-            lines.append((sh["narration"], args.voice_narr or "zh-CN-XiaoxiaoNeural"))
-        chars = set(sh.get("characters") or [])
-        for name, text in _split_dialogue(sh.get("dialogue", "")):
-            if name not in chars:  # 画外音:说话人不在画面
-                lines.append((text, args.voice_char or "zh-CN-YunxiNeural"))
+            narr = sh["narration"].strip()
+            for seg in narr.splitlines():
+                seg = seg.strip()
+                if seg.startswith("内心·") or "内心·" in seg[:8]:
+                    body = seg
+                    if "：" in seg:
+                        body = seg.split("：", 1)[1]
+                    elif ":" in seg:
+                        body = seg.split(":", 1)[1]
+                    lines.append((body, args.voice_narr or "zh-CN-XiaoxiaoNeural"))
         if not lines:
             continue
         if rms >= rms_threshold:
