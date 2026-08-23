@@ -1824,24 +1824,35 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 			"side":   "SIDE PROFILE view, face turned exactly 90 degrees to the side, strong profile silhouette, nose and chin clearly in profile",
 			"detail": "EXTREME CLOSE-UP detail shot, zoomed on the single most distinctive feature (ornament/pattern/hairstyle/scar), large detailed close-up composition",
 		}
-		for _, view := range []string{"full", "side", "detail"} {
+		for _, view := range []string{"full", "side", "detail", "q"} {
 			p := str(vs[view])
 			if p == "" {
 				continue
 			}
 			vDst := filepath.Join(ctx.assetsDir, "characters", cid+"_"+view+".png")
 			if !fileExists(vDst) {
-				st := 0.9
-				if s, ok := viewStrength[view]; ok {
-					st = s
-				}
-				// 视角硬锚前置:与原有提示词拼接(原提示词已含视角描述,再强锚一遍确保权重)
-				anchored := viewAnchor[view] + ", " + p
-				lg.logf(fmt.Sprintf("🎨 角色 %s %s 视图(基于主图 img2img %.2f + 视角锚保持同一人) ...", cid, view, st))
-				wf := ctx.portraitWF(anchored, charSeed(cid, view), "manju_asset", m, mainRef, st)
-				if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"("+view+")"); err != nil {
-					lg.logf("  ⚠️ " + view + " 视图生成失败(回退主图+正脸): " + err.Error())
-					continue
+				if view == "q" {
+					// Q 版呆萌形象(2026-08-23 用户规则:内心独白渲染用):独立文生图,
+					// 不基于主图(全新呆萌形象,保留角色标志特征)
+					lg.logf(fmt.Sprintf("🎨 角色 %s Q版呆萌形象(内心独白专用) ...", cid))
+					wf := ctx.portraitWF(p, charSeed(cid, "q"), "manju_asset", m, "", 0)
+					if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"(Q版)"); err != nil {
+						lg.logf("  ⚠️ Q版形象生成失败: " + err.Error())
+						continue
+					}
+				} else {
+					st := 0.9
+					if s, ok := viewStrength[view]; ok {
+						st = s
+					}
+					// 视角硬锚前置:与原有提示词拼接(原提示词已含视角描述,再强锚一遍确保权重)
+					anchored := viewAnchor[view] + ", " + p
+					lg.logf(fmt.Sprintf("🎨 角色 %s %s 视图(基于主图 img2img %.2f + 视角锚保持同一人) ...", cid, view, st))
+					wf := ctx.portraitWF(anchored, charSeed(cid, view), "manju_asset", m, mainRef, st)
+					if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"("+view+")"); err != nil {
+						lg.logf("  ⚠️ " + view + " 视图生成失败(回退主图+正脸): " + err.Error())
+						continue
+					}
 				}
 			}
 			cmap[cid+"_"+view] = "characters/" + cid + "_" + view + ".png"
@@ -3566,11 +3577,26 @@ func (ctx *manjuCtx) shotRefViews(s manjuShot) []string {
 	if n > 3 {
 		n = 3
 	}
+	// 内心戏镜(2026-08-23 用户规则):narration 含「内心·」→ 该角色参考优先用 Q 版图
+	innerChars := map[string]bool{}
+	if strings.Contains(s.Narration, "内心·") {
+		for _, cid := range s.Characters {
+			innerChars[cid] = true
+		}
+	}
 	for i, cid := range s.Characters {
 		if i >= 3 {
 			break
 		}
-		for _, rel := range ctx.charViewRels(cid, i, n) {
+		rels := ctx.charViewRels(cid, i, n)
+		if innerChars[cid] {
+			// 内心戏:Q 版形象优先(front 锁脸 + q 呆萌),供 h3_prompt 引用 Q 版图
+			qRel := manjuViewRel(cid, "q")
+			if fileExists(filepath.Join(ctx.assetsDir, qRel)) {
+				rels = []string{manjuViewRel(cid, "front"), qRel}
+			}
+		}
+		for _, rel := range rels {
 			view := strings.TrimSuffix(filepath.Base(rel), ".png")
 			view = strings.TrimPrefix(strings.TrimPrefix(view, sanitizeFileName(cid)+"_"), sanitizeFileName(cid))
 			if view == "" || view == "face" {

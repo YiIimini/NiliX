@@ -405,7 +405,8 @@ func wfKrea2(prompt, unet, clipName, vae string, seed, w, h int, prefix, neg, in
 }
 
 // manjuNegPrompt 内置默认负面提示词(render.neg_prompt 未配置/为空时的兜底)
-const manjuNegPrompt = "lowres, bad anatomy, bad hands, text, error, extra digit, no text, no watermark, no deformed hands, flickering frames, temporal discontinuity, inconsistent lighting"
+// 2026-08-23 用户规则:动漫风格也禁止日本人物形象——禁日本式脸型/日漫大眼,不禁 anime/cartoon 风格词本身
+const manjuNegPrompt = "lowres, bad anatomy, bad hands, text, error, extra digit, no text, no watermark, no deformed hands, flickering frames, temporal discontinuity, inconsistent lighting, japanese anime face, japanese manga face, japanese-style face, japanese cartoon character, anime eyes, manga eyes, big sparkly anime eyes, sharp anime chin"
 
 // manjuModelRefs 载入 H3 三件套(clip / vae_video / vae_audio),返回 [clip, vae, audioVae]
 func h3Loaders(workflow map[string]any, R map[string]any) (clip, vae, audioVae string) {

@@ -1057,11 +1057,19 @@ func (ctx *manjuCtx) refImagesFor(s manjuShot) []string {
 	if n > 3 {
 		n = 3
 	}
+	// 内心戏镜(2026-08-23 用户规则):narration 含「内心·」→ 该角色参考含 Q 版图
+	inner := strings.Contains(s.Narration, "内心·")
 	for i, cid := range s.Characters {
 		if i >= 3 {
 			break
 		}
-		for _, rel := range ctx.charViewRels(cid, i, n) {
+		rels := ctx.charViewRels(cid, i, n)
+		if inner {
+			if qRel := manjuViewRel(cid, "q"); fileExists(filepath.Join(ctx.assetsDir, qRel)) {
+				rels = append([]string{manjuViewRel(cid, "front")}, qRel)
+			}
+		}
+		for _, rel := range rels {
 			p := filepath.Join(ctx.assetsDir, rel)
 			if fileExists(p) {
 				out = append(out, p)
