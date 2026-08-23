@@ -1452,7 +1452,8 @@
         "manju-clip", "manju-vae-video", "manju-vae-audio", "manju-zimage-unet", "manju-zimage-clip",
         "manju-zimage-vae", "manju-turbo-lora", "manju-turbo-lora-r2v", "manju-char-male", "manju-char-female", "manju-animagine",
         "manju-banned-words", "manju-mosaic-level", "manju-res-tier", "manju-seed-policy", "manju-draft-scale",
-        "manju-transition", "manju-bgm", "manju-bgm-gain", "manju-take"];
+        "manju-transition", "manju-bgm", "manju-bgm-gain", "manju-take",
+        "manju-char-engine", "manju-krea2-unet", "manju-krea2-clip", "manju-krea2-vae"];
     },
     draftKey() { return "render-" + (this.project || ""); },
     /* 渲染配置自动保存(用户要求:填了参数自动保存,不用手动点保存按钮):
@@ -1479,6 +1480,8 @@
       d.sageEnabled = $("manju-sage").checked;
       d.draftJudge = $("manju-draft-judge").checked;
       d.fl2vaEndFrame = $("manju-fl2va").checked;
+      d.subtitle = $("manju-subtitle").checked;
+      d.voiceover = $("manju-voiceover").checked;
       try { localStorage.setItem("manju-" + this.draftKey(), JSON.stringify(d)); } catch (e) {}
     },
     autoSaveSubmit(manual) {
@@ -1602,6 +1605,13 @@
       set("manju-transition", R.transition || "cut");
       set("manju-bgm", R.bgm || "");
       num("manju-bgm-gain", R.bgm_gain != null && R.bgm_gain !== "" ? R.bgm_gain : 0.28);
+      // 2026-08-23 新增:定妆引擎/字幕/配音/Krea2 回填(解析脚本后同步显示)
+      set("manju-char-engine", R.char_engine || "zimage");
+      $("manju-subtitle").checked = R.subtitle !== false;
+      $("manju-voiceover").checked = !!R.voiceover;
+      set("manju-krea2-unet", R.krea2_unet);
+      set("manju-krea2-clip", R.krea2_clip);
+      set("manju-krea2-vae", R.krea2_vae);
       // 未保存编辑优先:用草稿覆盖 config.json 的回填值
       if (draft) {
         this.renderInputIds().forEach((id) => {
@@ -1798,6 +1808,13 @@
       body.bgm = this.strVal("manju-bgm");
       const bg = parseFloat($("manju-bgm-gain").value);
       if (!isNaN(bg)) body.bgm_gain = bg;
+      // 2026-08-23 新增:定妆引擎/字幕/配音/Krea2
+      body.char_engine = this.strVal("manju-char-engine") || "zimage";
+      body.subtitle = $("manju-subtitle").checked;
+      body.voiceover = $("manju-voiceover").checked;
+      body.krea2_unet = this.strVal("manju-krea2-unet");
+      body.krea2_clip = this.strVal("manju-krea2-clip");
+      body.krea2_vae = this.strVal("manju-krea2-vae");
       return body;
     },
 
@@ -1838,6 +1855,13 @@
       set("manju-bgm", R.bgm || "");
       set("manju-bgm-gain", R.bgm_gain != null && R.bgm_gain !== "" ? R.bgm_gain : 0.28);
       set("manju-take", R.shots_per_take != null && R.shots_per_take !== "" ? R.shots_per_take : 1);
+      // 2026-08-23 新增:定妆引擎/字幕/配音/Krea2 回填
+      set("manju-char-engine", R.char_engine || "zimage");
+      $("manju-subtitle").checked = R.subtitle !== false; // 缺省 true(向后兼容);config 显式 false=关
+      $("manju-voiceover").checked = !!R.voiceover;
+      set("manju-krea2-unet", R.krea2_unet);
+      set("manju-krea2-clip", R.krea2_clip);
+      set("manju-krea2-vae", R.krea2_vae);
       this.renderStyle();
       this.renderRatio();
       this.syncBoostButtons();
@@ -3420,6 +3444,7 @@
         if (r && r.ok) {
           this.closeModal();
           this.refreshScriptStatus();
+          this.loadProject(); // 2026-08-23:解析脚本后同步刷新渲染配置显示(脚本模式参数)
           this.setNote("🎬 脚本直出模式已启用: " + (r.path || "") + "（下次运行方案将以脚本为准）");
         } else {
           $("msp-do").textContent = "保存并启用脚本直出";
@@ -3452,6 +3477,7 @@
         if (r && r.ok) {
           this.closeModal();
           this.refreshScriptStatus();
+          this.loadProject(); // 2026-08-23:从小说分镜脚本导入后同步刷新渲染配置
           this.setNote("🎬 已从小说分镜脚本导入(" + (r.source || "") + ")，脚本直出模式已启用");
         } else {
           $("msp-err").textContent = (r && r.error) || "导入失败:请确认小说项目已生成 素材/分镜脚本/";

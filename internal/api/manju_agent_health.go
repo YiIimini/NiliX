@@ -176,6 +176,14 @@ func (ctx *manjuCtx) missingModels() []string {
 		{str(ctx.R["vae_video"]), "vae", ""},
 		{str(ctx.R["vae_audio"]), "vae", ""},
 	}
+	// Krea-2 定妆引擎(2026-08-23):char_engine=krea2 时检查三件套是否存在
+	if eng := strings.TrimSpace(str(ctx.R["char_engine"])); eng == "krea2" {
+		cands = append(cands,
+			struct{ name, sub, alt string }{str(ctx.R["krea2_unet"]), "diffusion_models", "unet"},
+			struct{ name, sub, alt string }{str(ctx.R["krea2_clip"]), "text_encoders", "clip"},
+			struct{ name, sub, alt string }{str(ctx.R["krea2_vae"]), "vae", ""},
+		)
+	}
 	seen := map[string]bool{}
 	var missing []string
 	for _, c := range cands {

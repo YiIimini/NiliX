@@ -405,6 +405,26 @@
               </select>
             </div>
 
+            <!-- 2026-08-23 新增:定妆引擎/字幕/配音/Krea2 模型 -->
+            <div class="manju-row">
+              <span class="manju-label">定妆引擎</span>
+              <select id="manju-char-engine" class="manju-input" title="角色定妆照引擎:zimage=Z-Image 写实人像(默认,人物微动漫写实防侵权)/ krea2=Krea-2 强指令跟随(复杂妆造/精细风格定妆,需 ComfyUI 已部署权重)/ sdxl=SDXL checkpoint">
+                <option value="zimage">Z-Image 写实</option>
+                <option value="krea2">Krea-2 强指令</option>
+                <option value="sdxl">SDXL</option>
+              </select>
+              <span class="manju-label">字幕</span>
+              <label class="manju-check" title="合成时是否烧录对白字幕(H3 原生对白已含台词,建议关闭避免字幕文字进画面)"><input id="manju-subtitle" type="checkbox"> 烧录</label>
+              <span class="manju-label">配音</span>
+              <label class="manju-check" title="旁白/画外音用 edge-tts 后期配音兜底(H3 本地对画面外音可能不生成音轨)"><input id="manju-voiceover" type="checkbox"> 旁白配音</label>
+            </div>
+            <div class="manju-row" id="manju-krea2-row">
+              <span class="manju-label">Krea2</span>
+              <input id="manju-krea2-unet" class="manju-input" placeholder="krea2_turbo_fp8_scaled.safetensors" title="Krea-2 Turbo FP8 扩散模型">
+              <input id="manju-krea2-clip" class="manju-input" placeholder="qwen3vl_4b_fp8_scaled.safetensors" title="Krea-2 文本编码器">
+              <input id="manju-krea2-vae" class="manju-input" placeholder="qwen_image_vae.safetensors" title="Krea-2 VAE">
+            </div>
+
             <!-- 增强开关独立一行:与「风格」同款分段胶囊样式(隐藏 checkbox 保持数据源兼容) -->
             <div class="manju-row">
               <span class="manju-label">增强</span>
