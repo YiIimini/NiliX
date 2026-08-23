@@ -398,9 +398,11 @@ func wfZImage(prompt, unet, clipName, vae string, seed, w, h int, prefix, neg, i
 // wfKrea2 Krea-2 Turbo 定妆照(2026-08-23 接入:8 步蒸馏;超强指令跟随,
 // 复杂妆造/精细风格/特殊审美定妆用;模型=Comfy-Org/Krea-2 的
 // krea2_turbo_fp8_scaled + qwen3vl_4b_fp8_scaled + qwen_image_vae)
+// CLIPLoader type 必须为 "krea2"(12 层 Qwen3-VL stack;用 qwen_image 会报
+// "Krea2 expects conditioning with 12x2560=30720 features" 执行失败)
 func wfKrea2(prompt, unet, clipName, vae string, seed, w, h int, prefix, neg, initImage string, initStrength float64) map[string]any {
 	wf := map[string]any{}
-	wfImage(wf, "krea2", prompt, neg, seed, w, h, 8, 1.0, "", unet, clipName, "qwen_image", vae, prefix, initImage, initStrength)
+	wfImage(wf, "krea2", prompt, neg, seed, w, h, 8, 1.0, "", unet, clipName, "krea2", vae, prefix, initImage, initStrength)
 	return wf
 }
 

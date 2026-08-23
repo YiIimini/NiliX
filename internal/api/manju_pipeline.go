@@ -3220,6 +3220,16 @@ func applyNovelRenderPlan(cfg map[string]any, novelDir string) {
 		cfg["render"] = R
 	}
 	for k, v := range rp {
+		// char_engine 特判(2026-08-23):config 默认值 zimage 视为"未显式设置",
+		// 规划给了 krea2/sdxl 时应用规划(否则用户创作期规划的定妆引擎不生效)
+		if k == "char_engine" {
+			cur := strings.TrimSpace(str(R["char_engine"]))
+			plan := strings.TrimSpace(str(v))
+			if (cur == "" || cur == "zimage") && plan != "" && plan != "zimage" {
+				R["char_engine"] = plan
+			}
+			continue
+		}
 		if _, exists := R[k]; !exists || isZeroVal(R[k]) {
 			R[k] = v
 		}
