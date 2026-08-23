@@ -1848,7 +1848,10 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 					// 视角硬锚前置:与原有提示词拼接(原提示词已含视角描述,再强锚一遍确保权重)
 					anchored := viewAnchor[view] + ", " + p
 					lg.logf(fmt.Sprintf("🎨 角色 %s %s 视图(基于主图 img2img %.2f + 视角锚保持同一人) ...", cid, view, st))
-					wf := ctx.portraitWF(anchored, charSeed(cid, view), "manju_asset", m, mainRef, st)
+					// 2026-08-23 一致性修复:多视图(全/侧/细节)固定用 Z-Image img2img 保身份——
+					// Krea-2 是纯文生图架构,img2img 身份保持弱(实测视图完全变人);
+					// Z-Image 已验证 img2img 保身份(主图→视角重绘)。主图仍按 char_engine(Krea-2 定身份)。
+					wf := wfZImage(anchored, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), charSeed(cid, view), manjuPortraitW, manjuPortraitH, "manju_asset", ctx.negPrompt(), mainRef, st)
 					if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"("+view+")"); err != nil {
 						lg.logf("  ⚠️ " + view + " 视图生成失败(回退主图+正脸): " + err.Error())
 						continue

@@ -403,51 +403,52 @@
     },
 
 
-    /* ---- 运行日志:竖向时间轴渲染 ----
-       阶段行=大节点(发光主色),普通行按类型着色(成功/失败/升级/警告/审片/镜头进度),
-       缩进行为子条目(无点弱化);超过 300 行折叠前置;内容未变跳过;用户贴底时自动跟随滚动 */
+    /* ---- 运行日志:完整日志按阶段分组折叠展示(2026-08-23 用户要求) ----
+       完整日志(不截断)按「━━━ 阶段 xxx ━━━」分段:
+       已通过阶段默认收起(<details>),点击展开;当前/最新阶段自动展开;
+       产物收起状态下日志完整展开到底,容器滚动条可拉到底。 */
     renderLog(text) {
       const log = $("manju-log");
       if (!log) return;
       const src = String(text || "");
       this._logSrc = src;
       if (log.dataset.last === src) return;
-      const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+      const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
       const wasEmpty = !log.dataset.last;
       log.dataset.last = src;
       const stageCN = { env: "项目体检", plan: "方案", assets: "资产", encode: "编码", render: "渲染", qc: "质检", assemble: "合成", upscale: "云端 2K" };
       const lines = src.split("\n");
-      const MAX = 300;
-      const view = lines.length > MAX ? lines.slice(-MAX) : lines;
-      const rows = [];
-      for (const raw of view) {
-        let t = raw;
-        let time = "";
-        const m = raw.match(/^\[(\d{2}:\d{2}:\d{2})\]\s?/);
-        if (m) { time = m[1]; t = raw.slice(m[0].length); }
-        if (!t.trim()) continue;
-        const st = t.match(/^━━━ 阶段 (\w+) ━━━/);
+      // 按阶段分段(普通行归入当前阶段;前置无阶段行归入"运行")
+      const sections = [];
+      let cur = null;
+      for (const raw of lines) {
+        const st = raw.match(/━━━ 阶段 (\w+) ━━━/);
         if (st) {
-          // 大节点:阶段名在时间轴左侧沟槽,时间在右侧(普通行的时间才在左列)
-          rows.push(`<div class="mj-tl-row stage" title="${esc(st[1])}"><span class="mj-tl-side"><b>${stageCN[st[1]] || esc(st[1])}</b><i>${esc(st[1])}</i></span><span class="mj-tl-dot"></span><span class="mj-tl-main"></span><span class="mj-tl-time">${time}</span></div>`);
+          cur = { name: st[1], cn: stageCN[st[1]] || st[1], rows: [], err: false, ok: false };
+          sections.push(cur);
           continue;
         }
-        const isSub = /^\s{2,}/.test(t);
-        const tt = t.trim(); // 类型按去缩进后的行首判定(缩进的 ✅/⚠️ 同样着色)
-        let cls = "info";
-        if (/^❌/.test(tt)) cls = "err";
-        else if (/^🚨/.test(tt)) cls = "esc";
-        else if (/^⚠️/.test(tt)) cls = "warn";
-        else if (/^✅|^🎉/.test(tt)) cls = "ok";
-        else if (/^🤖|^🧠|^📖|^✏️|^🔧|⤵️已降级/.test(tt)) cls = "agent";
-        else if (/^\[\d+\/\d+\]/.test(tt)) cls = "shot";
-        const body = esc(tt);
-        // 普通行:时间在时间轴最左侧,内容在右;子条目无点弱化
-        if (isSub) rows.push(`<div class="mj-tl-row sub ${cls}"><span class="mj-tl-time">${time}</span><span class="mj-tl-dot"></span><span class="mj-tl-main">${body}</span></div>`);
-        else rows.push(`<div class="mj-tl-row ${cls}"><span class="mj-tl-time">${time}</span><span class="mj-tl-dot"></span><span class="mj-tl-main">${body}</span></div>`);
+        if (!raw.trim()) continue;
+        if (!cur) { cur = { name: "", cn: "运行", rows: [], err: false, ok: false }; sections.push(cur); }
+        cur.rows.push(raw);
+        if (/❌/.test(raw)) cur.err = true;
+        if (/✅|🎉/.test(raw)) cur.ok = true;
       }
-      const head = lines.length > MAX ? `<div class="mj-tl-fold">… 前方 ${lines.length - MAX} 行已折叠(完整日志见项目目录 run.log)</div>` : "";
-      log.innerHTML = `<div class="mj-tl">${head}${rows.join("")}</div>`;
+      const last = sections.length ? sections[sections.length - 1] : null;
+      // 渲染:每段 <details>,当前段(最后一段有内容)展开,其余收起
+      let html = `<div class="mj-tl2">`;
+      sections.forEach((sec, i) => {
+        const isLast = sec === last && sec.rows.length > 0;
+        const status = sec.err ? "❌" : (isLast ? "⏳" : (sec.ok ? "✅" : ""));
+        const rowsTxt = sec.rows.map((r) => esc(r)).join("\n");
+        html += `<details class="mj-tl2-sec ${sec.err ? "err" : ""}" ${isLast ? "open" : ""}>
+          <summary>${status ? status + " " : ""}<b>${esc(sec.cn)}</b>${sec.name ? " <i>(" + esc(sec.name) + ")</i>" : ""} <span class="mj-tl2-cnt">${sec.rows.length} 行</span>${isLast ? " <em>当前</em>" : ""}</summary>
+          <pre>${rowsTxt}</pre>
+        </details>`;
+      });
+      html += `</div>`;
+      log.innerHTML = html;
+      // 完整日志:默认拉到底出现滚动条(用户上滚查看历史后不强制)
       if (nearBottom || wasEmpty) log.scrollTop = log.scrollHeight;
     },
 
@@ -2468,7 +2469,10 @@
           badge.textContent = "空闲";
         }
       }
-      if (s.logTail !== undefined && s.logTail !== log.dataset.last) {
+      if (s.logFull !== undefined && s.logFull !== log.dataset.last) {
+        // 2026-08-23:优先完整日志(产物收起也完整展开到底,按阶段折叠)
+        this.renderLog(s.logFull || "");
+      } else if (s.logTail !== undefined && s.logTail !== log.dataset.last) {
         this.renderLog(s.logTail || "");
       }
       this.renderInterruptTip();

@@ -1813,6 +1813,17 @@ func manjuDiskStatus(project string, ds *manjuDiskState) map[string]any {
 	if logStr == "" && project != "" {
 		logStr = readManjuRunLogTail(project)
 	}
+	// 2026-08-23 用户要求:完整运行日志(产物收起也完整展开到底)——返回 run.log 全文
+	// (限 500KB 防前端卡;前端按阶段分组折叠展示)
+	logFull := ""
+	if project != "" {
+		if b, rerr := os.ReadFile(manjuRunLogPath(project)); rerr == nil {
+			logFull = string(b)
+			if len(logFull) > 500*1024 {
+				logFull = logFull[len(logFull)-500*1024:]
+			}
+		}
+	}
 	info := parseManjuProgress(logStr, running)
 	return map[string]any{
 		"running":      running,
@@ -1831,6 +1842,7 @@ func manjuDiskStatus(project string, ds *manjuDiskState) map[string]any {
 		"stopped":      stopped,
 		"elapsedSec":   elapsed,
 		"logTail":      logStr,
+		"logFull":      logFull,
 	}
 }
 
@@ -1868,11 +1880,21 @@ func manjuStatusFor(config string) map[string]any {
 			logStr = readManjuRunLogTail(cfgName)
 		}
 		info := parseManjuProgress(logStr, running)
+		// 2026-08-23:完整日志(run.log 全文,限 500KB)
+		logFull := ""
+		if cfgName != "" {
+			if b, rerr := os.ReadFile(manjuRunLogPath(cfgName)); rerr == nil {
+				logFull = string(b)
+				if len(logFull) > 500*1024 {
+					logFull = logFull[len(logFull)-500*1024:]
+				}
+			}
+		}
 		return map[string]any{
 			"running": running, "stage": stage, "currentStage": info.CurrentStage,
 			"episode": liveEpisode, "stageIdx": info.StageIdx, "stageTotal": len(manjuStageOrder),
 			"shotCur": info.ShotCur, "shotTotal": info.ShotTotal, "progress": info.Progress,
-			"done": done, "rc": rc, "stopped": stopped, "elapsedSec": elapsed, "logTail": logStr,
+			"done": done, "rc": rc, "stopped": stopped, "elapsedSec": elapsed, "logTail": logStr, "logFull": logFull,
 		}
 	}
 	// 其余情况:该项目目录的落盘状态(无 → 空闲)

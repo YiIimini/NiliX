@@ -4732,6 +4732,20 @@ select option { text-align: center; }
 .mj-tl-row.sub.warn .mj-tl-main { color: #fbbf24; opacity: 1; }
 .mj-tl-row.sub.ok .mj-tl-main { color: color-mix(in srgb, var(--ok, #34d399) 65%, var(--text)); opacity: 1; }
 .mj-tl-fold { padding: 2px 0 8px 62px; color: var(--muted); font-size: 10.5px; opacity: .8; }
+/* 2026-08-23:运行日志按阶段分组折叠展示(mj-tl2) */
+.mj-tl2 { display: flex; flex-direction: column; gap: 4px; }
+.mj-tl2-sec { border: 1px solid color-mix(in srgb, var(--muted) 28%, transparent); border-radius: 7px; overflow: hidden; }
+.mj-tl2-sec.err { border-color: color-mix(in srgb, #f87171 55%, transparent); }
+.mj-tl2-sec summary { cursor: pointer; padding: 4px 9px; font-size: 11.5px; background: color-mix(in srgb, var(--muted) 8%, transparent); user-select: none; list-style: none; }
+.mj-tl2-sec summary::-webkit-details-marker { display: none; }
+.mj-tl2-sec summary::before { content: "▸ "; color: var(--muted); }
+.mj-tl2-sec[open] summary::before { content: "▾ "; }
+.mj-tl2-sec summary:hover { background: color-mix(in srgb, var(--muted) 18%, transparent); }
+.mj-tl2-sec summary b { font-size: 12.5px; }
+.mj-tl2-sec summary i { font-style: normal; color: var(--muted); font-size: 10px; margin-left: 4px; }
+.mj-tl2-sec .mj-tl2-cnt { color: var(--muted); font-size: 10px; margin-left: 6px; }
+.mj-tl2-sec summary em { color: var(--accent); font-style: normal; font-size: 10px; margin-left: 6px; }
+.mj-tl2-sec pre { margin: 0; padding: 6px 10px; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; max-height: 42vh; overflow: auto; color: color-mix(in srgb, var(--text) 88%, transparent); }
 @media (max-width: 560px) {
   .mj-tl-row { grid-template-columns: 44px 14px 1fr 42px; }
   .mj-tl::before { left: 51px; }
