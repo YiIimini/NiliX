@@ -675,6 +675,7 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 - [Shot 1] 无时间戳;后续镜 [Shot N] At MM:SS.mmm 严格递增切点
 - 运镜三要素(类型+幅度+速度)写成句内自然英语(Push In/Pull Out/Pan/Truck/Tilt/Pedestal/Arc/Tracking/Static/POV/Roll/Shake;with small/large amplitude;at slow/fast speed)
 - 说话者稳定 ID (S1)(S2),首次出现给身份描述,发声者写 <Subject N> (Sx);台词 <d>[中文]原文</d> 逐字保留(原词原标点,句末 。？！);画外音写 says in an off-screen voiceover ... while his/her lips remain completely closed
+- 【画外音/旁白措辞·硬禁中文】(2026-08-23 实测:直出的 h3_prompt 用中文「画外音/旁白/嘴唇完全闭合」H3 无法识别对白驱动→该镜静音 rms≈0.005):detailed_description 里画外音/旁白一律用英文指令句——旁白写 The narrator (Sx) says in an off-screen voiceover: <d>[中文]旁白</d> while the on-screen characters' lips remain completely closed;画外音台词写 (Sx) says in an off-screen voiceover: <d>[中文]台词</d> while his/her lips remain completely closed;禁止出现中文「画外音」「旁白」「嘴唇闭合」字样
 - 台词跨切点写 <scenetrans>,被结尾截断写 <cutoff>
 - 画面可见文字(招牌/字幕/霓虹)用英文双引号原文
 - overall_soundscape 1-4 句英文连续段落(环境/动作/非语言人声,不重复台词);non_diegetic_music 1-3 句(乐器+速度+节奏+动态,禁抽象情绪词,无配乐写 N/A)
