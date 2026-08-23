@@ -104,10 +104,11 @@ var manjuRenderStrFields = []string{
 	"minimax_api_key", "minimax_base_url", "jianying_dir",
 }
 
-// manjuRenderBoolFields 渲染参数布尔字段(SageAttention 加速/草稿预审开关/FL2VA 双帧)
+// manjuRenderBoolFields 渲染参数布尔字段(SageAttention 加速/草稿预审开关/FL2VA 双帧/字幕烧录)
 // fl2va_end_frame(审计升级 P1):空镜镜头生成场景尾帧走 FL2VA 首尾双帧插值,场景内运动更稳;
 // 默认关闭(场景图成本翻倍,节点缺失自动回退单图)
-var manjuRenderBoolFields = []string{"sage_attention", "draft_judge", "fl2va_end_frame"}
+// subtitle(2026-08-23 用户反馈成片字幕位文字优化):合成时是否烧录对白字幕,默认 true(保持向后兼容)
+var manjuRenderBoolFields = []string{"sage_attention", "draft_judge", "fl2va_end_frame", "subtitle"}
 
 // manjuRenderFloatFields 渲染参数浮点字段 + 取值范围 [min,max]
 var manjuRenderFloatFields = map[string][2]float64{
@@ -1246,6 +1247,14 @@ func manjuScriptImportFromNovel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "项目未配置小说目录(paths.novel),无法定位分镜脚本")
 		return
 	}
+	// 优先用 paths.novel_dir(小说根目录);旧配置只有全本文件路径时上溯一级
+	novelDir := strings.TrimSpace(str(P["novel_dir"]))
+	if novelDir == "" {
+		novelDir = filepath.Dir(novel)
+		if strings.EqualFold(filepath.Base(novelDir), "全本") {
+			novelDir = filepath.Dir(novelDir)
+		}
+	}
 	ep := normalizeEpisode(orDefault(body.Episode, "EP01"))
 	var chap string
 	if n, aerr := strconv.Atoi(strings.TrimPrefix(ep, "EP")); aerr == nil && n > 0 {
@@ -1254,7 +1263,7 @@ func manjuScriptImportFromNovel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "集号无效: "+ep+"(应为 EP01/EP02…或数字)")
 		return
 	}
-	dir := filepath.Join(novel, "素材", "分镜脚本")
+	dir := filepath.Join(novelDir, "素材", "分镜脚本")
 	matches, _ := filepath.Glob(filepath.Join(dir, "第"+chap+"章*.md"))
 	if len(matches) == 0 {
 		writeErr(w, http.StatusNotFound, fmt.Sprintf("小说分镜脚本目录(%s)未找到「第%s章*_分镜脚本.md」;请确认已按爽文技能 H3分镜脚本文档模板 生成", dir, chap))

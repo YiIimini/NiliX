@@ -265,7 +265,8 @@ func TestManjuScriptImportFromNovel(t *testing.T) {
 	_ = os.MkdirAll(sbDir, 0o755)
 	src := filepath.Join(sbDir, "第001章_被扔掉的人_分镜脚本.md")
 	_ = os.WriteFile(src, []byte("# 《人间回收站》分镜脚本 · 第001章\n\n## 一、分镜表\n| 镜号 | 景别 | ... |\n\n## 二、每镜 H3 提示词\n[Shot 1] At 00:00.000 中景,慢推。"), 0o644)
-	P["novel"] = filepath.ToSlash(novelRoot)
+	P["novel"] = filepath.ToSlash(filepath.Join(novelRoot, "全本", "人间回收站·全本.md"))
+	P["novel_dir"] = filepath.ToSlash(novelRoot)
 	if err := writeManjuConfig(configPath, cfg); err != nil {
 		t.Fatalf("写 config: %v", err)
 	}

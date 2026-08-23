@@ -698,6 +698,10 @@ def cmd_assemble(args):
         os.makedirs(os.path.dirname(out), exist_ok=True)
     fps = args.fps
     cues_by_id, takes_map = _load_subtitle_cues(args.plan)
+    if args.no_subtitle:
+        # 不烧录字幕:对白/旁白仅保留 H3 原生音轨,画面不出现字幕文字
+        cues_by_id = {}
+        takes_map = {}
 
     # ---- 转场配置:cut(硬切,默认)/ fade(闪黑淡入淡出)/ dissolve(叠化) ----
     # 硬切边界 = MotionContext 接缝镜头的起始处(Go 侧从 manifest 提取 seam 标记传入):
@@ -1476,6 +1480,8 @@ def main():
     a.add_argument("--bgm", default="", help="背景音乐音频文件(循环补齐,按字幕窗口对白闪避)")
     a.add_argument("--bgm-gain", type=float, default=0.28, help="BGM 基础音量(0-1)")
     a.add_argument("--bgm-duck", type=float, default=0.35, help="对白时段 BGM 压低系数(0-1)")
+    a.add_argument("--no-subtitle", action="store_true", default=False,
+                   help="不烧录字幕(对白/旁白仅 H3 原生音轨,画面无字幕文字;2026-08-23 用户反馈成片字幕位文字优化)")
     f = sub.add_parser("facecrop")
     f.add_argument("--src", required=True)
     f.add_argument("--dst", required=True)

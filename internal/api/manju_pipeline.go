@@ -2892,6 +2892,10 @@ func stageAssemble(ctx *manjuCtx, lg *manjuLogger) error {
 		args = append(args, "--mosaic", strconv.Itoa(mosaic))
 	}
 	args = append(args, "--plan", filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json"))
+	// 字幕烧录开关(2026-08-23 用户反馈):render.subtitle=false → 不烧字幕(对白仅 H3 原生音轨)
+	if sub, ok := ctx.R["subtitle"].(bool); ok && !sub {
+		args = append(args, "--no-subtitle")
+	}
 	// 转场 + BGM(数据驱动配置;seam 接缝镜清单传给脚本强制硬切,叠化重影防线)
 	trans := orDefault(str(ctx.R["transition"]), "cut")
 	if !manjuTransitions[trans] {
