@@ -503,7 +503,8 @@ func parseRenderPromptMaster(content string) *manjuNovelAssets {
 		}
 		return strings.TrimSpace(rest[:end])
 	}
-	// 按 ## N、标题 切节
+	// 按 ## N、标题 切节(兼容中文数字「一、二、三…」与阿拉伯数字「1. 2. 3.」两种编号——
+	// 技能阶段6 生成的 渲染提示词总集.md 用阿拉伯数字节标题,2026-08-24 实测修复)
 	sections := map[string]string{}
 	lines := strings.Split(content, "\n")
 	cur := ""
@@ -515,18 +516,56 @@ func parseRenderPromptMaster(content string) *manjuNovelAssets {
 			sections[cur] += ln + "\n"
 		}
 	}
+	// 节编号归一:阿拉伯数字 → 中文数字(1→一,2→二,3→三,4→四,5→五,6→六)
+	cnOf := func(n string) string {
+		switch strings.TrimSpace(n) {
+		case "1":
+			return "一"
+		case "2":
+			return "二"
+		case "3":
+			return "三"
+		case "4":
+			return "四"
+		case "5":
+			return "五"
+		case "6":
+			return "六"
+		}
+		return ""
+	}
+	// 中文数字必须是显式集合(Unicode 码点不连续:'四' U+56DB > '六' U+516D,区间判断会漏)
+	isCN := func(r rune) bool {
+		return strings.ContainsRune("一二三四五六七八九十", r)
+	}
 	var styleSec, negSec, charSec, sceneSec, masterSec string
 	for name, body := range sections {
+		title := strings.TrimSpace(strings.TrimPrefix(name, "##"))
+		// 提取标题开头的数字编号(中文或阿拉伯),只取编号本身用于匹配
+		no := ""
+		for _, r := range title {
+			if (r >= '0' && r <= '9') || isCN(r) {
+				no += string(r)
+			} else {
+				break
+			}
+		}
+		if no == "" {
+			continue
+		}
+		if len(no) == 1 && no >= "0" && no <= "9" {
+			no = cnOf(no)
+		}
 		switch {
-		case strings.Contains(name, "一") && strings.Contains(name, "风格"):
+		case strings.Contains(no, "一") && strings.Contains(title, "风格"):
 			styleSec = body
-		case strings.Contains(name, "二") && (strings.Contains(name, "负面") || strings.Contains(name, "负向")):
+		case strings.Contains(no, "二") && (strings.Contains(title, "负面") || strings.Contains(title, "负向")):
 			negSec = body
-		case strings.Contains(name, "三") && strings.Contains(name, "角色"):
+		case strings.Contains(no, "三") && strings.Contains(title, "角色"):
 			charSec = body
-		case strings.Contains(name, "四") && strings.Contains(name, "场景"):
+		case strings.Contains(no, "四") && strings.Contains(title, "场景"):
 			sceneSec = body
-		case strings.Contains(name, "五") && strings.Contains(name, "H3"):
+		case strings.Contains(no, "五") && strings.Contains(title, "H3"):
 			masterSec = body
 		}
 	}
