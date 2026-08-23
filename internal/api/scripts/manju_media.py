@@ -1067,6 +1067,8 @@ def _split_dialogue(d):
 def manju_voiceover(args):
     """把每镜的旁白(narration)与画外音台词(说话人不在该镜 characters)用 edge-tts
     合成并混入该镜音轨(镜头 12%-92% 窗口按字数分配时间点),再用 assemble 重合成。
+    静音检测(2026-08-23 双配音修复):先算该镜音轨 RMS,≥阈值视为 H3 已生成语音/环境音,
+    跳过配音(避免 H3 原生画外音 + TTS 双声);只有静音镜(<阈值)才补 TTS。
     """
     try:
         import edge_tts
@@ -1079,13 +1081,22 @@ def manju_voiceover(args):
     import av
 
     ff = args.ffmpeg or "ffmpeg"
+    rms_threshold = args.silence_threshold
     plan = json.load(open(args.plan, encoding="utf-8"))
     done = 0
+    skipped = 0
     for sh in plan.get("shots", []):
         sid = sh.get("shot_id")
         clip = os.path.join(args.clips_dir, "%02d.mp4" % int(sid))
         if not os.path.exists(clip):
             continue
+        # 静音检测:该镜音轨 RMS(有语音/环境音 → 不补 TTS)
+        try:
+            with av.open(clip) as c:
+                dur = float(c.duration) / av.time_base if c.duration else 4.0
+                rms = _audio_rms(clip)
+        except Exception:
+            dur, rms = 4.0, 0.0
         lines = []
         if sh.get("narration"):
             lines.append((sh["narration"], args.voice_narr or "zh-CN-XiaoxiaoNeural"))
@@ -1095,8 +1106,10 @@ def manju_voiceover(args):
                 lines.append((text, args.voice_char or "zh-CN-YunxiNeural"))
         if not lines:
             continue
-        with av.open(clip) as c:
-            dur = float(c.duration) / av.time_base if c.duration else 4.0
+        if rms >= rms_threshold:
+            skipped += 1
+            print(f"  ⏭ 镜 {sid} 已有语音/环境音(rms {rms:.3f}),跳过配音(防双声)")
+            continue
         total_len = sum(len(t) for t, _ in lines)
         win_span = dur * 0.80
         cur = dur * 0.12
@@ -1123,7 +1136,25 @@ def manju_voiceover(args):
                 os.remove(tmp)
             done += 1
             print(f"  🎙 镜 {sid} 配音 {w_start:.1f}s: {text[:20]}… ({voice})")
-    print("✅ 旁白/画外音配音完成,共 %d 句" % done)
+    print("✅ 旁白/画外音配音完成,配音 %d 句,跳过 %d 镜(已有语音)" % (done, skipped))
+
+
+def _audio_rms(path):
+    """计算视频文件音轨 RMS(粗略响度;0=无音轨/静音)"""
+    import math
+    import av
+    with av.open(path) as c:
+        acc = 0.0
+        n = 0
+        for fr in c.decode(audio=0):
+            arr = fr.to_ndarray()
+            if arr is None or arr.size == 0:
+                continue
+            acc += float((arr.astype("float64") ** 2).mean())
+            n += 1
+        if n == 0:
+            return 0.0
+    return math.sqrt(acc / n)
 
 
 import re as _reGlobal  # noqa: E402
@@ -1564,6 +1595,7 @@ def main():
     vo.add_argument("--voice-narr", default="zh-CN-XiaoxiaoNeural", help="旁白语音(默认女声)")
     vo.add_argument("--voice-char", default="zh-CN-YunxiNeural", help="画外音角色语音(默认男声)")
     vo.add_argument("--gain", type=float, default=1.2, help="TTS 音量增益(默认 1.2)")
+    vo.add_argument("--silence-threshold", type=float, default=0.02, help="静音判定 RMS 阈值:低于才补 TTS(防 H3 原生对白+ TTS 双声)")
     f = sub.add_parser("facecrop")
     f.add_argument("--src", required=True)
     f.add_argument("--dst", required=True)
