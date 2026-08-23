@@ -425,6 +425,9 @@ func readManjuConfig(path string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 2026-08-23 优化:容忍 UTF-8 BOM(PS/部分编辑器写 JSON 会带 BOM,json.Unmarshal 报
+	// "invalid character 'ï'";外部工具改 config 后 NiliX 不至于崩)
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 	var cfg map[string]any
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
@@ -734,6 +737,19 @@ func manjuSaveRender(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		R["res_tier"] = s
+	}
+	// 定妆引擎合法值(2026-08-23):zimage/krea2/sdxl,非法回退 zimage
+	if v, present := body["char_engine"]; present {
+		s := strings.TrimSpace(str(v))
+		if s == "" {
+			s = "zimage"
+		}
+		switch s {
+		case "zimage", "krea2", "sdxl":
+		default:
+			s = "zimage"
+		}
+		R["char_engine"] = s
 	}
 	// seed 重试策略
 	if v, present := body["seed_policy"]; present {

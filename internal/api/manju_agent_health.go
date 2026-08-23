@@ -96,6 +96,28 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 	} else {
 		items = append(items, ok("render_steps", fmt.Sprintf("steps=%d turbo=%d", steps, turbo)))
 	}
+	// 6.1 定妆引擎/字幕/配音(2026-08-23 新增)
+	eng := strings.TrimSpace(str(R["char_engine"]))
+	if eng == "" {
+		eng = "zimage"
+	}
+	engDesc := map[string]string{"zimage": "Z-Image 写实(人物微动漫)", "krea2": "Krea-2 强指令", "sdxl": "SDXL 动漫"}[eng]
+	items = append(items, ok("char_engine", "定妆引擎: "+engDesc))
+	if eng == "krea2" {
+		if !fileExists(filepath.Join(ComfySharedDir, "models", "diffusion_models", str(R["krea2_unet"]))) {
+			items = append(items, manjuHealthItem{Key: "krea2", Label: "Krea-2 权重", Status: "warn", Detail: "char_engine=krea2 但 Krea-2 主模型未下载,定妆会失败", FixHint: "下载 Comfy-Org/Krea-2 权重到共享 models/diffusion_models 或改用 zimage"})
+		} else {
+			items = append(items, ok("krea2", "Krea-2 权重就绪"))
+		}
+	}
+	if sub, _ := R["subtitle"].(bool); !sub {
+		items = append(items, ok("subtitle", "字幕: 不烧录(H3 原生对白)"))
+	} else {
+		items = append(items, ok("subtitle", "字幕: 烧录对白字幕"))
+	}
+	if vo, _ := R["voiceover"].(bool); vo {
+		items = append(items, ok("voiceover", "旁白/画外音: edge-tts 后期配音兜底"))
+	}
 	seed, _ := manjuToInt(R["seed"])
 	if seed == 0 {
 		items = append(items, manjuHealthItem{Key: "render_seed", Label: "随机种子", Status: "warn", Detail: "seed 为空/0,跨镜头一致性无锚点", Fixable: true, FixHint: "一键设为 1688"})
