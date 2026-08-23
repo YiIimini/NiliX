@@ -35,15 +35,32 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 	} else {
 		items = append(items, ok("style", "风格: "+ctx.style))
 	}
-	// 2. 小说正文
-	if ctx.novel == "" {
-		items = append(items, manjuHealthItem{Key: "novel", Label: "小说正文", Status: "bad", Detail: "未设置小说文件", FixHint: "渲染配置 → 小说 里选正文"})
+	// 2. 输入源(小说正文 / 视频脚本直出,二选一)
+	if ctx.scriptMode {
+		// 脚本模式:检查脚本文件而非小说
+		if !fileExists(ctx.novel) {
+			items = append(items, manjuHealthItem{Key: "novel", Label: "视频脚本", Status: "bad", Detail: "脚本文件不存在: " + ctx.novel, FixHint: "「视频脚本直出」卡片重新粘贴脚本"})
+		} else if b, err := os.ReadFile(ctx.novel); err != nil || len([]rune(string(b))) < 20 {
+			items = append(items, manjuHealthItem{Key: "novel", Label: "视频脚本", Status: "warn", Detail: "脚本内容过少或读取失败", FixHint: "确认脚本包含 [Shot N] 分镜内容"})
+		} else {
+			items = append(items, manjuHealthItem{Key: "novel", Label: "视频脚本", Status: "ok", Detail: fmt.Sprintf("视频脚本 %d 字,脚本直出模式", len([]rune(string(b))))})
+		}
+	} else if ctx.novel == "" {
+		items = append(items, manjuHealthItem{Key: "novel", Label: "小说正文", Status: "bad", Detail: "未设置小说文件", FixHint: "渲染配置 → 小说 里选正文,或「视频脚本直出」卡片粘贴脚本"})
 	} else if !fileExists(ctx.novel) {
 		items = append(items, manjuHealthItem{Key: "novel", Label: "小说正文", Status: "bad", Detail: "文件不存在: " + ctx.novel, FixHint: "检查 config.json 的 paths.novel"})
 	} else if b, err := os.ReadFile(ctx.novel); err != nil || len([]rune(string(b))) < 200 {
 		items = append(items, manjuHealthItem{Key: "novel", Label: "小说正文", Status: "warn", Detail: "内容过少或读取失败", FixHint: "确认正文是完整小说文件"})
 	} else {
 		items = append(items, ok("novel", fmt.Sprintf("正文 %d 字,可渲染", len([]rune(string(b))))))
+	}
+	// 2.5 分镜脚本目录(爽文技能阶段6 产物:H3分镜脚本文档模板生成,可一键导入脚本直出)
+	if !ctx.scriptMode {
+		if nv := strings.TrimSpace(str(ctx.P["novel"])); nv != "" {
+			if ms, _ := filepath.Glob(filepath.Join(nv, "素材", "分镜脚本", "第*章*_分镜脚本.md")); len(ms) > 0 {
+				items = append(items, ok("storyboard", fmt.Sprintf("小说分镜脚本 %d 集(素材/分镜脚本/),可一键导入脚本直出", len(ms))))
+			}
+		}
 	}
 	// 3. LLM 配置
 	if ctx.llm == nil || ctx.llm.apiKey == "" {

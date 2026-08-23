@@ -307,6 +307,16 @@
       el.classList.toggle("hidden", !msg);
     },
 
+    /* 绿色成功提示(复用人性化前缀,5 秒后消失) */
+    setNote(msg) {
+      const el = $("manju-err");
+      if (!el) return;
+      el.textContent = "✅ " + msg;
+      el.classList.remove("hidden");
+      clearTimeout(this._noteTimer);
+      this._noteTimer = setTimeout(() => { el.classList.add("hidden"); }, 6000);
+    },
+
     /* 中断续跑提示:上次任务被中断/失败且日志有失败痕迹 → 动态创建「一键续跑」横幅;
        无内容/无中断/无痕迹 → 彻底移除 DOM(静态 HTML 中不存在该元素,杜绝空提示条)
        质检失败时额外给逃生门:跳过失败镜并续跑 / 接受质检结果并合成(坏镜进成片由用户决策) */
@@ -477,6 +487,11 @@
       $("manju-novel-paste").addEventListener("click", () => this.openPaste());
       $("manju-novel-pick").addEventListener("click", () => this.openPicker("novel"));
       $("manju-novel-detect").addEventListener("click", () => this.detectNovel());
+
+      // 视频脚本直出(H3 官方格式分镜脚本,与小说解析二选一)
+      $("manju-script-paste").addEventListener("click", () => this.openScriptPaste());
+      $("manju-script-clear").addEventListener("click", () => this.doScriptClear());
+      $("manju-script-template").addEventListener("click", () => this.openScriptPaste(true));
 
       // 风格:预设按钮按单一数据源渲染;点击即多选切换(点中=选中,再点=取消,组合以 + 连接)
       this.renderStylePresets();
@@ -1395,6 +1410,7 @@
         this.loadModels();
         this.renderChips();
         this.refreshOutputs();
+        this.refreshScriptStatus(); // 视频脚本直出模式状态(与小说解析二选一)
         // 体检预热:发现可修复项 → 右栏 Agent 面板出主动建议横幅(仅一次/会话)
         this._healthTipDismissed = false;
         this.loadHealth(false);
@@ -3294,8 +3310,7 @@
     },
 
     /* 粘贴小说文章:直接粘贴正文保存为 .md，免去先建目录/文件 */
-    openPaste() {
-      this.pasteTitle = ""; this.pasteText = ""; this.pasting = false;
+    openPaste() {      this.pasteTitle = ""; this.pasteText = ""; this.pasting = false;
       this.openModal("粘贴小说文章",
         `<div class="manju-form">
           <label>标题（可选，用作文件名）</label>
@@ -3341,6 +3356,132 @@
       });
     },
 
+    /* ---- 视频脚本直出(H3 官方格式分镜脚本,与小说解析二选一) ---- */
+
+    // 脚本格式示例模板(官方 [Shot N] 时间码/画面/台词/音效 + 环境声/配乐)
+    scriptTemplate() {
+      return `# 视频渲染脚本 EP01(示例模板,可整体替换)
+【风格】Cinematic, live-action, 东方古风, 暖色调烛光
+【时长】12 秒 / 2 镜
+
+[Shot 1] 中景,缓慢推近。客栈内,青年(苏白,黑色长发束起,剑眉,深青色劲装)坐在桌边,手指轻叩桌面。
+台词:苏白:"来了。"
+音效:雨声,木地板吱呀。
+
+[Shot 2] At 00:05.000,硬切,特写。女子推门而入,斗笠滴着水,抬头看向苏白。
+台词:(无)
+音效:门轴吱呀,雨声骤密。
+
+环境声:整段雨声持续,木结构客栈的低频嗡鸣。
+配乐:古琴慢板,音量渐强后回落。`;
+    },
+
+    /* 粘贴视频脚本:弹窗(可选带模板) → script/save 启用脚本直出模式 */
+    openScriptPaste(withTemplate) {
+      this.scriptText = withTemplate ? this.scriptTemplate() : "";
+      this.scriptSaving = false;
+      this.openModal("🎬 粘贴视频脚本（H3 官方格式直出）",
+        `<div class="manju-form">
+          <div class="manju-meta" style="margin:0 0 8px">
+            LLM 将按 MiniMax H3 官方规范(<b>[Shot N] At MM:SS.mmm</b> 时间码 / 画面 / 台词 / 音效 / 环境声 / 配乐)
+            一步直出完整渲染方案(角色/场景/分镜/<b>逐镜 H3 提示词</b>)。保存后本集方案自动重新生成;
+            「清除脚本」可回到小说解析模式。脚本写法建议:<br>
+            ① 每镜:景别 + 运镜 + 人物动作 + 台词(标注说话人) + 音效;<br>
+            ② 多镜用 <code>[Shot 2] At 00:05.000</code> 标切点;<br>
+            ③ 末尾可写「环境声:…」与「配乐:…」两段。
+          </div>
+          <label>视频渲染脚本正文（markdown，H3 官方分镜格式）</label>
+          <textarea id="msp-text" class="manju-input manju-textarea" rows="14" spellcheck="false" placeholder="粘贴分镜脚本…（[Shot 1] 景别,运镜。画面动作。&#10;台词:角色:&quot;原文&quot;&#10;音效:…）">${esc(this.scriptText)}</textarea>
+          <div id="msp-err" class="manju-err-text"></div>
+          <div class="manju-row" style="justify-content:flex-start;margin:6px 0">
+            <button id="msp-import" class="hrs-btn">📂 从小说分镜脚本导入（阶段6 产物）</button>
+            <span style="opacity:.6;font-size:12px;margin-left:8px">自动定位 小说目录/素材/分镜脚本/第NNN章…_分镜脚本.md（EP01→第001章）</span>
+          </div>
+          <div class="manju-row">
+            <button id="msp-cancel" class="hrs-btn">取消</button>
+            <button id="msp-do" class="hrs-btn hrs-btn-primary">保存并启用脚本直出</button>
+          </div>
+        </div>`);
+      $("msp-text").addEventListener("input", (e) => { this.scriptText = e.target.value; });
+      $("msp-cancel").addEventListener("click", () => this.closeModal());
+      $("msp-do").addEventListener("click", () => this.doSaveScript());
+      $("msp-import").addEventListener("click", () => this.importScriptFromNovel());
+    },
+    doSaveScript() {
+      this.scriptText = $("msp-text").value.trim();
+      if (!this.scriptText) { $("msp-err").textContent = "请粘贴视频脚本正文"; return; }
+      if (!this.project) { $("msp-err").textContent = "请先选择项目"; return; }
+      const projName = this.projName();
+      this.scriptSaving = true;
+      $("msp-do").textContent = "保存中…";
+      $("msp-do").disabled = true;
+      post("/api/manju/script/save", { project: projName, episode: this.episode, text: this.scriptText }).then((r) => {
+        this.scriptSaving = false;
+        if (r && r.ok) {
+          this.closeModal();
+          this.refreshScriptStatus();
+          this.setNote("🎬 脚本直出模式已启用: " + (r.path || "") + "（下次运行方案将以脚本为准）");
+        } else {
+          $("msp-do").textContent = "保存并启用脚本直出";
+          $("msp-do").disabled = false;
+          $("msp-err").textContent = (r && r.error) || "保存失败";
+        }
+      }).catch((e) => {
+        this.scriptSaving = false;
+        $("msp-do").textContent = "保存并启用脚本直出";
+        $("msp-do").disabled = false;
+        $("msp-err").textContent = "保存失败: " + e.message;
+      });
+    },
+    doScriptClear() {
+      if (!confirm("清除视频脚本并回到小说解析模式？本集已生成的方案不会自动删除(下次运行按小说重新生成)。")) return;
+      post("/api/manju/script/clear?project=" + encodeURIComponent(this.projName()), {}).then((r) => {
+        this.refreshScriptStatus();
+        this.setNote((r && r.ok) ? "已清除脚本,回到小说解析模式" : "清除失败: " + ((r && r.error) || ""));
+      }).catch((e) => this.setErr("清除失败: " + e.message));
+    },
+    /* 从小说项目 素材/分镜脚本/(爽文技能阶段6 产物)导入本集分镜脚本,启用脚本直出模式 */
+    importScriptFromNovel() {
+      if (!this.project) { $("msp-err").textContent = "请先选择项目"; return; }
+      const projName = this.projName();
+      const ep = this.episode || "EP01";
+      const btn = $("msp-import");
+      if (btn) { btn.disabled = true; btn.textContent = "导入中…"; }
+      post("/api/manju/script/import-from-novel", { project: projName, episode: ep }).then((r) => {
+        if (btn) { btn.disabled = false; btn.textContent = "📂 从小说分镜脚本导入（阶段6 产物）"; }
+        if (r && r.ok) {
+          this.closeModal();
+          this.refreshScriptStatus();
+          this.setNote("🎬 已从小说分镜脚本导入(" + (r.source || "") + ")，脚本直出模式已启用");
+        } else {
+          $("msp-err").textContent = (r && r.error) || "导入失败:请确认小说项目已生成 素材/分镜脚本/";
+        }
+      }).catch((e) => {
+        if (btn) { btn.disabled = false; btn.textContent = "📂 从小说分镜脚本导入（阶段6 产物）"; }
+        $("msp-err").textContent = "导入失败: " + e.message;
+      });
+    },
+    projName() {
+      // this.project 是完整 configPath(.../manju/<项目名>/config.json) → 取目录名
+      return (this.project || "").split(/[\\/]/).filter(Boolean).slice(-2, -1)[0] || "";
+    },
+    refreshScriptStatus() {
+      const el = $("manju-script-meta");
+      const clearBtn = $("manju-script-clear");
+      if (!el) return;
+      if (!this.project) { el.innerHTML = ""; if (clearBtn) clearBtn.classList.add("hidden"); return; }
+      get("/api/manju/script?project=" + encodeURIComponent(this.projName())).then((r) => {
+        if (r && r.active) {
+          el.innerHTML = "🎬 <b>脚本直出模式</b>：<code>" + esc(r.path || "") + "</code>（" + (r.bytes || 0) + " 字）<br>" +
+            "<div style='opacity:.75;margin-top:4px;white-space:pre-wrap'>" + esc(r.preview || "") + "</div>";
+          if (clearBtn) clearBtn.classList.remove("hidden");
+        } else {
+          el.innerHTML = "小说解析模式（未启用脚本直出）";
+          if (clearBtn) clearBtn.classList.add("hidden");
+        }
+      }).catch(() => {});
+    },
+
     /* 新建项目 */
     openCreate() {
       this.createName = ""; this.createNovel = ""; this.createKey = ""; this.createErr = ""; this.creating = false; this.savedKey = "";
@@ -3348,15 +3489,24 @@
     },
     renderCreate() {
       const saved = this.savedKey ? "（已存默认: " + esc(this.savedKey) + "）" : "";
+      if (this.createMode === undefined) this.createMode = "novel";
       this.openModal("新建项目",
         `<div class="manju-form">
           <label>剧名（项目目录名）</label>
           <input id="mc-name" class="manju-input" placeholder="如：吞灵帝尊" value="${esc(this.createName)}">
-          <label>小说目录（含正文/设定/大纲）</label>
+          <label>输入方式</label>
           <div class="manju-row">
-            <input id="mc-novel" class="manju-input manju-wide" placeholder="选择小说目录或粘贴路径（自动识别 正文/设定集/分卷大纲）" value="${esc(this.createNovel)}">
-            <button id="mc-novel-pick" class="hrs-btn">选择目录</button>
+            <label class="manju-check"><input id="mc-mode-novel" type="radio" name="mc-mode" ${this.createMode === "novel" ? "checked" : ""}> 📖 小说解析</label>
+            <label class="manju-check"><input id="mc-mode-script" type="radio" name="mc-mode" ${this.createMode === "script" ? "checked" : ""}> 🎬 视频脚本直出</label>
           </div>
+          <div id="mc-novel-row">
+            <label>小说目录（含正文/设定/大纲）</label>
+            <div class="manju-row">
+              <input id="mc-novel" class="manju-input manju-wide" placeholder="选择小说目录或粘贴路径（自动识别 正文/设定集/分卷大纲）" value="${esc(this.createNovel)}">
+              <button id="mc-novel-pick" class="hrs-btn">选择目录</button>
+            </div>
+          </div>
+          <div id="mc-script-tip" class="manju-meta" style="${this.createMode === "script" ? "" : "display:none"}">🎬 视频脚本直出模式：创建后到「视频脚本直出」卡片粘贴 H3 官方格式分镜脚本，LLM 一步直出渲染方案（逐镜 H3 提示词）。</div>
           <label>DeepSeek API Key${saved}</label>
           <input id="mc-key" class="manju-input" placeholder="${this.savedKey ? "留空自动用默认 Key" : "sk-...（留空则用已保存的默认 Key）"}">
           <label class="manju-check"><input id="mc-remember" type="checkbox" checked> 记住为默认 Key（下次新建自动使用）</label>
@@ -3372,13 +3522,21 @@
       $("mc-novel-pick").addEventListener("click", () => this.openPicker("create"));
       $("mc-cancel").addEventListener("click", () => this.closeModal());
       $("mc-do").addEventListener("click", () => this.doCreate());
+      // 输入方式切换:脚本直出模式隐藏小说目录行(小说可选/可留空)
+      const applyMode = () => {
+        this.createMode = $("mc-mode-script").checked ? "script" : "novel";
+        $("mc-novel-row").style.display = this.createMode === "script" ? "none" : "";
+        $("mc-script-tip").style.display = this.createMode === "script" ? "" : "none";
+      };
+      $("mc-mode-novel").addEventListener("change", applyMode);
+      $("mc-mode-script").addEventListener("change", applyMode);
     },
     doCreate() {
       this.createName = $("mc-name").value.trim();
-      this.createNovel = $("mc-novel").value.trim();
+      this.createNovel = this.createMode === "script" ? "" : $("mc-novel").value.trim();
       this.createKey = $("mc-key").value.trim();
       if (!this.createName) { $("mc-err").textContent = "请填剧名"; return; }
-      if (!this.createNovel) { $("mc-err").textContent = "请选择小说目录"; return; }
+      if (this.createMode !== "script" && !this.createNovel) { $("mc-err").textContent = "请选择小说目录（或切换「视频脚本直出」模式）"; return; }
       this.creating = true;
       $("mc-do").textContent = "创建中…";
       $("mc-do").disabled = true;
@@ -3391,12 +3549,15 @@
         this.creating = false;
         if (r.ok) {
           this.closeModal();
-          // 新建时选的是「目录」,正文文件由 new_project.py 解析写入 config;
+          // 新建时选的是「目录」,正文文件由创建逻辑解析写入 config;
           // 这里清空小说值,让 loadProject 从新项目 config 读到正确的正文文件(避免把目录当小说传给管线)
           this.novel = "";
           $("manju-novel").value = "";
           ls("novel", "");
           this.loadProjects(r.configPath);
+          if (r.scriptMode) {
+            this.setNote("项目已创建（视频脚本直出）→ 到「视频脚本直出」卡片粘贴脚本");
+          }
         } else {
           $("mc-do").textContent = "创建项目";
           $("mc-do").disabled = false;

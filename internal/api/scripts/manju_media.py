@@ -18,6 +18,12 @@
   jianying --clips-dir <d> --out-dir <parent> --name <draft> [--fps 24] [--plan <p>] [--transition cut]
                                          剪映草稿导出:视频轨(可选转场)+ 字幕轨(台词/旁白,不烧录,可继续编辑);
                                          需 venv 安装 pyJianYingDraft(未装时打印安装指引并 exit 2)
+  bgm-pick --dir <曲库目录> [--json <p>]   BGM 选曲体检(整合 ai-film-skills bgm-spectral):PyAV+numpy 零新依赖,
+                                         逐曲算质心/滚降/低频占比/调性 → 推荐档位(清新通透/深邃有质感/压抑惊悚);
+                                         选曲前定档再找曲,别凭文件名;定期体检曲库重复文件/档位失衡
+  qc 默认开启字幕位文字渗漏 OCR 扫描(整合 ai-film-skills pitfalls ⑫):rapidocr_onnxruntime 可用时
+                                         抽 3 帧按「位置+宽度」判据(cy≥0.78 且 0.3≤cx≤0.7 且宽>0.02)检字幕位文字,
+                                         未装时优雅跳过(可用 --no-ocr 关闭)
 """
 import argparse
 import json
@@ -86,6 +92,178 @@ def check_video(path, threshold=0.5):
     }
 
 
+def scan_text_bleed(path, n_frames=3, width=768):
+    """字幕位文字渗漏扫描(整合 ai-film-skills pitfalls ⑫ 实测):
+    抽 n_frames 帧,rapidocr 检出文字框后按「位置+宽度」判据判定字幕位文字:
+    框中心 cy >= 0.78 且 0.3 <= cx <= 0.7 且 框宽 > 0.02(刺绣纹样等小框是噪声,不算)。
+    模型会把提示词里的台词/数字/标签画进画面(字幕位,H3 text_sensitivity 低尤其明显),
+    「画面无文字」句无效——只能检出后重渲/裁底。
+    rapidocr 未装时优雅跳过(建议装到独立目录,别污染 ComfyUI venv 的 numpy/torch)。
+    返回 {"hits": [{"frame": i, "text": "..."}], "skipped": bool, "reason": "..."}
+    """
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except Exception:
+        return {"skipped": True,
+                "reason": "rapidocr_onnxruntime 未安装,跳过文字渗漏扫描(可选:pip install --target <独立目录> rapidocr_onnxruntime)"}
+    import av
+    from PIL import Image
+    try:
+        c = av.open(path)
+        v = c.streams.video[0]
+        total = sum(1 for _ in c.decode(v))
+        c.close()
+        if total < n_frames:
+            n_frames = max(1, total)
+        ocr = RapidOCR()
+        hits = []
+        c = av.open(path)
+        v = c.streams.video[0]
+        fps = float(v.average_rate) if v.average_rate else 24.0
+        half = 0.5 / fps
+        for i in range(n_frames):
+            t_sec = total * (i + 0.5) / n_frames / fps
+            try:
+                c.seek(int(max(0, t_sec - 1.0) / v.time_base), stream=v)
+            except Exception:
+                c.seek(0)
+            fr = None
+            for f in c.decode(v):
+                if f.pts is not None and f.pts * v.time_base >= t_sec - half:
+                    fr = f
+                    break
+            if fr is None:
+                continue
+            im = fr.to_image()
+            if im.width > width:
+                im = im.resize((width, int(im.height * width / im.width)), Image.LANCZOS)
+            import numpy as np
+            arr = np.asarray(im.convert("RGB"))[:, :, ::-1].copy()  # RGB→BGR(rapidocr 输入)
+            res, _ = ocr(arr)
+            if not res:
+                continue
+            W, H = im.width, im.height
+            for box, text, score in res:
+                xs = [p[0] for p in box]
+                ys = [p[1] for p in box]
+                cx = (min(xs) + max(xs)) / 2 / W
+                cy = (min(ys) + max(ys)) / 2 / H
+                bw = (max(xs) - min(xs)) / W
+                if cy >= 0.78 and 0.3 <= cx <= 0.7 and bw > 0.02:
+                    hits.append({"frame": i + 1, "text": (text or "")[:40]})
+        c.close()
+        return {"hits": hits, "skipped": False, "reason": ""}
+    except Exception as e:
+        return {"skipped": True, "reason": "OCR 扫描异常跳过: %s" % e}
+
+
+def spectral_stats(path, sr_target=22050):
+    """单曲频谱统计(整合 ai-film-skills bgm-spectral 实测判据):质心/滚降/低频占比/调性。
+    零新依赖:PyAV 解码 + numpy FFT。低频带取 <500Hz(仓库实测参考档按此带标定):
+    清新通透 质心~2000/滚降~4200/低频~15%/大调;深邃 ~1400/~2960/~33%/小调;压抑惊悚 ~550/~440/~61%。
+    """
+    import av
+    import numpy as np
+    c = av.open(path)
+    a = c.streams.audio[0]
+    rs = av.AudioResampler(format="s16", layout="mono", rate=sr_target)
+    chunks = []
+    for fr in c.decode(a):
+        for out in _frame_list(rs.resample(fr)):
+            arr = out.to_ndarray()
+            if arr.dtype.kind in "iu":
+                arr = arr.astype(np.float32) / float(np.iinfo(arr.dtype).max)
+            chunks.append(arr.reshape(-1))
+    for out in _frame_list(rs.resample(None)):
+        arr = out.to_ndarray()
+        if arr.dtype.kind in "iu":
+            arr = arr.astype(np.float32) / float(np.iinfo(arr.dtype).max)
+        chunks.append(arr.reshape(-1))
+    c.close()
+    if not chunks:
+        return None
+    y = np.concatenate(chunks)
+    n = len(y)
+    if n < 4096:
+        return None
+    win = 1 << 17
+    hop = win // 2
+    if n < win:
+        win = 1 << 15
+        hop = win // 2
+    freqs = np.fft.rfftfreq(win, 1 / sr_target)
+    mag2 = np.zeros(len(freqs))
+    segs = 0
+    for start in range(0, n - win + 1, hop):
+        seg = y[start:start + win] * np.hanning(win)
+        mag2 += np.abs(np.fft.rfft(seg)) ** 2
+        segs += 1
+    mag2 /= max(1, segs)
+    total = mag2.sum()
+    if total <= 0:
+        return None
+    centroid = float((freqs * mag2).sum() / total)
+    cum = np.cumsum(mag2) / total
+    rolloff = float(freqs[np.searchsorted(cum, 0.85)])
+    lowf = float(mag2[freqs < 500].sum() / total)
+    chroma = np.zeros(12)
+    for idx in range(1, len(freqs)):
+        if freqs[idx] < 80 or freqs[idx] > 4000:
+            continue
+        # A4=440Hz → 音级 9(等程十二平均,参考频率偏移 +9)
+        pc = int(round(12 * np.log2(freqs[idx] / 440.0)) + 9) % 12
+        chroma[pc] += mag2[idx]
+    if chroma.sum() > 0:
+        chroma /= chroma.sum()
+    return {"centroid": round(centroid), "rolloff": round(rolloff), "lowfreq": round(lowf, 3),
+            "major": round(float(chroma[[0, 4, 7]].sum()), 3),
+            "minor": round(float(chroma[[0, 3, 7]].sum()), 3)}
+
+
+def bgm_tier(st):
+    """按频谱三指标推荐档位(仓库实测阈值,宽松判据):
+    滚降掉到 ~440Hz 就是低频嗡鸣(被判「诡异」),深邃≠发闷分界在滚降 ~3000Hz。"""
+    c, r, lf = st["centroid"], st["rolloff"], st["lowfreq"]
+    if c <= 1000 and r <= 1500 and lf >= 0.40:
+        return "压抑惊悚"
+    if c <= 1800 and lf >= 0.22:
+        return "深邃有质感"
+    return "清新通透"
+
+
+def cmd_bgm_pick(args):
+    """选曲体检:对目录音频算频谱三指标 + 档位推荐(把「选曲」固化成命令,比写说明有效)。
+    用途:① 选 BGM 前定档再找曲,别凭文件名;② 定期体检曲库(重复文件/档位失衡会锁死创作多样性)。
+    """
+    files = sorted(f for f in os.listdir(args.dir)
+                   if f.lower().endswith((".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg")))
+    if not files:
+        print("❌ 目录无音频文件: " + args.dir)
+        sys.exit(1)
+    print(f"BGM 选曲体检 {len(files)} 首(质心/滚降/低频占比/调性 → 档位):")
+    rows = []
+    for f in files:
+        p = os.path.join(args.dir, f)
+        try:
+            st = spectral_stats(p)
+        except Exception as e:
+            print(f"  {f:26s} ❌ {e}")
+            continue
+        if st is None:
+            print(f"  {f:26s} ⚠️ 音频过短/解码失败")
+            continue
+        tier = bgm_tier(st)
+        st["file"] = f
+        st["tier"] = tier
+        rows.append(st)
+        print(f"  {f:26s} 质心{st['centroid']:>6}Hz 滚降{st['rolloff']:>6}Hz 低频{st['lowfreq']*100:3.0f}% 大调{st['major']:.2f} 小调{st['minor']:.2f} → {tier}")
+    if args.json:
+        with open(args.json, "w", encoding="utf-8") as fp:
+            json.dump(rows, fp, ensure_ascii=False)
+    if not rows:
+        sys.exit(1)
+
+
 def cmd_qc(args):
     # --file 单文件质检(成片终检:时长/黑屏/静音;不按目录扫)
     if args.file:
@@ -115,6 +293,7 @@ def cmd_qc(args):
     print(f"质检 {len(files)} 个镜头（近黑帧阈值 {args.threshold}）")
     bad = []
     report = {"shots": {}}
+    ocr_warned = False
     for f in files:
         p = os.path.join(args.dir, f)
         try:
@@ -134,6 +313,18 @@ def cmd_qc(args):
                 flags.append("解码0帧")
             if r["duration_s"] < 0.5:
                 flags.append("时长过短")
+            # 字幕位文字渗漏扫描(整合 ai-film-skills pitfalls ⑫:提示词里的台词/数字/标签
+            # 会被画进画面字幕位;rapidocr 未装时优雅跳过)
+            text_bleed = {"skipped": True, "reason": ""}
+            if not args.no_ocr:
+                text_bleed = scan_text_bleed(p)
+                if text_bleed.get("skipped") and not ocr_warned:
+                    ocr_warned = True
+                    print("  ℹ️ " + (text_bleed.get("reason") or "OCR 跳过"))
+                if text_bleed.get("hits"):
+                    n = len(text_bleed["hits"])
+                    samples = "、".join(f"#{h['frame']}:{h['text']}" for h in text_bleed["hits"][:3])
+                    flags.append(f"字幕位文字×{n}({samples})")
             status = "OK" if not flags else "⚠️ " + ",".join(flags)
             print(f"  {f:12s} {r['duration_s']:6.2f}s {r['resolution']} 音轨:{r['audio_streams']}@{r['audio_rate']}Hz/{r['audio_channels']}ch 响度:{r['audio_rms']:.3f} 近黑:{r['dark_ratio']*100:3.0f}% {status}")
             report["shots"][f] = {
@@ -141,6 +332,7 @@ def cmd_qc(args):
                 "dark_ratio": r["dark_ratio"], "audio_streams": r["audio_streams"],
                 "audio_rate": r["audio_rate"], "audio_channels": r["audio_channels"],
                 "audio_rms": r["audio_rms"], "decoded_frames": r["decoded_frames"], "error": "",
+                "text_bleed": text_bleed,
             }
             if flags:
                 bad.append((f, flags))
@@ -1262,6 +1454,8 @@ def main():
     q.add_argument("--json", default="")
     q.add_argument("--shots", default="", help="只质检指定镜头(如 3 或 1,3;空=全部)")
     q.add_argument("--file", default="", help="单文件质检(成片终检;与 --dir 二选一)")
+    q.add_argument("--no-ocr", action="store_true", default=False,
+                   help="跳过字幕位文字渗漏 OCR 扫描(默认开启;未装 rapidocr 自动跳过)")
     fr = sub.add_parser("frames")
     fr.add_argument("--video", required=True)
     fr.add_argument("--out-dir", required=True)
@@ -1316,6 +1510,9 @@ def main():
     tr.add_argument("--target", type=float, default=30, help="目标总时长(秒)")
     tr.add_argument("--seg", type=float, default=4, help="单镜最长段长(秒)")
     tr.add_argument("--plan", default="")
+    bp = sub.add_parser("bgm-pick")
+    bp.add_argument("--dir", required=True, help="曲库目录(扫描 mp3/m4a/wav/flac/aac/ogg)")
+    bp.add_argument("--json", default="", help="另写频谱 JSON(选曲记录/许可 manifest 参考)")
     args = ap.parse_args()
     if args.cmd == "qc":
         cmd_qc(args)
@@ -1335,6 +1532,8 @@ def main():
         cmd_asr(args)
     elif args.cmd == "trailer":
         cmd_trailer(args)
+    elif args.cmd == "bgm-pick":
+        cmd_bgm_pick(args)
 
 
 if __name__ == "__main__":

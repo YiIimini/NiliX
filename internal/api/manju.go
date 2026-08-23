@@ -897,8 +897,8 @@ func manjuCreate(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(str(body["name"]))
 	novel := strings.TrimSpace(str(body["novel"]))
 	apiKey := strings.TrimSpace(str(body["apiKey"]))
-	if name == "" || novel == "" {
-		http.Error(w, `{"error":"请填剧名与小说路径"}`, http.StatusBadRequest)
+	if name == "" {
+		http.Error(w, `{"error":"请填剧名（小说可选：留空=视频脚本直出模式）"}`, http.StatusBadRequest)
 		return
 	}
 	if apiKey == "" {
@@ -910,6 +910,7 @@ func manjuCreate(w http.ResponseWriter, r *http.Request) {
 		"exitCode":   boolExitCode(ok),
 		"output":     out,
 		"configPath": configPath,
+		"scriptMode": novel == "",
 	})
 }
 
@@ -1109,6 +1110,207 @@ func manjuNovelSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": path})
+}
+
+// ---- 视频脚本直出模式(H3 官方格式分镜脚本 md,与小说解析并存二选一) ----
+
+// manjuScriptTarget 解析项目 + 集号 → 脚本文件路径(workdir/script/<ep>.md)与 configPath
+func manjuScriptTarget(project, episode string) (configPath, scriptPath, workdir string, err error) {
+	if project == "" {
+		return "", "", "", fmt.Errorf("缺少项目名")
+	}
+	configPath = filepath.Join(ManjuRootDir, project, "config.json")
+	if !fileExists(configPath) {
+		return "", "", "", fmt.Errorf("项目不存在: %s", project)
+	}
+	cfg, cerr := readManjuConfig(configPath)
+	if cerr != nil {
+		return "", "", "", cerr
+	}
+	P, _ := cfg["paths"].(map[string]any)
+	workdir = str(P["workdir"])
+	if workdir == "" {
+		return "", "", "", fmt.Errorf("项目 workdir 未配置")
+	}
+	ep := normalizeEpisode(orDefault(episode, "EP01"))
+	return configPath, filepath.Join(workdir, "script", ep+".md"), workdir, nil
+}
+
+// manjuScriptSave 保存视频渲染脚本 md(官方 H3 分镜格式)并启用脚本直出模式:
+// 写 <workdir>/script/<ep>.md + config paths.script 指向它。脚本文件指纹变化
+// (size/mtime)会使旧方案过期自动重新生成,无需手动清产物。
+func manjuScriptSave(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Project string `json:"project"`
+		Episode string `json:"episode"`
+		Text    string `json:"text"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	text := strings.TrimSpace(body.Text)
+	if text == "" {
+		http.Error(w, `{"error":"脚本内容为空"}`, http.StatusBadRequest)
+		return
+	}
+	configPath, scriptPath, _, err := manjuScriptTarget(body.Project, body.Episode)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := os.WriteFile(scriptPath, []byte(text), 0o644); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	cfg, err := readManjuConfig(configPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	P, _ := cfg["paths"].(map[string]any)
+	if P == nil {
+		P = map[string]any{}
+		cfg["paths"] = P
+	}
+	P["script"] = scriptPath
+	if err := writeManjuConfig(configPath, cfg); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": scriptPath, "script_mode": true})
+}
+
+// manjuScriptClear 清除视频脚本,项目回到小说解析模式
+func manjuScriptClear(w http.ResponseWriter, r *http.Request) {
+	project := strings.TrimSpace(r.URL.Query().Get("project"))
+	if project == "" {
+		http.Error(w, `{"error":"缺少项目名"}`, http.StatusBadRequest)
+		return
+	}
+	configPath := filepath.Join(ManjuRootDir, project, "config.json")
+	if !fileExists(configPath) {
+		writeErr(w, http.StatusBadRequest, "项目不存在: "+project)
+		return
+	}
+	cfg, err := readManjuConfig(configPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	P, _ := cfg["paths"].(map[string]any)
+	removed := ""
+	if P != nil {
+		if sp := strings.TrimSpace(str(P["script"])); sp != "" {
+			_ = os.RemoveAll(filepath.Dir(sp)) // 删 script/ 目录(含各集脚本)
+			removed = sp
+		}
+		delete(P, "script")
+	}
+	if err := writeManjuConfig(configPath, cfg); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": removed, "script_mode": false})
+}
+
+// manjuScriptImportFromNovel 从小说项目的「素材/分镜脚本/」目录导入某集分镜脚本
+// (爽文技能阶段6 产物:第NNN章_章节名_分镜脚本.md,分镜表 8 字段 + 每镜 H3 六段式,
+// 符合 H3 官方直通渲染格式)并启用脚本直出模式:复制到 <workdir>/script/<ep>.md
+// + config paths.script 指向它(指纹变化自动使旧方案过期重生成)。
+// 集号→章号映射:EP01→第001章。
+func manjuScriptImportFromNovel(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Project string `json:"project"`
+		Episode string `json:"episode"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	configPath, scriptPath, _, err := manjuScriptTarget(body.Project, body.Episode)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	cfg, err := readManjuConfig(configPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	P, _ := cfg["paths"].(map[string]any)
+	if P == nil {
+		P = map[string]any{}
+		cfg["paths"] = P
+	}
+	novel := strings.TrimSpace(str(P["novel"]))
+	if novel == "" {
+		writeErr(w, http.StatusBadRequest, "项目未配置小说目录(paths.novel),无法定位分镜脚本")
+		return
+	}
+	ep := normalizeEpisode(orDefault(body.Episode, "EP01"))
+	var chap string
+	if n, aerr := strconv.Atoi(strings.TrimPrefix(ep, "EP")); aerr == nil && n > 0 {
+		chap = fmt.Sprintf("%03d", n)
+	} else {
+		writeErr(w, http.StatusBadRequest, "集号无效: "+ep+"(应为 EP01/EP02…或数字)")
+		return
+	}
+	dir := filepath.Join(novel, "素材", "分镜脚本")
+	matches, _ := filepath.Glob(filepath.Join(dir, "第"+chap+"章*.md"))
+	if len(matches) == 0 {
+		writeErr(w, http.StatusNotFound, fmt.Sprintf("小说分镜脚本目录(%s)未找到「第%s章*_分镜脚本.md」;请确认已按爽文技能 H3分镜脚本文档模板 生成", dir, chap))
+		return
+	}
+	src := matches[0]
+	text, rerr := os.ReadFile(src)
+	if rerr != nil {
+		writeErr(w, http.StatusInternalServerError, "读取分镜脚本失败: "+rerr.Error())
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := os.WriteFile(scriptPath, text, 0o644); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	P["script"] = scriptPath
+	if err := writeManjuConfig(configPath, cfg); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": scriptPath, "source": src, "chapter": chap, "script_mode": true})
+}
+
+// manjuScriptStatus 脚本直出模式状态(active/path/preview,供前端显示与切换)
+func manjuScriptStatus(w http.ResponseWriter, r *http.Request) {
+	project := strings.TrimSpace(r.URL.Query().Get("project"))
+	configPath := filepath.Join(ManjuRootDir, project, "config.json")
+	if !fileExists(configPath) {
+		writeJSON(w, http.StatusOK, map[string]any{"active": false})
+		return
+	}
+	cfg, err := readManjuConfig(configPath)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"active": false})
+		return
+	}
+	P, _ := cfg["paths"].(map[string]any)
+	sp := strings.TrimSpace(str(P["script"]))
+	active := sp != "" && fileExists(sp)
+	res := map[string]any{"active": active, "path": sp, "script_mode": active}
+	if active {
+		if b, rerr := os.ReadFile(sp); rerr == nil {
+			runes := []rune(string(b))
+			res["bytes"] = len(runes)
+			if len(runes) > 160 {
+				res["preview"] = string(runes[:160]) + "…"
+			} else {
+				res["preview"] = string(runes)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // manjuModelDirs 各模型字段对应的 ComfyUI 模型子目录（依次查找，取第一个非空）。
@@ -2240,6 +2442,10 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/manju/settings", manjuSettingsPost)
 	mux.HandleFunc("GET /api/manju/novel", manjuNovelInfo)
 	mux.HandleFunc("POST /api/manju/novel/save", manjuNovelSave)
+	mux.HandleFunc("GET /api/manju/script", manjuScriptStatus)
+	mux.HandleFunc("POST /api/manju/script/save", manjuScriptSave)
+	mux.HandleFunc("POST /api/manju/script/clear", manjuScriptClear)
+	mux.HandleFunc("POST /api/manju/script/import-from-novel", manjuScriptImportFromNovel)
 	mux.HandleFunc("GET /api/manju/models", manjuModels)
 	mux.HandleFunc("POST /api/manju/env", manjuEnv)
 	mux.HandleFunc("POST /api/manju/run", manjuRun)

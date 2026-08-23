@@ -43,6 +43,7 @@ type manjuCtx struct {
 	chapters     string
 	only         string
 	novel        string // 实际使用的小说文件(前端覆盖优先)
+	scriptMode   bool   // 视频脚本直出模式(输入为 H3 官方格式的分镜脚本 md,而非小说正文)
 	auto         bool   // 全本自动分集模式:该集章节由引擎按内容量切分(方案复用校验用)
 	llm          *manjuLLM
 	comfy        *comfyClient
@@ -236,23 +237,32 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 		workdir:      str(P["workdir"]),
 		qcRerender:   map[int]int{},
 	}
+	// 视频脚本直出模式:config paths.script 指向 H3 官方格式分镜脚本 md 时启用——
+	// ctx.novel 切换到脚本文件(复用指纹/复用校验/章节范围标记),方案由 manjuScriptSystem 直出。
+	// 章节范围固定 "script"(脚本无章节概念),保证复用校验稳定;脚本文件变化(指纹)强制重生成。
+	if sp := strings.TrimSpace(str(P["script"])); sp != "" && fileExists(sp) {
+		ctx.scriptMode = true
+		ctx.novel = sp
+		ctx.chapters = "script"
+	}
 	if ctx.episode == "" {
 		ctx.episode = "EP01"
 	}
 	// 章节范围语义归一(与 manjuRun 同一套规则;抽卡方案/智能体分析/诊断等旁路入口
 	// 不再各自漏归一化——"0" 曾被当字面章节号报"章节不存在: 0"):
 	// 空/0 = 全书 1-N;集数纯数字 N>0 = 第 N 集即第 N 章(chapters=N-N)
-	if ctx.chapters == "" || ctx.chapters == "0" {
+	// 脚本模式跳过归一化(chapters 已固定 "script")
+	if !ctx.scriptMode && (ctx.chapters == "" || ctx.chapters == "0") {
 		if n := manjuChapterTotal(configPath); n > 0 {
 			ctx.chapters = fmt.Sprintf("1-%d", n)
 		} else {
 			ctx.chapters = "1-3"
 		}
 	}
-	if epNum, err := strconv.Atoi(strings.TrimSpace(epEff)); err == nil && epNum > 0 {
+	if epNum, err := strconv.Atoi(strings.TrimSpace(epEff)); err == nil && epNum > 0 && !ctx.scriptMode {
 		ctx.chapters = fmt.Sprintf("%d-%d", epNum, epNum)
 	}
-	if novel != "" {
+	if novel != "" && !ctx.scriptMode {
 		if fileExists(novel) {
 			ctx.novel = novel
 		}
@@ -600,6 +610,9 @@ func allChapterNums(novelText string) []int {
 }
 
 func (ctx *manjuCtx) chapterText() (string, error) {
+	if ctx.novel == "" {
+		return "", fmt.Errorf("未配置输入源: 请在「视频脚本直出」卡片粘贴脚本,或在渲染配置中选择小说文件")
+	}
 	data, err := os.ReadFile(ctx.novel)
 	if err != nil {
 		return "", fmt.Errorf("读小说失败: %w", err)
@@ -1038,6 +1051,7 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 		if reuse {
 			ctx.writeCharactersJSON(plan)
 			lg.logf("♻️  复用方案: " + filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json"))
+			ctx.recordPlanFingerprint(plan, lg) // 反同质化:复用也回填指纹(老方案无 directing 则记空五维)
 			return plan, nil
 		}
 		if legacy {
@@ -1052,34 +1066,50 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 		return nil, cerr
 	}
 	runes := len([]rune(chapterText))
-	lg.logf("📖 章节 " + ctx.chapters + "（" + strconv.Itoa(runes) + " 字）")
+	if ctx.scriptMode {
+		lg.logf("🎬 视频脚本直出模式: " + filepath.Base(ctx.novel) + "（" + strconv.Itoa(runes) + " 字脚本）")
+	} else {
+		lg.logf("📖 章节 " + ctx.chapters + "（" + strconv.Itoa(runes) + " 字）")
+	}
 	if runes > 20000 {
 		// 超长静默截断会让超出部分的剧情根本没进方案,视频自然对不上——必须明示
 		lg.logf("  ⚠️ 内容 " + strconv.Itoa(runes) + " 字超出 20000 字上限,超出部分可能未被方案覆盖(建议缩小章节范围或分集)")
 	}
-	lg.logf("🤖 大模型直出 人物/场景/分镜...")
+	lg.logf("🤖 大模型直出 人物/场景/分镜" + manjuModeTag(ctx.scriptMode) + "...")
 	sys := manjuDirectSystem(ctx.cfg, ctx.style)
+	if ctx.scriptMode {
+		// 视频脚本直出:输入即镜头级脚本,直接映射为方案;不走小说素材注入
+		sys = manjuScriptSystem(ctx.cfg, ctx.style)
+	}
 	// 小说素材完整注入(通用目录约定:素材/人物生成提示词.md、素材/场景*.md、素材/其它、设定集/*.md、封面/封面提示词.md):
 	// 方案生成时全部参考——角色/场景 image_prompt 贴合素材,世界观/创作规范贴合设定集,避免「素材白准备」
 	// 用户规则(2026-08):不注入总集的 风格/负面(StylePrompt/NegPrompt)——渲染风格/负面
 	// 一律用用户配置(config.style / render.neg_prompt);仅 AI 一条龙分析时读总集并写回配置。
-	if assets := scanNovelAssets(ctx.novelRootDir()); len(assets.Files) > 0 {
-		lg.logf("📎 已利用小说素材: " + strings.Join(assets.Files, "、"))
-		if assets.Setting != "" {
-			sys += "\n\n【小说设定集·世界观/大纲/创作规范(角色设定/场景设定/剧情线/文风必须贴合,禁止与设定冲突;未知细节以本章原文为准)】\n" + assets.Setting
+	if !ctx.scriptMode {
+		if assets := scanNovelAssets(ctx.novelRootDir()); len(assets.Files) > 0 {
+			lg.logf("📎 已利用小说素材: " + strings.Join(assets.Files, "、"))
+			if assets.Setting != "" {
+				sys += "\n\n【小说设定集·世界观/大纲/创作规范(角色设定/场景设定/剧情线/文风必须贴合,禁止与设定冲突;未知细节以本章原文为准)】\n" + assets.Setting
+			}
+			if assets.CharPrompt != "" {
+				sys += "\n\n【小说素材·人物生成提示词(角色 image_prompt 必须贴合此文件的人物描述——外观/服装/气质/记忆点以其为准,再结合章节原文细节;不要照抄整段,提炼为可渲染英文)】\n" + assets.CharPrompt
+			}
+			if assets.ScenePrompt != "" {
+				sys += "\n\n【小说素材·场景提示词(场景 image_prompt 必须贴合此文件的场景描述,再结合本章原文)】\n" + assets.ScenePrompt
+			}
+			if assets.ExtraPrompt != "" {
+				sys += "\n\n【小说素材·其它提示词(道具/氛围/H3 母版等,如有相关镜头尽量贴合)】\n" + assets.ExtraPrompt
+			}
+			if assets.CoverPrompt != "" {
+				sys += "\n\n【封面提示词参考(全剧美术基调与封面一致)】\n" + assets.CoverPrompt
+			}
 		}
-		if assets.CharPrompt != "" {
-			sys += "\n\n【小说素材·人物生成提示词(角色 image_prompt 必须贴合此文件的人物描述——外观/服装/气质/记忆点以其为准,再结合章节原文细节;不要照抄整段,提炼为可渲染英文)】\n" + assets.CharPrompt
-		}
-		if assets.ScenePrompt != "" {
-			sys += "\n\n【小说素材·场景提示词(场景 image_prompt 必须贴合此文件的场景描述,再结合本章原文)】\n" + assets.ScenePrompt
-		}
-		if assets.ExtraPrompt != "" {
-			sys += "\n\n【小说素材·其它提示词(道具/氛围/H3 母版等,如有相关镜头尽量贴合)】\n" + assets.ExtraPrompt
-		}
-		if assets.CoverPrompt != "" {
-			sys += "\n\n【封面提示词参考(全剧美术基调与封面一致)】\n" + assets.CoverPrompt
-		}
+	}
+	// 反同质化(整合 ai-film-skills directing 指纹机制):同小说历史摘要注入,
+	// 要求新方案五维与近 3 集拉开距离、高潮/首尾手法不与全部历史重复(历史为空则无注入)
+	if hist := ctx.manjuFingerprintHistorySummary(nil); hist != "" {
+		lg.logf("  🧬 反同质化:注入 " + filepath.Base(ctx.novel) + " 历史指纹摘要(近 3 集)")
+		sys += "\n\n【防同质化·历史冲突警告(整合 ai-film-skills 指纹查重,必须与历史拉开距离)】\n" + hist
 	}
 	// 生成并校验:输出被截断/非 JSON/无镜头都视为无效,追加精简约束重试一次
 	plan, err = ctx.llm.chatJSON(sys, truncate(chapterText, 20000), 0.4)
@@ -1128,6 +1158,7 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 			lg.logf("  ⚠️ 方案修复重试失败,沿用原方案继续")
 		}
 	}
+	ctx.recordPlanFingerprint(plan, lg) // 反同质化闭环:方案定稿即写回指纹(漏了下次查重就失效)
 	return plan, nil
 }
 
@@ -1174,6 +1205,9 @@ func (ctx *manjuCtx) validatePlan(plan map[string]any, shots []manjuShot) []stri
 			}
 		}
 	}
+	// 反同质化(整合 ai-film-skills fingerprint.md):vars 近 3 集撞 ≥3 维 / signature 全历史撞 ≥2 项
+	// → 判问题进既有「带意见修复重试」闭环(修复不了沿用原方案,不阻断)
+	problems = append(problems, ctx.planFingerprintProblems(plan)...)
 	return problems
 }
 
@@ -3059,16 +3093,21 @@ func manjuCreateProject(name, novel, apiKey string) (string, string, bool) {
 		return "❌ 剧名无效\n[exit 1]", "", false
 	}
 	novel = strings.Trim(novel, `" `)
-	// 审计 F1:novel 必须位于小说库根目录内(否则 config.paths.novel 可指向任意文件,
-	// 后续 GET /api/manju/outputs 等免 token 入口经 newManjuCtx 动态扩 fs 白名单 → 任意文件读)
-	if _, gerr := manjuGuardNovel(novel); gerr != nil {
-		out.WriteString("❌ 小说路径必须在小说库根目录内: " + gerr.Error() + "\n[exit 1]")
-		return out.String(), "", false
-	}
-	novelFile, novelDir := resolveNovelPath(novel)
-	if novelFile == "" {
-		out.WriteString("❌ 小说路径无效或未找到正文文件: " + novel + "\n[exit 1]")
-		return out.String(), "", false
+	// 输入方式二选一:novel 非空 = 小说解析模式(须在小说库根目录内,否则后续 GET 免 token
+	// 入口经 newManjuCtx 动态扩 fs 白名单 → 任意文件读);novel 空 = 视频脚本直出模式
+	// (创建后到「视频脚本直出」卡片粘贴 H3 官方格式脚本,config paths.script 由 script/save 写入)
+	var novelFile, novelDir string
+	if novel != "" {
+		// 审计 F1:novel 必须位于小说库根目录内
+		if _, gerr := manjuGuardNovel(novel); gerr != nil {
+			out.WriteString("❌ 小说路径必须在小说库根目录内: " + gerr.Error() + "\n[exit 1]")
+			return out.String(), "", false
+		}
+		novelFile, novelDir = resolveNovelPath(novel)
+		if novelFile == "" {
+			out.WriteString("❌ 小说路径无效或未找到正文文件: " + novel + "\n[exit 1]")
+			return out.String(), "", false
+		}
 	}
 	projDir := filepath.Join(ManjuRootDir, clean)
 	if _, err := os.Stat(projDir); err == nil {
@@ -3087,12 +3126,18 @@ func manjuCreateProject(name, novel, apiKey string) (string, string, bool) {
 	if err := writeManjuConfig(filepath.Join(projDir, "config.json"), cfg); err != nil {
 		return "❌ 写 config 失败: " + err.Error() + "\n[exit 1]", "", false
 	}
-	// 从小说目录检索封面图复制到项目 assets/，供左侧栏海报展示
-	if cover := copyProjectCover(novelDir, projDir); cover != "" {
-		out.WriteString("  ✅ 封面已检索: " + filepath.Base(cover) + "\n")
+	// 从小说目录检索封面图复制到项目 assets/，供左侧栏海报展示(仅小说模式)
+	if novelDir != "" {
+		if cover := copyProjectCover(novelDir, projDir); cover != "" {
+			out.WriteString("  ✅ 封面已检索: " + filepath.Base(cover) + "\n")
+		}
 	}
 	out.WriteString("📁 项目已创建: " + projDir + "\n")
-	out.WriteString("📖 小说: " + novelFile + "\n")
+	if novelFile != "" {
+		out.WriteString("📖 小说: " + novelFile + "\n")
+	} else {
+		out.WriteString("🎬 视频脚本直出模式: 创建后到「视频脚本直出」卡片粘贴 H3 官方格式脚本\n")
+	}
 	out.WriteString("  ✅ config.json 已生成\n")
 	return out.String(), filepath.Join(projDir, "config.json"), true
 }
