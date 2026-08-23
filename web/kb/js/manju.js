@@ -492,7 +492,7 @@
       // 视频脚本直出(H3 官方格式分镜脚本,与小说解析二选一)
       $("manju-script-paste").addEventListener("click", () => this.openScriptPaste());
       $("manju-script-clear").addEventListener("click", () => this.doScriptClear());
-      $("manju-script-template").addEventListener("click", () => this.openScriptPaste(true));
+      // 2026-08-23 用户要求:模板示例移至新建项目弹窗,主页不再提供
       // 2026-08-23 用户要求:主页脚本卡片收起/展开(只展示结果,配置在新建项目弹窗)
       const stog = $("manju-script-toggle");
       const sbody = $("manju-script-body");
@@ -3575,9 +3575,8 @@
       const tpl = $("mc-script-tpl");
       if (tpl) tpl.addEventListener("click", () => {
         const s = $("mc-script-text");
-        if (!s.value.trim()) s.value = `# 视频渲染脚本 EP01
-[Shot 1] 中景,缓慢推近。青年坐在桌边,低声说:"来了。"环境:雨声,木地板吱呀。配乐:古琴慢板。
-[Shot 2] At 00:04.000,切特写。女子推门而入,雨水顺着斗笠滴落。`;
+        // 2026-08-23 用户要求:模板示例移至新建项目弹窗——用完整 H3 官方格式模板
+        s.value = this.scriptTemplate();
         this.createScript = s.value;
       });
       // 输入方式切换:脚本直出模式隐藏小说目录行,显示脚本粘贴区(2026-08-23 用户要求:新建弹窗直接配置脚本)
