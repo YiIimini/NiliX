@@ -2730,7 +2730,7 @@
     renderGachaModal() {
       const p = this.plan || {};
       const fileUrl = (p2) => "/api/fs/file?path=" + encodeURIComponent(p2);
-      const VIEWS = [["", "正面", "🎭"], ["full", "全身", "🧍"], ["side", "侧面", "↔️"], ["detail", "细节", "🔍"]];
+      const VIEWS = [["", "正面", "🎭"], ["full", "全身", "🧍"], ["side", "侧面", "↔️"], ["detail", "细节", "🔍"], ["q", "Q版", "🐣"]];
       let html = "";
       if (!p.exists) {
         html = `<div class="manju-empty">

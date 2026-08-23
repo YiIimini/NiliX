@@ -2981,7 +2981,7 @@ select.manju-input {
 .manju-modal-close:hover { color: var(--danger); border-color: var(--danger); transform: rotate(90deg); }
 .manju-modal-close svg { width: 15px; height: 15px; }
 /* 使用说明等宽窗口 */
-.manju-modal-panel.wide { width: min(980px, 94vw); }
+.manju-modal-panel.wide { width: min(1280px, 96vw); }
 .manju-form { display: flex; flex-direction: column; gap: 10px; }
 .manju-form label { font-size: 12.5px; color: var(--muted); }
 .manju-check { display: flex; align-items: center; gap: 6px; }
@@ -3190,7 +3190,7 @@ select.manju-input {
 
 /* 角色抽卡 */
 .manju-gacha-sub { margin: -8px 0 12px; }
-.manju-gacha-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+.manju-gacha-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 16px; }
 
 /* 角色卡片:更宽更精致,层次分明 */
 .manju-char {
