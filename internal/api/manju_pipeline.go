@@ -965,6 +965,7 @@ type manjuShot struct {
 	Dialogue   string
 	Narration  string
 	Duration   int
+	Style      string   // 镜级渲染风格(2026-08-23 多风格并用:缺省继承全局 style;按镜差异化如 real+magical/ink 回忆)
 	H3Prompt   string
 	TakeTail   bool        // 多切点长镜的内镜:不独立渲染,由组头一次生成覆盖
 	TakeGroup  []manjuShot // 多切点长镜组头携带整组(含自身;单镜为空)
@@ -1006,6 +1007,7 @@ func planShots(plan map[string]any) ([]manjuShot, error) {
 			Action:    str(m["action"]),
 			Dialogue:  str(m["dialogue"]),
 			Narration: str(m["narration"]),
+			Style:     str(m["style"]),
 			H3Prompt:  str(m["h3_prompt"]),
 		}
 		s.ID, _ = manjuToInt(m["shot_id"])
@@ -1603,7 +1605,12 @@ func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map
 // genShotPromptRaw 生成单镜 H3 提示词;fix 非空时追加修复意见(校验未过修复重试用)
 func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]map[string]any, fix string) (string, error) {
 	hasChar := len(s.Characters) > 0
-	sys := manjuShotPromptSystem(hasChar, ctx.style)
+	// 镜级风格(2026-08-23 多风格并用):shots[].style 优先,缺省继承全局 ctx.style
+	shotStyle := strings.TrimSpace(s.Style)
+	if shotStyle == "" {
+		shotStyle = ctx.style
+	}
+	sys := manjuShotPromptSystem(hasChar, shotStyle)
 	// 用户规则(2026-08):普通执行管线/一条龙不解析小说总集——风格/负面一律用
 	// 用户配置(config.style / render.neg_prompt)。仅「AI 一条龙」在
 	// manjuAgentStyleAnalyze 分析时读总集并写回配置,此后再由本处使用配置值。

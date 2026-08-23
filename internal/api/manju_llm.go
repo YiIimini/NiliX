@@ -574,6 +574,7 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
       "shot_size": "特写/近景/中景/全景/远景",
       "camera": "运镜（类型+幅度+速度，如：缓慢推近）",
       "action": "画面动作描述",
+      "style": "该镜渲染风格(2026-08-23 多风格并用:可省略=继承全局风格;需要差异化时给,如写实对话镜=real、奇幻特效镜=real+magical realism、回忆/梦境镜=ink+watercolor、赛博镜=cyberpunk;可 + 组合多个元素,总元素≤4;风格需贴合该镜情绪/内容)",
       "dialogue": "角色:台词（逐字引用小说原文对白，禁止改写/扩写/编造；多句用换行分隔；无对白为空）。【说话人硬约束】\"角色:\"前缀必须是本镜 characters 中实际开口的角色，谁说的就是谁，禁止张冠李戴；角色说的话一律放 dialogue，禁止混入旁白",
       "narration": "旁白（仅原文叙述性文字/画外音，逐字引用）。【硬约束】旁白禁止包含任何角色的台词——角色说的每句话必须放进 dialogue 并标注对应角色；原文中\"XXX说\"的对白必须标为该角色 dialogue；无旁白则空；有台词时旁白留空避免重复",
       "duration": 5
@@ -647,6 +648,7 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
       "shot_size": "特写/近景/中景/全景/远景",
       "camera": "运镜（类型+幅度+速度，如：缓慢推近）",
       "action": "画面动作描述",
+      "style": "该镜渲染风格(2026-08-23 多风格并用:可省略=继承全局风格;需要差异化时给,如写实对话镜=real、奇幻特效镜=real+magical realism、回忆/梦境镜=ink+watercolor;可 + 组合多个元素,总元素≤4;风格贴合该镜情绪/内容)",
       "dialogue": "角色:台词（脚本台词逐字引用，禁止改写/扩写/编造；多句用换行分隔；无对白为空）。【说话人硬约束】"角色:"前缀必须是本镜 characters 中实际开口的角色，谁说的就是谁",
       "narration": "旁白（画外音，脚本原文；无则空；有台词时旁白留空避免重复）",
       "duration": 5,
