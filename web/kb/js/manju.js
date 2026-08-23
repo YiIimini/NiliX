@@ -493,6 +493,16 @@
       $("manju-script-paste").addEventListener("click", () => this.openScriptPaste());
       $("manju-script-clear").addEventListener("click", () => this.doScriptClear());
       $("manju-script-template").addEventListener("click", () => this.openScriptPaste(true));
+      // 2026-08-23 用户要求:主页脚本卡片收起/展开(只展示结果,配置在新建项目弹窗)
+      const stog = $("manju-script-toggle");
+      const sbody = $("manju-script-body");
+      if (stog && sbody) {
+        stog.addEventListener("click", () => {
+          const hidden = sbody.style.display === "none";
+          sbody.style.display = hidden ? "" : "none";
+          stog.textContent = (hidden ? "▾ " : "▸ ") + "视频脚本直出";
+        });
+      }
 
       // 风格:预设按钮按单一数据源渲染;点击即多选切换(点中=选中,再点=取消,组合以 + 连接)
       this.renderStylePresets();
@@ -3536,7 +3546,15 @@
               <button id="mc-novel-pick" class="hrs-btn">选择目录</button>
             </div>
           </div>
-          <div id="mc-script-tip" class="manju-meta" style="${this.createMode === "script" ? "" : "display:none"}">🎬 视频脚本直出模式：创建后到「视频脚本直出」卡片粘贴 H3 官方格式分镜脚本，LLM 一步直出渲染方案（逐镜 H3 提示词）。</div>
+          <div id="mc-script-tip" class="manju-meta" style="${this.createMode === "script" ? "" : "display:none"}">🎬 视频脚本直出模式：直接粘贴 H3 官方格式分镜脚本（或留空创建后从小说分镜脚本导入/主页补充），LLM 一步直出渲染方案（逐镜 H3 提示词）。</div>
+          <div id="mc-script-row" style="${this.createMode === "script" ? "" : "display:none"}">
+            <label>视频脚本正文（H3 官方格式分镜脚本，可直接粘贴；留空=创建后再配置）</label>
+            <textarea id="mc-script-text" class="manju-input manju-textarea" rows="8" spellcheck="false" placeholder="[Shot 1] 景别,运镜。画面动作。&#10;台词:角色:&quot;原文&quot;&#10;音效:…">${esc(this.createScript)}</textarea>
+            <div class="manju-row" style="margin-top:6px">
+              <button id="mc-script-tpl" class="hrs-btn">📋 插入官方格式模板</button>
+              <span class="manju-meta" style="margin-left:8px">创建后自动启用脚本直出</span>
+            </div>
+          </div>
           <label>DeepSeek API Key${saved}</label>
           <input id="mc-key" class="manju-input" placeholder="${this.savedKey ? "留空自动用默认 Key" : "sk-...（留空则用已保存的默认 Key）"}">
           <label class="manju-check"><input id="mc-remember" type="checkbox" checked> 记住为默认 Key（下次新建自动使用）</label>
@@ -3552,11 +3570,22 @@
       $("mc-novel-pick").addEventListener("click", () => this.openPicker("create"));
       $("mc-cancel").addEventListener("click", () => this.closeModal());
       $("mc-do").addEventListener("click", () => this.doCreate());
-      // 输入方式切换:脚本直出模式隐藏小说目录行(小说可选/可留空)
+      const st = $("mc-script-text");
+      if (st) st.addEventListener("input", (e) => { this.createScript = e.target.value; });
+      const tpl = $("mc-script-tpl");
+      if (tpl) tpl.addEventListener("click", () => {
+        const s = $("mc-script-text");
+        if (!s.value.trim()) s.value = `# 视频渲染脚本 EP01
+[Shot 1] 中景,缓慢推近。青年坐在桌边,低声说:"来了。"环境:雨声,木地板吱呀。配乐:古琴慢板。
+[Shot 2] At 00:04.000,切特写。女子推门而入,雨水顺着斗笠滴落。`;
+        this.createScript = s.value;
+      });
+      // 输入方式切换:脚本直出模式隐藏小说目录行,显示脚本粘贴区(2026-08-23 用户要求:新建弹窗直接配置脚本)
       const applyMode = () => {
         this.createMode = $("mc-mode-script").checked ? "script" : "novel";
         $("mc-novel-row").style.display = this.createMode === "script" ? "none" : "";
         $("mc-script-tip").style.display = this.createMode === "script" ? "" : "none";
+        $("mc-script-row").style.display = this.createMode === "script" ? "" : "none";
       };
       $("mc-mode-novel").addEventListener("change", applyMode);
       $("mc-mode-script").addEventListener("change", applyMode);
@@ -3586,7 +3615,18 @@
           ls("novel", "");
           this.loadProjects(r.configPath);
           if (r.scriptMode) {
-            this.setNote("项目已创建（视频脚本直出）→ 到「视频脚本直出」卡片粘贴脚本");
+            // 2026-08-23 用户要求:视频脚本直出配置直接在新建弹窗操作——
+            // 新建时粘贴的脚本自动保存并启用脚本直出;留空则提示后续配置
+            const script = (this.createScript || "").trim();
+            if (script) {
+              const proj = String(r.configPath || "").split(/[\\/]/).filter(Boolean).slice(-2, -1)[0] || this.createName;
+              post("/api/manju/script/save", { project: proj, episode: "EP01", text: script }).then((sr) => {
+                this.refreshScriptStatus();
+                this.setNote(sr && sr.ok ? "🎬 项目已创建，脚本直出已启用（脚本已保存）" : "🎬 项目已创建（脚本直出）");
+              }).catch(() => this.setNote("🎬 项目已创建（脚本直出，脚本保存失败可到主页补充）"));
+            } else {
+              this.setNote("🎬 项目已创建（视频脚本直出）→ 主页卡片粘贴脚本或从小说分镜脚本导入");
+            }
           }
         } else {
           $("mc-do").textContent = "创建项目";

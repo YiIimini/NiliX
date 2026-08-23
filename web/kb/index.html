@@ -303,20 +303,22 @@
             <div id="manju-novel-meta" class="manju-meta"></div>
           </div>
 
-          <!-- 视频脚本直出(H3 官方格式分镜脚本,与小说解析二选一) -->
+          <!-- 视频脚本直出(H3 官方格式分镜脚本,与小说解析二选一;2026-08-23 配置移至新建项目弹窗,主页只展示结果+可折叠) -->
           <div class="manju-card">
             <div class="manju-card-head">
-              <h3 class="manju-card-title">视频脚本直出</h3>
+              <h3 class="manju-card-title" style="cursor:pointer" id="manju-script-toggle" title="点击收起/展开">▾ 视频脚本直出</h3>
               <div class="manju-save-group">
                 <button id="manju-script-template" class="hrs-btn" title="插入 H3 官方格式分镜脚本示例模板">模板示例</button>
               </div>
             </div>
-            <div class="manju-row">
-              <span class="manju-label" title="输入符合 MiniMax H3 官方规范的分镜脚本 md([Shot N] 时间码/画面/台词/音效),LLM 一步直出完整渲染方案(逐镜 H3 提示词);与小说解析二选一,启用后方案以脚本为准">输入方式</span>
-              <button id="manju-script-paste" class="hrs-btn hrs-btn-primary">🎬 粘贴视频脚本</button>
-              <button id="manju-script-clear" class="hrs-btn hidden">清除脚本(回小说)</button>
+            <div id="manju-script-body">
+              <div class="manju-row">
+                <span class="manju-label" title="配置在「新建项目」弹窗完成;此处展示脚本直出结果,可更换/清除">输入方式</span>
+                <button id="manju-script-paste" class="hrs-btn hrs-btn-primary">🎬 更换脚本</button>
+                <button id="manju-script-clear" class="hrs-btn hidden">清除脚本(回小说)</button>
+              </div>
+              <div id="manju-script-meta" class="manju-meta"></div>
             </div>
-            <div id="manju-script-meta" class="manju-meta"></div>
           </div>
 
           <!-- 渲染配置 -->
