@@ -3157,6 +3157,9 @@ func manjuCreateProject(name, novel, apiKey string) (string, string, bool) {
 		apiKey = manjuDefaultAPIKey()
 	}
 	cfg := manjuDefaultConfig(clean, novelFile, novelDir, apiKey)
+	// 2026-08-23 用户规则:渲染参数与风格创作期规划(爽文技能 立项.json render 字段),
+	// 建项目时自动应用;config 已有非零显式值优先,规划作默认
+	applyNovelRenderPlan(cfg, novelDir)
 	if err := writeManjuConfig(filepath.Join(projDir, "config.json"), cfg); err != nil {
 		return "❌ 写 config 失败: " + err.Error() + "\n[exit 1]", "", false
 	}
@@ -3174,6 +3177,55 @@ func manjuCreateProject(name, novel, apiKey string) (string, string, bool) {
 	}
 	out.WriteString("  ✅ config.json 已生成\n")
 	return out.String(), filepath.Join(projDir, "config.json"), true
+}
+
+// applyNovelRenderPlan 读取小说目录 立项.json 的 render 规划,合并进 config.render
+// (2026-08-23 用户规则:渲染参数与风格创作期规划,建项目自动应用;config 已有非零显式值优先,规划作默认)
+func applyNovelRenderPlan(cfg map[string]any, novelDir string) {
+	if novelDir == "" {
+		return
+	}
+	planPath := filepath.Join(novelDir, "立项.json")
+	if !fileExists(planPath) {
+		return
+	}
+	var plan map[string]any
+	if b, err := os.ReadFile(planPath); err == nil {
+		_ = json.Unmarshal(b, &plan)
+	}
+	rp, _ := plan["render"].(map[string]any)
+	if len(rp) == 0 {
+		return
+	}
+	R, _ := cfg["render"].(map[string]any)
+	if R == nil {
+		R = map[string]any{}
+		cfg["render"] = R
+	}
+	for k, v := range rp {
+		if _, exists := R[k]; !exists || isZeroVal(R[k]) {
+			R[k] = v
+		}
+	}
+	// style 顶层(config.style):规划风格非空且 config 未设才应用
+	if s := str(rp["style"]); s != "" && str(cfg["style"]) == "" {
+		cfg["style"] = s
+	}
+}
+
+// isZeroVal 渲染参数"未设置"判定(空串/0/false 视为未设,让规划默认生效)
+func isZeroVal(v any) bool {
+	switch x := v.(type) {
+	case string:
+		return strings.TrimSpace(x) == ""
+	case float64:
+		return x == 0
+	case int:
+		return x == 0
+	case bool:
+		return !x
+	}
+	return false
 }
 
 // copyProjectCover 从小说目录检索封面图片(文件名含 主图/封面/cover/poster 优先)复制到项目 assets/，
