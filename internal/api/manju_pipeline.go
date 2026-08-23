@@ -1715,6 +1715,12 @@ const manjuPortraitW, manjuPortraitH = 1024, 1024
 // 防生成不相干新角色)。initStrength:denoise 强度——视图换视角需要更高(0.8)才不像主图正面,
 // 0.6 对 turbo 模型重绘量太小(四视图全变正面,用户反馈)。
 func (ctx *manjuCtx) portraitWF(prompt string, seed int, prefix string, char map[string]any, initImage string, initStrength float64) map[string]any {
+	// 定妆引擎(2026-08-23 用户规则:按创作需求选):render.char_engine = krea2/zimage/sdxl
+	// 缺省:风格含 real → Z-Image(写实人像质优);krea2=强指令跟随(复杂妆造/精细风格定妆)
+	eng := strings.TrimSpace(str(ctx.R["char_engine"]))
+	if eng == "krea2" {
+		return wfKrea2(prompt, str(ctx.R["krea2_unet"]), str(ctx.R["krea2_clip"]), str(ctx.R["krea2_vae"]), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt(), initImage, initStrength)
+	}
 	if manjuStyleHas(ctx.style, "real") {
 		return wfZImage(prompt, str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt(), initImage, initStrength)
 	}
@@ -3340,6 +3346,10 @@ func manjuDefaultConfig(name, novelFile, novelDir, apiKey string) map[string]any
 			"z_image_unet":   "z_image_turbo_bf16.safetensors",
 			"z_image_clip":   "qwen_3_4b.safetensors",
 			"z_image_vae":    "ae.safetensors",
+			"krea2_unet":     "krea2_turbo_fp8_scaled.safetensors",
+			"krea2_clip":     "qwen3vl_4b_fp8_scaled.safetensors",
+			"krea2_vae":      "qwen_image_vae.safetensors",
+			"char_engine":    "zimage", // 定妆引擎:zimage(默认写实)/krea2(强指令跟随)/sdxl
 			"turbo_lora":     "minimax_h3_turbo_4step_ema.safetensors",
 			"animagine_ckpt": "animagine-xl-3.1.safetensors",
 			"char_models":    map[string]any{"男": "sd_xl_base_1.0.safetensors", "女": "animagine-xl-3.1.safetensors"},
