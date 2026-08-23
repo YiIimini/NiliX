@@ -27,6 +27,7 @@ type dirFile struct {
 	Words int    `json:"words"`
 	Dir   string `json:"dir"`
 	No    int    `json:"no"`
+	Kind  string `json:"kind"` // 创作输出分类: storyboard=分镜脚本 / prompt=提示词 / 空=其他附加(2026-08-23 用户规则)
 }
 
 type dirProject struct {
@@ -80,6 +81,11 @@ func chapterNo(name string) int {
 }
 
 func classifyTextFile(relDir, name string) (bool, int) {
+	// 创作输出先排除:分镜脚本文件名常含"第N章"(如 第001章_xxx_分镜脚本.md),
+	// 不能与正文章节混排(2026-08-23 用户规则:分镜脚本独立一栏)
+	if isStoryboardFile(relDir, name) {
+		return false, 0
+	}
 	d := strings.ToLower(relDir)
 	if strings.Contains(d, "正文") || strings.Contains(d, "content") || strings.Contains(d, "chapter") {
 		return true, chapterNo(name)
@@ -88,6 +94,26 @@ func classifyTextFile(relDir, name string) (bool, int) {
 		return true, chapterNo(name)
 	}
 	return false, 0
+}
+
+// isStoryboardFile 是否为分镜脚本文件(路径/文件名含"分镜脚本"或"分镜")
+func isStoryboardFile(relDir, name string) bool {
+	d := strings.ToLower(relDir)
+	n := strings.ToLower(name)
+	return strings.Contains(d, "分镜脚本") || strings.Contains(d, "分镜") ||
+		strings.Contains(n, "分镜脚本") || strings.Contains(n, "分镜")
+}
+
+// extraKind 附加文件的创作输出分类: storyboard=分镜脚本 / prompt=提示词 / 空=其他
+func extraKind(relDir, name string) string {
+	if isStoryboardFile(relDir, name) {
+		return "storyboard"
+	}
+	n := strings.ToLower(name)
+	if strings.Contains(n, "提示词") {
+		return "prompt"
+	}
+	return ""
 }
 
 func sortChapters(chs []dirFile) {
@@ -209,6 +235,7 @@ func walkProject(root, dir string, p *dirProject, depth int) {
 				df.No = no
 				p.Chapters = append(p.Chapters, df)
 			} else {
+				df.Kind = extraKind(rel, e.Name()) // 创作输出分类(分镜脚本/提示词),前端独立一栏(2026-08-23 用户规则)
 				p.Extras = append(p.Extras, df)
 			}
 		}

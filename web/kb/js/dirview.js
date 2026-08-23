@@ -450,6 +450,7 @@ class DirView {
     const toc = this._toc;
     if (!el || !toc) return;
     const name = (f) => f.name.replace(/\.(md|markdown|txt)$/i, "");
+    const extras = toc.extras || [];
     let html = "";
     if (toc.chapters.length) {
       html += `<div class="rt-group"><div class="rt-group-head"><span>📖 ${I18N.t("book.chapters")}</span><span class="rt-count">${toc.chapters.length}</span></div>`;
@@ -461,11 +462,20 @@ class DirView {
         .join("");
       html += `</div>`;
     }
-    if (toc.extras.length) {
-      html += `<div class="rt-group"><div class="rt-group-head"><span>📑 ${I18N.t("book.extras")}</span><span class="rt-count">${toc.extras.length}</span></div>`;
-      html += toc.extras
+    // 创作输出独立成栏(2026-08-23 用户规则):附加(其他) → 提示词 → 分镜脚本(默认放最下面)
+    // 分镜脚本由后端打标 kind=storyboard(文件名含"分镜"不会被误判为正文章节),
+    // 提示词打标 kind=prompt;data-i 保留 extras 原始索引,点击/高亮逻辑不变。
+    const exIdx = extras.map((f, i) => ({ f, i }));
+    const groups = [
+      { icon: "📑", label: I18N.t("book.extras"), items: exIdx.filter(({ f }) => !f.kind) },
+      { icon: "✍️", label: "提示词", items: exIdx.filter(({ f }) => f.kind === "prompt") },
+      { icon: "🎬", label: "分镜脚本", items: exIdx.filter(({ f }) => f.kind === "storyboard") },
+    ].filter((g) => g.items.length);
+    for (const g of groups) {
+      html += `<div class="rt-group"><div class="rt-group-head"><span>${g.icon} ${g.label}</span><span class="rt-count">${g.items.length}</span></div>`;
+      html += g.items
         .map(
-          (f, i) =>
+          ({ f, i }) =>
             `<div class="rt-item" data-kind="ex" data-i="${i}" title="${f.path}"><span class="rt-ic">📄</span><span class="rt-name">${name(f)}</span></div>`
         )
         .join("");
