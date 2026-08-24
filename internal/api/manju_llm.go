@@ -307,22 +307,54 @@ type manjuStyleSpec struct {
 }
 
 // manjuStyles 预设风格档位。style 值不在表内时视为「自定义风格」原样使用(英文风格描述)。
+// 2026-08-24 用户规则升级:所有定妆照必须「写实拟动漫」——
+// ①禁日漫(日本动漫脸):asset 措辞不用裸 "anime"(SDXL 对 anime 关键词高度敏感,正面拉向日漫),
+//   改用「东方风格化插画/国风 CG」表述;②禁真人(侵权风险):不再写 photorealistic/real human,
+//   统一「写实拟动漫:semi-realistic stylized illustration」——既非纯真人照片也非日漫脸。
+// 防御分三层:这里(风格措辞不诱导) + manjuPortraitAnchor(正向锚强制) + manjuNegPrompt(负面排除)。
+// 2026-08-24 升级(知识库「官方风格技能与漫剧优化」):风格措辞升级为官方风格签名段
+// (Pixar 3D 动画/纸拼贴/纸艺定格/手绘实拍/极简产品)——官方 skills 目录 8 风格技能的可照抄签名词,
+// 换风格只换美术字段(渲染媒介/色彩/灯光),不重写时间线;新增 minimal(极简产品)预设。
 var manjuStyles = map[string]manjuStyleSpec{
-	"2.5d":       {"2.5D anime, semi-realistic detailed anime", "The target video is in a 2.5D anime style, semi-realistic, detailed anime art, cinematic realistic lighting, high quality anime illustration", "[Shot 1] 2.5D anime style, semi-realistic, detailed anime art, cinematic realistic lighting"},
-	"real":       {"photorealistic live-action, cinematic film still, real human", "The target video is in a cinematic, live-action style", "[Shot 1] Live-action, cinematic"},
-	"3d":         {"3D CG render, detailed 3D animation", "The target video is in a high-quality 3D CG animation style, detailed rendering, cinematic lighting", "[Shot 1] 3D CG animation, detailed rendering, cinematic lighting"},
-	"anime":      {"anime style, vibrant cel shading, detailed anime illustration", "The target video is in a vibrant anime style, cel shading, detailed anime illustration, cinematic lighting", "[Shot 1] Anime style, vibrant cel shading, detailed anime illustration"},
-	"handdrawn":  {"hand-drawn illustration, organic sketch lines, storybook art", "The target video is in a hand-drawn illustration style, organic sketch lines, storybook art, cinematic lighting", "[Shot 1] Hand-drawn illustration style, organic sketch lines"},
-	"papercraft": {"papercraft stop-motion, layered cut paper, tactile texture", "The target video is in a papercraft stop-motion style, layered cut paper, tactile texture, cinematic lighting", "[Shot 1] Papercraft stop-motion style, layered cut paper"},
+	"2.5d":       {"2.5D stylized CG illustration, semi-realistic, East Asian art style, cinematic lighting", "The target video is in a 2.5D stylized CG illustration style, semi-realistic, East Asian art style, cinematic realistic lighting, high quality illustration", "[Shot 1] 2.5D stylized CG illustration, semi-realistic, East Asian art style, cinematic realistic lighting"},
+	"real":       {"cinematic semi-realistic stylized illustration, film-like lighting, painterly realism", "The target video is in a cinematic semi-realistic stylized style, film-like lighting", "[Shot 1] Cinematic semi-realistic stylized, film-like lighting"},
+	"3d":         {"Pixar-inspired 3D cartoon rendering, C4D + Octane look, warm subsurface scattering skin, sculpted hair clumps, non-realistic", "The target video is in a high-quality Pixar-inspired 3D cartoon animation style, C4D + Octane look, warm subsurface scattering skin, sculpted hair clumps, cinematic lighting", "[Shot 1] Pixar-inspired 3D cartoon animation, C4D + Octane look, warm subsurface scattering skin, sculpted hair clumps"},
+	"anime":      {"stylized East Asian animation illustration, semi-realistic, painterly cel shading, cinematic lighting", "The target video is in a stylized East Asian animation illustration style, semi-realistic, painterly cel shading, cinematic lighting", "[Shot 1] Stylized East Asian animation illustration, semi-realistic, painterly cel shading"},
+	"handdrawn":  {"hand-drawn illustration, crayon/chalk/colored pencil/pastel texture, slightly trembling lines, uneven smudging, rough edges, frame-by-frame redraw feel", "The target video is in a hand-drawn illustration style, crayon/chalk/colored pencil/pastel texture, slightly trembling lines, uneven smudging, rough edges, frame-by-frame redraw feel, cinematic lighting", "[Shot 1] Hand-drawn illustration style, crayon/chalk/colored pencil/pastel texture, trembling lines, rough edges"},
+	"papercraft": {"handmade papercraft stop-motion, miniature diorama, layered cardboard cutouts, visible thickness, matte paper textures, real drop shadows, 2.5D parallax", "The target video is in a handmade papercraft stop-motion style, miniature diorama, layered cardboard cutouts, visible thickness, matte paper textures, real drop shadows, 2.5D parallax, cinematic lighting", "[Shot 1] Handmade papercraft stop-motion, miniature diorama, layered cardboard cutouts, matte paper textures, real drop shadows, 2.5D parallax"},
 	"clay":       {"claymation stop-motion, plasticine figures, tactile", "The target video is in a claymation stop-motion style, plasticine figures, tactile, cinematic lighting", "[Shot 1] Claymation stop-motion style, plasticine figures"},
 	"ink":        {"Chinese ink wash painting, traditional brushwork, minimalist", "The target video is in a Chinese ink wash painting style, traditional brushwork, minimalist, cinematic lighting", "[Shot 1] Chinese ink wash painting style, traditional brushwork"},
+	"minimal":    {"minimalist product design, white-tech aesthetic with dark rim light, brand color field, light lifestyle scene", "The target video is in a minimalist product design style, white-tech aesthetic with dark rim light, brand color field, light lifestyle scene, cinematic lighting", "[Shot 1] Minimalist product design, white-tech aesthetic, dark rim light, brand color field"},
 }
+
+// manjuPortraitAnchor 角色定妆照正向锚(2026-08-24 用户规则升级,强制附加到每个角色 image_prompt):
+// 写实拟动漫 = 半写实风格化插画 + 东方/中式面孔 + 禁日漫 + 禁真人(防侵权)。
+// 无论风格(写实/2.5D/动漫/水墨)一律执行——LLM 直出、脚本素材抽卡、视图派生全部走它。
+const manjuPortraitAnchor = "semi-realistic stylized illustration of an East Asian/Chinese character, subtly stylized painterly art, not a photorealistic photo of a real person, not a Japanese anime/manga style, avoid japanese-style facial features, avoid japanese anime eyes, avoid resembling any real person"
+
+// manjuSceneAnchor 场景图锚:场景无人脸,只需明亮清晰;不带人物锚(防误伤)。
+const manjuSceneAnchor = "empty scene, no people"
 
 // manjuStyleDesc 取风格措辞；预设外视为自定义风格，原样使用(用户直接输入英文风格描述)。
 // manjuStyleHas 组合风格(以 + 分隔的 token)是否包含某预设元素,精确匹配避免子串误判。
 func manjuStyleHas(style, key string) bool {
 	for _, p := range strings.Split(style, "+") {
 		if strings.TrimSpace(p) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// manjuStyleStylized 风格组合是否含"风格化"元素(动漫/水墨/3D/手绘等非写实预设)。
+// 2026-08-24 用户反馈:定妆照与视频角色画风割裂——组合风格(real+2.5d+ink)含 real 被一刀切
+// 走 Z-Image 纯写实,而视频按 2.5D 动漫/水墨渲染,定妆照真人脸与视频动漫脸不一致。
+// 修复:风格含这些风格化预设(即使组合里同时含 real)时,定妆照应走 SDXL checkpoint
+// (animagine 等动漫模型)渲染同风格;仅纯写实(real 或 real+自定义写实词)才走 Z-Image。
+func manjuStyleStylized(style string) bool {
+	for _, p := range strings.Split(style, "+") {
+		switch strings.TrimSpace(p) {
+		case "2.5d", "anime", "ink", "3d", "handdrawn", "papercraft", "clay":
 			return true
 		}
 	}
@@ -603,7 +635,7 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
 【输出 JSON（严格）】：
 {
   "episode_title": "集标题",
-  "characters": [{"id": "角色名", "gender": "男/女", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，逐字从原文提炼，具体到可渲染）", "costume": "完整服装描述", "image_prompt": "给图片模型的英文文生图提示词（【全身立绘·强制】full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;` + assetStyle + ` 风格, 人物微动漫写实: subtly anime-stylized semi-realistic character, stylized East Asian features, 避免与任何真人肖像高度相似[防侵权,2026-08-23 用户规则];含完整外观/服装/性别强化）", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版呆萌形象（chibi cute style, 圆脸大眼睛短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
+  "characters": [{"id": "角色名", "role": "正角|反派|功能配角（按剧情阵营判定:主角/女主/正派灵宠/重要正派助攻=正角;主要反派=反派;次要反派/下属/炮灰/龙套=功能配角。【Q版纪律·2026-08-24 用户规则】只有正角才生成 Q 版呆萌形象,反派与功能配角一律不生成、不配使用 Q 版）", "gender": "男/女", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，逐字从原文提炼，具体到可渲染）", "costume": "完整服装描述", "image_prompt": "给图片模型的英文文生图提示词（【全身立绘·强制】full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;` + assetStyle + ` 风格;【拟动漫硬规则·2026-08-24 用户规则】semi-realistic stylized illustration of an East Asian/Chinese character, 禁日漫(not a Japanese anime/manga style, avoid japanese-style facial features, japanese anime eyes), 禁真人(not a photorealistic photo of a real person, avoid resembling any real person)——写实风格同样按拟动漫渲染,不输出真人照片;含完整外观/服装/性别强化）", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版呆萌形象（【Q版纪律·2026-08-24 用户规则】仅 role=正角 才填此项;反派/功能配角此字段留空,不生成 Q 版,其内心独白用写实镜头+画外音渲染。chibi cute style, 圆脸大眼睛短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
   "scenes": [{"id": "场景名（取自原文）", "description": "空间结构/材质/光线/氛围", "image_prompt": "给图片模型的英文文生图提示词（空场景无人物，明亮清晰，` + assetStyle + ` 风格）"}],
   "shots": [
     {
@@ -615,7 +647,7 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
       "action": "画面动作描述",
       "style": "该镜渲染风格(2026-08-23 多风格并用:可省略=继承全局风格;需要差异化时给,如写实对话镜=real、奇幻特效镜=real+magical realism、回忆/梦境镜=ink+watercolor、赛博镜=cyberpunk;可 + 组合多个元素,总元素≤4;风格需贴合该镜情绪/内容)",
       "dialogue": "角色:台词（逐字引用小说原文对白，禁止改写/扩写/编造；多句用换行分隔；无对白为空）。【说话人硬约束】\"角色:\"前缀必须是本镜 characters 中实际开口的角色，谁说的就是谁，禁止张冠李戴；角色说的话一律放 dialogue，禁止混入旁白",
-      "narration": "旁白（仅原文叙述性文字/画外音，逐字引用）。【硬约束】旁白禁止包含任何角色的台词——角色说的每句话必须放进 dialogue 并标注对应角色；原文中\"XXX说\"的对白必须标为该角色 dialogue；无旁白则空；有台词时旁白留空避免重复。【内心独白标记·强制】原文角色内心/心理活动(心想/暗道/嘀咕/盘算等)写 内心·角色名:原文内心内容(渲染时画面用该角色 Q 版呆萌形象+画外音,2026-08-23 用户规则),与客观旁白区分",
+      "narration": "旁白（仅原文叙述性文字/画外音，逐字引用）。【硬约束】旁白禁止包含任何角色的台词——角色说的每句话必须放进 dialogue 并标注对应角色；原文中\"XXX说\"的对白必须标为该角色 dialogue；无旁白则空；有台词时旁白留空避免重复。【内心独白标记·强制】原文角色内心/心理活动(心想/暗道/嘀咕/盘算等)写 内心·角色名:原文内心内容(渲染时画面用该角色 Q 版呆萌形象+画外音,2026-08-23 用户规则;【Q版纪律·2026-08-24 用户规则】仅 role=正角 的角色用 Q 版,反派/功能配角内心独白不用 Q 版——画面=该角色写实正脸图+画外音),与客观旁白区分",
       "duration": 5
     }
   ],
@@ -630,6 +662,8 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
   }
 }
 【时长硬约束】duration 由台词/动作量决定:中文台词约 4 字/秒(20 字台词≈5 秒;60 字≈12 秒),台词长于时长容纳量必须加时长(4-15)或拆镜;旁白同速折算。台词被截断=废镜。
+【节奏模型·强制】(2026-08-24 知识库「官方风格技能与漫剧优化」节奏模型整合)每镜内部必须有多拍节奏,禁止一镜一个动作平铺直叙:5 秒镜=3-4 个 beat(建立→动作→收尾);10 秒镜=5-7 个 beat 且含 1-2 个峰值+1-2 个刹车(静止/空拍);15 秒镜=6-9 个 beat 且含 2-3 个峰值+安静刹车。节奏意图词:setup(建立)/establish(定位)/prepare(蓄势)/impact(冲击)/brake(刹车)/settle(落定)——每镜 action 按 beat 组织,峰值镜前必有蓄势镜,高潮后必接刹车,禁止高潮镜直接切下一镜无缓冲
+【近景补偿·强制】(2026-08-24 知识库「H3长镜连续与工作室实战」人脸 token 数学整合)H3 VisualVAE 32× 空间下采样,中景人脸仅约 2 token、眼睛约 0.28 token——拉近景比加大画幅更有效。情感戏/对白戏/表情戏(哭/怒/恐惧/心动/内心挣扎)一律强制近景或特写(shot_size=近景/特写,机位对准面部),禁止用中景/全景拍情绪;中景起步 ≥1024×576;脸部特写是该角色情绪演出的主要载体,表演层细节(情绪三层拆解/五维微表情/哭戏梯度)写在特写镜里
 【防同质化变量表·强制(每集必填)】directing 五维必须逐项选择并**贯彻到分镜**(镜头时长分布/景别/收尾镜/声音设计对应取值):禁止默认组合「线性+全知+匀速+BGM通铺+空景收」(历史最高频重复)。tempo 取值对照时长分布:匀速=各镜等长;加速爆发=逐段加快末段最密;前紧后松=开头密逐渐拉开;全片凝滞=全部取上限时长。ending 取值对照末 1-3 镜:空景收=拉大远景空镜;回到首镜=末镜与首镜同机位同景别;硬切黑=高潮中途切黑;悬而未决=停在一个动作中间;日常化=回落到极普通日常场景。peak_device 写手法本身(摘面具/脱帽/亮武器),不要写题材(防化服/武侠)。
 【分镜纪律·强制】:
 - shots[].characters 必须列全该镜实际在场的全部角色(说话人+同时出镜者,缺一不可);未列出的角色(长老/弟子/路人/群众)一律不得入画,如需氛围只允许无面部细节的远景虚化
@@ -647,7 +681,8 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
 - 画内文字: 只允许大号阿拉伯数字(中文/小字必糊),否则画面里干脆不要文字载体(招牌/菜单/路牌/书封)
 - 多人互动(A 给 B 戴上某物/交接): 拆成单人镜,用视线缝起来
 - 手部纹理级特征(掌纹/指节细节): 改成姿势级特征(握/指/摊开)
-【题材真实度判据】(整合 ai-film-skills prompt-craft 实测): 戏剧强度越高越假——火山喷发/冰川崩塌/闪电劈荒原/巨兽正面亮相是 AI 过拟合区,一出必带 AI 味;普通瞬间才真。高危画面优先改拍「痕迹/后果」(如地面炸裂+上方压下的阴影,不正面拍本体);题材选型先问:这个世界里的东西,模型见过真的吗?`
+【题材真实度判据】(整合 ai-film-skills prompt-craft 实测): 戏剧强度越高越假——火山喷发/冰川崩塌/闪电劈荒原/巨兽正面亮相是 AI 过拟合区,一出必带 AI 味;普通瞬间才真。高危画面优先改拍「痕迹/后果」(如地面炸裂+上方压下的阴影,不正面拍本体);题材选型先问:这个世界里的东西,模型见过真的吗?
+【表演层·强制】(2026-08-24 知识库「H3提示词优化5层结构方法论」+「AIGC人物微表情设计指南」整合,专治蜡像脸)情绪镜禁止写情绪形容词,必须按三层物理细节拆解:①外部动作(转身/握拳/低头/咬唇)②生理反应(瞳孔收缩/喉结滚动/下眼睑微红/鼻翼轻颤)③量化指标(眉心上聚2mm/单侧嘴角下沉0.5°/振幅<1mm)。表情=眉眼/嘴角/肌肉/呼吸/光影五维组合;哭戏按四梯度写(强忍泪水=泪锁睫毛边缘不落→无声落泪→抽泣=肩胸起伏→崩溃大哭);非对称(只让半边脸动)+克制中断(动作启动后在第10°突然减速停止)去 AI 感;每条约束写成可见终态("第8秒时她仍是长黑发蓝开衫圆框眼镜"),不写"保持一致"`
 	if kbChar != "" {
 		s += "\n\n【知识库角色模板参考（仅作设定参考，贴合本剧）】\n" + kbChar
 	}
@@ -677,7 +712,7 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 【输出 JSON（严格）】:
 {
   "episode_title": "集标题",
-  "characters": [{"id": "角色名", "gender": "男/女", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，从脚本提取并补全，具体到可渲染）", "costume": "完整服装描述", "image_prompt": "给图片模型的英文文生图提示词（【全身立绘·强制】full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;` + assetStyle + ` 风格, 人物微动漫写实: subtly anime-stylized semi-realistic character, stylized East Asian features, 避免与任何真人肖像高度相似[防侵权,2026-08-23 用户规则];含完整外观/服装/性别强化）", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版呆萌形象（chibi cute style, 圆脸大眼睛短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
+  "characters": [{"id": "角色名", "role": "正角|反派|功能配角（按剧情阵营判定:主角/女主/正派灵宠/重要正派助攻=正角;主要反派=反派;次要反派/下属/炮灰/龙套=功能配角。【Q版纪律·2026-08-24 用户规则】只有正角才生成 Q 版呆萌形象,反派与功能配角一律不生成、不配使用 Q 版）", "gender": "男/女", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，从脚本提取并补全，具体到可渲染）", "costume": "完整服装描述", "image_prompt": "给图片模型的英文文生图提示词（【全身立绘·强制】full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;` + assetStyle + ` 风格;【拟动漫硬规则·2026-08-24 用户规则】semi-realistic stylized illustration of an East Asian/Chinese character, 禁日漫(not a Japanese anime/manga style, avoid japanese-style facial features, japanese anime eyes), 禁真人(not a photorealistic photo of a real person, avoid resembling any real person)——写实风格同样按拟动漫渲染,不输出真人照片;含完整外观/服装/性别强化）", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版呆萌形象（【Q版纪律·2026-08-24 用户规则】仅 role=正角 才填此项;反派/功能配角此字段留空,不生成 Q 版,其内心独白用写实镜头+画外音渲染。chibi cute style, 圆脸大眼睛短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
   "scenes": [{"id": "场景名（取自脚本）", "description": "空间结构/材质/光线/氛围", "image_prompt": "给图片模型的英文文生图提示词（空场景无人物，明亮清晰，` + assetStyle + ` 风格）"}],
   "shots": [
     {
@@ -689,7 +724,7 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
       "action": "画面动作描述",
       "style": "该镜渲染风格(2026-08-23 多风格并用:可省略=继承全局风格;需要差异化时给,如写实对话镜=real、奇幻特效镜=real+magical realism、回忆/梦境镜=ink+watercolor;可 + 组合多个元素,总元素≤4;风格贴合该镜情绪/内容)",
       "dialogue": "角色:台词（脚本台词逐字引用，禁止改写/扩写/编造；多句用换行分隔；无对白为空）。【说话人硬约束】"角色:"前缀必须是本镜 characters 中实际开口的角色，谁说的就是谁",
-      "narration": "旁白（画外音，脚本原文；无则空；有台词时旁白留空避免重复）。【内心独白标记·强制】脚本原文角色内心/心理活动写 内心·角色名:内容(渲染时画面用该角色 Q 版呆萌形象+画外音,2026-08-23 用户规则),与客观旁白区分",
+      "narration": "旁白（画外音，脚本原文；无则空；有台词时旁白留空避免重复）。【内心独白标记·强制】脚本原文角色内心/心理活动写 内心·角色名:内容(渲染时画面用该角色 Q 版呆萌形象+画外音,2026-08-23 用户规则;【Q版纪律·2026-08-24 用户规则】仅 role=正角 的角色用 Q 版,反派/功能配角内心独白不用 Q 版——画面=该角色写实正脸图+画外音),与客观旁白区分",
       "duration": 5,
       "h3_prompt": "该镜完整 H3 提示词（英文主体、中文台词/旁白原文；见下方官方格式硬规定）"
     }
@@ -733,11 +768,14 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 【判停清单·模型做不到的六类,换写法不要重抽】:
 - 机械开合→「关着的空镜 硬切 开着的空镜」;群体连锁反应→单人反应+画外声;走位→直接画「已到位」(原地姿态变化可以);画内文字→只留大号阿拉伯数字;多人互动→拆单人镜视线缝合;手部纹理级→姿势级
 【题材真实度判据】戏剧强度越高越假(火山/冰川/闪电/巨兽正面是 AI 过拟合区);高危画面优先改拍「痕迹/后果」
+【节奏模型·强制】(2026-08-24 知识库「官方风格技能与漫剧优化」整合)每镜内部多拍节奏:5 秒镜=3-4 beat、10 秒镜=5-7 beat(含 1-2 峰值+1-2 刹车)、15 秒镜=6-9 beat(含 2-3 峰值+安静刹车);节奏意图词 setup/establish/prepare/impact/brake/settle,峰值镜前必有蓄势,高潮后必接刹车
+【近景补偿·强制】(2026-08-24 知识库「H3长镜连续与工作室实战」整合)情感戏/对白戏/表情戏一律近景或特写(shot_size=近景/特写,机位对准面部),禁止中景/全景拍情绪;脸部特写是情绪演出主要载体
 【防同质化变量表·强制】directing 五维必须逐项选择并贯彻到分镜,禁止默认组合「线性+全知+匀速+BGM通铺+空景收」;peak_device 写手法不写题材
 【人物比例/物品清单/动作流畅·强制】(2026-08-23 用户反馈大头/乱入/不流畅)角色一律 full body 全身 7 头身,禁止大头小身/portrait 头像;detailed_description 每物品写数量/位置/关系,不需要的物品写排除句,同镜物品≤3;每镜单一主导动作+小幅+慢速,走位写「已到位」,连续动作拆镜
 【日本人物形象·禁止·强制】(2026-08-23 用户规则)无论风格(含 anime/2.5d)人物一律中式/东方面孔,写 East Asian/Chinese facial features,正面排除 avoid japanese-style facial features, japanese anime eyes;anime 风格词保留,日本式脸型禁止
-【内心戏 Q 版化·强制】(2026-08-23 用户规则)narration 若为角色内心独白(前缀 内心·角色名),该镜 detailed_description 画面主体=该角色 Q 版呆萌形象(引用其 Q 版参考图),画外音 The narrator says in an off-screen voiceover 念内心;非内心旁白保持原画面
-【动物禁人脸·强制】(2026-08-23 用户规则)动物/萌宠/妖兽保持动物形态(物种特征),写 animal form + species-specific features + no human face;禁止人脸/人形化(拟人化角色除外)`
+【内心戏 Q 版化·强制·仅正角】(2026-08-23 用户规则 + 2026-08-24 限定:Q 版仅限正角)narration 若为角色内心独白(前缀 内心·角色名),该镜 detailed_description 画面主体=该角色 Q 版呆萌形象(引用其 Q 版参考图);【Q版纪律·2026-08-24 用户规则】role=反派/功能配角 或无 Q 版参考图的角色内心戏**禁止用 Q 版**,画面主体=该角色写实正脸图;画外音一律 The narrator says in an off-screen voiceover 念内心;非内心旁白保持原画面
+【动物禁人脸·强制】(2026-08-23 用户规则)动物/萌宠/妖兽保持动物形态(物种特征),写 animal form + species-specific features + no human face;禁止人脸/人形化(拟人化角色除外)
+【表演层·强制】(2026-08-24 知识库整合,专治蜡像脸)情绪镜禁止情绪形容词,按三层物理细节拆解:①外部动作(转身/握拳/低头/咬唇)②生理反应(瞳孔收缩/喉结滚动/下眼睑微红/鼻翼轻颤)③量化指标(眉心上聚2mm/单侧嘴角下沉0.5°/振幅<1mm)。表情=眉眼/嘴角/肌肉/呼吸/光影五维组合;哭戏四梯度(强忍→无声→抽泣→崩溃);非对称+克制中断去 AI 感;约束写可见终态不写"保持一致"`
 	// 拼接官方六段式/三段式模板与逐镜写作规范,保证直出的 h3_prompt 格式与逐镜生成完全一致
 	opening := manjuStyleDesc(style).opening
 	if opening == "" {
@@ -769,6 +807,7 @@ subject_definitions:
 [多角色镜:每个登场角色一行 <Subject N> is the character in <Picture A> and <Picture B> ...,与参考图顺序一致(角色在前场景在后);画面里谁先出现谁 Subject 号靠前]
 [参考图纪律·强制:ref_available 是「角色+视图」的平铺清单,顺序就是参考图传入顺序;<Picture 1..N> 严格对应清单第 1..N 项(同一角色多视图占多个 Picture 编号),Subject 编号与角色一一对应(Subject 1=清单第 1 个角色,依次),禁止调换/跳过/合并视图;清单外的登场角色(本镜参考图不足)写 <Subject N> is [角色名] with 外观描述(不引用任何 Picture),并保持与参考角色不串脸]
 [外观锁定·强制:每个角色的外观只允许出现角色卡 appearance+costume 里的特征,且逐项覆盖(发型/眼睛/疤痕/服装/道具缺一不可);禁止 generic 泛化词(ordinary/plain/sturdy/average/young man 等),禁止编造角色卡没有的特征(白发/换装/错误年龄);多角色镜严禁把其他角色的特征写进本角色(谁的特征写谁)]
+[拟漫化硬规则·2026-08-24 用户强制:所有角色均为 semi-realistic stylized illustration of an East Asian/Chinese character——参考图已拟漫化,subject_definitions 必须延续此画风;禁止写 photorealistic/realistic photo/real human(真人脸=侵权);禁止写 japanese anime/manga style, japanese-style facial features, japanese anime eyes(禁日漫);角色外形以参考图为准逐字保留,画风恒定拟漫]
 [场景编号·强制:场景的 Picture 编号 = 全部角色视图总数 + 1(如 2 角色各 2 视图 → 场景在 <Picture 5>);Subject 编号 = 角色数 + 1]
 <Subject N+1> is the [场景名] environment in <Picture M>(M=角色视图总数+1), with [空间结构/材质/光线客观描述，引用场景卡]
 [关键道具：<Subject M> is the [道具名] in <Picture M>, with 外观描述；说明与角色互动]
@@ -784,13 +823,14 @@ retention_analysis:
 
 detailed_description:
 {style}。[实体锁定句：The face, hairstyle, costume of <Subject 1> must remain exactly as in <Picture 1> throughout the shot; the scene layout of <Subject N+1> must match its reference.; 多角色镜加 Each character must keep their own identity from their own reference picture, never swap or blend identities.]
+[拟漫化锚句·强制:All characters appear as semi-realistic stylized illustrations, East Asian/Chinese facial features, not photorealistic photos, not Japanese anime style — keep the stylized look consistent with the reference character.]
 [Shot 1] [官方建议 350-500 英文词(对话密集优先完整台词时间线):开场构图→主体外观位置→动作状态变化→运镜(类型+幅度+速度,句内自然英语)→光影→台词/旁白→收尾；<Subject N> 标签在主体首次出现处插入,后续镜复用同标签不重定义；情感戏/对话优先近景/中景；末尾散文排除项 no subtitles, no text overlays, no watermark；【亮度护栏·强制】Dark mood is fine for atmosphere, but the subject's face and body must remain clearly visible and well-lit at all times - use a clear light source on the subject (candlelight, moonlight, torch, window light); never render the frame nearly black]
 
 overall_soundscape:
 环境底噪/动作音效（1-4 句英文连续段落，禁重复台词）
 
 non_diegetic_music:
-纯器乐配乐（1-3 句：乐器+速度+节奏+动态，禁抽象情绪词；无配乐写 N/A）`
+纯器乐配乐（1-3 句：乐器+速度+节奏+动态，禁抽象情绪词；无配乐写 N/A）【BGM 定向文案·强制】(2026-08-24 知识库整合)按题材文化贴合选乐器:古风/仙侠/武侠→古筝、竹笛、琵琶、箫;热血/战斗→鼓组+弦乐;都市/现代→钢琴、合成器;悬疑/惊悚→低音提琴拨弦、钟琴;治愈/温馨→木琴、竖琴;对白下 ducking 压到对白之下`
 
 const manjuFl2vaTpl = `【FL2VA 三段式（空镜/转场，无主角），严格此顺序】：
 第一行对齐指令（两位小数）：How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video.（尾帧锚定时补 Picture 2 (from Shot N) aligns with the S.SS-second mark，S.SS=镜头时长两位小数）
@@ -799,7 +839,7 @@ integrated_multimodal_description:
 {style} + 画面延续首帧（首帧锚定→动作展开→收尾）+ 动作/运镜/光影 + 台词/旁白 <d>[中文]原文</d>（H3 原生配音；时长严格=镜头秒数）+【亮度护栏】Subjects must remain clearly visible and adequately lit - keep readable exposure with visible faces and actions; avoid rendering the frame nearly black
 
 overall_soundscape:
-non_diegetic_music:`
+non_diegetic_music:【BGM 定向文案·强制】(2026-08-24 知识库「官方风格技能与漫剧优化」整合)配乐写乐器+速度+节奏+动态,并按题材文化贴合选乐器:古风/仙侠/武侠→古筝、竹笛、琵琶、箫;热血/战斗→鼓组+弦乐齐奏;都市/现代→钢琴、合成器、电吉他;悬疑/惊悚→低音提琴拨弦、钟琴、不安的脉冲;治愈/温馨→木琴、竖琴、轻快的拨弦;祭典/节庆→锣鼓、唢呐、民族打击乐。对白下配乐自动 ducking(压到对白之下),无配乐写 N/A,禁写"欢快/悲伤/激昂"等抽象情绪词——只写乐器与节奏(如 guzheng plucking at 90 BPM, sparse and delicate)`
 
 const manjuShotWritingRules = `
 
@@ -835,12 +875,23 @@ const manjuShotWritingRules = `
 23. 【画面物品清单·强制】(2026-08-23 用户反馈乱入物品)detailed_description 里每个出现的物品写明数量/位置/与主体的关系(「他手里握着缺角镜子,桌面没有其他物品」);禁止笼统场景描述让模型自由发挥补物品;不需要的物品写排除句(no other objects in frame / only XX on the table);同一镜物品数≤3,超过拆镜
 24. 【动作流畅·强制】(2026-08-23 用户反馈人物镜头不流畅)每镜**单一主导动作**+小幅+慢速(动作太大/太多 H3 易崩);走位/位移写「已到位」+原地姿态微变;连续动作拆成 2 镜或静态+微动;禁止一镜内多个不相干动作堆叠
 25. 【日本人物形象·禁止·强制】(2026-08-23 用户规则:动漫渲染也禁止日本人物形象)无论渲染风格(含 anime/2.5d/动漫),所有人物一律**中式/东方面孔**——detailed_description 人物镜写 East Asian/Chinese facial features(自然眼型,非日漫大眼),正面排除句 avoid japanese-style facial features, japanese anime eyes, big sparkly anime eyes, sharp anime chin;禁止出现日本式脸型/日式动漫大眼/日本风格面容;anime/cartoon **风格词保留**(风格可动漫,脸必须中式东方)
-26. 【内心戏 Q 版化·强制】(2026-08-23 用户规则:内心独白用对应角色 Q 版呆萌形象渲染)narration 若为角色内心独白(前缀 内心·角色名,如「内心·阿拾:…」),detailed_description **画面主体=该角色 Q 版呆萌形象**(圆脸/大眼/短手短脚,保留角色标志特征,引用其 Q 版参考图 <Picture>),画外音 The narrator (S1) says in an off-screen voiceover 念内心内容 while lips closed;内心戏镜的 <Subject> 引用该角色 Q 版图而非正脸图;非内心客观旁白保持原画面+画外音
+26. 【内心戏 Q 版化·强制·仅正角】(2026-08-23 用户规则 + 2026-08-24 限定:Q 版仅限正角)narration 若为角色内心独白(前缀 内心·角色名,如「内心·阿拾:…」):①若该角色 role=正角(有 Q 版参考图),detailed_description **画面主体=该角色 Q 版呆萌形象**(圆脸/大眼/短手短脚,保留角色标志特征,引用其 Q 版参考图 <Picture>),画外音 The narrator (S1) says in an off-screen voiceover 念内心内容 while lips closed;内心戏镜的 <Subject> 引用该角色 Q 版图而非正脸图;②若该角色 role=反派/功能配角(无 Q 版图),**禁止用 Q 版**——画面主体=该角色写实正脸图+画外音念内心(off-screen voiceover, lips closed);③角色无 role 字段时按有无 Q 版参考图判断:有则 Q 版,无则写实+画外音;非内心客观旁白保持原画面+画外音
 27. 【人物微动漫写实·强制】(2026-08-23 用户规则:避免写实人物侵权)写实电影级渲染时,人物形象**微动漫化**——detailed_description 人物写 subtly anime-stylized semi-realistic character, stylized East Asian features(略带动漫风格化:适度圆润/线条化,避免与任何真人肖像高度相似);场景/光影/镜头保持写实电影级(人物微动漫,场景写实);Q 版内心形象不受此限(本就呆萌)
-28. 【动物禁人脸·强制】(2026-08-23 用户规则:动物别乱入人脸)动物/萌宠/妖兽/兽类角色一律保持**动物形态**(物种特征:毛皮/鳞甲/兽瞳/喙/爪/尾/角),禁止人脸/人形化/拟人过头;detailed_description 动物镜写 animal form, species-specific features(如 round ink-black blob spirit with golden bead eyes),并明确 no human face;定妆 image_prompt 动物角色加 animal form 约束;穿衣服的拟人化角色(设定明确)除外`
+28. 【动物禁人脸·强制】(2026-08-23 用户规则:动物别乱入人脸)动物/萌宠/妖兽/兽类角色一律保持**动物形态**(物种特征:毛皮/鳞甲/兽瞳/喙/爪/尾/角),禁止人脸/人形化/拟人过头;detailed_description 动物镜写 animal form, species-specific features(如 round ink-black blob spirit with golden bead eyes),并明确 no human face;定妆 image_prompt 动物角色加 animal form 约束;穿衣服的拟人化角色(设定明确)除外
+29. 【表演层·情绪三层拆解·强制】(2026-08-24 知识库「H3提示词优化5层结构方法论」整合:专治蜡像脸/假表情)H3 把抽象情绪形容词当低质量指令——禁止直接写"她很伤心/愤怒/害怕"(模型只会出呆滞假脸),必须把情绪翻译成**三层物理细节**:①外部动作(可观察:转身/握拳/低头/咬唇);②生理反应(不可控真相:瞳孔收缩/喉结滚动/下眼睑微红/鼻翼轻颤);③量化指标(振幅<1mm/时长1.5s/眉心上聚2mm/单侧嘴角下沉0.5°)。detailed_description 人物镜按此三层写表演,禁止情绪形容词单独出现
+30. 【微表情五维拆解·强制】(2026-08-24 知识库「AIGC人物微表情设计指南」整合)表情=眉眼/嘴角/面部肌肉/呼吸节奏/光影质感五要素组合,不是单个情绪词。人物特写/近景镜至少覆盖 3 个维度:眉眼状态(眉位高低/眉形收放/眼部张力/视线聚焦)、嘴角唇部(上扬下压幅度/唇部紧绷/嘴型张合)、面部肌肉(额部/下颌线/鼻唇沟的收紧松弛颤动)、呼吸节奏(平稳/短促/屏息/抽泣停顿)、光影配合(侧光勾情绪/顶光压氛围)。同一情绪分克制/爆发双档(愤怒克制版=眉心紧锁+眼白微露+嘴角紧绷后张开;爆发版=眼裂放大+瞳孔收缩+面部肌肉强烈)
+31. 【哭戏四梯度·强制】(2026-08-24 知识库「AIGC人物微表情设计指南」整合:哭戏的情绪刻度表)哭戏按强度分四档写,禁止笼统"哭了":①强忍泪水(隐忍哭)=眉尾下垂+眼睑轻颤+下眼睑泛红+鼻翼微颤+泪水不落;②无声落泪(安静哭)=泪珠缓慢滑落+眼尾泛红+嘴角微下垂;③抽泣哭(压抑哭)=肩部胸廓起伏+鼻翼煽动+嘴角抽搐;④崩溃大哭(爆发哭)=眼裂放大+泪水滚落+面部张力强。变体:哽咽哭(喉结滚动/泪珠挂睫毛/说不出话)、喜极而泣(嘴角带笑+泪珠眼尾滑落)、委屈哭(下唇轻突+眼睑微颤)。情绪越深越要"少一点更准"(隐忍心动=目光轻回+嘴角极轻上扬+耳尖微红)
+32. 【非对称与克制中断·强制】(2026-08-24 知识库「H3提示词优化5层结构方法论」第三层整合:去 AI 感两手法)①非对称:情绪只让半边脸动,明确"眼部不参与/左脸不动"——全脸同步动=AI 味;②克制与中断:动作启动后写中断点,不写"摇头否认",写"摇头启动后在第 10° 突然减速停止"。情绪演出带肌肉层次和克制(泪锁在睫毛边缘不滑落/笑到一半收住),比写满更真
+33. 【原子需求台账·强制】(2026-08-24 知识库「H3提示词优化5层结构方法论」第四层整合:每条约束必须可验收)每镜详细描述按台账四栏自查并落实:必须出现(核心主体/关键动作/关键道具)/必须保持(发型/瞳色/服装/疤痕/场景布局——写"第 N 秒时仍是长黑发、蓝开衫、圆框眼镜"这类可见终态,不写"保持一致")/允许变化(表情/光线/镜头内可动元素)/禁止出现(无关人物/多余物品/画面文字/水印)。"保持一致"=没写,必须改写成可被结果检查的可见终态;多素材任务显式写清每张图各自负责什么,不让两份素材抢同一核心身份`
 
 func manjuShotPromptSystem(hasChar bool, style string) string {
 	sys := "你是 MiniMax H3 视频生成模型的提示词专家。基于给定镜头的分镜信息与角色/场景卡，直出该镜【完整】H3 提示词（英文主体、中文台词/旁白原文）。\n\n输出严格 JSON：{\"h3_prompt\": \"提示词全文\"}\n\n"
+	sys += "【输出体积硬约束·强制(2026-08-24:此前逐镜输出超长被截断)】:\n"
+	sys += "- 六段式必须完整(字段齐全)但每字段精简:subject_definitions 逐项列角色/场景即可(不展开;每个 <Subject> 一行);\n"
+	sys += "- detailed_description 控制在 150-220 英文词(构图/动作/运镜/光影/台词逐字;禁止铺陈背景/环境细节);\n"
+	sys += "- overall_soundscape 1-2 句、non_diegetic_music 1 句、summary/retention_analysis 各 1 句;\n"
+	sys += "- 整个 h3_prompt 控制在 1500 tokens 以内(约 600 英文词),宁可精炼不可超长;\n"
+	sys += "- 台词/旁白逐字保留(中文原文),时长=输入 duration。\n\n"
 	if hasChar {
 		opening := manjuStyleDesc(style).opening
 		if opening == "" {

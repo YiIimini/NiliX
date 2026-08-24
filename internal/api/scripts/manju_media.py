@@ -49,6 +49,10 @@ def check_video(path, threshold=0.5):
     dur = float(round(v.duration * v.time_base, 2)) if v.duration else 0.0
     res = (v.width, v.height)
     samples, n = [], 0
+    # 冻结检测(2026-08-24 知识库「H3长镜连续与工作室实战」freeze-aware 整合):
+    # H3 段尾可能提前到达 Last Frame 后几乎静止(冻结),且冻结长度每段不同——固定裁剪不可靠。
+    # 每采样帧记录整帧灰度均值,末尾窗口内相邻差 < 阈值(0.8/255)占比高=段尾冻结。
+    frame_means = []
     # 音频响度:采样前 40 个音频帧的归一化 RMS(静音=有音轨但无声音,TTS 失败的典型产物)
     np = None
     rms_sum, rms_n = 0.0, 0
@@ -61,6 +65,7 @@ def check_video(path, threshold=0.5):
                 # 近黑判据:整帧平均亮度 < 20 才算接近全黑(亮度护栏防的是整帧黑屏);
                 # 用像素占比会把合法夜景(暗背景+火把/月光)误判为过暗
                 samples.append(float(g.mean() < 20))
+                frame_means.append(float(g.mean()))
             n += 1
         elif rms_n < 40:
             if np is None:
@@ -77,6 +82,14 @@ def check_video(path, threshold=0.5):
     if samples:
         cut = max(1, int(len(samples) * 0.05))
         samples = samples[:-cut]
+    # 冻结检测计算:末尾 25% 采样点窗口(至少 4 个点),相邻灰度均值差 < 0.8/255 记一次"冻结";
+    # 冻结占比 = 冻结邻接数 / 窗口邻接总数。结尾淡出带丢弃(淡出是合法暗化,不是冻结)。
+    freeze_ratio = 0.0
+    if len(frame_means) >= 6:
+        win = frame_means[-max(4, int(len(frame_means) * 0.25)):]
+        diffs = [abs(win[i + 1] - win[i]) for i in range(len(win) - 1)]
+        if diffs:
+            freeze_ratio = round(sum(1 for d in diffs if d < 0.8) / len(diffs), 3)
     audio_rms = rms_sum / max(rms_n, 1)
     # 音轨规格(H3 原生规格 32kHz 立体声;审计升级 P0:静音/单声道/采样率异常在合成前拦截)
     audio_rate = 0
@@ -89,6 +102,7 @@ def check_video(path, threshold=0.5):
         "audio_rate": audio_rate, "audio_channels": audio_channels,
         "dark_ratio": round(sum(samples) / max(len(samples), 1), 3), "decoded_frames": n,
         "audio_rms": round(audio_rms, 4), "audio_frames": rms_n,
+        "freeze_ratio": freeze_ratio,
     }
 
 
@@ -309,6 +323,8 @@ def cmd_qc(args):
                 flags.append(f"音轨非立体声({r['audio_channels']}ch≠2)")
             if r["dark_ratio"] > args.threshold:
                 flags.append(f"近黑帧{r['dark_ratio']*100:.0f}%")
+            if r["freeze_ratio"] > 0.6:
+                flags.append(f"段尾冻结{int(r['freeze_ratio']*100)}%")
             if r["decoded_frames"] == 0:
                 flags.append("解码0帧")
             if r["duration_s"] < 0.5:
@@ -326,10 +342,11 @@ def cmd_qc(args):
                     samples = "、".join(f"#{h['frame']}:{h['text']}" for h in text_bleed["hits"][:3])
                     flags.append(f"字幕位文字×{n}({samples})")
             status = "OK" if not flags else "⚠️ " + ",".join(flags)
-            print(f"  {f:12s} {r['duration_s']:6.2f}s {r['resolution']} 音轨:{r['audio_streams']}@{r['audio_rate']}Hz/{r['audio_channels']}ch 响度:{r['audio_rms']:.3f} 近黑:{r['dark_ratio']*100:3.0f}% {status}")
+            print(f"  {f:12s} {r['duration_s']:6.2f}s {r['resolution']} 音轨:{r['audio_streams']}@{r['audio_rate']}Hz/{r['audio_channels']}ch 响度:{r['audio_rms']:.3f} 近黑:{r['dark_ratio']*100:3.0f}% 冻结:{int(r['freeze_ratio']*100):3d}% {status}")
             report["shots"][f] = {
                 "ok": not flags, "flags": flags, "duration_s": r["duration_s"],
-                "dark_ratio": r["dark_ratio"], "audio_streams": r["audio_streams"],
+                "dark_ratio": r["dark_ratio"], "freeze_ratio": r["freeze_ratio"],
+                "audio_streams": r["audio_streams"],
                 "audio_rate": r["audio_rate"], "audio_channels": r["audio_channels"],
                 "audio_rms": r["audio_rms"], "decoded_frames": r["decoded_frames"], "error": "",
                 "text_bleed": text_bleed,
@@ -1478,8 +1495,9 @@ def cmd_inspect(args):
     fps = float(v.average_rate) if v.average_rate else 24.0
     dur = float(v.duration * v.time_base) if v.duration else 0.0
     os.makedirs(args.out_dir, exist_ok=True)
-    # 单遍交错解码:数帧 + 近黑采样 + 音频响度 + 均匀抽帧(先数总数,再按目标位置取)
+    # 单遍交错解码:数帧 + 近黑采样 + 冻结采样 + 音频响度 + 均匀抽帧(先数总数,再按目标位置取)
     samples, n = [], 0
+    frame_means = []
     rms_sum, rms_n = 0.0, 0
     np_mod = None
     targets = {}
@@ -1490,6 +1508,7 @@ def cmd_inspect(args):
             if n % 6 == 0:
                 g = fr.to_ndarray(format="gray")
                 samples.append(float(g.mean() < 20))
+                frame_means.append(float(g.mean()))
             n += 1
             if len(frames) < n_target:
                 frames.append(fr)
@@ -1541,6 +1560,12 @@ def cmd_inspect(args):
     if samples:
         cut = max(1, int(len(samples) * 0.05))
         samples = samples[:-cut]
+    freeze_ratio = 0.0
+    if len(frame_means) >= 6:
+        win = frame_means[-max(4, int(len(frame_means) * 0.25)):]
+        diffs = [abs(win[i + 1] - win[i]) for i in range(len(win) - 1)]
+        if diffs:
+            freeze_ratio = round(sum(1 for d in diffs if d < 0.8) / len(diffs), 3)
     audio_rms = rms_sum / max(rms_n, 1)
     flags = []
     if a0 is None:
@@ -1550,14 +1575,17 @@ def cmd_inspect(args):
     dark = sum(samples) / max(len(samples), 1) if samples else 0.0
     if dark > args.threshold:
         flags.append(f"近黑帧{dark*100:.0f}%")
+    if freeze_ratio > 0.6:
+        flags.append(f"段尾冻结{int(freeze_ratio*100)}%")
     if n == 0:
         flags.append("解码0帧")
     if dur < 0.5:
         flags.append("时长过短")
     qc = {"duration_s": round(dur, 2), "resolution": (v.width, v.height),
           "audio_streams": len(a), "audio_rms": round(audio_rms, 4),
-          "dark_ratio": round(dark, 3), "decoded_frames": n, "flags": flags, "ok": not flags}
-    print(f"  🔬 {os.path.basename(args.file)} {dur:.1f}s {v.width}x{v.height} 音轨:{len(a)} 响度:{audio_rms:.3f} 近黑:{dark*100:.0f}% {'OK' if qc['ok'] else '⚠️ ' + ','.join(flags)}")
+          "dark_ratio": round(dark, 3), "freeze_ratio": freeze_ratio,
+          "decoded_frames": n, "flags": flags, "ok": not flags}
+    print(f"  🔬 {os.path.basename(args.file)} {dur:.1f}s {v.width}x{v.height} 音轨:{len(a)} 响度:{audio_rms:.3f} 近黑:{dark*100:.0f}% 冻结:{int(freeze_ratio*100):3d}% {'OK' if qc['ok'] else '⚠️ ' + ','.join(flags)}")
     print(json.dumps({"qc": qc, "frames": out_paths}, ensure_ascii=False))
 
 

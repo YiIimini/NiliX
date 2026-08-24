@@ -159,3 +159,8 @@
 | 2026-08-20 | 打包 | `go build -ldflags "-H windowsgui -s -w" -o NiliX.exe` 完成，前端 `?v=20260820a2` 已 embed | ✅ |
 | 2026-08-20 | 前端补齐 | **差集审计**（后端路由 vs 前端调用）：发现并补齐 3 项后端有前端无的功能——①**知识图谱页恢复**（后端 /api/graph+/api/meta+/api/page 全在，前端"关系图谱页已移除"）：新增 `graph.js`（力导向 SVG 布局/分类着色/枢纽节点/点击详情 Markdown 渲染/双链跳转/⟳重扫 POST /api/reload），nav 第 4 页「知识图谱」；②**设置·测试连接**（/api/settings/test 此前前端 0 引用）：漫剧设置弹窗智能体调度区加「🔌 测试连接」按钮（测全局 LLM + ComfyUI 连通）；③**FL2VA 双帧勾选**（后端字段已注册前端缺失，补 8 处表单接入） | ✅ |
 | 2026-08-20 | 差集结论 | 其余后端独有 API 均属设计定位：/api/render*+/api/outputs（旧渲染任务，主管线为 manju，只读诊断保留）、/api/script/*（剧本预览/诊断，已被 manju 管线覆盖）、/api/stats（前端经 /api/meta 聚合）、/api/fs/analyze 等诊断端点——不作前端 UI，报告备案 | 说明 |
+| 2026-08-24 | 知识库升级 | **表演层纪律（5 层结构方法论 + 微表情指南整合）**：情绪三层拆解（外部动作/生理反应/量化指标）+ 微表情五维（眉眼/嘴角/肌肉/呼吸/光影）+ 哭戏四梯度（强忍→无声→抽泣→崩溃）+ 非对称克制中断 + 原子需求台账（必须出现/保持/允许/禁止）——注入 manjuDirectSystem/manjuScriptSystem/manjuShotWritingRules（规则 29-33），专治蜡像脸 | ✅ |
+| 2026-08-24 | 知识库升级 | **官方风格签名**：manjuStyles 8 预设升级为官方风格签名段（Pixar 3D/纸拼贴/纸艺定格/手绘实拍/极简产品签名词+负向词转正面），新增 minimal 预设；组合风格仍按核心措辞拼接 | ✅ |
+| 2026-08-24 | 知识库升级 | **节奏模型 + 近景补偿 + BGM 定向**：每镜 beat 数（5s=3-4/10s=5-7 含峰值刹车/15s=6-9）+ 节奏意图词（setup/impact/brake/settle）进方案/脚本系统；人脸 token 数学 → 情感戏/对话强制近景特写；non_diegetic_music 按题材文化贴合选乐器（古筝/竹笛/鼓组/钢琴/钟琴/木琴）+ ducking | ✅ |
+| 2026-08-24 | 知识库升级 | **QC 冻结检测**：manju_media.py check_video/inspect 增加 freeze_ratio（末尾 25% 采样窗口相邻灰度均值差 <0.8 占比），>0.6 判段尾冻结告警（H3 段尾提前到达 Last Frame 静止的典型病）——黑屏/静音/冻结三道防线齐备 | ✅ |
+| 2026-08-24 | 验证 | `go build ./...` + 全量 `go test ./...` 全绿（新增 manju_knowledge_upgrade_test.go 6 项：表演层/节奏/近景/BGM/风格签名/规则连续性）；NiliX.exe 重编（GUI 版）+ 重启验证 8787 正常 | ✅ |
