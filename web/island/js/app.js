@@ -67,7 +67,12 @@
   function islandHeight() {
     const el = $("full");
     if (!el) return 380;
-    return Math.max(1, el.scrollHeight || el.offsetHeight);
+    // 双口径取大+余量(2026-08-26):scrollHeight 与 getBoundingClientRect 各有盲区,
+    // 按钮/开关这类行内元素曾被低估 ~20px,导致窗口矮一截、按钮被裁半截
+    const sh = el.scrollHeight || 0;
+    let rh = 0;
+    try { rh = Math.ceil(el.getBoundingClientRect().height); } catch (e) {}
+    return Math.max(1, sh, rh) + 16;
   }
   // 按内容高度自适应窗口(offsetHeight 同步强制布局,类切换后立即量到最终高度)
   function syncIslandSize() {
@@ -783,4 +788,22 @@
   renderClock();
   setInterval(renderClock, 1000);
   bindHW();
+  // 内容高度自适应兜底(2026-08-26):tick 填充数据/note 文字变化后 #full 变高,
+  // 窗口必须跟随——ResizeObserver 防抖同步,防 CTL 按钮被窗口下缘裁住
+  (function () {
+    var t = null;
+    var sync = function () {
+      t = null;
+      if (expanded && typeof setIsland === "function") {
+        var h = islandHeight();
+        if (h + 2 > 300) setIsland(true, 380, h + 2);
+      }
+    };
+    var full = $("full");
+    if (full && typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(function () {
+        clearTimeout(t); t = setTimeout(sync, 120);
+      }).observe(full);
+    }
+  })();
 })();

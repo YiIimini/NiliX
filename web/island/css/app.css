@@ -476,7 +476,7 @@ body.high .status-dot { animation-name: pulseWarn; }
   flex-direction: column;
   gap: 2px;
   padding: 8px 12px 6px;
-  overflow: hidden;
+  overflow: visible; /* 2026-08-26:不再裁溢出——CTL 卡按钮曾被下缘裁半截;窗口高度由 islandHeight+ResizeObserver 保证 */
 }
 
 .row {

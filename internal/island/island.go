@@ -91,6 +91,8 @@ type rect struct {
 
 var (
 	islandExpanded bool
+	islandW      int
+	islandH      int
 	islandCurW     = miniW
 	islandCurH     = miniH
 	islandCurR     = miniR
@@ -160,10 +162,6 @@ func islandAnimate(hwnd uintptr, toW, toH, toR, steps int) {
 }
 
 func setIsland(wv webview.WebView, expanded bool, w, h int) {
-	if expanded == islandExpanded {
-		return
-	}
-	islandExpanded = expanded
 	hwnd := uintptr(wv.Window())
 	if expanded {
 		if w <= 0 {
@@ -172,9 +170,16 @@ func setIsland(wv webview.WebView, expanded bool, w, h int) {
 		if h <= 0 {
 			h = fullH
 		}
-		islandAnimate(hwnd, w, h, fullR, 24) // 展开:240ms(0.24s)
+		// 同为展开态且目标尺寸一致才跳过(2026-08-26 修复:旧版对已展开一律 return,
+		// 内容后渲染变高时窗口永不跟随——CTL 按钮被裁的直接根因);尺寸变化则动画到新目标
+		if islandExpanded && w == islandW && h == islandH {
+			return
+		}
+		islandExpanded, islandW, islandH = true, w, h
+		islandAnimate(hwnd, w, h, fullR, 24) // 240ms
 	} else {
 		// 收起:180ms 与前端面板淡出(0.17s)同步,避免窗口已缩到胶囊但内容还挂着
+		islandExpanded, islandW, islandH = false, 0, 0
 		islandAnimate(hwnd, miniW, miniH, miniR, 18)
 	}
 }
