@@ -268,14 +268,17 @@
     const locked = !!hw.denied || (!hw.ok && !hw.admin);
     box.classList.toggle("locked", locked);
     if (unlock) unlock.classList.toggle("hidden", !locked);
-    if (modes) modes.classList.toggle("hidden", locked);
+    // 操作按钮常驻可见(用户要求):锁定态禁用半透明,不整块隐藏
+    if (modes) {
+      modes.querySelectorAll(".hw-mode").forEach((b) => { b.disabled = locked; });
+    }
     const swRow = document.querySelector(".hw-switches");
     if (swRow) {
-      swRow.classList.toggle("hidden", false); // 超频免管理员,恒显示;制冷在锁定态禁用
-      cool.disabled = locked;
+      cool.disabled = locked; // 超频免管理员恒可用,制冷锁定态禁用
     }
     if (locked) {
-      if (note) note.textContent = "风扇/模式/核心温度需管理员令牌(超频免提权)";
+      if (modes) modes.querySelectorAll(".hw-mode").forEach((b) => b.classList.remove("on"));
+      if (note) note.textContent = "模式/制冷/风扇需管理员令牌(超频免提权),点下方解锁";
       return;
     }
     if (!hw.ok) {
