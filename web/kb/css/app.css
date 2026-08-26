@@ -4996,3 +4996,21 @@ select option { text-align: center; }
 /* 弹窗头部刷新按钮(2026-08-26:关闭按钮前,旋转动效由 JS 驱动) */
 .manju-modal-refresh { margin-right: 6px; font-size: 13px; }
 .manju-modal-refresh:hover { color: var(--accent, #4da3ff); }
+
+/* ============ 清理缓存弹窗·双卡选择(2026-08-26 美化) ============ */
+.cc-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 4px; }
+.cc-card {
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  padding: 18px 14px 14px; border-radius: 12px;
+  border: 1px solid var(--panel-border);
+  background: color-mix(in srgb, var(--muted) 4%, transparent);
+  transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.cc-card:hover { transform: translateY(-2px); border-color: var(--accent, #4da3ff); box-shadow: 0 6px 18px rgba(0,0,0,.28); }
+.cc-card-danger:hover { border-color: var(--err, #f87171); box-shadow: 0 6px 18px rgba(248,113,113,.18); }
+.cc-ic { font-size: 26px; line-height: 1; }
+.cc-card h4 { margin: 0; font-size: 14px; letter-spacing: 1px; color: var(--text); }
+.cc-list { margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--muted); text-align: center; line-height: 1.8; }
+.cc-keep { margin: 2px 0 4px; font-size: 11px; color: var(--ok, #3ddc84); text-align: center; }
+.cc-warn { color: var(--err, #f87171); }
+.cc-btn-danger { background: var(--err, #f87171); color: #fff; }

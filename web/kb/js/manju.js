@@ -737,17 +737,32 @@
       if (!this.project) { this.setErr("请先选择项目后再清理缓存"); return; }
       const fmtB = this._fmtBytes;
       this.openModal("🧹 清理缓存",
-        `<div class="manju-confirm">
-          <p class="mc-q">选择清理范围:</p>
-          <div class="mc-opt" style="margin-bottom:14px">
-            <p style="margin:6px 0;font-size:13px;color:var(--muted)"><b style="color:var(--text)">确认(普通清理)</b> — 删除本项目旧缓存:方案 JSON(plan/characters/prompts) + 镜头 mp4 + 条件缓存 + 接缝 latent。<br>定妆照 / 场景图 / 成片 / 2K 产物不受影响。</p>
-            <p style="margin:6px 0;font-size:13px;color:var(--muted)"><b style="color:var(--err)">高级(彻底清场)</b> — 在普通清理基础上,<b style="color:var(--err)">删除 ComfyUI 共享 input 与 output 目录里的全部产物</b>(含其他项目的图片/视频/中间产物)并<b style="color:var(--err)">清空运行日志数据</b>(界面日志与各项目 run.log)。<br><span style="color:var(--err)">⚠ 渲染产物将被清空,需重新渲染;请确认 ComfyUI 未在运行关键任务。</span></p>
+        `<div class="cc-cards">
+          <div class="cc-card">
+            <div class="cc-ic">🧽</div>
+            <h4>普通清理</h4>
+            <ul class="cc-list">
+              <li>方案 JSON · 镜头 mp4</li>
+              <li>条件缓存 · 接缝 latent</li>
+              <li>运行状态残留(run_state)</li>
+            </ul>
+            <p class="cc-keep">✓ 保留 定妆照 / 场景图 / 成片 / 2K</p>
+            <button id="cc-confirm" class="hrs-btn hrs-btn-primary">确认清理</button>
           </div>
-          <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
-            <button id="cc-confirm" class="hrs-btn hrs-btn-primary">确认(普通)</button>
-            <button id="cc-advanced" class="hrs-btn hrs-btn-danger" style="background:var(--err);color:#fff">高级(清 ComfyUI)</button>
-            <button id="cc-cancel" class="hrs-btn">取消</button>
+          <div class="cc-card cc-card-danger">
+            <div class="cc-ic">🔥</div>
+            <h4>彻底清场</h4>
+            <ul class="cc-list">
+              <li>普通清理全部内容</li>
+              <li>ComfyUI input / output 全部产物</li>
+              <li><b>成片 / 预告片</b> · 运行日志数据</li>
+            </ul>
+            <p class="cc-keep cc-warn">⚠ 渲染产物将被清空需重渲;含其他项目文件</p>
+            <button id="cc-advanced" class="hrs-btn cc-btn-danger">高级清理</button>
           </div>
+        </div>
+        <div class="manju-row" style="justify-content:center;margin-top:6px">
+          <button id="cc-cancel" class="hrs-btn">取消</button>
         </div>`);
       const btn = $("nav-cache-clear");
       $("cc-cancel").addEventListener("click", () => this.closeModal());

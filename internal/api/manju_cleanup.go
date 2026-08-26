@@ -218,6 +218,33 @@ func manjuCacheClear(w http.ResponseWriter, r *http.Request) {
 	// 安全护栏:只清 ComfyUI 共享目录(input/output)内的产物,目录本身保留;
 	// 模型权重(../models)绝不触碰。目录来自 ComfySharedDir(与 comfyParams 同源)。
 	if advanced {
+		// 高级=彻底清场:成片/预告片也是渲染产物(2026-08-26 用户反馈「产物没同步清理」——
+		// 此前护栏保住成片,高级清场后产物面板仍挂着 workdir/<ep>_成片.mp4,观感即「没清干净」)
+		if entries, err := os.ReadDir(ctx.workdir); err == nil {
+			n, b2 := 0, int64(0)
+			for _, e := range entries {
+				name := e.Name()
+				if e.IsDir() || !(strings.Contains(name, "_成片") || strings.Contains(name, "_预告片")) {
+					continue
+				}
+				if !strings.HasSuffix(name, ".mp4") {
+					continue
+				}
+				full := filepath.Join(ctx.workdir, name)
+				if fi, _ := e.Info(); fi != nil {
+					b2 += fi.Size()
+				}
+				if os.Remove(full) == nil {
+					n++
+				} else if len(failed) < 8 {
+					failed = append(failed, name)
+					totalFails++
+				}
+			}
+			if n > 0 {
+				clean = append(clean, map[string]any{"target": "final", "files": n, "bytes": b2, "dir": ctx.workdir})
+			}
+		}
 		for _, sub := range []string{"input", "output"} {
 			dir := filepath.Join(ComfySharedDir, sub)
 			if files, bytes, fl := removeTreeEx(dir, &failed); files > 0 || fl > 0 {
