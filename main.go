@@ -521,23 +521,35 @@ func main() {
 		return
 	}
 
-	// 主窗口子进程模式:独立进程�?WebView2 管理窗口(任务栏图�?NiliX,环境不与灵动岛冲�?
-	if len(os.Args) > 1 && os.Args[1] == "--mainwin" {
-		runMainWindowWebView()
-		return
-	}
-
-	// 提权硬件助手模式:UAC 授权后常驻,替普通权限主服务读写 EC(风扇/模式/温度)。
-	// 通信走 logs/hw/ 文件通道,详见 internal/sysmon/hwagent.go。
-	if len(os.Args) > 1 && os.Args[1] == "--hwagent" {
-		os.Exit(sysmon.RunHWAgent())
+	// 子进程模式必须在 flag.Parse 之前拦截——flag 包对未定义参数(--mainwin/--hwagent)
+	// 的默认行为是打印 usage 后 os.Exit(2),这就是「窗口秒退无日志」的根因(2026-08-26)。
+	// 各分支自带日志初始化,退出原因可查。
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--mainwin":
+			if f, err := setupLogFile(filepath.Join(exeDir(), "logs", "server.log")); err == nil {
+				log.SetOutput(f)
+				defer f.Close()
+				log.Printf("[mainwin] 子进程启动 pid=%d", os.Getpid())
+			}
+			runMainWindowWebView()
+			log.Printf("[mainwin] 子进程退出")
+			return
+		case "--hwagent":
+			if f, err := setupLogFile(filepath.Join(exeDir(), "logs", "server.log")); err == nil {
+				log.SetOutput(f)
+				defer f.Close()
+			}
+			_ = os.Remove(filepath.Join("logs", "graceful_exit"))
+			os.Exit(sysmon.RunHWAgent())
+		}
 	}
 
 	port := flag.String("port", "8787", "监听端口")
 	cfgPath := flag.String("config", "settings.json", "设置文件路径")
 	kbRoot := flag.String("kb", `C:\Mi\Ai\WorkBench\zhishiku`, "知识库根目录")
 	flag.Parse()
-	// �?DPI 感知：必须在任何窗口（托�?胶囊）创建前设置，否则窗口尺寸与圆角裁剪错乱�?
+	// �?DPI 感知：必须在任何窗口（托�? 胶囊）创建前设置，否则窗口尺寸与圆角裁剪错乱�?
 	island.EnablePerMonitorDPI()
 
 	// 以 windowsgui 方式运行时无控制台，日志写文件。
@@ -549,6 +561,7 @@ func main() {
 		defer f.Close()
 		log.Printf("NiliX 日志已开启: %s", logPath)
 	}
+
 	// 审计 M13:主进程启动即清理旧看门狗标记——上一轮看门狗自身被杀/系统重启残留�?
 	// graceful_exit 会在本进程崩溃时让新看门狗误�?用户主动退�?而不重启
 	_ = os.Remove(filepath.Join("logs", "graceful_exit"))

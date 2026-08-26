@@ -727,3 +727,20 @@ body:not(.no-effects) .core i {
 #hw-note { color: var(--muted, #7d8db0); }
 #hw-note.hw-note-flash { color: #fbbf24; }
 #hw-note.hw-note-flash { color: #fbbf24; }
+
+/* ============ NilixTip 统一悬停气泡(2026-08-26,与主页面同款;HUD 变量体系) ============ */
+.nilix-tip {
+  position: fixed; z-index: 9999;
+  max-width: 280px; padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(77, 163, 255, .30);
+  background: rgba(9, 15, 28, .88);
+  backdrop-filter: blur(10px);
+  color: var(--txt, #cfe3ff);
+  font-size: 11px; line-height: 1.55; letter-spacing: .3px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .5);
+  pointer-events: none; opacity: 0; transform: translateY(3px);
+  transition: opacity .14s ease, transform .14s ease;
+  white-space: normal; word-break: break-word;
+}
+.nilix-tip.show { opacity: 1; transform: translateY(0); }

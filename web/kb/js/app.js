@@ -1009,3 +1009,68 @@ const App = {
 };
 
 document.addEventListener("DOMContentLoaded", () => App.init());
+
+/* ============ NilixTip 统一悬停气泡(2026-08-26)============
+ * 接管原生 title:系统白底气泡与深色主题割裂、长文本排版差。
+ * 深色玻璃拟态 + 智能上下翻转 + 屏幕边界防溢;动态 title 走 NilixSetTip 同步刷新。 */
+(function () {
+  let tipEl = null, cur = null, showT = null;
+  function ensure() {
+    if (tipEl) return tipEl;
+    tipEl = document.createElement("div");
+    tipEl.className = "nilix-tip";
+    tipEl.setAttribute("role", "tooltip");
+    document.body.appendChild(tipEl);
+    return tipEl;
+  }
+  function show(el) {
+    const text = el.getAttribute("data-tip");
+    if (!text) return;
+    const t = ensure();
+    t.textContent = text;
+    t.classList.add("show");
+    t.style.left = "0px"; t.style.top = "0px"; // 复位后再量尺寸
+    const r = el.getBoundingClientRect();
+    const tw = t.offsetWidth, th = t.offsetHeight;
+    let x = r.left + r.width / 2 - tw / 2;
+    x = Math.max(8, Math.min(x, window.innerWidth - tw - 8));
+    let y = r.top - th - 8;
+    if (y < 6) y = r.bottom + 8; // 顶部放不下翻到下方
+    t.style.left = x + "px"; t.style.top = y + "px";
+  }
+  function hide() {
+    if (tipEl) tipEl.classList.remove("show");
+    cur = null;
+  }
+  // 动态 title 更新入口:气泡激活时同步刷新文字,否则照常写 title
+  window.NilixSetTip = function (el, text) {
+    if (!el) return;
+    if (!text) { el.removeAttribute("title"); el.removeAttribute("data-tip"); return; }
+    if (cur === el && tipEl) { el.setAttribute("data-tip", text); tipEl.textContent = text; return; }
+    if (el.hasAttribute("data-tip")) el.setAttribute("data-tip", text);
+    else el.title = text;
+  };
+  document.addEventListener("mouseover", (e) => {
+    const el = e.target.closest ? e.target.closest("[title]") : null;
+    if (el === cur) return;
+    hide();
+    clearTimeout(showT);
+    if (!el) return;
+    showT = setTimeout(() => {
+      const text = el.getAttribute("title");
+      if (!text) return;
+      el.setAttribute("data-tip", text);
+      el.removeAttribute("title"); // 防原生气泡冒出
+      cur = el;
+      show(el);
+    }, 320);
+  });
+  document.addEventListener("mouseout", (e) => {
+    const el = e.target.closest ? e.target.closest("[data-tip]") : null;
+    if (el && !el.contains(e.relatedTarget)) {
+      clearTimeout(showT);
+      hide();
+    }
+  });
+  ["scroll", "mousedown", "keydown"].forEach((ev) => window.addEventListener(ev, hide, true));
+})();

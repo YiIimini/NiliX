@@ -2602,7 +2602,7 @@
         // 内存副值显示已用/总量(比恒 N/A 的内存温度有用);温度并入 title
         const memIt = wrap.querySelector('[data-k="mem"]');
         setT("mem", m.used && m.total ? m.used + "/" + m.total : "N/A");
-        if (memIt) memIt.title = "内存 " + pct(m.percent) + (m.hasTemp ? " · " + Math.round(m.temp) + "℃" : "") + (m.available ? " · 可用 " + m.available : "");
+        if (memIt) window.NilixSetTip ? NilixSetTip(memIt, "内存 " + pct(m.percent) + (m.hasTemp ? " · " + Math.round(m.temp) + "℃" : "") + (m.available ? " · 可用 " + m.available : "")) : (memIt.title = "内存");
         setBar("mem", m.percent, true);
         // GPU:优先显示显存使用率(H3 渲染显存常满、算力利用率波动无参考性);无显卡显示 N/A
         const gpuPct = g.present ? (g.memPercent != null && g.memPercent > 0 ? g.memPercent : g.usage) : null;
@@ -2618,19 +2618,19 @@
         });
         const gpuIt = wrap.querySelector('[data-k="gpu"]');
         if (gpuIt && g.present) {
-          gpuIt.title = "GPU 显存 " + g.memUsed + "/" + g.memTotal + "(" + Math.round(g.memPercent || 0) + "%)"
+          NilixSetTip(gpuIt, "GPU 显存 " + g.memUsed + "/" + g.memTotal + "(" + Math.round(g.memPercent || 0) + "%)"
             + " · 算力 " + Math.round(g.usage) + "% · 温度 " + temp(g.temp, g.temp > 0)
-            + (g.sharedUsed ? " · 共享 " + g.sharedUsed : "");
+            + (g.sharedUsed ? " · 共享 " + g.sharedUsed : ""));
         }
         const cpuIt = wrap.querySelector('[data-k="cpu"]');
         if (cpuIt) {
           const cores = (c.cores || []).length;
-          cpuIt.title = "CPU " + pct(c.usage) + " · " + cores + " 线程" + (c.hasTemp ? " · 核心 " + Math.round(c.temp) + "℃" : "")
-            + (hw.ok && hw.cpuFan > 0 ? " · 风扇 " + hw.cpuFan + "%" : "");
+          NilixSetTip(cpuIt, "CPU " + pct(c.usage) + " · " + cores + " 线程" + (c.hasTemp ? " · 核心 " + Math.round(c.temp) + "℃" : "")
+            + (hw.ok && hw.cpuFan > 0 ? " · 风扇 " + hw.cpuFan + "%" : ""));
         }
         // 温度不可用时给出可行动的提示:CPU 核心温度唯一来源 LHM 需要管理员权限(2026-08-26)
         const cpuEm = wrap.querySelector('[data-k="cpu"] em');
-        if (cpuEm) cpuEm.title = c.hasTemp ? "" : "CPU 核心温度需以管理员身份运行 NiliX 才能读取(灵动岛「设备控制」可一键提权)";
+        if (cpuEm) window.NilixSetTip ? NilixSetTip(cpuEm, c.hasTemp ? "" : "CPU 核心温度需以管理员身份运行 NiliX 才能读取(灵动岛「设备控制」可一键提权)") : (cpuEm.title = "");
         // ComfyUI 服务状态灯(视频管理页顶部:ComfyUI · 运行中/已停止)
         const cfy = r.comfy || {};
         const cDot = document.querySelector("#manju-cfy-status .hrs-dot");
