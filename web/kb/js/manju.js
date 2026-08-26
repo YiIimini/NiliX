@@ -2606,6 +2606,16 @@
         set("gpu", gpuPct != null ? Math.round(gpuPct) + "%" : "N/A", gpuPct != null ? (gpuPct >= 90 ? "crit" : gpuPct >= 70 ? "hot" : "") : "");
         setT("gpu", g.present ? temp(g.temp, g.temp > 0) : "N/A", g.temp >= 85 ? "crit" : g.temp >= 70 ? "hot" : "");
         setBar("gpu", gpuPct != null ? gpuPct : 0, g.present);
+        // 风扇转速(雷神同源 EC 通道;需管理员,未解锁时留空)
+        const hw = r.hw || {};
+        const fanTxt = (v) => (hw.ok && v > 0 ? Math.round(v) + "rpm" : "");
+        ["cpu", "gpu"].forEach((k) => {
+          const el = wrap.querySelector(`[data-k="${k}"] .ms-fan`);
+          if (el) el.textContent = fanTxt(k === "cpu" ? hw.cpuFan : hw.gpuFan);
+        });
+        // 温度不可用时给出可行动的提示:CPU 核心温度唯一来源 LHM 需要管理员权限(2026-08-26)
+        const cpuEm = wrap.querySelector('[data-k="cpu"] em');
+        if (cpuEm) cpuEm.title = c.hasTemp ? "" : "CPU 核心温度需以管理员身份运行 NiliX 才能读取(灵动岛「设备控制」可一键提权)";
         // ComfyUI 服务状态灯(视频管理页顶部:ComfyUI · 运行中/已停止)
         const cfy = r.comfy || {};
         const cDot = document.querySelector("#manju-cfy-status .hrs-dot");

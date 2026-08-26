@@ -27,6 +27,9 @@ __pycache__/
 mainwin.json
 # 热替换编译备份
 NiliX.exe~
+NiliX.exe.bak-*
+# --mainwin 子进程 WebView2 用户数据目录(截图/调试启动产生)
+NiliX.exe.WebView2/
 
 # 运行时数据目录(漫剧项目/小说库,自包含部署后位于 exe 目录旁,勿入库)
 manju/

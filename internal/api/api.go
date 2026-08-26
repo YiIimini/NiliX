@@ -54,6 +54,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 	mux.HandleFunc("POST /api/settings/test", s.handleTest)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("POST /api/hwctl", s.handleHWCtl)
 	mux.HandleFunc("GET /api/page", s.handleKBPage)
 	mux.HandleFunc("GET /api/asset", s.handleKBAsset)
 	mux.HandleFunc("GET /api/comfy", s.handleComfy)

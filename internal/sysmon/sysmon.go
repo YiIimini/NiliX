@@ -100,6 +100,22 @@ type ZCode struct {
 	Count   int  `json:"count"`
 }
 
+// HW 设备控制中心(雷神 EC 同源通道 + NVAPI):风扇/性能模式/快速制冷/超频。
+type HW struct {
+	OK      bool   `json:"ok"`      // EC 通道可用(需管理员)
+	Denied  bool   `json:"denied"`  // 权限被拒 → 引导一键提权
+	Admin   bool   `json:"admin"`   // NiliX 自身是否管理员令牌
+	CPUTemp float64 `json:"cpuTemp"` // EC CPU 温度(Snapshot 温度链首选;仅缓存读,绝不阻塞)
+	GPUTemp float64 `json:"gpuTemp"`
+	CPUFan  uint32 `json:"cpuFan"`  // RPM
+	GPUFan  uint32 `json:"gpuFan"`  // RPM
+	Mode    uint32 `json:"mode"`    // 0 轻效 / 1 进阶 / 2 巅峰
+	ModeName string `json:"modeName"`
+	ModeOK  bool   `json:"modeOK"`
+	QuickCool bool `json:"quickCool"` // 快速制冷(风扇全速)
+	Overclock bool `json:"overclock"` // 一键超频(NVAPI,免管理员)
+}
+
 // Bot ZCode bot 运行时状态（运行锁 owner.json 探测）。
 type Bot struct {
 	Online   bool   `json:"online"`
@@ -113,6 +129,7 @@ type Snapshot struct {
 	CPU   CPU   `json:"cpu"`
 	Mem   Mem   `json:"mem"`
 	GPU   GPU   `json:"gpu"`
+	HW    HW    `json:"hw"`
 	Disk  Disk  `json:"disk"`
 	Net   Net   `json:"net"`
 	ZCode ZCode `json:"zcode"`
@@ -138,9 +155,6 @@ type Collector struct {
 	firstDisk    bool
 	firstNet     bool
 
-	cpuTemp    float64
-	cpuTempOK  bool
-	cpuTempAt  time.Time
 	gpuCache   GPU
 	gpuAt      time.Time
 	sharedMem  uint64
@@ -157,13 +171,47 @@ type Collector struct {
 	procsCount int
 	procsAt    time.Time
 	lhm        *LHM
+	ec         *ECHW // 雷神同源 EC/WMI 通道(风扇/模式/温度)
+	hwCache    HW
+	hwAt       time.Time
 }
 
 // NewCollector 构造采集器。
 func NewCollector() *Collector {
-	c := &Collector{firstDisk: true, firstNet: true, lhm: NewLHM()}
+	c := &Collector{firstDisk: true, firstNet: true, lhm: NewLHM(), ec: NewECHW()}
+	go c.ecLoop() // EC 采样是 PowerShell 进程(数百 ms),异步协程预热缓存,不阻塞 /api/stats
 	_, _ = cpu.Percent(0, false)
 	return c
+}
+
+// EC 设备控制中心句柄(供 API 控制端点调用)。
+func (c *Collector) EC() *ECHW { return c.ec }
+
+// ecLoop 后台轮询 EC(3s);权限被拒时指数退避至 30s(提权重启后自动恢复)。
+func (c *Collector) ecLoop() {
+	backoff := 3 * time.Second
+	for {
+		s := c.ec.Sample()
+		c.mu.Lock()
+		c.hwCache = HW{
+			OK: s.OK, Denied: s.Denied, Admin: IsAdmin(),
+			CPUTemp: s.CPUT, GPUTemp: s.GPUT,
+			CPUFan: s.CPUFan, GPUFan: s.GPUFan,
+			Mode: s.Mode, ModeName: ECModeName(s.Mode), ModeOK: s.ModeOK,
+			QuickCool: s.QuickCool,
+			Overclock: NVOverclockState(),
+		}
+		c.hwAt = time.Now()
+		c.mu.Unlock()
+		if s.OK {
+			backoff = 3 * time.Second
+		} else if s.Denied {
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
+		}
+		time.Sleep(backoff)
+	}
 }
 
 // Snapshot 采集一次全量指标。
@@ -187,10 +235,12 @@ func (c *Collector) Snapshot() *Snapshot {
 			s.CPU.Usage = u[0]
 		}
 	}
-	if t, ok := c.lhm.CPUTemp(); ok {
+	// CPU 核心温度优先级:雷神同源 EC(最准,需管理员;只读 ecLoop 预热缓存,绝不阻塞)
+	// → LHM → N/A(宁缺毋假,不用 ACPI 热区)。
+	if c.hwCache.CPUTemp > 0 && c.hwCache.CPUTemp < 120 {
+		s.CPU.Temp, s.CPU.HasTemp = c.hwCache.CPUTemp, true
+	} else if t, ok := c.lhm.CPUTemp(); ok {
 		s.CPU.Temp, s.CPU.HasTemp = t, true
-	} else {
-		s.CPU.Temp, s.CPU.HasTemp = c.cpuTempCached(now)
 	}
 
 	if vm, err := mem.VirtualMemory(); err == nil {
@@ -204,10 +254,17 @@ func (c *Collector) Snapshot() *Snapshot {
 	}
 
 	s.GPU = c.gpuCached(now)
+	// GPU 温度优先雷神同源 EC 值(与控制中心显示一致),无则 nvidia-smi,再无则 LHM 兜底
+	if c.hwCache.GPUTemp > 0 && c.hwCache.GPUTemp < 120 {
+		s.GPU.Temp = c.hwCache.GPUTemp
+	}
 	s.Comfy = c.comfyCached(now)
 	s.Harness = c.harnessCached(now)
 	s.ZCode = c.zcodeCached(now)
 	s.Bot = c.botCached(now)
+	if time.Since(c.hwAt) > 0 {
+		s.HW = c.hwCache
+	}
 
 	if du, err := disk.Usage(`C:\`); err == nil {
 		s.Disk.Percent = du.UsedPercent
@@ -232,21 +289,18 @@ func (c *Collector) Snapshot() *Snapshot {
 	return s
 }
 
-func (c *Collector) cpuTempCached(now time.Time) (float64, bool) {
-	if now.Sub(c.cpuTempAt) < 10*time.Second {
-		return c.cpuTemp, c.cpuTempOK
-	}
-	t, ok := CPUTemp()
-	c.cpuTemp, c.cpuTempOK, c.cpuTempAt = t, ok, now
-	return t, ok
-}
-
 func (c *Collector) gpuCached(now time.Time) GPU {
 	// GPU 利用率/温度 5 秒缓存(无需 2s 精度;nvidia-smi 单次约 50ms 可接受)
 	if now.Sub(c.gpuAt) < 5*time.Second {
 		return c.gpuCache
 	}
 	g := GPUInfo()
+	// 温度兜底:nvidia-smi 偶发 [N/A]/驱动忙时无温度,LHM 有值则补上(2026-08-26)
+	if g.Present && g.Temp <= 0 {
+		if t, ok := c.lhm.GPUTemp(); ok {
+			g.Temp = t
+		}
+	}
 	g.SharedUsed = c.sharedMemCached(now)
 	c.gpuCache = g
 	c.gpuAt = now

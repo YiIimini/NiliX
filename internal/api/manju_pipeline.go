@@ -938,7 +938,30 @@ func (ctx *manjuCtx) novelRootDir() string {
 // 在 novel_dir(小说根目录)的 素材/分镜脚本/ 里找当前集对应脚本(EP01→第001章,EP12→第012章),
 // 找到返回脚本路径并切脚本直出(程序化解析零 LLM,避免逐镜提示词截断);未找到返回空串。
 func (ctx *manjuCtx) autoStoryboardForEpisode(lg *manjuLogger) string {
-	root := ctx.novelRootDir()
+	// 2026-08-26 修复:脚本模式下 ctx.novel=workdir/script/EPxx.md,novelRootDir() 会误指
+	// workdir/script(其下无 素材/分镜脚本)→ 永远找不到 novel 源。先用 config paths 显式
+	// 指向的小说目录兜底(novel_dir 优先,novel 为全本文件时上溯书根),再回退 novelRootDir()。
+	root := ""
+	if d := strings.TrimSpace(str(ctx.P["novel_dir"])); d != "" && dirExists(filepath.Join(d, "素材")) {
+		root = d
+	} else if nv := strings.TrimSpace(str(ctx.P["novel"])); nv != "" {
+		if st, serr := os.Stat(nv); serr == nil && st.IsDir() {
+			if dirExists(filepath.Join(nv, "素材")) {
+				root = nv
+			}
+		} else if dirExists(filepath.Join(filepath.Dir(nv), "素材")) {
+			d := filepath.Dir(nv)
+			if strings.EqualFold(filepath.Base(d), "全本") {
+				d = filepath.Dir(d)
+			}
+			if dirExists(filepath.Join(d, "素材")) {
+				root = d
+			}
+		}
+	}
+	if root == "" {
+		root = ctx.novelRootDir()
+	}
 	if root == "" {
 		return ""
 	}
@@ -971,9 +994,61 @@ func (ctx *manjuCtx) autoStoryboardForEpisode(lg *manjuLogger) string {
 		matches, _ = filepath.Glob(filepath.Join(dir, "EP"+fmt.Sprintf("%02d", n)+".md"))
 	}
 	if len(matches) > 0 {
-		return matches[0]
+		return pickStoryboardMatch(matches)
 	}
 	return ""
+}
+
+// pickStoryboardMatch 同章号存在多个分镜脚本候选时择优:排除备份标记(_old/旧/bak/backup/副本),
+// 余下取 mtime 最新。旧版取字典序首个,备份文件(第001章…_old.md)排在正片前时会把备份当正片渲染。
+func pickStoryboardMatch(matches []string) string {
+	if len(matches) == 0 {
+		return ""
+	}
+	best, bestMt := "", int64(-1)
+	for _, m := range matches {
+		low := strings.ToLower(filepath.Base(m))
+		if strings.Contains(low, "_old") || strings.Contains(low, "old.") ||
+			strings.Contains(low, "bak") || strings.Contains(low, "backup") ||
+			strings.Contains(low, "旧") || strings.Contains(low, "副本") {
+			continue
+		}
+		mt := int64(0)
+		if st, err := os.Stat(m); err == nil {
+			mt = st.ModTime().Unix()
+		}
+		if mt > bestMt {
+			best, bestMt = m, mt
+		}
+	}
+	if best == "" {
+		best = matches[0] // 全部是备份文件时兜底取首个
+	}
+	return best
+}
+
+// syncScriptFromNovel 把 novel 源分镜脚本同步进 workdir 工作副本(ensurePlan 入口调用)。
+// 脚本模式渲染实际读 workdir/script/EPxx.md 副本:源文件更新而副本不换,指纹/方案/镜头全按旧
+// 剧情复用——这正是「分镜改了、视频还是旧剧情」的主链路。内容一致时零开销;不同则覆盖副本,
+// 由副本 mtime 变化触发既有指纹失配 → 「脚本已更换」→ 清产物重生成。
+func (ctx *manjuCtx) syncScriptFromNovel(lg *manjuLogger) {
+	if !ctx.scriptMode || ctx.novel == "" {
+		return
+	}
+	sp := ctx.autoStoryboardForEpisode(lg)
+	if sp == "" || strings.EqualFold(sp, ctx.novel) {
+		return
+	}
+	src, err := readTextFileUTF8(sp)
+	if err != nil || len(src) == 0 {
+		return
+	}
+	if dst, derr := readTextFileUTF8(ctx.novel); derr == nil && bytes.Equal(src, dst) {
+		return
+	}
+	if werr := os.WriteFile(ctx.novel, src, 0o644); werr == nil {
+		lg.logf("🔄 已同步小说源分镜(" + filepath.Base(sp) + ") → 工作副本;方案与旧镜头将按「脚本已更换」过期重生成")
+	}
 }
 
 // volumeEpisodes 按卷分集:正文/<卷X_标题>/ 卷目录下每卷一个集(卷内章节文件定章节范围,卷序定集号)。
@@ -1354,6 +1429,11 @@ const manjuConciseSuffix = `
 // 章节范围变化导致重新生成时,清空该集旧镜头/缓存,避免按旧内容复用。
 // 生成失败(输出被截断/非 JSON)时追加精简约束重试一次。
 func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
+	// 2026-08-26 修复(「渲染视频与小说不同步」主链路):脚本模式下 ctx.novel 指向 workdir
+	// 副本,指纹只盯副本——直接改 novel 源分镜后副本不变,旧方案与旧镜头全部被复用,
+	// 视频永远停留在旧剧情。生成/复用方案前先把 novel 源脚本同步进副本:内容不同则覆盖,
+	// 副本 mtime 变化使指纹失配,走下方既有「脚本已更换」链路清产物重生成。
+	ctx.syncScriptFromNovel(lg)
 	plan, _, err := ctx.loadPlan()
 	if err == nil {
 		planC := str(plan["chapters"])
@@ -1742,6 +1822,7 @@ func (ctx *manjuCtx) novelFingerprint() string {
 				rel := strings.ToLower(strings.TrimPrefix(p, root))
 				if strings.Contains(low, "人物") || strings.Contains(low, "角色") ||
 					strings.Contains(low, "场景") || strings.Contains(low, "封面") ||
+					strings.Contains(low, "总集") || // 渲染提示词总集:改风格/负面词必失效旧方案(LLM 模式注入源)
 					strings.Contains(rel, "设定集") {
 					if st, err := os.Stat(p); err == nil {
 						parts = append(parts, fmt.Sprintf("%s|%d|%d", p, st.Size(), st.ModTime().UnixNano()))

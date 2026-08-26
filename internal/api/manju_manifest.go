@@ -93,7 +93,10 @@ func (ctx *manjuCtx) manifestRemove(shotID int) {
 	}
 }
 
-// shotManifestStatus 产物时效:current / stale / missing / unknown(无记录=旧项目兼容,视为 current)
+// shotManifestStatus 产物时效:current / stale / missing / unknown(产物在但清单无记录)。
+// 2026-08-26 修复:旧版 unknown 视为 current 直接跳过——「无记录」实为不可信(旧项目兼容语义),
+// 输入已变却无指纹可比时,旧镜头被当作最新复用,正是「视频与分镜不同步」漏网路径之一。
+// 漫剧项目库已清空重建档,无兼容包袱:unknown 一律按 stale 删旧重渲,宁可重烧不可用旧。
 func (ctx *manjuCtx) shotManifestStatus(s manjuShot) string {
 	p := filepath.Join(ctx.clipsDir, ctx.episode, fmt.Sprintf("%02d.mp4", s.ID))
 	if !fileExists(p) {
@@ -104,7 +107,7 @@ func (ctx *manjuCtx) shotManifestStatus(s manjuShot) string {
 	manjuManifestMu.Unlock()
 	e := m.Shots[strconv.Itoa(s.ID)]
 	if e == nil {
-		return "unknown"
+		return "stale" // 无指纹记录=不可信,重渲
 	}
 	if e.Fingerprint != ctx.shotRenderFingerprint(s) {
 		return "stale"

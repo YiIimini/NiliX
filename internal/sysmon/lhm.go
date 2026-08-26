@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-
-	"github.com/shirou/gopsutil/v4/process"
 )
 
 // LHM LibreHardwareMonitor 传感器读取（可选温度源）。
@@ -44,25 +42,11 @@ func lhmExePath() string {
 	return ""
 }
 
-func lhmRunning() bool {
-	procs, err := process.Processes()
-	if err != nil {
-		return false
-	}
-	for _, p := range procs {
-		if name, err := p.Name(); err == nil && strings.EqualFold(name, lhmExe) {
-			return true
-		}
-	}
-	return false
-}
-
+// lhmsensor 只读传感器、双开无冲突;外部已跑的实例 stdout 我们读不到,
+// 绝不能因「进程已存在」而放弃自启——那会让温度永远回退 ACPI 热区假值(2026-08-26 修复)。
 func (l *LHM) run() {
 	exe := lhmExePath()
 	if exe == "" {
-		return
-	}
-	if lhmRunning() {
 		return
 	}
 	cmd := hiddenCmd(exe)
@@ -120,4 +104,14 @@ func (l *LHM) MemTemp() (float64, bool) {
 		return 0, false
 	}
 	return *l.mem, true
+}
+
+// GPUTemp LHM 的 GPU 温度(仅作 nvidia-smi 失效时的兜底源)。
+func (l *LHM) GPUTemp() (float64, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.gpu == nil {
+		return 0, false
+	}
+	return *l.gpu, true
 }

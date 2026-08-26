@@ -7,10 +7,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=202608261331">
-<link rel="stylesheet" href="/css/themes.css?v=202608261331">
-<link rel="stylesheet" href="/css/materials.css?v=202608261331">
-<link rel="stylesheet" href="/css/app.css?v=202608261331">
+<link rel="icon" type="image/png" href="/icon.png?v=202608261450">
+<link rel="stylesheet" href="/css/themes.css?v=202608261450">
+<link rel="stylesheet" href="/css/materials.css?v=202608261450">
+<link rel="stylesheet" href="/css/app.css?v=202608261450">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -85,7 +85,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=202608261331" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=202608261450" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -211,6 +211,13 @@
         <div class="hrs-title">
           <h1 data-i18n="manju.title">视频管理</h1>
           <p class="ov-sub">漫剧工作台 · 一站式管线 · 成品列表</p>
+        </div>
+        <!-- 系统监测条:2026-08-26 用户要求置于「视频管理」标题与使用说明/设置按钮之间居中;
+             CPU/GPU 附风扇转速(雷神同源 EC 通道,需管理员;未解锁时留空) -->
+        <div class="manju-sysmonbar" id="manju-sysmon" title="本机系统状态(每 2 秒刷新)">
+          <span class="ms-it" data-k="cpu"><i>CPU</i><span class="ms-line"><b>--</b><span class="ms-sep">·</span><em>--</em><span class="ms-fan"></span></span><span class="ms-bar"><span class="ms-fill"></span></span></span>
+          <span class="ms-it" data-k="mem"><i>内存</i><span class="ms-line"><b>--</b><span class="ms-sep">·</span><em>--</em><span class="ms-fan"></span></span><span class="ms-bar"><span class="ms-fill"></span></span></span>
+          <span class="ms-it" data-k="gpu"><i>GPU</i><span class="ms-line"><b>--</b><span class="ms-sep">·</span><em>--</em><span class="ms-fan"></span></span><span class="ms-bar"><span class="ms-fill"></span></span></span>
         </div>
         <div class="hrs-tools">
           <span id="manju-cfy-status" class="hrs-status" title="ComfyUI 服务状态(每 2 秒刷新)"><span class="hrs-dot off"></span><span id="manju-cfy-txt">ComfyUI · 检测中…</span></span>
@@ -547,11 +554,6 @@
           <div class="manju-side-head">
             <span class="manju-side-title">运行状态</span>
           </div>
-          <div class="manju-sysmon" id="manju-sysmon" title="本机系统状态(每 2 秒刷新)">
-            <span class="ms-it" data-k="cpu"><i>CPU</i><span class="ms-line"><b>--</b><span class="ms-sep">·</span><em>--</em></span><span class="ms-bar"><span class="ms-fill"></span></span></span>
-            <span class="ms-it" data-k="mem"><i>内存</i><span class="ms-line"><b>--</b><span class="ms-sep">·</span><em>--</em></span><span class="ms-bar"><span class="ms-fill"></span></span></span>
-            <span class="ms-it" data-k="gpu"><i>GPU</i><span class="ms-line"><b>--</b><span class="ms-sep">·</span><em>--</em></span><span class="ms-bar"><span class="ms-fill"></span></span></span>
-          </div>
           <div class="manju-side-body" id="manju-side-body">
             <div class="manju-row">
               <span id="manju-badge" class="manju-badge manju-badge-idle">空闲</span>
@@ -783,12 +785,12 @@
   </div>
   <!-- 实际根路径由服务端注入(自包含部署后 manju/novel 在 exe 目录旁,dirview 勿再硬编码) -->
   <script>window.NILIX_PATHS = { manjuRoot: /*__NILIX_MANJU_ROOT__*/, novelRoot: /*__NILIX_NOVEL_ROOT__*/ };</script>
-  <script src="/js/i18n.js?v=202608261331"></script>
-  <script src="/js/markdown.js?v=202608261331"></script>
-  <script src="/js/winctl.js?v=202608261331"></script>
-  <script src="/js/app.js?v=202608261331"></script>
-  <script src="/js/comfy.js?v=202608261331"></script>
-  <script src="/js/dirview.js?v=202608261331"></script>
-  <script src="/js/manju.js?v=202608261331"></script>
+  <script src="/js/i18n.js?v=202608261450"></script>
+  <script src="/js/markdown.js?v=202608261450"></script>
+  <script src="/js/winctl.js?v=202608261450"></script>
+  <script src="/js/app.js?v=202608261450"></script>
+  <script src="/js/comfy.js?v=202608261450"></script>
+  <script src="/js/dirview.js?v=202608261450"></script>
+  <script src="/js/manju.js?v=202608261450"></script>
 </body>
 </html>

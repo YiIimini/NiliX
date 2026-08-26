@@ -700,3 +700,33 @@ body:not(.no-effects) .core i {
 ::-webkit-scrollbar { width: 0; height: 0; }
 /* NiliX 应用图标(替代字母 Z):沿用 .zmark 尺寸/圆角,去掉底色避免从透明圆角透出 */
 .zmark-img { background: transparent; display: block; object-fit: cover; font-size: 0; }
+
+/* ============ 设备控制中心(雷神同源 EC 通道,2026-08-26) ============ */
+.hw-row { align-items: flex-start; }
+.hw-box { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.hw-box .hw-line { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.hw-fans { color: var(--txt, #cfe3ff); font-size: 11px; opacity: .9; }
+.hw-fanmax { color: var(--muted, #7d8db0); font-size: 10px; }
+.hw-modes { display: flex; gap: 6px; }
+.hw-mode {
+  flex: 1; padding: 4px 0; border: 1px solid rgba(125, 141, 176, .35); border-radius: 7px;
+  background: rgba(125, 141, 176, .08); color: var(--muted, #7d8db0);
+  font-size: 11px; letter-spacing: 1px; cursor: pointer; transition: all .15s ease;
+}
+.hw-mode:hover { border-color: var(--acc, #4da3ff); color: var(--txt, #cfe3ff); }
+.hw-mode.on {
+  background: linear-gradient(135deg, rgba(77, 163, 255, .28), rgba(61, 220, 132, .22));
+  border-color: var(--acc, #4da3ff); color: #fff;
+  box-shadow: 0 0 8px rgba(77, 163, 255, .35);
+}
+.hw-switches { display: flex; gap: 18px; }
+.hw-sw { display: flex; align-items: center; gap: 6px; }
+.hw-sw-lbl { font-size: 11px; color: var(--muted, #7d8db0); letter-spacing: 1px; cursor: pointer; }
+.hw-box.locked .hw-fans, .hw-box.locked .hw-fanmax { opacity: .35; }
+.hw-unlock {
+  width: 100%; padding: 7px 0; border: 1px dashed rgba(251, 191, 36, .55); border-radius: 8px;
+  background: rgba(251, 191, 36, .08); color: #fbbf24; font-size: 11.5px; letter-spacing: 1px;
+  cursor: pointer; transition: all .15s ease;
+}
+.hw-unlock:hover { background: rgba(251, 191, 36, .16); box-shadow: 0 0 10px rgba(251, 191, 36, .25); }
+.hw-unlock:disabled { opacity: .6; cursor: wait; }

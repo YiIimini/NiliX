@@ -247,6 +247,93 @@
     setFill(fillEl, pct);
   };
 
+  // 设备控制中心渲染:EC 可用→风扇/模式/开关实时态;被拒→解锁按钮引导提权
+  function renderHW(hw) {
+    const box = $("hw-box");
+    if (!box) return;
+    const fans = $("hw-fans"), fanmax = $("hw-fanmax"), note = $("hw-note");
+    const modes = $("hw-modes"), unlock = $("hw-unlock");
+    const cool = $("hw-cool"), oc = $("hw-oc");
+    // GPU 风扇副行(独立于控制卡,CPU 风扇并入控制卡首行)
+    if (hw.ok && hw.cpuFan > 0) {
+      fans.textContent = "CPU " + hw.cpuFan + " RPM";
+    } else { fans.textContent = "CPU --"; }
+    if (hw.ok && hw.gpuFan > 0) {
+      $("gpu-fan").textContent = "风扇 GPU " + hw.gpuFan + " RPM";
+    } else { $("gpu-fan").textContent = ""; }
+    if (hw.ok && hw.gpuFanMax > 0) {
+      fanmax.textContent = "/ " + hw.gpuFanMax;
+    } else { fanmax.textContent = ""; }
+
+    const locked = !!hw.denied || (!hw.ok && !hw.admin);
+    box.classList.toggle("locked", locked);
+    if (unlock) unlock.classList.toggle("hidden", !locked);
+    if (modes) modes.classList.toggle("hidden", locked);
+    const swRow = document.querySelector(".hw-switches");
+    if (swRow) {
+      swRow.classList.toggle("hidden", false); // 超频免管理员,恒显示;制冷在锁定态禁用
+      cool.disabled = locked;
+    }
+    if (locked) {
+      if (note) note.textContent = "风扇/模式/核心温度需管理员令牌(超频免提权)";
+      return;
+    }
+    if (!hw.ok) {
+      if (note) note.textContent = "本机无雷神同源 root\\wmi ACPIMethod 通道";
+      return;
+    }
+    if (note) note.textContent = "模式 " + (hw.modeName || hw.mode) + (hw.quickCool ? " · 制冷中" : "");
+    if (hw.modeOK && modes) {
+      modes.querySelectorAll(".hw-mode").forEach((b) => {
+        b.classList.toggle("on", Number(b.dataset.mode) === hw.mode);
+      });
+    }
+    if (cool && !cool.checkedLocked) cool.checked = !!hw.quickCool;
+    if (oc) oc.checked = !!hw.overclock;
+  }
+
+  // 设备控制事件:模式/制冷/超频/提权解锁
+  function hwPost(act, val) {
+    const body = val === undefined ? { act: act } : { act: act, val: val };
+    const headers = { "Content-Type": "application/json" };
+    if (nilixTok()) headers["X-NiliX-Token"] = nilixTok();
+    return fetch("/api/hwctl", { method: "POST", headers: headers, body: JSON.stringify(body) })
+      .then((r) => {
+        if (r.ok) return;
+        return r.json().catch(() => ({})).then((j) => { throw new Error(j.error || "HTTP " + r.status); });
+      });
+  }
+  function bindHW() {
+    const modes = $("hw-modes");
+    if (modes) modes.addEventListener("click", (e) => {
+      const b = e.target.closest(".hw-mode");
+      if (!b || b.classList.contains("on")) return;
+      b.dataset.label = b.textContent; b.textContent = "…";
+      hwPost("mode", Number(b.dataset.mode)).catch(alertErr).finally(() => {
+        b.textContent = b.dataset.label || b.textContent;
+      });
+    });
+    const cool = $("hw-cool");
+    if (cool) cool.addEventListener("change", function () {
+      const on = this.checked; this.checkedLocked = true;
+      hwPost("cool", on).catch((e) => { this.checked = !on; alertErr(e); }).finally(() => { this.checkedLocked = false; });
+    });
+    const oc = $("hw-oc");
+    if (oc) oc.addEventListener("change", function () {
+      const on = this.checked;
+      hwPost("oc", on).catch((e) => { this.checked = !on; alertErr(e); });
+    });
+    const unlock = $("hw-unlock");
+    if (unlock) unlock.addEventListener("click", function () {
+      if (!confirm("将以管理员身份重启 NiliX(UAC 弹窗确认一次),解锁风扇/性能模式/核心温度。继续?")) return;
+      this.textContent = "提权中…"; this.disabled = true;
+      hwPost("elevate").catch((e) => { alertErr(e); this.textContent = "🔒 解锁设备控制"; this.disabled = false; });
+    });
+  }
+  function alertErr(e) {
+    try { console.warn("hwctl:", e && e.message); } catch (_) {}
+  }
+
   function renderCores(cores) {
     const el = $("cores");
     if (!cores || !cores.length) {
@@ -396,6 +483,9 @@
     $("net-d").textContent = "↓ " + fmtRate(s.net.rxRate);
     $("net-u").textContent = "↑ " + fmtRate(s.net.txRate);
     $("net-total").textContent = "下行 " + s.net.rxTotal + " · 上行 " + s.net.txTotal;
+
+    // 设备控制中心(雷神同源 EC 通道):风扇/模式/制冷/超频(2026-08-26)
+    renderHW(s.hw || {});
 
     // ZCode 桌面端状态
     const z = s.zcode || {},
@@ -701,4 +791,5 @@
   setInterval(tick, 1500);
   renderClock();
   setInterval(renderClock, 1000);
+  bindHW();
 })();

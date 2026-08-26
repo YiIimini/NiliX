@@ -298,8 +298,8 @@ func TestShotManifestLifecycle(t *testing.T) {
 	mp4 := filepath.Join(ctx.clipsDir, "EP01", "03.mp4")
 	_ = os.WriteFile(mp4, []byte("v"), 0644)
 
-	if st := ctx.shotManifestStatus(s); st != "unknown" {
-		t.Errorf("无记录应 unknown: %s", st)
+	if st := ctx.shotManifestStatus(s); st != "stale" {
+		t.Errorf("无记录应 stale(不可信重渲,2026-08-26 语义): %s", st)
 	}
 	ctx.manifestMark(s, true)
 	if st := ctx.shotManifestStatus(s); st != "current" {

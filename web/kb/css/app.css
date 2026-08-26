@@ -2688,52 +2688,61 @@ body.view-dir-active .top-search { display: none; }
   0%, 100% { opacity: .9; text-shadow: 0 0 5px color-mix(in srgb, var(--accent) 20%, transparent); }
   50% { opacity: 1; text-shadow: 0 0 16px color-mix(in srgb, var(--accent) 60%, transparent); }
 }
-/* 运行状态卡系统监测行:CPU/内存/GPU 三项对称排列(每 2 秒刷新) */
-.manju-sysmon {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 0;
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--panel-border);
+/* 系统监测条(2026-08-26 定稿:顶栏内、「视频管理」标题与使用说明/设置按钮组之间居中)
+   原 .manju-sysmon 右栏版已随 DOM 迁移移除;类名换新避免残留规则污染 */
+.manju-sysmonbar {
+  display: flex; align-items: stretch; gap: 10px;
+  margin: 0 auto;            /* hrs-head 为 flex,auto 外边距在标题与按钮组之间真居中 */
+  padding: 7px 12px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 11px;
   background: color-mix(in srgb, var(--muted) 4%, transparent);
 }
-.manju-sysmon .ms-it {
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
-  padding: 2px 6px 5px;
-  border-left: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent);
-  min-width: 0;
+.manju-sysmonbar .ms-it {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 0 6px;
+  min-width: 84px;
 }
-.manju-sysmon .ms-it:first-child { border-left: none; }
-.manju-sysmon .ms-it i { font-style: normal; font-size: 9.5px; color: var(--muted); letter-spacing: 1px; }
-.manju-sysmon .ms-it .ms-line { display: flex; align-items: baseline; justify-content: center; gap: 5px; min-width: 0; }
+.manju-sysmonbar .ms-it i { font-style: normal; font-size: 9.5px; color: var(--muted); letter-spacing: 1.5px; }
+.manju-sysmonbar .ms-it .ms-line { display: flex; align-items: baseline; justify-content: center; gap: 5px; min-width: 0; }
 /* 百分比与温度同字号 + 中间分隔符间隔 */
-.manju-sysmon .ms-it b {
-  font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+.manju-sysmonbar .ms-it b {
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
   color: var(--text); white-space: nowrap;
 }
-.manju-sysmon .ms-it em {
-  font-style: normal; font-size: 11.5px; font-variant-numeric: tabular-nums;
-  color: var(--text); white-space: nowrap; opacity: 0.75;
+.manju-sysmonbar .ms-it em {
+  font-style: normal; font-size: 12px; font-variant-numeric: tabular-nums;
+  color: var(--text); white-space: nowrap; opacity: 0.75; cursor: default;
 }
-.manju-sysmon .ms-it .ms-sep { font-size: 10px; color: var(--muted); opacity: 0.6; }
-.manju-sysmon .ms-it em.hot { color: #fbbf24; opacity: 1; }
-.manju-sysmon .ms-it em.crit { color: #f87171; opacity: 1; }
-.manju-sysmon .ms-it b.hot { color: #fbbf24; }
-.manju-sysmon .ms-it b.crit { color: #f87171; }
+.manju-sysmonbar .ms-it .ms-sep { font-size: 10px; color: var(--muted); opacity: 0.6; }
+/* 风扇转速小字(EC 通道,需管理员;无数据时为空不占宽) */
+.manju-sysmonbar .ms-it .ms-fan {
+  font-style: normal; font-size: 10px; font-variant-numeric: tabular-nums;
+  color: var(--muted); white-space: nowrap; min-width: 0;
+  border-left: 1px solid color-mix(in srgb, var(--panel-border) 55%, transparent);
+  padding-left: 7px; margin-left: 2px;
+}
+.manju-sysmonbar .ms-it .ms-fan:empty { border-left: none; padding-left: 0; margin-left: 0; }
+.manju-sysmonbar .ms-it em.hot { color: #fbbf24; opacity: 1; }
+.manju-sysmonbar .ms-it em.crit { color: #f87171; opacity: 1; }
+.manju-sysmonbar .ms-it b.hot { color: #fbbf24; }
+.manju-sysmonbar .ms-it b.crit { color: #f87171; }
 /* 底部进度条:按负载填充,颜色跟随负载等级 */
-.manju-sysmon .ms-bar {
-  width: 100%; height: 4px; border-radius: 999px;
+.manju-sysmonbar .ms-bar {
+  width: 100%; height: 3px; border-radius: 999px;
   background: color-mix(in srgb, var(--panel-border) 55%, transparent);
   overflow: hidden;
 }
-.manju-sysmon .ms-fill {
+.manju-sysmonbar .ms-fill {
   display: block; height: 100%; width: 0%;
   border-radius: 999px;
   background: linear-gradient(90deg, var(--ok, #3ddc84), var(--accent-2, #4da3ff));
   transition: width 0.4s ease;
 }
-.manju-sysmon .ms-fill.hot {
+.manju-sysmonbar .ms-fill.hot {
   background: linear-gradient(90deg, #fbbf24, #f59e0b);
 }
-.manju-sysmon .ms-fill.crit {
+.manju-sysmonbar .ms-fill.crit {
   background: linear-gradient(90deg, #f87171, #ef4444);
 }
 /* 收起态:保持网格占位(列宽 0),去掉边框阴影,内容 overflow 隐藏;不能用 display:none(会导致网格项前移错位) */

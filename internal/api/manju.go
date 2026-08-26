@@ -1299,10 +1299,13 @@ func manjuScriptImportFromNovel(w http.ResponseWriter, r *http.Request) {
 	dir := filepath.Join(novelDir, "素材", "分镜脚本")
 	matches, _ := filepath.Glob(filepath.Join(dir, "第"+chap+"章*.md"))
 	if len(matches) == 0 {
+		matches, _ = filepath.Glob(filepath.Join(dir, "EP"+strings.TrimPrefix(ep, "EP")+".md"))
+	}
+	if len(matches) == 0 {
 		writeErr(w, http.StatusNotFound, fmt.Sprintf("小说分镜脚本目录(%s)未找到「第%s章*_分镜脚本.md」;请确认已按爽文技能 H3分镜脚本文档模板 生成", dir, chap))
 		return
 	}
-	src := matches[0]
+	src := pickStoryboardMatch(matches) // 同章号多文件择优(排除备份,取最新)
 	text, rerr := os.ReadFile(src)
 	if rerr != nil {
 		writeErr(w, http.StatusInternalServerError, "读取分镜脚本失败: "+rerr.Error())
@@ -1496,8 +1499,8 @@ func manjuScriptImportAllDir(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "目录未检测到分镜脚本")
 		return
 	}
-	// 复制源目录 素材/ → workdir/素材/(人物提示词文档,定妆照参考;不覆盖已有)
-	copyNovelAssetsToWorkdir(dir, workdir)
+	// 复制源目录 素材/ → workdir/素材/(人物提示词文档,定妆照参考;内容有变则覆盖更新)
+	assetsUpdated := copyNovelAssetsToWorkdir(dir, workdir)
 	// 逐个导入:章号 → EPxx.md
 	results := make([]map[string]any, 0, len(items))
 	for _, it := range items {
@@ -1538,38 +1541,45 @@ func manjuScriptImportAllDir(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "imported": len(results), "total": len(items), "script_mode": true,
-		"path": curFile, "dir": dir, "results": results,
+		"path": curFile, "dir": dir, "assets_updated": assetsUpdated, "results": results,
 	})
 }
 
 // copyNovelAssetsToWorkdir 源目录 素材/(人物生成提示词.md/场景提示词.md/渲染提示词总集.md)
-// 复制到 workdir/素材/(已存在不覆盖),供脚本直出模式定妆照/场景参考
-func copyNovelAssetsToWorkdir(srcDir, workdir string) {
+// 复制到 workdir/素材/,供脚本直出模式定妆照/场景参考。
+// 2026-08-26 修复:旧版「已存在不覆盖」→ 源素材更新后重新导入分镜,workdir 仍用旧角色/场景卡
+// (脚本直出的角色卡来源 workdir 优先),定妆照/场景图全按旧设定生成。改为内容比对后覆盖,
+// 返回更新文件数。
+func copyNovelAssetsToWorkdir(srcDir, workdir string) int {
 	src := filepath.Join(srcDir, "素材")
 	if !dirExists(src) {
-		return
+		return 0
 	}
 	entries, err := os.ReadDir(src)
 	if err != nil {
-		return
+		return 0
 	}
+	updated := 0
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		dstF := filepath.Join(workdir, "素材", e.Name())
-		if fileExists(dstF) {
+		b, rerr := readTextFileUTF8(filepath.Join(src, e.Name()))
+		if rerr != nil || len(b) == 0 {
 			continue
 		}
-		b, rerr := readTextFileUTF8(filepath.Join(src, e.Name()))
-		if rerr != nil {
-			continue
+		if old, oerr := readTextFileUTF8(dstF); oerr == nil && bytes.Equal(old, b) {
+			continue // 内容一致,无需覆盖
 		}
 		if mkerr := os.MkdirAll(filepath.Dir(dstF), 0o755); mkerr != nil {
 			continue
 		}
-		_ = os.WriteFile(dstF, b, 0o644)
+		if os.WriteFile(dstF, b, 0o644) == nil {
+			updated++
+		}
 	}
+	return updated
 }
 
 // readTextFileUTF8 读文本文件并统一为 UTF-8(容忍 UTF-8 BOM;GBK/GB18030 自动转码,防乱码)
@@ -2486,7 +2496,7 @@ func manjuOutputs(w http.ResponseWriter, r *http.Request) {
 		episodes = append(episodes, manjuEpisodeOutputs(P, e))
 	}
 	// 产物时效角标:提示词/定妆照/画幅已变但旧产物仍在的镜头标 stale(前端「已过期」徽标,
-	// 下次渲染自动删旧重渲)。manifest 无记录的旧项目不标(unknown 兼容)。
+	// 下次渲染自动删旧重渲)。manifest 无记录的产物同样视为 stale(不可信,2026-08-26 语义)。
 	if mctx, err := newManjuCtx(configPath, "", "", "", ""); err == nil {
 		for _, epAny := range episodes {
 			ep, _ := epAny.(map[string]any)

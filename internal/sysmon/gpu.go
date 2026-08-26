@@ -61,49 +61,5 @@ func SharedGPUMem() uint64 {
 	return v
 }
 
-// ThermalZoneTemps 读取全部 ACPI 热区温度（℃）。
-func ThermalZoneTemps() ([]float64, bool) {
-	cmd := hiddenCmd("powershell", "-NoProfile", "-Command",
-		"Get-CimInstance -Namespace root/cimv2 -ClassName Win32_PerfFormattedData_Counters_ThermalZoneInformation | Select-Object -ExpandProperty Temperature")
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, false
-	}
-	var temps []float64
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		v, err := strconv.ParseFloat(strings.TrimSpace(line), 64)
-		if err != nil {
-			continue
-		}
-		c := v - 273.15
-		if c < 0 || c > 120 {
-			continue
-		}
-		temps = append(temps, c)
-	}
-	return temps, len(temps) > 0
-}
-
-// CPUTemp 读取 CPU 温度：取热区最高值；回退 MSAcpi。
-func CPUTemp() (float64, bool) {
-	if temps, ok := ThermalZoneTemps(); ok {
-		max := temps[0]
-		for _, t := range temps {
-			if t > max {
-				max = t
-			}
-		}
-		return max, true
-	}
-	cmd := hiddenCmd("powershell", "-NoProfile", "-Command",
-		"Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature | Measure-Object -Property CurrentTemperature -Maximum | Select-Object -ExpandProperty Maximum")
-	out, err := cmd.Output()
-	if err != nil {
-		return 0, false
-	}
-	v, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
-	if err != nil || v <= 0 {
-		return 0, false
-	}
-	return v/10 - 273.15, true
-}
+// ACPI 热区/MSAcpi 温度链已于 2026-08-26 移除:热区值与 CPU 核心温度脱节(恒 45℃ 上下),
+// 属「温度不准」假源;核心温度唯一来源 = LHM(需管理员),读不到时前端显示 N/A。
