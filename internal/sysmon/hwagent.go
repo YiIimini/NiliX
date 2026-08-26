@@ -68,10 +68,13 @@ func RunHWAgent() int {
 			"ts": time.Now().UnixMilli(), "sample": s,
 		})
 		// 命令轮询(每轮采样间穿插短间隔检查,交互响应 <1s)
+		// 执行完命令立即 break 进入下一轮采样——状态文件即刻反映新状态,
+		// 否则要等完剩余 sleep+整轮周期(前端观感「点击后几秒才同步」,2026-08-26)
 		for i := 0; i < 3; i++ {
 			if c, ok := readHWCMD(); ok && c.ID != lastID {
 				lastID = c.ID
 				writeHWCMDResult(c, execHWCMD(e, c))
+				break
 			}
 			time.Sleep(400 * time.Millisecond)
 		}

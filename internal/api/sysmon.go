@@ -29,7 +29,11 @@ func (s *Server) ecExec(act string, val interface{}) (pending bool, err error) {
 		return false, nil
 	}
 	if _, ok := sysmon.ReadHWAgentState(); ok {
-		return false, sysmon.SendHWCmd(act, val)
+		if err := sysmon.SendHWCmd(act, val); err != nil {
+			return false, err
+		}
+		s.sysmon.RefreshHW() // 助手已在命令后立即采样,即时入缓存省 3s 轮询
+		return false, nil
 	}
 	// 未授权:拉起提权助手(UAC 弹窗一次);授权后数据自动点亮,本次操作稍后重试即可
 	if e := sysmon.EnsureHWAgent(); e != nil {

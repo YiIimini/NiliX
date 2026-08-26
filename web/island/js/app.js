@@ -299,13 +299,22 @@
     if (n) { n.textContent = msg; n.classList.add("hw-note-flash"); setTimeout(() => n.classList.remove("hw-note-flash"), 2600); }
   }
   function bindHW() {
+    // 操作成功:乐观保持 6s(轮询旧数据不回弹)+ 快拉两次真值校正
+    const hwOkHold = () => {
+      window._hwHoldUntil = Date.now() + 6000;
+      setTimeout(() => { try { tick(); } catch (_) {} }, 400);
+      setTimeout(() => { try { tick(); } catch (_) {} }, 1600);
+    };
     const modes = $("hw-modes");
     if (modes) modes.addEventListener("click", (e) => {
       const b = e.target.closest(".hw-mode");
       if (!b || b.classList.contains("on")) return;
       b.dataset.label = b.textContent; b.textContent = "…";
       hwPost("mode", Number(b.dataset.mode)).then((j) => {
-        if (j && j.pending) hwNote(j.msg || "已请求授权,确认后自动生效");
+        if (j && j.pending) { hwNote(j.msg || "已请求授权,确认后自动生效"); return; }
+        // 乐观高亮:成功即点亮(后端缓存已即时刷新),不等轮询
+        modes.querySelectorAll(".hw-mode").forEach((x) => x.classList.toggle("on", x === b));
+        hwOkHold();
       }).catch((e) => hwNote("操作失败: " + (e.message || e))).finally(() => {
         b.textContent = b.dataset.label || b.textContent;
       });
@@ -314,13 +323,14 @@
     if (cool) cool.addEventListener("change", function () {
       const on = this.checked; this.checkedLocked = true;
       hwPost("cool", on).then((j) => {
-        if (j && j.pending) { hwNote(j.msg || "已请求授权,确认后自动生效"); this.checked = !on; }
+        if (j && j.pending) { hwNote(j.msg || "已请求授权,确认后自动生效"); this.checked = !on; return; }
+        hwOkHold();
       }).catch((e) => { this.checked = !on; hwNote("操作失败: " + (e.message || e)); }).finally(() => { this.checkedLocked = false; });
     });
     const oc = $("hw-oc");
     if (oc) oc.addEventListener("change", function () {
       const on = this.checked;
-      hwPost("oc", on).catch((e) => { this.checked = !on; hwNote("操作失败: " + (e.message || e)); });
+      hwPost("oc", on).then(() => hwOkHold()).catch((e) => { this.checked = !on; hwNote("操作失败: " + (e.message || e)); });
     });
   }
 

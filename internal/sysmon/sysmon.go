@@ -193,26 +193,34 @@ func (c *Collector) EC() *ECHW { return c.ec }
 //     由 AutoEnsureHWAgent / CTL 按钮点击拉起,采样循环自身绝不弹 UAC。
 func (c *Collector) ecLoop() {
 	for {
-		var s ECHWSample
-		if IsAdmin() {
-			s = c.ec.Sample()
-		} else if st, ok := ReadHWAgentState(); ok {
-			s = st
-		}
-		c.mu.Lock()
-		c.hwCache = HW{
-			OK: s.OK, Denied: s.Denied, Admin: IsAdmin(),
-			CPUTemp: s.CPUT, GPUTemp: s.GPUT,
-			CPUFan: s.CPUFan, GPUFan: s.GPUFan,
-			Mode: s.Mode, ModeName: ECModeName(s.Mode), ModeOK: s.ModeOK,
-			QuickCool: s.QuickCool,
-			Overclock: NVOverclockState(),
-		}
-		c.hwAt = time.Now()
-		c.mu.Unlock()
+		c.refreshHWOnce()
 		time.Sleep(3 * time.Second)
 	}
 }
+
+// refreshHWOnce 采一轮 EC 状态入缓存(ecLoop 与 RefreshHW 共用)。
+func (c *Collector) refreshHWOnce() {
+	var s ECHWSample
+	if IsAdmin() {
+		s = c.ec.Sample()
+	} else if st, ok := ReadHWAgentState(); ok {
+		s = st
+	}
+	c.mu.Lock()
+	c.hwCache = HW{
+		OK: s.OK, Denied: s.Denied, Admin: IsAdmin(),
+		CPUTemp: s.CPUT, GPUTemp: s.GPUT,
+		CPUFan: s.CPUFan, GPUFan: s.GPUFan,
+		Mode: s.Mode, ModeName: ECModeName(s.Mode), ModeOK: s.ModeOK,
+		QuickCool: s.QuickCool,
+		Overclock: NVOverclockState(),
+	}
+	c.hwAt = time.Now()
+	c.mu.Unlock()
+}
+
+// RefreshHW 控制操作成功后立即刷新缓存(不等 ecLoop 3s 周期),前端下轮拉 stats 即新值。
+func (c *Collector) RefreshHW() { c.refreshHWOnce() }
 
 // Snapshot 采集一次全量指标。
 func (c *Collector) Snapshot() *Snapshot {
