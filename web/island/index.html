@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <title>SysMon</title>
 <script>window.NILIX_TOKEN = "/*__NILIX_TOKEN__*/"; try { if (window.NILIX_TOKEN.length > 8) localStorage.setItem("nilix_token", window.NILIX_TOKEN); } catch (e) {}</script>
-<link rel="stylesheet" href="css/app.css?v=202608261750">
+<link rel="stylesheet" href="css/app.css?v=202608261830">
 </head>
-<body class="island-collapsed">
+<body class="island-collapsed hw-off">
   <div id="card" class="card">
 
     <!-- 灵动岛收起态:顶部居中透明胶囊(悬停展开) -->
@@ -146,8 +146,9 @@
         </div>
 
         <!-- 设备控制中心(2026-08-26 定稿排版):数据行与 SSD/NET 同构(lbl+右值),
-             操作区单行收尾(模式三选+制冷/超频),与 HUD 整体行风格对齐 -->
-        <div class="divider"></div>
+             操作区单行收尾(模式三选+制冷/超频),与 HUD 整体行风格对齐。
+             2026-08-26 用户要求隐藏:CSS 一键开关(.hw-off),恢复=删样式块即可 -->
+        <div class="divider hw-ctl-sep"></div>
         <div class="row hw-row">
           <div class="lbl">CTL</div>
           <div class="io hw-io">
@@ -178,6 +179,6 @@
     </div>
 
   </div>
-  <script src="js/app.js?v=202608261750"></script>
+  <script src="js/app.js?v=202608261830"></script>
 </body>
 </html>

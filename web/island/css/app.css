@@ -750,3 +750,6 @@ body:not(.no-effects) .core i {
   white-space: normal; word-break: break-word;
 }
 .nilix-tip.show { opacity: 1; transform: translateY(0); }
+
+/* ============ CTL 设备控制卡隐藏(2026-08-26 用户要求;恢复=删除本块) ============ */
+.hw-off .hw-ctl-sep, .hw-off .hw-row, .hw-off .hw-ops { display: none !important; }
