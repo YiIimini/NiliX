@@ -2599,20 +2599,35 @@
         setT("cpu", temp(c.temp, c.hasTemp), c.temp >= 85 ? "crit" : c.temp >= 70 ? "hot" : "");
         setBar("cpu", c.usage, true);
         set("mem", pct(m.percent), m.percent >= 90 ? "crit" : m.percent >= 75 ? "hot" : "");
-        setT("mem", m.temp ? temp(m.temp, m.hasTemp) : "N/A");
+        // 内存副值显示已用/总量(比恒 N/A 的内存温度有用);温度并入 title
+        const memIt = wrap.querySelector('[data-k="mem"]');
+        setT("mem", m.used && m.total ? m.used + "/" + m.total : "N/A");
+        if (memIt) memIt.title = "内存 " + pct(m.percent) + (m.hasTemp ? " · " + Math.round(m.temp) + "℃" : "") + (m.available ? " · 可用 " + m.available : "");
         setBar("mem", m.percent, true);
         // GPU:优先显示显存使用率(H3 渲染显存常满、算力利用率波动无参考性);无显卡显示 N/A
         const gpuPct = g.present ? (g.memPercent != null && g.memPercent > 0 ? g.memPercent : g.usage) : null;
         set("gpu", gpuPct != null ? Math.round(gpuPct) + "%" : "N/A", gpuPct != null ? (gpuPct >= 90 ? "crit" : gpuPct >= 70 ? "hot" : "") : "");
         setT("gpu", g.present ? temp(g.temp, g.temp > 0) : "N/A", g.temp >= 85 ? "crit" : g.temp >= 70 ? "hot" : "");
         setBar("gpu", gpuPct != null ? gpuPct : 0, g.present);
-        // 风扇转速(雷神同源 EC 通道;需管理员,未解锁时留空)
+        // 风扇转速(雷神同源 EC 通道;需管理员,未解锁时留空)+ GPU 卡 title 补显存/算力明细
         const hw = r.hw || {};
         const fanTxt = (v) => (hw.ok && v > 0 ? Math.round(v) + "rpm" : "");
         ["cpu", "gpu"].forEach((k) => {
           const el = wrap.querySelector(`[data-k="${k}"] .ms-fan`);
           if (el) el.textContent = fanTxt(k === "cpu" ? hw.cpuFan : hw.gpuFan);
         });
+        const gpuIt = wrap.querySelector('[data-k="gpu"]');
+        if (gpuIt && g.present) {
+          gpuIt.title = "GPU 显存 " + g.memUsed + "/" + g.memTotal + "(" + Math.round(g.memPercent || 0) + "%)"
+            + " · 算力 " + Math.round(g.usage) + "% · 温度 " + temp(g.temp, g.temp > 0)
+            + (g.sharedUsed ? " · 共享 " + g.sharedUsed : "");
+        }
+        const cpuIt = wrap.querySelector('[data-k="cpu"]');
+        if (cpuIt) {
+          const cores = (c.cores || []).length;
+          cpuIt.title = "CPU " + pct(c.usage) + " · " + cores + " 线程" + (c.hasTemp ? " · 核心 " + Math.round(c.temp) + "℃" : "")
+            + (hw.ok && hw.cpuFan > 0 ? " · 风扇 " + hw.cpuFan + "rpm" : "");
+        }
         // 温度不可用时给出可行动的提示:CPU 核心温度唯一来源 LHM 需要管理员权限(2026-08-26)
         const cpuEm = wrap.querySelector('[data-k="cpu"] em');
         if (cpuEm) cpuEm.title = c.hasTemp ? "" : "CPU 核心温度需以管理员身份运行 NiliX 才能读取(灵动岛「设备控制」可一键提权)";
