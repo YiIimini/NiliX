@@ -63,19 +63,28 @@ func manjuCleanupRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleaned": cleaned})
 }
 
-// removeTree 递归删除目录内容,返回 (文件数, 释放字节);目录本身保留
+// removeTree 递归删除目录内容,返回 (成功文件数, 释放字节);目录本身保留。
+// 2026-08-26:删除失败(ComfyUI/播放器占用句柄)不再静默——失败清单经 removeTreeEx 透出,
+// 前端明示「X 个文件被占用」,否则用户以为清干净了实际残留(「扫帚清不干净」根因)。
 func removeTree(dir string) (int, int64) {
-	files, bytes := 0, int64(0)
+	n, _, _ := removeTreeEx(dir, nil)
+	return n, int64(0)
+}
+
+// removeTreeEx 带失败清单版本:failed 收集删除失败的文件名(上限 8 条,防刷屏)。
+func removeTreeEx(dir string, failed *[]string) (int, int64, int) {
+	files, bytes, fails := 0, int64(0), 0
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	for _, e := range entries {
 		full := filepath.Join(dir, e.Name())
 		if e.IsDir() {
-			f, b := removeTree(full)
+			f, b, fl := removeTreeEx(full, failed)
 			files += f
 			bytes += b
+			fails += fl
 			_ = os.Remove(full) // 空子目录
 			continue
 		}
@@ -84,9 +93,14 @@ func removeTree(dir string) (int, int64) {
 		}
 		if os.Remove(full) == nil {
 			files++
+		} else {
+			fails++
+			if failed != nil && len(*failed) < 8 {
+				*failed = append(*failed, filepath.Base(full))
+			}
 		}
 	}
-	return files, bytes
+	return files, bytes, fails
 }
 
 // manjuCacheClear 一键清理项目旧缓存(2026-08-25 用户要求:NiliX 导航栏右侧「扫帚」按钮):
@@ -137,8 +151,19 @@ func manjuCacheClear(w http.ResponseWriter, r *http.Request) {
 		clean = append(clean, map[string]any{"target": "plan", "files": files, "bytes": bytes, "dir": ctx.analysisDir})
 	}
 	// 2) 镜头 mp4:clips/<ep>/ 全清(清理按钮=全部集)
-	if files, bytes := removeTree(ctx.clipsDir); files > 0 {
+	var failed []string
+	totalFails := 0
+	if files, bytes, fl := removeTreeEx(ctx.clipsDir, &failed); files > 0 || fl > 0 {
+		totalFails += fl
 		clean = append(clean, map[string]any{"target": "clips", "files": files, "bytes": bytes, "dir": ctx.clipsDir})
+	}
+	// 2b) 运行状态残留(2026-08-26 用户反馈「清不干净」):非运行态下 run_state.json 是
+	// 崩溃/中断残留——不清会让页面继续弹「检测到已有任务」横幅,像没清干净;agent_state 同理
+	for _, state := range []string{"run_state.json", "agent_state.json"} {
+		sp := filepath.Join(ManjuRootDir, ctx.project, state)
+		if _, err := os.Stat(sp); err == nil && os.Remove(sp) == nil {
+			clean = append(clean, map[string]any{"target": "state", "files": 1, "bytes": 0, "dir": sp})
+		}
 	}
 	// 3) 条件缓存:conditioning/<项目>_* 前缀(与 clearEpisodeArtifacts 同口径,不误删其他项目)
 	prefix := reNonWord.ReplaceAllString(ctx.project, "_") + "_"
@@ -195,7 +220,8 @@ func manjuCacheClear(w http.ResponseWriter, r *http.Request) {
 	if advanced {
 		for _, sub := range []string{"input", "output"} {
 			dir := filepath.Join(ComfySharedDir, sub)
-			if files, bytes := removeTree(dir); files > 0 {
+			if files, bytes, fl := removeTreeEx(dir, &failed); files > 0 || fl > 0 {
+				totalFails += fl
 				clean = append(clean, map[string]any{"target": "comfy_"+sub, "files": files, "bytes": bytes, "dir": dir})
 			}
 		}
@@ -223,7 +249,12 @@ func manjuCacheClear(w http.ResponseWriter, r *http.Request) {
 			clean = append(clean, map[string]any{"target": "runlog", "files": n, "bytes": b, "dir": filepath.Join(ManjuRootDir, "<项目>/run.log")})
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "advanced": advanced, "cleaned": clean})
+	resp := map[string]any{"ok": true, "advanced": advanced, "cleaned": clean}
+	if totalFails > 0 {
+		resp["failed"] = totalFails
+		resp["failedFiles"] = failed
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // removePlanJSONs 删除 analysis 目录里的方案类 JSON 缓存文件

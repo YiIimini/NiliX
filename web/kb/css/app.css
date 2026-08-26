@@ -4992,3 +4992,7 @@ select option { text-align: center; }
   white-space: normal; word-break: break-word;
 }
 .nilix-tip.show { opacity: 1; transform: translateY(0); }
+
+/* 弹窗头部刷新按钮(2026-08-26:关闭按钮前,旋转动效由 JS 驱动) */
+.manju-modal-refresh { margin-right: 6px; font-size: 13px; }
+.manju-modal-refresh:hover { color: var(--accent, #4da3ff); }

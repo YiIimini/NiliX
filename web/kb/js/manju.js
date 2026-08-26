@@ -763,8 +763,13 @@
       post("/api/manju/cache/clear", { config: this.project, advanced: !!advanced })
         .then((r) => {
           const parts = (r.cleaned || []).map((c) => `${c.target} ${c.files}个(${this._fmtBytes(c.bytes || 0)})`);
-          this.setErr("🧹 缓存已清理" + (advanced ? "(高级:含 ComfyUI input/output)" : "") + ": " + (parts.join("、") || "无残留"));
-          setTimeout(() => this.setErr(""), 6000);
+          let msg = "🧹 缓存已清理" + (advanced ? "(高级:含 ComfyUI input/output)" : "") + ": " + (parts.join("、") || "无残留");
+          // 被占用文件明示(2026-08-26:静默失败曾让用户以为清干净了实际残留)
+          if (r.failed > 0) {
+            msg += ` ⚠ 另有 ${r.failed} 个文件被占用未能删除(如 ${(r.failedFiles || []).slice(0, 3).join("、")}…),请关闭 ComfyUI/播放器后重试`;
+          }
+          this.setErr(msg);
+          setTimeout(() => this.setErr(""), r.failed > 0 ? 10000 : 6000);
           this.refreshOutputs();
           this.loadPlan();
         }).catch((e) => this.setErr(e.message))
@@ -3042,7 +3047,10 @@
           <input id="manju-upload-file" type="file" accept="image/png,image/jpeg,image/webp" style="display:none">`
           : '<div class="manju-empty">方案中无角色</div>';
       }
-      if (fresh) this.openModal("角色抽卡", html, true);
+      if (fresh) this.openModal("角色抽卡", html, true, () => {
+        const gen = this._modalGen;
+        this.loadPlan(() => { if (gen === this._modalGen) this.renderGachaModal(); });
+      });
       else this.rerenderModal("角色抽卡", html, true);
       const planBtn = $("mg-plan");
       if (planBtn) planBtn.addEventListener("click", () => this.genCharacters());
@@ -3569,7 +3577,7 @@
     /* ---- 弹窗(多级:2026-08-24 用户要求) ---- */
     /* 每个弹窗独立遮罩层,压栈管理——弹窗里再弹窗时父弹窗保留在后面,
        关闭子弹窗自动露出父弹窗,不再"弹窗里弹窗就全部关闭"。 */
-    openModal(title, bodyHtml, wide) {
+    openModal(title, bodyHtml, wide, refresh) {
       if (!this._bound) this.bind();   // 自愈:任何页面(未进漫剧页)调用弹窗都先绑定
       // 代次守卫:任何开/关弹窗都会使挂起的异步渲染(设置/体检)失效,
       // 防止"请求完成时弹窗已被关闭 → 又弹回来"的关闭失效竞态
@@ -3589,6 +3597,18 @@
       overlay.querySelector(".manju-modal-title").textContent = title;
       overlay.querySelector(".manju-modal-body").innerHTML = bodyHtml;
       // 关闭:关闭按钮 / 点遮罩空白(Esc 由 bind 单例监听,一次只关顶层)
+      // 2026-08-26 用户要求:弹窗右上角关闭按钮前提供刷新按钮(refresh 回调存在才显示)
+      if (typeof refresh === "function") {
+        const rb = document.createElement("button");
+        rb.className = "manju-modal-close manju-modal-refresh";
+        rb.title = "刷新本页内容"; rb.textContent = "🔄";
+        rb.addEventListener("click", () => {
+          rb.style.transition = "transform .5s ease"; rb.style.transform = "rotate(360deg)";
+          setTimeout(() => { rb.style.transition = ""; rb.style.transform = ""; }, 520);
+          refresh();
+        });
+        overlay.querySelector(".manju-modal-head").insertBefore(rb, overlay.querySelector(".manju-modal-close"));
+      }
       overlay.querySelector(".manju-modal-close").addEventListener("click", () => this.closeModal());
       overlay.addEventListener("click", (e) => { if (e.target === overlay) this.closeModal(); });
       this._modalEl = overlay;
