@@ -178,9 +178,91 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 		}
 	}
 	if n, _ := manjuToInt(R["shots_per_take"]); n >= 2 {
-		items = append(items, ok("long_take", fmt.Sprintf("多切点长镜 %d 镜/组(实验特性;相邻同场景镜头一次生成多机位切点)", n)))
+		if ctx.scriptMode {
+			// 脚本直出恒单镜(渲染层禁用 takes):配置了也如实说明,避免用户以为分组生效
+			items = append(items, manjuHealthItem{Key: "long_take", Label: "多切点长镜", Status: "warn", Detail: fmt.Sprintf("配置 %d 镜/组,但脚本直出模式不分组(脚本六段式逐字权威,分组会丢镜),已按单镜渲染", n)})
+		} else {
+			items = append(items, ok("long_take", fmt.Sprintf("多切点长镜 %d 镜/组(实验特性;相邻同场景镜头一次生成多机位切点)", n)))
+		}
 	}
+	items = append(items, manjuPlanAuditItem(ctx))
 	return items
+}
+
+// manjuPlanAuditItem 方案软告警体检(2026-08-26,机械质检汇总项):遍历项目已有各集方案
+// (analysis/*_direct_plan.json),统计超时长上限镜/时长全同集/超 3 角色镜/超 20 字句/重复
+// 提示词对——渲染前一眼看全,不必等 validatePlan 逐条翻运行日志。只读展示,不可自动修复。
+func manjuPlanAuditItem(ctx *manjuCtx) manjuHealthItem {
+	it := manjuHealthItem{Key: "plan_audit", Label: "方案体检", Status: "ok", Detail: "暂无方案(先跑一次方案阶段)"}
+	plans, _ := filepath.Glob(filepath.Join(ctx.analysisDir, "*_direct_plan.json"))
+	if len(plans) == 0 {
+		return it
+	}
+	var warns []string
+	overDur, overChar, overLine, dupPrompt, flatEps := 0, 0, 0, 0, 0
+	for _, p := range plans {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var plan map[string]any
+		if json.Unmarshal(b, &plan) != nil {
+			continue
+		}
+		shots, serr := planShots(plan)
+		if serr != nil || len(shots) == 0 {
+			continue
+		}
+		durSet := map[int]bool{}
+		seenP := map[string]bool{}
+		for _, s := range shots {
+			durSet[s.Duration] = true
+			if s.Duration > ctx.maxSec {
+				overDur++
+			}
+			if len(s.Characters) > 3 {
+				overChar++
+			}
+			for _, line := range strings.Split(s.Dialogue, "\n") {
+				if i := strings.IndexAny(line, ":："); i > 0 {
+					if rc := len([]rune(stripSpeechPunct(strings.TrimSpace(line[i+1:])))); rc > 20 {
+						overLine++
+					}
+				}
+			}
+			if s.H3Prompt != "" && !s.TakeTail {
+				if seenP[s.H3Prompt] {
+					dupPrompt++
+				}
+				seenP[s.H3Prompt] = true
+			}
+		}
+		if len(shots) >= 6 && len(durSet) == 1 {
+			flatEps++
+		}
+	}
+	if overDur > 0 {
+		warns = append(warns, fmt.Sprintf("%d 镜超时长上限 %ds", overDur, ctx.maxSec))
+	}
+	if overChar > 0 {
+		warns = append(warns, fmt.Sprintf("%d 镜登场角色超 3(参考图截断)", overChar))
+	}
+	if overLine > 0 {
+		warns = append(warns, fmt.Sprintf("%d 句对白超 20 字", overLine))
+	}
+	if dupPrompt > 0 {
+		warns = append(warns, fmt.Sprintf("%d 镜提示词重复", dupPrompt))
+	}
+	if flatEps > 0 {
+		warns = append(warns, fmt.Sprintf("%d 集时长全同(节奏单一)", flatEps))
+	}
+	if len(warns) == 0 {
+		it.Detail = fmt.Sprintf("%d 集方案:时长/角色数/句长/重复均合规", len(plans))
+		return it
+	}
+	it.Status = "warn"
+	it.Detail = fmt.Sprintf("%d 集方案:%s(重新生成方案或在方案 JSON 里修正;脚本直出模式请改分镜脚本后重导入)", len(plans), strings.Join(warns, "、"))
+	return it
 }
 
 // missingModels 检查配置里引用的关键模型是否在磁盘上(检查点/UNET/CLIP/VAE/LoRA)。
@@ -188,7 +270,8 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 // (ComfyUI 新版默认索引 diffusion_models/text_encoders,旧版用 unet/clip)。
 func (ctx *manjuCtx) missingModels() []string {
 	cands := []struct{ name, sub, alt string }{
-		{str(ctx.R["animagine_ckpt"]), "checkpoints", ""},
+		// 2026-08-24 用户规则:SDXL checkpoint 全面禁用(观感差),定妆照只用 Z-Image 或 Krea-2——
+		// 不再检查 characterCkpt/SDXL 模型;Z-Image 三件套为常驻检查(Krea-2 引擎时追加其三件套)。
 		{str(ctx.R["z_image_unet"]), "diffusion_models", "unet"},
 		{str(ctx.R["z_image_clip"]), "text_encoders", "clip"},
 		{str(ctx.R["z_image_vae"]), "vae", ""},
@@ -444,7 +527,8 @@ func manjuAgentChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sys := manjuAgentChatSystem()
-	user := manjuAgentChatContext(ctx, configPath, project) + "\n\n【用户】" + rawText
+	user := manjuAgentChatContext(ctx, configPath, project)
+	user += "\n\n【用户】" + rawText
 	out, lerr := ctx.llm.chatJSON(sys, user, 0.5)
 	if lerr == nil {
 		reply = str(out["reply"])

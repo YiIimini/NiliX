@@ -259,12 +259,25 @@ func truncate(s string, n int) string {
 
 // ---- 知识库注入:config.knowledge 指向 zhishiku/AI漫剧生产 模板(与旧 direct_render.py 同款) ----
 
+// manjuKBRoots knowledge 模板候选根目录(相对路径依次尝试):
+// 旧部署路径 zhishiku/AI漫剧生产 已废弃(2026-08-25 实测不存在),实际模板在 创作管理/AI漫剧 下。
+// 逐根探测,首个存在的目录生效——新项目/迁移项目无需改 config,老 config 也能自动落到新路径。
+var manjuKBRoots = []string{
+	`C:\Mi\Ai\WorkBench\zhishiku\创作管理\AI漫剧`,
+	`C:\Mi\Ai\WorkBench\zhishiku\创作管理\AI漫剧\提示词模板`,
+	`C:\Mi\Ai\WorkBench\zhishiku\AI漫剧生产`, // 旧路径兜底(存在则仍可用)
+}
+
+// manjuKBLastMissing 最近一次 knowledge 加载缺失的模板清单(供 plan 阶段日志提示,防静默失效)。
+var manjuKBLastMissing []string
+
 func manjuKBChunks(cfg map[string]any, keys []string) string {
 	kb, _ := cfg["knowledge"].(map[string]any)
 	if kb == nil {
 		return ""
 	}
 	var out []string
+	missing := []string{}
 	for _, k := range keys {
 		arr, _ := kb[k].([]any)
 		for _, x := range arr {
@@ -274,10 +287,26 @@ func manjuKBChunks(cfg map[string]any, keys []string) string {
 			}
 			p := rel
 			if !filepath.IsAbs(p) {
-				p = filepath.Join(`C:\Mi\Ai\WorkBench\zhishiku\AI漫剧生产`, rel)
+				// 相对路径:逐根尝试(模板分散在 AI漫剧 根目录与 提示词模板 子目录)
+				found := ""
+				for _, r := range manjuKBRoots {
+					if st, err := os.Stat(r); err == nil && st.IsDir() {
+						cand := filepath.Join(r, rel)
+						if fileExists(cand) {
+							found = cand
+							break
+						}
+					}
+				}
+				if found == "" {
+					missing = append(missing, rel)
+					continue
+				}
+				p = found
 			}
 			data, err := os.ReadFile(p)
 			if err != nil {
+				missing = append(missing, rel)
 				continue
 			}
 			txt := string(data)
@@ -287,6 +316,7 @@ func manjuKBChunks(cfg map[string]any, keys []string) string {
 			out = append(out, "【知识库模板《"+filepath.Base(rel)+"》要点(仅作设定/风格参考,必须贴合本剧世界观)】\n"+txt)
 		}
 	}
+	manjuKBLastMissing = missing
 	return strings.Join(out, "\n\n")
 }
 
@@ -361,13 +391,93 @@ func manjuStyleStylized(style string) bool {
 	return false
 }
 
+// ---- 风格词净化(2026-08-25 用户反馈:角色/场景/视频与小说不符——污染根因之一) ----
+//
+// config.style 是 GUI 组合风格输入框的自由文本(以 + 分隔)。历史配置常把「非美术风格」的
+// 规则性文字混进来(如 反派磕碜/Q版呆萌可爱小角色(用于对应角色的动态内心独白)/玄幻修仙/
+// 真情实意/正能量…),这些中文指令被原样拼进英文 image_prompt 与 H3 提示词后:
+//  - "Q版呆萌可爱小角色" → 把角色/场景往 Q 版萌物拉(实测阿铁全息屏被画成"呆"字)
+//  - "玄幻修仙"         → 赛博朋克剧被拉向修仙古风
+//  - 其余中文指令       → 对图像/视频模型是噪音 token,稀释有效语义
+// 本净化器在 manjuStyleDesc 组装措辞前对每个自定义段执行:
+//  1) 剥离括号及内容(括号里常是使用说明);
+//  2) 黑名单包含匹配(角色塑造/内容价值观/运镜指令/跨书残留词) → 丢弃;
+//  3) 中文白名单词 → 转英文措辞(图像模型对英文更可靠);未命中白名单的中文 → 丢弃;
+//  4) 英文/数字自定义词 → 原样保留(用户自定义英文风格描述合法)。
+// 被丢弃的词记入 manjuStyleLastDropped,由 plan 阶段日志提示用户,防静默。
+
+// manjuStyleDropWords 非美术风格黑名单(子串匹配):角色塑造/内容价值观/运镜指令/跨书残留。
+var manjuStyleDropWords = []string{
+	"反派磕碜", "正角帅气或美丽", "配角谄媚", "真情实意", "正能量", "场景唯美",
+	"电影级运镜", "电影动漫写实风格", "二次元动漫写实风", "电影感", "运镜",
+	"系统绑定", "男主慵懒", "美女如云", "高燃爽文", "冷幽默", "逆袭", "打脸",
+	"东方神话", "东方修仙", "东方玄幻", "玄幻修仙", "仙侠玄幻", "修真",
+	"拟漫化", "禁日漫", "禁真人", "写实拟动漫", "Q版呆萌", "呆萌可爱",
+	"内心独白", "角色", "主角", "配角", "反派", "正角",
+}
+
+// manjuStyleZhEn 中文美术风格白名单 → 英文措辞(仅这些中文词被接受并翻译,其余中文丢弃)。
+var manjuStyleZhEn = map[string]string{
+	"写实": "realistic", "动漫": "stylized anime", "水墨": "Chinese ink wash painting",
+	"赛博朋克": "cyberpunk", "蒸汽朋克": "steampunk", "古风": "ancient Chinese aesthetic",
+	"国潮": "Chinese retro wave", "科幻": "sci-fi", "奇幻": "fantasy",
+	"热血": "passionate tone", "治愈": "healing cozy tone", "悬疑": "suspenseful tone",
+	"都市": "urban modern", "Q版": "chibi cute style", "卡通": "cartoon",
+	"像素": "pixel art", "油画": "oil painting", "水彩": "watercolor",
+	"厚涂": "thick impasto", "平涂": "flat cel shading", "日系": "Japanese soft style",
+	"玄幻": "xianxia fantasy", "仙侠": "xianxia immortal fantasy", "武侠": "wuxia martial arts",
+	"西方": "western style", "暗黑": "dark moody", "胶片": "film grain aesthetic",
+	"赛璐璐": "cel animation", "明亮": "bright airy", "低饱和": "low saturation", "高饱和": "high saturation",
+}
+
+// manjuStyleLastDropped 最近一次风格解析被净化的自定义词(供 plan 阶段日志提示)。
+var manjuStyleLastDropped []string
+
+// manjuSanitizeStyleToken 净化单个自定义风格词,返回(保留的英文措辞, 是否保留)。
+func manjuSanitizeStyleToken(tok string) (string, bool) {
+	// 1) 剥离括号及内容(括号里常是使用说明)
+	if i := strings.IndexAny(tok, "（("); i >= 0 {
+		tok = strings.TrimSpace(tok[:i])
+	}
+	if tok == "" {
+		return "", false
+	}
+	// 2) 黑名单包含匹配
+	for _, drop := range manjuStyleDropWords {
+		if strings.Contains(tok, drop) {
+			return "", false
+		}
+	}
+	// 3) 中文白名单 → 英文措辞
+	if en, ok := manjuStyleZhEn[tok]; ok {
+		return en, true
+	}
+	// 4) 纯英文/数字自定义词保留(用户自定义英文风格描述)
+	if isASCIIAlpha(tok) {
+		return tok, true
+	}
+	return "", false
+}
+
+// isASCIIAlpha 是否全部为 ASCII 字母/数字/空格/常见分隔(英文风格词判定)。
+func isASCIIAlpha(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
+}
+
 // manjuStyleDesc 取风格措辞。
 // 单个预设 key 直接查表;组合(预设+预设 / 预设+自定义词,以 + 分隔)逐段解析:
-// 预设段取其 asset 核心措辞、自定义段原样保留,再拼成一句整体风格;其余视为自定义风格原样使用。
+// 预设段取其 asset 核心措辞、自定义段经 manjuSanitizeStyleToken 净化后拼入;
+// 净化丢弃的词记入 manjuStyleLastDropped(plan 阶段日志提示);全部被净化时退回空措辞。
 func manjuStyleDesc(style string) manjuStyleSpec {
 	if s, ok := manjuStyles[style]; ok {
 		return s
 	}
+	manjuStyleLastDropped = nil
 	parts := strings.Split(style, "+")
 	if len(parts) > 1 {
 		core := make([]string, 0, len(parts))
@@ -378,8 +488,12 @@ func manjuStyleDesc(style string) manjuStyleSpec {
 			}
 			if s, ok := manjuStyles[p]; ok {
 				core = append(core, s.asset)
+				continue
+			}
+			if keep, ok := manjuSanitizeStyleToken(p); ok {
+				core = append(core, keep)
 			} else {
-				core = append(core, p)
+				manjuStyleLastDropped = append(manjuStyleLastDropped, p)
 			}
 		}
 		if len(core) > 0 {
@@ -390,8 +504,16 @@ func manjuStyleDesc(style string) manjuStyleSpec {
 				shot1:   "[Shot 1] " + joined + " style, cinematic realistic lighting",
 			}
 		}
+		// 全部被净化:无有效风格措辞,回退默认写实措辞(比污染画面好)
+		manjuStyleLastDropped = append(manjuStyleLastDropped, style)
+		return manjuStyles["real"]
 	}
-	return manjuStyleSpec{asset: style, opening: style, shot1: style}
+	// 单个自定义 token(未用 + 组合)
+	if keep, ok := manjuSanitizeStyleToken(style); ok {
+		return manjuStyleSpec{asset: keep, opening: "The target video is in a " + keep + " style, cinematic realistic lighting", shot1: "[Shot 1] " + keep + " style, cinematic realistic lighting"}
+	}
+	manjuStyleLastDropped = append(manjuStyleLastDropped, style)
+	return manjuStyles["real"]
 }
 
 // manjuAssetStyle 返回给图片模型(定妆照/场景图)的风格措辞，与逐镜 H3 风格保持一致。
@@ -621,9 +743,31 @@ func parseRenderPromptMaster(content string) *manjuNovelAssets {
 	return a
 }
 
+// manjuDurationRule 时长/语音预算/拆镜密度规则段(2026-08-26):min_shot_seconds/max_shot_seconds
+// 与 chars_per_sec 从渲染配置读取注入系统提示词——此前硬编码「4-15s/4 字每秒」,立项.render
+// 规划的时长区间是死配置从未生效。direct/script 两个系统提示词共用。
+func manjuDurationRule(cfg map[string]any) string {
+	R, _ := cfg["render"].(map[string]any)
+	lo, hi := 4, 12
+	if n, ok := manjuToInt(R["min_shot_seconds"]); ok && n > 0 {
+		lo = n
+	}
+	if n, ok := manjuToInt(R["max_shot_seconds"]); ok && n > 0 {
+		hi = n
+	}
+	cps := 4.0
+	if f, ok := manjuToFloat(R["chars_per_sec"]); ok && f >= 2 && f <= 8 {
+		cps = f
+	}
+	return fmt.Sprintf("【拆镜密度·强制】按正文/脚本逐节拍完整拆镜:约每 100-160 字一镜(1400-1800 字一章≈11-17 镜),覆盖全部情节/对白/动作/情绪,禁止只挑 3-6 个关键点压缩剧情;每镜登场角色 ≤3(H3 参考图上限),每句对白 ≤20 字(超长对白拆成多句对话或旁白承接)。\n【时长硬约束】duration 由台词/动作量决定:中文语音约 %.0f 字/秒(20 字≈5 秒;60 字≈12 秒),台词+旁白总字数 ÷ %.0f 不得超过时长(%d-%d 秒);超预算必须加时长或拆镜,旁白同速折算计入。台词被截断=废镜。", cps, cps, lo, hi)
+}
+
 func manjuDirectSystem(cfg map[string]any, style string) string {
 	kbChar, kbScene, kbStory := manjuKnowledgeChunks(cfg)
 	assetStyle := manjuAssetStyle(style)
+	// 2026-08-26:min/max_shot_seconds 与 chars_per_sec 从渲染配置注入提示词——此前硬编码
+	// 4-15s/4 字每秒,立项.render 规划的时长区间从未生效(死配置激活的一部分)
+	durationRule := manjuDurationRule(cfg)
 	s := `你是 MiniMax H3 视频生成模型的导演兼提示词专家。基于给定的小说章节，直接输出完整漫剧渲染方案。
 
 【内容纪律·最高优先】：分镜必须忠实还原小说原文，画面与小说对不上=废镜：
@@ -635,7 +779,7 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
 【输出 JSON（严格）】：
 {
   "episode_title": "集标题",
-  "characters": [{"id": "角色名", "role": "正角|反派|功能配角（按剧情阵营判定:主角/女主/正派灵宠/重要正派助攻=正角;主要反派=反派;次要反派/下属/炮灰/龙套=功能配角。【Q版纪律·2026-08-24 用户规则】只有正角才生成 Q 版呆萌形象,反派与功能配角一律不生成、不配使用 Q 版）", "gender": "男/女", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，逐字从原文提炼，具体到可渲染）", "costume": "完整服装描述", "image_prompt": "给图片模型的英文文生图提示词（【全身立绘·强制】full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;` + assetStyle + ` 风格;【拟动漫硬规则·2026-08-24 用户规则】semi-realistic stylized illustration of an East Asian/Chinese character, 禁日漫(not a Japanese anime/manga style, avoid japanese-style facial features, japanese anime eyes), 禁真人(not a photorealistic photo of a real person, avoid resembling any real person)——写实风格同样按拟动漫渲染,不输出真人照片;含完整外观/服装/性别强化）", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版呆萌形象（【Q版纪律·2026-08-24 用户规则】仅 role=正角 才填此项;反派/功能配角此字段留空,不生成 Q 版,其内心独白用写实镜头+画外音渲染。chibi cute style, 圆脸大眼睛短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
+  "characters": [{"id": "角色名", "role": "正角|反派|功能配角（按剧情阵营判定:主角/女主/正派灵宠/重要正派助攻=正角;主要反派=反派;次要反派/下属/炮灰/龙套=功能配角。【Q版纪律·2026-08-24 用户规则】只有正角才生成 Q 版呆萌形象,反派与功能配角一律不生成、不配使用 Q 版）", "gender": "男/女", "species": "人|妖兽|灵宠|神兽|精怪|鬼物|机械（种族:人=人类角色;妖兽/灵宠/神兽/精怪/鬼物=非人形兽类/生灵,image_prompt 画的是兽形本体(毛色/种族特征)而非人形,严禁把兽类当人画;角色是兽类必须标非人）", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，逐字从原文提炼，具体到可渲染）", "costume": "完整服装描述", "color_palette": "角色配色板(5色HEX,如 #1E2A33 #31414D #53606D #D8D1C6 #A89B8B,顺序=主色/辅色/点缀色/肤色/发色;角色板与所有视图严格用它统一配色)", "expressions": "表情神态(4-6个该角色关键情绪,中文逗号分隔,如 清冷/沉思/轻笑/审视/惊疑)", "board_prompt": "给图片模型的英文文生图提示词:角色板/角色资料卡整合图（【角色板结构·强制,2026-08-25 即梦角色版教程】①三视图整合:正面/侧面/背面全身并排;②细节特写模块:脸部/发型/服装纹样/配饰各一小格;③服饰分层展示:外袍/内衬/腰带,纹样刺绣细节;④表情神态 4-6 格(用 expressions);⑤配色板:5 色 HEX 色块一行标注;⑥人设文字:身份/气质/视觉标志一行中文。整图竖版网格排版、浅色底、清晰分区、所有分格同一人同一服装;拟漫化半写实东方风格,禁日漫禁真人;` + assetStyle + ` 风格;外观/服装逐字引用 appearance/costume,配色严格用 color_palette）", "image_prompt": "给图片模型的英文文生图提示词（【全身立绘·强制】full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;species≠人 的兽类角色此处画兽形本体,不套人形立绘措辞;` + assetStyle + ` 风格;【拟动漫硬规则·2026-08-24 用户规则】semi-realistic stylized illustration of an East Asian/Chinese character, 禁日漫(not a Japanese anime/manga style, avoid japanese-style facial features, japanese anime eyes), 禁真人(not a photorealistic photo of a real person, avoid resembling any real person)——写实风格同样按拟动漫渲染,不输出真人照片;含完整外观/服装/性别强化）", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版形象（【Q版纪律·2026-08-25 用户规则】①仅 role=正角 才填此项;反派/功能配角此字段留空,不生成 Q 版,其内心独白用写实镜头+画外音渲染;②Q版面容随角色本人——脸型/眼型/发型/年龄感/胡须按该角色具体面容,禁止统一做成通用宝宝脸(老人要有老相、有胡须者保留胡须、少年保持少年相);③species≠人 的妖兽/灵宠/神兽:Q版=该妖兽本体的萌化小兽形(保留种族/毛色/特征),禁止画成人形或人类宝宝;④人类按性别与年龄:女性一律无胡须、年轻男性(少年/青年/男孩)一律无胡须,仅成年/老年男性可有胡须且 Q版必须保留;⑤Q版渲染以该角色正面定妆照为参考图生成(同一人,禁止形象大变)。chibi cute style, 短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记/胡须], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
   "scenes": [{"id": "场景名（取自原文）", "description": "空间结构/材质/光线/氛围", "image_prompt": "给图片模型的英文文生图提示词（空场景无人物，明亮清晰，` + assetStyle + ` 风格）"}],
   "shots": [
     {
@@ -661,7 +805,7 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
     "climax_pattern": "高潮段镜头组织方式(如'6×特写连打'/'单镜长时凝滞')"
   }
 }
-【时长硬约束】duration 由台词/动作量决定:中文台词约 4 字/秒(20 字台词≈5 秒;60 字≈12 秒),台词长于时长容纳量必须加时长(4-15)或拆镜;旁白同速折算。台词被截断=废镜。
+{MANJU_DURATION_RULE}
 【节奏模型·强制】(2026-08-24 知识库「官方风格技能与漫剧优化」节奏模型整合)每镜内部必须有多拍节奏,禁止一镜一个动作平铺直叙:5 秒镜=3-4 个 beat(建立→动作→收尾);10 秒镜=5-7 个 beat 且含 1-2 个峰值+1-2 个刹车(静止/空拍);15 秒镜=6-9 个 beat 且含 2-3 个峰值+安静刹车。节奏意图词:setup(建立)/establish(定位)/prepare(蓄势)/impact(冲击)/brake(刹车)/settle(落定)——每镜 action 按 beat 组织,峰值镜前必有蓄势镜,高潮后必接刹车,禁止高潮镜直接切下一镜无缓冲
 【近景补偿·强制】(2026-08-24 知识库「H3长镜连续与工作室实战」人脸 token 数学整合)H3 VisualVAE 32× 空间下采样,中景人脸仅约 2 token、眼睛约 0.28 token——拉近景比加大画幅更有效。情感戏/对白戏/表情戏(哭/怒/恐惧/心动/内心挣扎)一律强制近景或特写(shot_size=近景/特写,机位对准面部),禁止用中景/全景拍情绪;中景起步 ≥1024×576;脸部特写是该角色情绪演出的主要载体,表演层细节(情绪三层拆解/五维微表情/哭戏梯度)写在特写镜里
 【防同质化变量表·强制(每集必填)】directing 五维必须逐项选择并**贯彻到分镜**(镜头时长分布/景别/收尾镜/声音设计对应取值):禁止默认组合「线性+全知+匀速+BGM通铺+空景收」(历史最高频重复)。tempo 取值对照时长分布:匀速=各镜等长;加速爆发=逐段加快末段最密;前紧后松=开头密逐渐拉开;全片凝滞=全部取上限时长。ending 取值对照末 1-3 镜:空景收=拉大远景空镜;回到首镜=末镜与首镜同机位同景别;硬切黑=高潮中途切黑;悬而未决=停在一个动作中间;日常化=回落到极普通日常场景。peak_device 写手法本身(摘面具/脱帽/亮武器),不要写题材(防化服/武侠)。
@@ -674,6 +818,12 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
 - 每个角色的 image_prompt 必须给出**独一无二的面容锚点组合**:从 眼型(丹凤眼/桃花眼/狭长眼/圆眼)、眉型(剑眉/柳叶眉/浓眉/细眉)、鼻型(高挺/小巧/鹰钩)、唇形(薄唇/丰唇/唇珠)、脸型(瓜子/方圆/棱角/鹅蛋)、肤色(苍白/小麦/古铜)、气质 中选至少 4 个具体特征,并给 1 个独有印记(痣/疤/耳饰/发色挑染等);**禁止** generic 泛化词(sharp jawline/clear eyes/handsome/young man 单独出现都算,必须搭配具体特征)
 - 同剧多角色面容必须**互不相同**(五官/发型/气质可辨认区分);不同剧的相同职位角色(如各剧主角)也必须是不同面容,禁止模板化雷同
 - appearance 字段同步给出这些独特特征的中文描述(供提示词外观锁定引用)
+【种族与胡须纪律·强制】(2026-08-25 用户规则):
+- 角色是妖兽/灵宠/神兽/精怪等非人形种族时:species 必须填非人;image_prompt/views 一律画兽形本体(毛色/种族特征),严禁画成人形或人头兽身;该角色 Q 版=萌化小兽形,禁止人类宝宝
+- 女性角色一律无胡须/胡子(appearance/image_prompt/views/Q版全部禁止出现胡须描写)
+- 年轻男性(少年/青少年/青年/男孩/孩童)一律无胡须;胡须仅限成年/老年男性角色
+- 有胡须的成年/老年男性:appearance 必须写明胡须形态(如花白络腮胡/山羊胡),image_prompt 与 Q 版提示词必须保留胡须
+- Q 版形象面容必须跟随角色本人(老人显老/有胡须保留/少年清俊),禁止全部做成统一萌娃脸
 【判停清单·模型做不到的六类,换写法不要重抽】(整合 ai-film-skills dialogue-drama 判停清单实测):
 - 机械开合(舱盖掀开/抽屉拉出/门开): 拆成「关着的空镜 硬切 开着的空镜」,不写开合过程
 - 群体连锁反应(一排人依次回头): 改单人反应 + 画外声补足"一片骚动"
@@ -686,6 +836,7 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
 	if kbChar != "" {
 		s += "\n\n【知识库角色模板参考（仅作设定参考，贴合本剧）】\n" + kbChar
 	}
+	s = strings.Replace(s, "{MANJU_DURATION_RULE}", durationRule, 1)
 	if kbScene != "" {
 		s += "\n\n【知识库场景模板参考（仅作设定参考，贴合本剧）】\n" + kbScene
 	}
@@ -712,7 +863,7 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 【输出 JSON（严格）】:
 {
   "episode_title": "集标题",
-  "characters": [{"id": "角色名", "role": "正角|反派|功能配角（按剧情阵营判定:主角/女主/正派灵宠/重要正派助攻=正角;主要反派=反派;次要反派/下属/炮灰/龙套=功能配角。【Q版纪律·2026-08-24 用户规则】只有正角才生成 Q 版呆萌形象,反派与功能配角一律不生成、不配使用 Q 版）", "gender": "男/女", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，从脚本提取并补全，具体到可渲染）", "costume": "完整服装描述", "image_prompt": "给图片模型的英文文生图提示词（【全身立绘·强制】full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;` + assetStyle + ` 风格;【拟动漫硬规则·2026-08-24 用户规则】semi-realistic stylized illustration of an East Asian/Chinese character, 禁日漫(not a Japanese anime/manga style, avoid japanese-style facial features, japanese anime eyes), 禁真人(not a photorealistic photo of a real person, avoid resembling any real person)——写实风格同样按拟动漫渲染,不输出真人照片;含完整外观/服装/性别强化）", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版呆萌形象（【Q版纪律·2026-08-24 用户规则】仅 role=正角 才填此项;反派/功能配角此字段留空,不生成 Q 版,其内心独白用写实镜头+画外音渲染。chibi cute style, 圆脸大眼睛短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
+  "characters": [{"id": "角色名", "role": "正角|反派|功能配角（按剧情阵营判定:主角/女主/正派灵宠/重要正派助攻=正角;主要反派=反派;次要反派/下属/炮灰/龙套=功能配角。【Q版纪律·2026-08-24 用户规则】只有正角才生成 Q 版呆萌形象,反派与功能配角一律不生成、不配使用 Q 版）", "gender": "男/女", "species": "人|妖兽|灵宠|神兽|精怪|鬼物|机械（种族:人=人类角色;妖兽/灵宠/神兽/精怪/鬼物=非人形兽类/生灵,image_prompt 画的是兽形本体(毛色/种族特征)而非人形,严禁把兽类当人画;角色是兽类必须标非人）", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，从脚本提取并补全，具体到可渲染）", "costume": "完整服装描述", "color_palette": "角色配色板(5色HEX,如 #1E2A33 #31414D #53606D #D8D1C6 #A89B8B,顺序=主色/辅色/点缀色/肤色/发色;角色板与所有视图严格用它统一配色)", "expressions": "表情神态(4-6个该角色关键情绪,中文逗号分隔,如 清冷/沉思/轻笑/审视/惊疑)", "board_prompt": "给图片模型的英文文生图提示词:角色板/角色资料卡整合图（【角色板结构·强制,2026-08-25 即梦角色版教程】①三视图整合:正面/侧面/背面全身并排;②细节特写模块:脸部/发型/服装纹样/配饰各一小格;③服饰分层展示:外袍/内衬/腰带,纹样刺绣细节;④表情神态 4-6 格(用 expressions);⑤配色板:5 色 HEX 色块一行标注;⑥人设文字:身份/气质/视觉标志一行中文。整图竖版网格排版、浅色底、清晰分区、所有分格同一人同一服装;拟漫化半写实东方风格,禁日漫禁真人;` + assetStyle + ` 风格;外观/服装逐字引用 appearance/costume,配色严格用 color_palette）", "image_prompt": "给图片模型的英文文生图提示词（【全身立绘·强制】full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;species≠人 的兽类角色此处画兽形本体,不套人形立绘措辞;` + assetStyle + ` 风格;【拟动漫硬规则·2026-08-24 用户规则】semi-realistic stylized illustration of an East Asian/Chinese character, 禁日漫(not a Japanese anime/manga style, avoid japanese-style facial features, japanese anime eyes), 禁真人(not a photorealistic photo of a real person, avoid resembling any real person)——写实风格同样按拟动漫渲染,不输出真人照片;含完整外观/服装/性别强化）", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版形象（【Q版纪律·2026-08-25 用户规则】①仅 role=正角 才填此项;反派/功能配角此字段留空,不生成 Q 版,其内心独白用写实镜头+画外音渲染;②Q版面容随角色本人——脸型/眼型/发型/年龄感/胡须按该角色具体面容,禁止统一做成通用宝宝脸(老人要有老相、有胡须者保留胡须、少年保持少年相);③species≠人 的妖兽/灵宠/神兽:Q版=该妖兽本体的萌化小兽形(保留种族/毛色/特征),禁止画成人形或人类宝宝;④人类按性别与年龄:女性一律无胡须、年轻男性(少年/青年/男孩)一律无胡须,仅成年/老年男性可有胡须且 Q版必须保留;⑤Q版渲染以该角色正面定妆照为参考图生成(同一人,禁止形象大变)。chibi cute style, 短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记/胡须], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
   "scenes": [{"id": "场景名（取自脚本）", "description": "空间结构/材质/光线/氛围", "image_prompt": "给图片模型的英文文生图提示词（空场景无人物，明亮清晰，` + assetStyle + ` 风格）"}],
   "shots": [
     {
@@ -741,7 +892,7 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 }
 
 【脚本→方案映射规则·强制】:
-- 脚本的每个镜头/段落 → 一个 shots 条目;脚本标注的时间码/时长优先,未标注时按台词量折算(中文约 4 字/秒,总长 4-15 秒)
+- 脚本的每个镜头/段落 → 一个 shots 条目;脚本标注的时间码/时长优先,未标注时按台词量折算(语音预算与时长区间见下方【时长硬约束】)
 - 脚本出现的角色/场景 → characters/scenes 卡片,外观/服装从脚本逐字提取,脚本未给的细节按上下文补全(补全项不得与脚本矛盾)
 - 脚本的台词逐字进 dialogue(标注说话人),旁白进 narration;脚本里已有的 H3 提示词片段直接吸收进 h3_prompt,缺失部分按下方官方格式补全
 - 脚本与小说不同:没有"原文事件必须逐字"约束——脚本本身就是镜头指令,直接执行;但台词仍逐字保留
@@ -757,7 +908,7 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 - overall_soundscape 1-4 句英文连续段落(环境/动作/非语言人声,不重复台词);non_diegetic_music 1-3 句(乐器+速度+节奏+动态,禁抽象情绪词,无配乐写 N/A)
 - H3 为 CFG-distilled 无负面词:负面概念一律转正面排除句写进散文,禁堆叠负面词
 
-【时长硬约束】duration 4-15 秒;台词长于时长容纳量必须加时长或拆镜。台词被截断=废镜。
+{MANJU_DURATION_RULE}
 【分镜纪律·强制】:
 - shots[].characters 必须列全该镜实际在场角色(说话人+同时出镜者);未列出角色不得入画,如需氛围只允许无面部细节的远景虚化
 - 谁说的就是谁:脚本台词按说话角色逐句标入对应 dialogue,严禁张冠李戴或塞进旁白
@@ -765,6 +916,12 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 - 同一角色整集所有镜头形象完全一致(外观/服装逐字复用其 characters 卡,禁止换装/换写法)
 【面容独特性纪律·强制(防跨剧撞脸)】:
 - 每个角色 image_prompt 给出独一无二面容锚点组合(眼型/眉型/鼻型/唇形/脸型/肤色/气质 至少 4 个具体特征 + 1 个独有印记);禁止 generic 泛化词;同剧多角色面容互不相同
+【种族与胡须纪律·强制】(2026-08-25 用户规则):
+- 角色是妖兽/灵宠/神兽/精怪等非人形种族时:species 必须填非人;image_prompt/views 一律画兽形本体(毛色/种族特征),严禁画成人形或人头兽身;该角色 Q 版=萌化小兽形,禁止人类宝宝
+- 女性角色一律无胡须/胡子(appearance/image_prompt/views/Q版全部禁止出现胡须描写)
+- 年轻男性(少年/青少年/青年/男孩/孩童)一律无胡须;胡须仅限成年/老年男性角色
+- 有胡须的成年/老年男性:appearance 必须写明胡须形态(如花白络腮胡/山羊胡),image_prompt 与 Q 版提示词必须保留胡须
+- Q 版形象面容必须跟随角色本人(老人显老/有胡须保留/少年清俊),禁止全部做成统一萌娃脸
 【判停清单·模型做不到的六类,换写法不要重抽】:
 - 机械开合→「关着的空镜 硬切 开着的空镜」;群体连锁反应→单人反应+画外声;走位→直接画「已到位」(原地姿态变化可以);画内文字→只留大号阿拉伯数字;多人互动→拆单人镜视线缝合;手部纹理级→姿势级
 【题材真实度判据】戏剧强度越高越假(火山/冰川/闪电/巨兽正面是 AI 过拟合区);高危画面优先改拍「痕迹/后果」
@@ -783,6 +940,7 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 	}
 	s += "\n\n" + strings.ReplaceAll(manjuRef2vaTpl, "{style}", opening) + manjuShotWritingRules
 	s += "\n\n" + strings.ReplaceAll(manjuFl2vaTpl, "{style}", manjuStyleShot1(style))
+	s = strings.Replace(s, "{MANJU_DURATION_RULE}", manjuDurationRule(cfg), 1)
 	return s
 }
 

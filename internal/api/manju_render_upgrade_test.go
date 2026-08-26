@@ -54,27 +54,30 @@ func TestDraftDims(t *testing.T) {
 	}
 }
 
-// TestSeedFor seed 重试策略:fixed 恒定 / increment 递增 / random 首渲仍用配置 seed
+// TestSeedFor seed 重试策略:每镜独立基线(seed+镜头号) / fixed 恒定 / increment 递增 / random 首渲仍用基线
 func TestSeedFor(t *testing.T) {
 	ctx := &manjuCtx{seed: 1688, seedPolicy: "fixed"}
-	if s := ctx.seedFor(0); s != 1688 {
-		t.Errorf("fixed 首渲应等于配置 seed: %d", s)
+	if s := ctx.seedFor(0, 0); s != 1688 {
+		t.Errorf("镜头0 首渲应等于配置 seed: %d", s)
 	}
-	if s := ctx.seedFor(3); s != 1691 {
+	if s := ctx.seedFor(5, 0); s != 1693 {
+		t.Errorf("镜头5 首渲基线应 = seed+镜头号(防同 prompt 同 seed 出同画): %d", s)
+	}
+	if s := ctx.seedFor(0, 3); s != 1691 {
 		t.Errorf("fixed 重渲(attempt>0)应换 seed(+attempt),否则同 seed 同画面质检永远不过: %d", s)
 	}
 	ctx.seedPolicy = "increment"
-	if s := ctx.seedFor(2); s != 1690 {
+	if s := ctx.seedFor(0, 2); s != 1690 {
 		t.Errorf("increment 策略第 2 次应 seed+2: %d", s)
 	}
-	if s := ctx.seedFor(0); s != 1688 {
+	if s := ctx.seedFor(0, 0); s != 1688 {
 		t.Errorf("increment 首渲应等于 seed: %d", s)
 	}
 	ctx.seedPolicy = "random"
-	if s := ctx.seedFor(0); s != 1688 {
+	if s := ctx.seedFor(0, 0); s != 1688 {
 		t.Errorf("random 首渲应等于 seed: %d", s)
 	}
-	if s := ctx.seedFor(1); s == 1688 {
+	if s := ctx.seedFor(0, 1); s == 1688 {
 		t.Errorf("random 重试应换新随机(碰巧等于配置 seed 的概率可忽略)")
 	}
 }

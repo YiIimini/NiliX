@@ -49,9 +49,7 @@
   if (typeof stopComfy !== "function") window.stopComfy = () => httpPost("http://127.0.0.1:8787/api/comfy/stop");
   if (typeof openComfy !== "function") window.openComfy = () => window.open("http://127.0.0.1:8190");
   if (typeof openKB !== "function") window.openKB = () => window.open("http://127.0.0.1:8787");
-  if (typeof startHarness !== "function") window.startHarness = () => httpPost("http://127.0.0.1:8787/api/harness/start");
-  if (typeof restartHarness !== "function") window.restartHarness = () => httpPost("http://127.0.0.1:8787/api/harness/restart");
-  if (typeof openHarness !== "function") window.openHarness = () => window.open("http://127.0.0.1:3080");
+  // Harness(DSH)启停桥接已随 HUD 监控行删除(2026-08-26 用户要求)
   // ZCode/BOT:HTTP API(NiliX 主服务,原 Go 绑定 HTTP 化,重构不阉割功能)
   if (typeof startZCode !== "function") window.startZCode = () => httpPost("http://127.0.0.1:8787/api/zcode/start");
   if (typeof stopZCode !== "function") window.stopZCode = () => httpPost("http://127.0.0.1:8787/api/zcode/stop");
@@ -473,37 +471,6 @@
       cfOpen.classList.add("hidden");
     }
 
-    // DeepSeek Harness 服务状态(底部监控;启动/重启/访问按钮)
-    const hs = s.harness || {},
-      hDot = $("harness-dot"),
-      hTxt = $("harness-txt"),
-      hMeta = $("harness-meta"),
-      hStart = $("harness-start"),
-      hRestart = $("harness-restart"),
-      hOpen = $("harness-open");
-    if (hs.online) {
-      hDot.className = "kb-dot on";
-      hTxt.textContent = "在线";
-      // 端口 + 版本号(版本取自 Harness 页面 <title>,如 "DSH · v0.6.3")
-      const hVer = hs.version ? " · " + hs.version.replace(/^v/i, "v") : "";
-      hMeta.textContent = ":3080" + hVer;
-      hStart.classList.add("hidden");
-      hRestart.classList.remove("hidden");
-      hOpen.classList.remove("hidden");
-      if (harnessStarting) {
-        harnessStarting = false;
-        hStart.textContent = "启动";
-        hStart.disabled = false;
-      }
-    } else {
-      hDot.className = "kb-dot off";
-      hTxt.textContent = harnessStarting ? "启动中…" : "离线";
-      hMeta.textContent = "";
-      hStart.classList.remove("hidden");
-      hRestart.classList.add("hidden");
-      hOpen.classList.add("hidden");
-    }
-
     // N_X NiliX 主应用窗口状态(经 8799 /nx 探测;工作台按钮开/关主窗口)
     const nxDot = $("nilix-dot"),
       nxTxt = $("nilix-txt"),
@@ -695,60 +662,7 @@
     if (typeof openComfy === "function") openComfy();
   });
 
-  // DeepSeek Harness:启动 / 重启 / 访问(桥接 Go 注入函数;状态由 tick() 轮询刷新)
-  let harnessStarting = false;
-  const bindHarnessBtn = (id, fn, busyLabel) => {
-    $(id).addEventListener("click", function () {
-      if (typeof fn !== "function") return;
-      const btn = this;
-      const label = btn.textContent;
-      btn.textContent = busyLabel;
-      btn.disabled = true;
-      fn()
-        .then(() => {
-          setTimeout(() => {
-            btn.textContent = label;
-            btn.disabled = false;
-          }, 5000);
-        })
-        .catch(() => {
-          btn.textContent = "失败";
-          setTimeout(() => {
-            btn.textContent = label;
-            btn.disabled = false;
-          }, 1500);
-        });
-    });
-  };
-  $("harness-start").addEventListener("click", function () {
-    if (typeof startHarness !== "function" || harnessStarting) return;
-    const btn = this;
-    harnessStarting = true;
-    btn.textContent = "启动中…";
-    btn.disabled = true;
-    startHarness()
-      .then(() => {
-        setTimeout(() => {
-          if (harnessStarting) {
-            harnessStarting = false;
-            btn.textContent = "启动";
-            btn.disabled = false;
-          }
-        }, 30000);
-      })
-      .catch(() => {
-        harnessStarting = false;
-        btn.textContent = "失败";
-        setTimeout(() => {
-          btn.textContent = "启动";
-          btn.disabled = false;
-        }, 1500);
-      });
-  });
-  bindHarnessBtn("harness-restart", () => (typeof restartHarness === "function" ? restartHarness() : Promise.reject()), "重启中…");
-  $("harness-open").addEventListener("click", () => {
-    if (typeof openHarness === "function") openHarness();
-  });
+  // DSH/Harness 监控行已删除(2026-08-26 用户要求)——HTML row、tick 渲染与按钮绑定一并移除
 
   // 启动即查灵动岛启用状态(不等 5 次轮询):若系统设置已禁用,立即隐藏,避免黑底胶囊残留
   fetch("/api/island", { cache: "no-store" })

@@ -7,10 +7,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=20260823x">
-<link rel="stylesheet" href="/css/themes.css?v=20260823x">
-<link rel="stylesheet" href="/css/materials.css?v=20260823x">
-<link rel="stylesheet" href="/css/app.css?v=20260823x">
+<link rel="icon" type="image/png" href="/icon.png?v=202608261331">
+<link rel="stylesheet" href="/css/themes.css?v=202608261331">
+<link rel="stylesheet" href="/css/materials.css?v=202608261331">
+<link rel="stylesheet" href="/css/app.css?v=202608261331">
 </head>
 <body>
   <!-- SVG 矢量图标库(stroke 风格,随 currentColor 着色) -->
@@ -85,7 +85,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=20260823x" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=202608261331" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -96,14 +96,18 @@
       <a href="#/manju" class="nav-link" data-route="manju">
         <svg class="ic" aria-hidden="true"><use href="#i-film"/></svg><span data-i18n="nav.manju">视频管理</span>
       </a>
-      <a href="#/harness" class="nav-link" data-route="harness">
-        <svg class="ic" aria-hidden="true"><use href="#i-harness"/></svg><span data-i18n="nav.harness">Harness</span>
-      </a>
+      <!-- Harness 导航入口已删除(2026-08-26 用户要求);二级页与路由同步移除,后端 /api/harness 保留 -->
       <a href="#/comfy" class="nav-link" data-route="comfy">
         <svg class="ic" aria-hidden="true"><use href="#i-comfy"/></svg><span data-i18n="nav.comfy">ComfyUI</span>
       </a>
     </nav>
     <div class="controls">
+      <!-- 2026-08-24 用户要求:所有页面的刷新按钮统一集中到导航设置按钮前面(按当前路由触发对应刷新) -->
+      <button id="nav-refresh" class="settings-btn" title="刷新当前页面" aria-label="Refresh">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/>
+        </svg>
+      </button>
       <button id="settings-btn" class="settings-btn" data-i18n-title="settings.title" title="设置" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3.2"></circle>
@@ -122,42 +126,7 @@
   </header>
 
   <main class="stage">
-    <!-- 二级页:DeepSeek Harness(AI 智能体工作台,内嵌 Web UI) -->
-    <section id="view-harness" class="view view-comfy">
-      <div class="hrs-head">
-        <div class="hrs-title">
-          <h1 data-i18n="harness.title">Harness</h1>
-          <p class="ov-sub" data-i18n="harness.sub">DeepSeek Harness · AI 智能体工作台内嵌访问</p>
-        </div>
-        <div class="hrs-tools">
-          <span id="hrs-status" class="hrs-status"><span class="hrs-dot off"></span><span id="hrs-txt" data-i18n="harness.checking">检测中…</span></span>
-          <button id="hrs-start" class="hrs-btn hidden" data-i18n="harness.start">启动服务</button>
-          <button id="hrs-restart" class="hrs-btn hidden" data-i18n="harness.restart">重启服务</button>
-          <button id="hrs-open" class="hrs-btn hrs-btn-icon hidden" data-i18n-title="harness.open" title="新窗口打开" aria-label="Open in new tab">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M14 4h6v6M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>
-            </svg>
-          </button>
-          <button id="hrs-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/>
-            </svg>
-          </button>
-          <p id="hrs-live" class="live-tag"></p>
-        </div>
-      </div>
-      <p id="hrs-err" class="hrs-err hidden"></p>
-      <div id="hrs-stage" class="hrs-stage">
-        <div id="hrs-offline" class="hrs-offline hidden">
-          <div class="hrs-off-ic"><svg class="ic" aria-hidden="true"><use href="#i-harness"/></svg></div>
-          <div class="hrs-off-t" data-i18n="harness.offlineTitle">Harness 服务未运行</div>
-          <div class="hrs-off-s" data-i18n="harness.offlineSub">启动后此处将完整内嵌 DeepSeek Harness Web 界面（127.0.0.1:3080）</div>
-          <button id="hrs-start-big" class="hrs-btn hrs-btn-big" data-i18n="harness.start">启动服务</button>
-        </div>
-        <div id="hrs-loading" class="hrs-loading hidden"><span class="hrs-loading-dot"></span><span data-i18n="harness.loading">页面加载中…</span></div>
-        <iframe id="hrs-frame" class="hrs-frame" title="Harness" src="about:blank" allow="clipboard-write"></iframe>
-      </div>
-    </section>
+    <!-- 二级页:DeepSeek Harness —— 已删除(2026-08-26 用户要求移除导航);harness.js 留盘不再加载 -->
 
     <!-- 二级页:Comfy UI(内嵌 Web UI) -->
     <section id="view-comfy" class="view view-comfy">
@@ -181,7 +150,7 @@
               <path d="M8 9h8M8 13h8M8 17h5"/>
             </svg>
           </button>
-          <button id="cfy-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh">
+          <button id="cfy-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh" style="display:none">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/>
             </svg>
@@ -199,6 +168,11 @@
         </div>
         <div id="cfy-loading" class="hrs-loading hidden"><span class="hrs-loading-dot"></span><span data-i18n="comfy.loading">页面加载中…</span></div>
         <iframe id="cfy-frame" class="hrs-frame" title="ComfyUI" src="about:blank" allow="clipboard-write"></iframe>
+      </div>
+      <!-- 2026-08-26 用户要求:底部常驻日志行,同步展示 ComfyUI 真实运行日志(点击展开完整面板) -->
+      <div id="cfy-log-bar" class="cfy-log-bar" title="点击展开/收起完整日志">
+        <span class="cfy-log-bar-tag">LOG</span>
+        <span id="cfy-log-line" class="cfy-log-line">等待日志…</span>
       </div>
       <div id="cfy-log-wrap" class="hrs-log-wrap hidden">
         <pre id="cfy-log" class="hrs-log"></pre>
@@ -219,7 +193,7 @@
           </div>
           <button id="novel-create" class="hrs-btn hrs-btn-primary">✍ 创作小说</button>
           <button id="novel-up" class="hrs-btn hidden" data-i18n="dir.up">上一级</button>
-          <button id="novel-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh">
+          <button id="novel-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh" style="display:none">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/>
             </svg>
@@ -241,6 +215,26 @@
         <div class="hrs-tools">
           <span id="manju-cfy-status" class="hrs-status" title="ComfyUI 服务状态(每 2 秒刷新)"><span class="hrs-dot off"></span><span id="manju-cfy-txt">ComfyUI · 检测中…</span></span>
           <span id="manju-status" class="hrs-status"><span class="hrs-dot off"></span><span id="manju-txt">空闲</span></span>
+          <span class="hrs-tools-sep"></span>
+          <!-- 统一操作区(2026-08-24 用户要求:刷新/使用说明/系统设置统一排到窗体右上角,刷新在最前) -->
+          <button id="manju-refresh" class="hrs-btn hrs-btn-icon" title="刷新项目列表" aria-label="Refresh" style="display:none">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/></svg>
+          </button>
+          <button id="manju-guide" class="hrs-btn hrs-btn-icon" title="使用说明" aria-label="Guide">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+          </button>
+          <!-- 2026-08-26 用户要求:清理按钮从导航栏迁到视频管理右上角(使用说明与设置之间)。
+               一键清理旧缓存(方案 JSON/镜头 mp4/条件缓存/接缝 latent);高级清理额外清
+               ComfyUI input/output 与运行日志。绑定见 manju.js bindOutputsFold -->
+          <button id="nav-cache-clear" class="hrs-btn hrs-btn-icon" title="一键清理旧缓存(方案/镜头/条件缓存/接缝);高级清理含 ComfyUI 产物与运行日志" aria-label="Clear cache">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 3l-7 7"/><path d="M5 21l4-9 4-4 3 3-4 4-9 4z"/><path d="M13 7l4 4"/>
+              <path d="M3 21l3-1 1-3"/><path d="M19 3l2 2-2 2-2-2 2-2z"/>
+            </svg>
+          </button>
+          <button id="manju-settings" class="hrs-btn hrs-btn-icon" title="设置" aria-label="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
         </div>
       </div>
       <p id="manju-err" class="hrs-err hidden"></p>
@@ -266,14 +260,15 @@
 
           <!-- 左列：项目卡片（悬浮，贴合内容左侧） -->
           <div class="manju-project-col">
-            <div class="manju-card manju-project-card">
-              <h3 class="manju-card-title">项目</h3>
+            <div class="manju-card manju-project-card foldable">
+              <h3 class="manju-card-title manju-fold-head" data-fold="project" title="点击收起/展开">项目</h3>
               <div class="manju-row">
                 <select id="manju-project" class="manju-select"><option value="">— 选择项目 —</option></select>
                 <button id="manju-create" class="hrs-btn" title="新建/创建漫剧项目">✚ 新建项目</button>
               </div>
           <!-- 环境自检/项目体检已整合为执行管线 ⓪「项目体检」弹窗 -->
-              <div id="manju-chips-title" class="manju-sub-title" hidden>参数</div>
+              <!-- 2026-08-25 用户要求:悬浮项目卡「参数」单独收起/展开(大类分项) -->
+              <div id="manju-chips-title" class="manju-sub-title manju-chips-fold" hidden title="点击收起/展开参数"><span class="manju-sec-foldbtn">▾</span>参数</div>
               <div id="manju-chips" class="manju-chips"></div>
             </div>
           </div>
@@ -281,35 +276,27 @@
           <!-- 右列：其余卡片 -->
           <div class="manju-content-col">
 
-          <!-- 小说来源 -->
-          <div class="manju-card">
-            <div class="manju-card-head manju-novel-head">
-              <h3 class="manju-card-title">小说来源</h3>
-              <div class="manju-save-group">
-                <button id="manju-guide" class="hrs-btn hrs-btn-icon" title="使用说明" aria-label="Guide">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
-                </button>
-                <button id="manju-settings" class="hrs-btn hrs-btn-icon" title="设置" aria-label="Settings">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                </button>
-              </div>
-            </div>
-            <div class="manju-row">
-              <input id="manju-novel" class="manju-input manju-wide" placeholder="小说文件路径（.md）" spellcheck="false">
-              <button id="manju-novel-paste" class="hrs-btn hrs-btn-primary hidden">粘贴文章</button>
-              <button id="manju-novel-pick" class="hrs-btn">选择文件</button>
-              <button id="manju-novel-detect" class="hrs-btn">识别章节</button>
-            </div>
-            <div id="manju-novel-meta" class="manju-meta"></div>
-          </div>
-
-          <!-- 视频脚本直出(H3 官方格式分镜脚本,与小说解析二选一;2026-08-23 配置移至新建项目弹窗,主页只展示结果+可折叠) -->
-          <div class="manju-card">
+          <!-- 内容来源(小说解析 + 视频脚本直出 二选一;2026-08-24 合并为一个大卡片;说明/设置按钮已移至页面右上角) -->
+          <div class="manju-card foldable">
             <div class="manju-card-head">
-              <h3 class="manju-card-title" style="cursor:pointer" id="manju-script-toggle" title="点击收起/展开">▾ 视频脚本直出</h3>
+              <h3 class="manju-card-title manju-fold-head" data-fold="novel" title="点击收起/展开">内容来源</h3>
               <div class="manju-save-group"></div>
             </div>
-            <div id="manju-script-body">
+            <div class="manju-row">
+              <label class="manju-check"><input id="mc-content-novel" type="radio" name="mc-content" checked> 📖 小说解析</label>
+              <label class="manju-check"><input id="mc-content-script" type="radio" name="mc-content"> 🎬 视频脚本直出</label>
+              <span class="manju-meta" style="margin-left:auto">两种输入方式二选一（脚本模式需先在「新建项目」配置脚本）</span>
+            </div>
+            <div id="content-novel-block">
+              <div class="manju-row">
+                <input id="manju-novel" class="manju-input manju-wide" placeholder="小说文件路径（.md）" spellcheck="false">
+                <button id="manju-novel-paste" class="hrs-btn hrs-btn-primary hidden">粘贴文章</button>
+                <button id="manju-novel-pick" class="hrs-btn">选择文件</button>
+                <button id="manju-novel-detect" class="hrs-btn">识别章节</button>
+              </div>
+              <div id="manju-novel-meta" class="manju-meta"></div>
+            </div>
+            <div id="content-script-block" style="display:none">
               <div class="manju-row">
                 <span class="manju-label" title="配置在「新建项目」弹窗完成;此处展示脚本直出结果,可更换/清除">输入方式</span>
                 <button id="manju-script-paste" class="hrs-btn hrs-btn-primary">🎬 更换脚本</button>
@@ -320,9 +307,9 @@
           </div>
 
           <!-- 渲染配置 -->
-          <div class="manju-card manju-render-card">
+          <div class="manju-card manju-render-card foldable">
             <div class="manju-card-head">
-              <h3 class="manju-card-title">渲染配置</h3>
+              <h3 class="manju-card-title manju-fold-head" data-fold="render" title="点击收起/展开">渲染配置</h3>
               <div class="manju-save-group">
                 <button id="manju-save-render" class="hrs-btn hrs-btn-primary" title="参数改动后自动保存(2 秒防抖),此按钮用于手动确认/强制保存">保存参数（自动）</button>
                 <button id="manju-char-manage" class="hrs-btn" title="抽卡 / 采纳角色定妆照">角色管理</button>
@@ -373,16 +360,6 @@
             </div>
 
             <div class="manju-row">
-              <span class="manju-label">采样</span>
-              <span class="manju-label">步数</span><input id="manju-steps" class="manju-input manju-num" type="number" min="1" max="60">
-              <span class="manju-label">Turbo步</span><input id="manju-turbo" class="manju-input manju-num" type="number" min="1" max="30">
-              <span class="manju-label">seed</span><input id="manju-seed" class="manju-input manju-num" type="number">
-              <span class="manju-label">时长</span>
-              <span class="manju-label">最短</span><input id="manju-minsec" class="manju-input manju-num" type="number" min="1" max="15">
-              <span class="manju-label">最长</span><input id="manju-maxsec" class="manju-input manju-num" type="number" min="1" max="15">
-            </div>
-
-            <div class="manju-row">
               <span class="manju-label">档位</span>
               <select id="manju-res-tier" class="manju-input" title="按配置画幅等比换算短边(对齐32);「手动宽高」=直接用上面的宽高值">
                 <option value="">手动宽高</option>
@@ -396,33 +373,19 @@
                 <option value="increment">重试递增</option>
                 <option value="random">重试随机</option>
               </select>
-              <span class="manju-label">缩放</span><input id="manju-draft-scale" class="manju-input manju-num" type="number" min="0.2" max="0.95" step="0.05" title="草稿预审的分辨率缩放(0.2-0.95,默认 0.5)">
-              <span class="manju-label">长镜</span>
-              <select id="manju-take" class="manju-input" title="多切点长镜(experimental):相邻同场景镜头合并为一次生成,组内 [Shot N] At MM:SS.mmm 多机位切点;关闭=一镜一渲+接缝">
-                <option value="1">关闭</option>
-                <option value="2">2镜/组</option>
-                <option value="3">3镜/组</option>
-              </select>
             </div>
 
             <!-- 2026-08-23 新增:定妆引擎/字幕/配音/Krea2 模型 -->
             <div class="manju-row">
               <span class="manju-label">定妆引擎</span>
-              <select id="manju-char-engine" class="manju-input" title="角色定妆照引擎:zimage=Z-Image 写实人像(默认,人物微动漫写实防侵权)/ krea2=Krea-2 强指令跟随(复杂妆造/精细风格定妆,需 ComfyUI 已部署权重)/ sdxl=SDXL checkpoint">
-                <option value="zimage">Z-Image 写实</option>
+              <select id="manju-char-engine" class="manju-input" title="角色定妆照引擎(2026-08-24 用户规则:SDXL 已禁用,生成观感差):zimage=Z-Image(默认,写实拟动漫防侵权)/ krea2=Krea-2 强指令跟随(复杂妆造/精细风格定妆,需 ComfyUI 已部署权重)">
+                <option value="zimage">Z-Image</option>
                 <option value="krea2">Krea-2 强指令</option>
-                <option value="sdxl">SDXL</option>
               </select>
               <span class="manju-label">字幕</span>
               <label class="manju-check" title="合成时是否烧录对白字幕(H3 原生对白已含台词,建议关闭避免字幕文字进画面)"><input id="manju-subtitle" type="checkbox"> 烧录</label>
               <span class="manju-label">配音</span>
               <label class="manju-check" title="旁白/画外音用 edge-tts 后期配音兜底(H3 本地对画面外音可能不生成音轨)"><input id="manju-voiceover" type="checkbox"> 旁白配音</label>
-            </div>
-            <div class="manju-row" id="manju-krea2-row">
-              <span class="manju-label">Krea2</span>
-              <input id="manju-krea2-unet" class="manju-input" placeholder="krea2_turbo_fp8_scaled.safetensors" title="Krea-2 Turbo FP8 扩散模型">
-              <input id="manju-krea2-clip" class="manju-input" placeholder="qwen3vl_4b_fp8_scaled.safetensors" title="Krea-2 文本编码器">
-              <input id="manju-krea2-vae" class="manju-input" placeholder="qwen_image_vae.safetensors" title="Krea-2 VAE">
             </div>
 
             <!-- 增强开关独立一行:与「风格」同款分段胶囊样式(隐藏 checkbox 保持数据源兼容) -->
@@ -439,18 +402,12 @@
             </div>
 
             <div class="manju-row">
-              <span class="manju-label">ComfyUI</span>
-              <input id="manju-comfy-url" class="manju-input manju-wide" placeholder="http://127.0.0.1:8190" spellcheck="false">
-            </div>
-
-            <div class="manju-row">
               <span class="manju-label">转场</span>
               <select id="manju-transition" class="manju-input" title="镜头间转场;接缝镜(MotionContext 连续渲染)自动硬切防重影">
                 <option value="cut">硬切</option>
                 <option value="fade">闪黑</option>
                 <option value="dissolve">叠化</option>
               </select>
-              <span class="manju-label">BGM音量</span><input id="manju-bgm-gain" class="manju-input manju-num" type="number" min="0" max="1" step="0.02" title="背景音乐音量(0-1);对白/字幕时段自动压低(闪避)">
             </div>
 
             <div class="manju-row">
@@ -458,12 +415,7 @@
               <input id="manju-bgm" class="manju-input manju-wide" placeholder="背景音乐音频文件绝对路径(mp3/wav/m4a,循环补齐,对白自动闪避;留空=无 BGM)" spellcheck="false">
             </div>
 
-            <div class="manju-row">
-              <span class="manju-label">负面提示词</span>
-              <textarea id="manju-neg-prompt" class="manju-input manju-textarea" rows="2" spellcheck="false" placeholder="英文逗号分隔（角色图/场景图生成用，缺省用内置默认）"></textarea>
-            </div>
-
-            <button id="manju-adv-toggle" class="hrs-btn manju-adv-toggle">▸ 高级模型配置</button>
+            <button id="manju-adv-toggle" class="hrs-btn manju-adv-toggle">▸ 高级配置</button>
             <div id="manju-adv" class="manju-adv hidden">
               <div class="manju-sub-title manju-sub-center">H3 视频模型</div>
               <div class="manju-grid">
@@ -503,6 +455,42 @@
                   <span class="manju-meta">2–64</span>
                 </div>
               </div>
+
+              <div class="manju-sub-title manju-sub-center">渲染参数（采样/时长/长镜，设置后一般不用改）</div>
+              <div class="manju-grid">
+                <div class="manju-field"><label>步数</label><input id="manju-steps" class="manju-input manju-num" type="number" min="1" max="60"></div>
+                <div class="manju-field"><label>Turbo步</label><input id="manju-turbo" class="manju-input manju-num" type="number" min="1" max="30"></div>
+                <div class="manju-field"><label>seed</label><input id="manju-seed" class="manju-input manju-num" type="number"></div>
+                <div class="manju-field"><label>最短时长</label><input id="manju-minsec" class="manju-input manju-num" type="number" min="1" max="15"></div>
+                <div class="manju-field"><label>最长时长</label><input id="manju-maxsec" class="manju-input manju-num" type="number" min="1" max="15"></div>
+                <div class="manju-field"><label>草稿缩放</label><input id="manju-draft-scale" class="manju-input manju-num" type="number" min="0.2" max="0.95" step="0.05" title="草稿预审的分辨率缩放(0.2-0.95,默认 0.5)"></div>
+                <div class="manju-field"><label>长镜</label><select id="manju-take" class="manju-input" title="多切点长镜(experimental):相邻同场景镜头合并为一次生成,组内 [Shot N] At MM:SS.mmm 多机位切点;关闭=一镜一渲+接缝">
+                  <option value="1">关闭</option>
+                  <option value="2">2镜/组</option>
+                  <option value="3">3镜/组</option>
+                </select></div>
+              </div>
+
+              <div class="manju-sub-title manju-sub-center">Krea2 定妆模型（定妆引擎选 Krea-2 时用）</div>
+              <div class="manju-row" id="manju-krea2-row">
+                <span class="manju-label">Krea2</span>
+                <input id="manju-krea2-unet" class="manju-input" placeholder="krea2_turbo_fp8_scaled.safetensors" title="Krea-2 Turbo FP8 扩散模型">
+                <input id="manju-krea2-clip" class="manju-input" placeholder="qwen3vl_4b_fp8_scaled.safetensors" title="Krea-2 文本编码器">
+                <input id="manju-krea2-vae" class="manju-input" placeholder="qwen_image_vae.safetensors" title="Krea-2 VAE">
+              </div>
+
+              <div class="manju-sub-title manju-sub-center">服务与提示词</div>
+              <div class="manju-field manju-field-block">
+                <label>ComfyUI 地址</label>
+                <input id="manju-comfy-url" class="manju-input manju-wide" placeholder="http://127.0.0.1:8190" spellcheck="false">
+              </div>
+              <div class="manju-grid">
+                <div class="manju-field"><label>BGM 音量</label><input id="manju-bgm-gain" class="manju-input manju-num" type="number" min="0" max="1" step="0.02" title="背景音乐音量(0-1);对白/字幕时段自动压低(闪避)"></div>
+              </div>
+              <div class="manju-field manju-field-block">
+                <label>负面提示词（角色图/场景图生成用，缺省用内置默认）</label>
+                <textarea id="manju-neg-prompt" class="manju-input manju-textarea" rows="2" spellcheck="false" placeholder="英文逗号分隔"></textarea>
+              </div>
             </div>
 
             <div class="manju-row" id="manju-render-msg-row">
@@ -523,8 +511,8 @@
 
           <!-- 右列：执行管线（悬浮，贴合内容右侧，与项目卡片对称） -->
           <div class="manju-pipeline-col">
-            <div class="manju-card manju-pipeline-card">
-              <h3 class="manju-card-title">执行管线</h3>
+            <div class="manju-card manju-pipeline-card foldable">
+              <h3 class="manju-card-title manju-fold-head" data-fold="pipeline" title="点击收起/展开">执行管线</h3>
               <div class="manju-row manju-stage-row">
                 <button id="manju-env" class="hrs-btn" title="🔍 项目体检：环境就绪性 + 配置/参数智能诊断，可修复项一键处理"><span class="mj-step-no">0</span>项目体检</button>
               </div>
@@ -536,7 +524,7 @@
                 <button class="hrs-btn" data-phase="qc"><span class="mj-step-no">5</span>质检</button>
                 <button class="hrs-btn" data-phase="assemble"><span class="mj-step-no">6</span>合成</button>
               </div>
-              <div class="manju-stage-label">快速执行</div>
+              <div class="manju-stage-label manju-fold-quick" data-fold="quick" title="点击收起/展开">快速执行</div>
               <div class="manju-row manju-stage-row">
                 <button id="manju-resume" class="hrs-btn hrs-btn-resume" title="从上次中断处一键续跑（幂等跳过已完成阶段）">▶ 续跑</button>
                 <button id="manju-stop" class="hrs-btn hrs-btn-danger" disabled>停止</button>
@@ -558,9 +546,6 @@
         <aside class="manju-side manju-side-right" id="manju-side-right">
           <div class="manju-side-head">
             <span class="manju-side-title">运行状态</span>
-            <button id="manju-refresh" class="hrs-btn hrs-btn-icon" title="刷新" aria-label="Refresh">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/></svg>
-            </button>
           </div>
           <div class="manju-sysmon" id="manju-sysmon" title="本机系统状态(每 2 秒刷新)">
             <span class="ms-it" data-k="cpu"><i>CPU</i><span class="ms-line"><b>--</b><span class="ms-sep">·</span><em>--</em></span><span class="ms-bar"><span class="ms-fill"></span></span></span>
@@ -577,58 +562,34 @@
               <div class="manju-progress"><div id="manju-progress-bar" class="manju-progress-bar"></div></div>
             </div>
             <div id="manju-flow"></div>
-            <pre id="manju-log" class="manju-log">(就绪)</pre>
           </div>
-          <div class="manju-side-head manju-fold-head" id="manju-out-fold" title="点击折叠/展开产物">
-            <span class="manju-side-title">产物 · <span id="manju-outputs-ep">EP01</span></span>
-            <button id="manju-out-fold-btn" class="manju-side-fold-btn" title="折叠/展开产物" aria-label="折叠/展开产物">▾</button>
-          </div>
-          <div class="manju-side-body" id="manju-out-body">
-            <div class="manju-out-tools">
-              <span class="manju-out-ops">操作</span>
-              <span class="manju-out-actions">
-                <button id="manju-cleanup" class="hrs-btn" title="清理抽卡候选/审片抽帧/云端 2K 等可再生成产物,释放磁盘(定妆照/镜头定稿/成片不动)">🧹 清理</button>
-                <button id="manju-trailer" class="hrs-btn" title="按审片分数自动剪辑高分镜头,合成 30 秒预告片(音量归一+字幕)">🎬 预告片</button>
-              </span>
-            </div>
-            <div id="manju-outputs"></div>
-          </div>
+          <!-- 2026-08-25:日志区移出 side-body 独立占位(flex:1)——修复日志被 side-body 内部滚动隐藏 -->
+          <div id="manju-log" class="manju-log">(就绪)</div>
         </aside>
 
         <button id="manju-right-toggle" class="manju-side-toggle-btn" title="收起/展开右侧栏">▸</button>
       </div>
+
+      <!-- 2026-08-26 用户要求:产物区从右侧栏底部移至窗口底部横跨全宽(此前 div 错位意外呈现的
+           布局,用户认可,正式实现);折叠/记忆/清理/预告片逻辑不变,仅换容器 -->
+      <div class="manju-out-panel" id="manju-out-panel">
+        <div class="manju-side-head manju-fold-head" id="manju-out-fold" title="点击折叠/展开产物">
+          <span class="manju-side-title">产物 · <span id="manju-outputs-ep">EP01</span></span>
+          <button id="manju-out-fold-btn" class="manju-side-fold-btn" title="折叠/展开产物" aria-label="折叠/展开产物">▾</button>
+        </div>
+        <div class="manju-side-body" id="manju-out-body">
+          <div class="manju-out-tools">
+            <span class="manju-out-ops">操作</span>
+            <span class="manju-out-actions">
+              <button id="manju-cleanup" class="hrs-btn" title="清理抽卡候选/审片抽帧/云端 2K 等可再生成产物,释放磁盘(定妆照/镜头定稿/成片不动)">🧹 清理</button>
+              <button id="manju-trailer" class="hrs-btn" title="按审片分数自动剪辑高分镜头,合成 30 秒预告片(音量归一+字幕)">🎬 预告片</button>
+            </span>
+          </div>
+          <div id="manju-outputs"></div>
+        </div>
+      </div>
     </section>
   </main>
-
-  <!-- 悬浮 AI 小助手:对话云朵实时播报 Agent/管线状态;点击由气泡展开对话框对话 -->
-  <div id="ai-mascot" title="AI 助手 · 点击与我对话">
-    <div id="ai-bubble" class="ai-bubble">AI 助手待命中 ✨</div>
-    <img id="ai-avatar" src="/assets/anim01.webp" alt="AI 助手" draggable="false">
-  </div>
-
-  <!-- AI 对话窗口:由气泡展开(内容+输入一体);上半为 Agent 审片/档案状态卡(迁自右栏),下半聊天;
-       未对话闲置自动收起(设置可配) -->
-  <div id="ai-chat-box" class="hidden">
-    <div id="ai-chat-head" title="按住拖动 · 📌 吸回助手身边">
-      <span class="ai-ch-title">🤖 AI 助手</span>
-      <span class="ai-ch-acts">
-        <button id="ai-chat-dock" class="ai-ch-btn" title="吸回助手身边(跟随移动)">📌</button>
-        <button id="ai-chat-close" class="ai-ch-btn" title="收起">×</button>
-      </span>
-    </div>
-    <div id="ai-ag-panel"></div>
-    <div id="ai-chat-log"></div>
-    <div id="ai-chat-quick">
-      <button class="ai-qbtn" data-qchat="体检">🔍 体检</button>
-      <button class="ai-qbtn" data-qchat="推荐风格">🎨 风格</button>
-      <button class="ai-qbtn" data-qchat="总结">🧠 总结</button>
-      <button class="ai-qbtn" data-qchat="修复">🔧 修复</button>
-    </div>
-    <div id="ai-chat-in">
-      <input id="ai-chat-input" placeholder="问我任何问题,或下指令:体检 / 推荐风格 / 总结 / 修复…" spellcheck="false" autocomplete="off">
-      <button id="ai-chat-send" class="hrs-btn hrs-btn-primary">➤</button>
-    </div>
-  </div>
 
   <!-- 小说阅读器:宽弹窗(正文 + 右侧章节目录,可手动隐藏) -->
   <div id="reader" class="reader" aria-hidden="true">
@@ -704,18 +665,8 @@
     </div>
   </div>
 
-  <!-- 漫剧工作台通用弹窗:新建项目 / 使用说明 / 文件选择 -->
-  <div id="manju-modal" class="manju-modal hidden" aria-hidden="true">
-    <div class="manju-modal-panel">
-      <div class="manju-modal-head">
-        <h3 id="manju-modal-title" class="manju-modal-title"></h3>
-        <button id="manju-modal-close" class="manju-modal-close" title="关闭" aria-label="Close">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
-        </button>
-      </div>
-      <div id="manju-modal-body" class="manju-modal-body"></div>
-    </div>
-  </div>
+  <!-- 漫剧工作台通用弹窗:多级弹窗(2026-08-24)由 manju.js openModal 动态创建,
+       每个弹窗独立遮罩层压栈,弹窗里再弹窗父弹窗保留,不再使用静态单例 -->
 
   <!-- 设置弹窗:语言 + 主题配色 -->
   <div id="settings-modal" class="settings-modal" aria-hidden="true">
@@ -745,6 +696,14 @@
             <button class="theme-opt" data-theme="starlight" style="--dot:#2563eb"><i class="theme-dot"></i><span data-i18n="theme.starlight">未来白</span></button>
             <button class="theme-opt" data-theme="deepseek" style="--dot:#4d6bfe"><i class="theme-dot"></i><span data-i18n="theme.deepseek">DeepSeek 亮蓝</span></button>
             <button class="theme-opt" data-theme="harness"  style="--dot:#6799fe"><i class="theme-dot"></i><span data-i18n="theme.harness">Harness 深空</span></button>
+            <button class="theme-opt" data-theme="galaxy-gold"     style="--dot:#f9c270"><i class="theme-dot"></i><span>银河·流金</span></button>
+            <button class="theme-opt" data-theme="galaxy-jade"     style="--dot:#4cb679"><i class="theme-dot"></i><span>银河·翠玉</span></button>
+            <button class="theme-opt" data-theme="galaxy-night"    style="--dot:#8e4bac"><i class="theme-dot"></i><span>银河·夜紫</span></button>
+            <button class="theme-opt" data-theme="galaxy-crimson"  style="--dot:#e83839"><i class="theme-dot"></i><span>银河·朱砂</span></button>
+            <button class="theme-opt" data-theme="galaxy-amethyst" style="--dot:#a96bc8"><i class="theme-dot"></i><span>银河·紫晶</span></button>
+            <button class="theme-opt" data-theme="galaxy-lilac"     style="--dot:#9e9dcd"><i class="theme-dot"></i><span>银河·丁香</span></button>
+            <button class="theme-opt" data-theme="galaxy-olive"    style="--dot:#c2c270"><i class="theme-dot"></i><span>银河·橄榄</span></button>
+            <button class="theme-opt" data-theme="galaxy-flare"    style="--dot:#f2e64b"><i class="theme-dot"></i><span>银河·星芒</span></button>
           </div>
         </div>
         <div class="settings-group">
@@ -792,84 +751,7 @@
           </div>
         </div>
 
-        <div class="settings-group">
-          <div class="settings-label"><span class="sl-emoji">🤖</span>AI 助手</div>
-          <div class="settings-grid">
-            <div class="settings-row">
-              <span class="settings-row-label">启用助手</span>
-              <label class="toggle"><input type="checkbox" id="set-ai-on"><span class="tk"></span></label>
-            </div>
-            <div class="settings-row">
-              <span class="settings-row-label">状态播报</span>
-              <label class="toggle"><input type="checkbox" id="set-ai-status"><span class="tk"></span></label>
-              <span class="settings-hint">管线/审片实时播报</span>
-            </div>
-            <div class="settings-row">
-              <span class="settings-row-label">闲置名言</span>
-              <label class="toggle"><input type="checkbox" id="set-ai-quotes"><span class="tk"></span></label>
-              <span class="settings-hint">典故·成语·名言轮播</span>
-            </div>
-            <div class="settings-row">
-              <span class="settings-row-label">闲逛移动</span>
-              <label class="toggle"><input type="checkbox" id="set-ai-wander"><span class="tk"></span></label>
-              <span class="settings-hint">闲时踱步换位</span>
-            </div>
-            <div class="settings-row">
-              <span class="settings-row-label">闲逛间隔</span>
-              <select id="set-ai-wander-int" class="settings-input">
-                <option value="6000">频繁(6s)</option>
-                <option value="11000">较快(11s)</option>
-                <option value="19000">适中(19s)</option>
-                <option value="35000">悠哉(35s)</option>
-                <option value="60000">佛系(60s)</option>
-              </select>
-            </div>
-            <div class="settings-row">
-              <span class="settings-row-label">冒泡频率</span>
-              <select id="set-ai-freq" class="settings-input">
-                <option value="12000">勤快(12s)</option>
-                <option value="22000">适中(22s)</option>
-                <option value="45000">安静(45s)</option>
-              </select>
-            </div>
-            <div class="settings-row">
-              <span class="settings-row-label">体型</span>
-              <select id="set-ai-size" class="settings-input">
-                <option value="76">小</option>
-                <option value="104">中(默认)</option>
-                <option value="132">大</option>
-              </select>
-            </div>
-            <div class="settings-row">
-              <span class="settings-row-label">左右摇摆</span>
-              <label class="toggle"><input type="checkbox" id="set-ai-waddle"><span class="tk"></span></label>
-              <span class="settings-hint">闲逛/步行时的摇摆动画</span>
-            </div>
-            <div class="settings-row">
-              <span class="settings-row-label">摇摆幅度</span>
-              <select id="set-ai-waddle-amp" class="settings-input">
-                <option value="0">关闭(0°)</option>
-                <option value="1.5">轻(1.5°)</option>
-                <option value="2.5" selected>中(2.5°)</option>
-                <option value="4">大(4°)</option>
-              </select>
-            </div>
-            <div class="settings-row">
-              <span class="settings-row-label">对话闲置隐藏</span>
-              <label class="toggle"><input type="checkbox" id="set-ai-chat-hide"><span class="tk"></span></label>
-              <span class="settings-hint">对话框无交互自动收起</span>
-            </div>
-            <div class="settings-row">
-              <span class="settings-row-label">闲置时长</span>
-              <select id="set-ai-chat-hide-sec" class="settings-input">
-                <option value="30">30 秒</option>
-                <option value="60">1 分钟</option>
-                <option value="120">2 分钟</option>
-                <option value="300">5 分钟</option>
-              </select>
-            </div>
-          </div>
-        </div>
+        <!-- AI 桌宠设置卡已删除(2026-08-26 用户要求;2026-08-24 已移除桌宠本体,此为残留占位卡) -->
 
         <!-- 剧本模型(LLM):已隐藏——小说转剧本能力并入视频管理(DeepSeek Key/视觉模型均在漫剧设置·智能体调度里配置);
              DOM 保留避免 app.js loadLLMSettings 空引用,后端 /api/settings llm 不动 -->
@@ -901,12 +783,12 @@
   </div>
   <!-- 实际根路径由服务端注入(自包含部署后 manju/novel 在 exe 目录旁,dirview 勿再硬编码) -->
   <script>window.NILIX_PATHS = { manjuRoot: /*__NILIX_MANJU_ROOT__*/, novelRoot: /*__NILIX_NOVEL_ROOT__*/ };</script>
-  <script src="/js/i18n.js?v=20260823x"></script>
-  <script src="/js/markdown.js?v=20260823x"></script>
-  <script src="/js/winctl.js?v=20260823x"></script>
-  <script src="/js/app.js?v=20260823x"></script>
-  <script src="/js/comfy.js?v=20260823x"></script>
-  <script src="/js/dirview.js?v=20260823x"></script>
-  <script src="/js/manju.js?v=20260823x"></script>
+  <script src="/js/i18n.js?v=202608261331"></script>
+  <script src="/js/markdown.js?v=202608261331"></script>
+  <script src="/js/winctl.js?v=202608261331"></script>
+  <script src="/js/app.js?v=202608261331"></script>
+  <script src="/js/comfy.js?v=202608261331"></script>
+  <script src="/js/dirview.js?v=202608261331"></script>
+  <script src="/js/manju.js?v=202608261331"></script>
 </body>
 </html>

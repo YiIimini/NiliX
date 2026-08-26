@@ -92,22 +92,30 @@ func TestShotRefViews(t *testing.T) {
 	}
 }
 
-// 多视图升级回归:views 提示词优先角色卡 views.<view>,旧方案派生后缀
+// 多视图升级回归:views 提示词——2026-08-24 起 image_prompt(含身份特征)优先,
+// views.<view> 仅兜底(防"白发老者侧面变黑发":LLM 泛化 views 丢发色/胡须)
 func TestCharViewPromptFor(t *testing.T) {
 	dir := t.TempDir()
 	analysis := filepath.Join(dir, "analysis")
 	_ = os.MkdirAll(analysis, 0755)
-	_ = os.WriteFile(filepath.Join(analysis, "EP01_characters.json"),
-		[]byte(`{"characters":[{"id":"甲","image_prompt":"front base","views":{"full":"full prompt","detail":"detail prompt"}}]}`), 0644)
+	_ = os.WriteFile(filepath.Join(analysis, "EP01_direct_plan.json"),
+		[]byte(`{"characters":[{"id":"甲","image_prompt":"front base, white beard","views":{"full":"full prompt","detail":"detail prompt"}}]}`), 0644)
 	ctx := &manjuCtx{analysisDir: analysis, episode: "EP01", assetsDir: filepath.Join(dir, "assets")}
-	if got := charViewPromptFor(ctx, "甲", "full"); got != "full prompt" {
-		t.Fatalf("views.full 提示词 = %q, want %q", got, "full prompt")
+	// image_prompt 优先 + 视图后缀(身份特征必须带上)
+	if got := charViewPromptFor(ctx, "甲", "full"); got != "front base, white beard, full body, head to toe, standing pose, complete outfit visible" {
+		t.Fatalf("full 提示词 = %q, want image_prompt 优先(含身份特征)", got)
 	}
-	if got := charViewPromptFor(ctx, "甲", "side"); got != "front base, side profile, 90 degree side view, face and hairstyle silhouette, body side view" {
-		t.Fatalf("旧方案 side 派生 = %q", got)
+	if got := charViewPromptFor(ctx, "甲", "side"); got != "front base, white beard, side profile, 90 degree side view, face and hairstyle silhouette, body side view" {
+		t.Fatalf("side 派生 = %q", got)
 	}
-	if got := charViewPromptFor(ctx, "甲", ""); got != "front base" {
-		t.Fatalf("主视图 = %q, want %q", got, "front base")
+	if got := charViewPromptFor(ctx, "甲", ""); got != "front base, white beard" {
+		t.Fatalf("主视图 = %q, want %q", got, "front base, white beard")
+	}
+	// 无 image_prompt 时兜底 views.<view>
+	_ = os.WriteFile(filepath.Join(analysis, "EP01_direct_plan.json"),
+		[]byte(`{"characters":[{"id":"乙","image_prompt":"","views":{"full":"full prompt"}}]}`), 0644)
+	if got := charViewPromptFor(ctx, "乙", "full"); got != "full prompt" {
+		t.Fatalf("兜底 views.full = %q, want %q", got, "full prompt")
 	}
 }
 

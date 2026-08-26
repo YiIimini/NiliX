@@ -13,7 +13,7 @@ const App = {
 
   loadPrefs() {
     const d = { aiOn: true, aiStatus: true, aiQuotes: true, aiWander: true, aiFreq: 22000, aiSize: 104, aiWanderInt: 11000,
-      aiChatHide: true, aiChatHideSec: 60, aiWaddle: true, aiWaddleAmp: 2.5, // 闲置收起 + 左右摇摆(幅度°)
+      aiChatHide: true, aiChatHideSec: 60, aiWaddle: true, aiWaddleAmp: 2.5, // 旧主窗口助手(已迁移桌宠,兼容保留)
       kbLayout: "force", kbShape: "mixed", kbCurve: 0.05, kbLineOp: 0.2, kbHoverLabel: true, kbLabels: 0,
       kbRepel: 260, kbDist: 100, kbGrav: 9 };
     let s = null;
@@ -32,43 +32,7 @@ const App = {
     const el = (id) => document.getElementById(id);
     const set = (id, v) => { el(id).value = String(v); };
     const chk = (id, v) => { el(id).checked = !!v; };
-    chk("set-ai-on", P.aiOn); chk("set-ai-status", P.aiStatus);
-    chk("set-ai-quotes", P.aiQuotes); chk("set-ai-wander", P.aiWander);
-    set("set-ai-freq", P.aiFreq); set("set-ai-size", P.aiSize);
-    set("set-ai-wander-int", P.aiWanderInt);
-    chk("set-ai-chat-hide", P.aiChatHide); set("set-ai-chat-hide-sec", P.aiChatHideSec);
-    chk("set-ai-waddle", P.aiWaddle); set("set-ai-waddle-amp", P.aiWaddleAmp);
-    const apply = () => {
-      const m = document.getElementById("ai-mascot");
-      if (m) {
-        m.style.display = P.aiOn ? "" : "none";
-        const av = document.getElementById("ai-avatar");
-        av.style.width = av.style.height = P.aiSize + "px";
-      }
-      // 左右摇摆:幅度写 CSS 变量(--ai-waddle),0=关闭
-      const amp = P.aiWaddle ? (P.aiWaddleAmp || 2.5) : 0;
-      document.body.style.setProperty("--ai-waddle", amp + "deg");
-      if (P.aiFreq !== this._mqFreq) {
-        this._mqFreq = P.aiFreq;
-        clearInterval(this._mqT);
-        const m2 = document.getElementById("ai-mascot");
-        this._mqT = setInterval(() => {
-          if (!m2 || !P.aiOn || m2.classList.contains("is-busy") || !P.aiQuotes) return;
-          const q = this.mascotQuote();
-          if (q) this.mascotSay(q);
-        }, P.aiFreq);
-      }
-      this.savePrefs();
-    };
-    ["set-ai-on", "set-ai-status", "set-ai-quotes", "set-ai-wander", "set-ai-chat-hide", "set-ai-waddle"].forEach((id) =>
-      el(id).addEventListener("change", (e) => {
-        const k = { "set-ai-on": "aiOn", "set-ai-status": "aiStatus", "set-ai-quotes": "aiQuotes", "set-ai-wander": "aiWander", "set-ai-chat-hide": "aiChatHide", "set-ai-waddle": "aiWaddle" }[id];
-        P[k] = e.target.checked; apply();
-      }));
-    [["set-ai-freq", "aiFreq", parseInt], ["set-ai-size", "aiSize", parseInt], ["set-ai-wander-int", "aiWanderInt", parseInt], ["set-ai-chat-hide-sec", "aiChatHideSec", parseInt], ["set-ai-waddle-amp", "aiWaddleAmp", parseFloat]].forEach(([id, k, cast]) => {
-      const e2 = el(id);
-      if (e2) e2.addEventListener("change", () => { P[k] = cast(e2.value); apply(); });
-    });
+    // AI 桌宠配置 → 已删除(2026-08-24 用户要求移除桌宠)
     // 灵动岛开关:读取后端 settings(默认启用),切换时写回(灵动岛轮询自动隐藏/显示)
     const islandToggle = el("set-island-on");
     if (islandToggle) {
@@ -84,7 +48,6 @@ const App = {
         }).catch(() => {});
       });
     }
-    apply();
   },
 
   async init() {
@@ -115,8 +78,7 @@ const App = {
     });
     this.loadPrefs();
     this.bindPrefs();
-    this.mascotInit();
-    this.mascotLoop();
+    // 主窗口助手已迁移独立桌宠窗口 → 桌宠已删除(2026-08-24 用户要求)
     this.initTips();
     this.applyNavVisibility();
     this.route();
@@ -149,6 +111,17 @@ const App = {
     };
     document.getElementById("settings-btn").addEventListener("click", openSettings);
     document.getElementById("settings-close").addEventListener("click", closeSettings);
+    // 2026-08-24 用户要求:所有页面刷新按钮集中到导航设置按钮前面——全局刷新按当前路由触发对应逻辑
+    const navRefresh = document.getElementById("nav-refresh");
+    if (navRefresh) navRefresh.addEventListener("click", () => {
+      const route = this.currentRoute();
+      if (route === "comfy") { if (typeof ComfyView !== "undefined") ComfyView.renderStatus(); }
+      else if (route === "novel") { if (typeof NovelView !== "undefined") NovelView.render(); }
+      else {
+        if (typeof ManjuWorkbench !== "undefined") ManjuWorkbench.loadProjects();
+        if (typeof ManjuView !== "undefined") ManjuView.render();
+      }
+    });
     modal.addEventListener("click", (e) => {
       if (e.target === modal) closeSettings();
     });
@@ -959,10 +932,9 @@ const App = {
     }
   },
 
-  /* 当前路由:harness / comfy / novel / manju(默认视频管理) */
+  /* 当前路由:comfy / novel / manju(默认视频管理)——harness 已删除(2026-08-26 用户要求) */
   currentRoute() {
     const hash = location.hash || "#/manju";
-    if (hash.startsWith("#/harness")) return "harness";
     if (hash.startsWith("#/comfy")) return "comfy";
     if (hash.startsWith("#/novel")) return "novel";
     return "manju";
@@ -970,11 +942,10 @@ const App = {
 
   route() {
     const route = this.currentRoute();
-    document.getElementById("view-harness").classList.toggle("is-active", route === "harness");
     document.getElementById("view-comfy").classList.toggle("is-active", route === "comfy");
     document.getElementById("view-novel").classList.toggle("is-active", route === "novel");
     document.getElementById("view-manju").classList.toggle("is-active", route === "manju");
-    document.body.classList.toggle("view-comfy-active", route === "harness" || route === "comfy");
+    document.body.classList.toggle("view-comfy-active", route === "comfy");
     document.body.classList.toggle("view-dir-active", route === "novel" || route === "manju");
     document.querySelectorAll(".nav-link").forEach((a) =>
       a.classList.toggle("is-active", a.dataset.route === route)
@@ -982,9 +953,7 @@ const App = {
     // 路由切换时关闭管理页遗留弹窗(宽阅读器/单视频弹窗)
     if (typeof NovelView !== "undefined") NovelView.closeReader();
     if (typeof ManjuView !== "undefined") ManjuView.closeFilmModal();
-    if (route === "harness") {
-      this.ensureHarnessScript().then(() => HarnessView.enter());
-    } else if (route === "comfy") ComfyView.enter();
+    if (route === "comfy") ComfyView.enter();
     else if (route === "novel") NovelView.enter();
     else {
       ManjuView.enter();
@@ -993,18 +962,6 @@ const App = {
     // 离开视频管理页时停止其轮询(iframe/状态常驻仅在本页需要)
     if (route !== "manju" && typeof ManjuWorkbench !== "undefined") ManjuWorkbench.leave();
     this.mascotOnRoute(route);
-  },
-
-  /* 动态加载 harness.js(未加载过才注入,避免首屏多请求) */
-  ensureHarnessScript() {
-    if (typeof HarnessView !== "undefined") return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = "/js/harness.js?v=20260820c6";
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error("harness.js 加载失败"));
-      document.head.appendChild(s);
-    });
   },
 
 

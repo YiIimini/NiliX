@@ -209,6 +209,124 @@ func TestManjuCleanup(t *testing.T) {
 	}
 }
 
+// TestManjuCacheClear 一键清缓存(2026-08-25 扫帚按钮):方案 JSON/镜头 mp4/条件缓存/接缝 latent 清除,
+// 定妆照/场景图/成片不动;支持 Query 与 body 两种 config 传参。
+func TestManjuCacheClear(t *testing.T) {
+	old := comfyParams()
+	SetComfyParams("", "", "") // 重置生效启动参数,让 ctx 回退 config 的 comfy_output(测试隔离)
+	defer SetComfyParams(old.url, old.in, old.out)
+	proj := "zz_cacheclear_test"
+	dir := filepath.Join(ManjuRootDir, proj)
+	_ = os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+	mk := func(p string) { _ = os.MkdirAll(p, 0755) }
+	mk(filepath.Join(dir, "analysis"))
+	mk(filepath.Join(dir, "assets", "characters"))
+	mk(filepath.Join(dir, "clips", "EP01"))
+	mk(filepath.Join(dir, "comfy_output", "h3_context", "zz_cacheclear_test_EP01"))
+	// 其他项目的 latent(不得误删)
+	mk(filepath.Join(dir, "comfy_output", "h3_context", "other_proj_EP01"))
+	// 方案缓存
+	_ = os.WriteFile(filepath.Join(dir, "analysis", "EP01_direct_plan.json"), []byte(`{"shots":[{"shot_id":1,"duration":5}]}`), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "analysis", "EP01_characters.json"), []byte(`{}`), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "analysis", "EP01_shots_prompts.json"), []byte(`{}`), 0644)
+	// 镜头 mp4
+	_ = os.WriteFile(filepath.Join(dir, "clips", "EP01", "01.mp4"), []byte("x"), 0644)
+	// 接缝 latent(本项目的清,其他项目的不动)
+	_ = os.WriteFile(filepath.Join(dir, "comfy_output", "h3_context", "zz_cacheclear_test_EP01", "lat.pt"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "comfy_output", "h3_context", "other_proj_EP01", "lat.pt"), []byte("keep"), 0644)
+	// 定妆照/成片(不得误删)
+	_ = os.WriteFile(filepath.Join(dir, "assets", "characters", "c.png"), []byte("keep"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "EP01_成片.mp4"), []byte("keep"), 0644)
+	cfg := `{"paths":{"workdir":"` + filepath.ToSlash(dir) + `","comfy_output":"` + filepath.ToSlash(filepath.Join(dir, "comfy_output")) + `","comfy_shared":"` + filepath.ToSlash(dir) + `"},"project":"` + proj + `"}`
+	_ = os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0644)
+
+	w, res := doReq(t, "POST", "/api/manju/cache/clear", map[string]any{
+		"config": filepath.Join(dir, "config.json"),
+	})
+	if w.Code != 200 || res["ok"] != true {
+		t.Fatalf("清缓存失败: %d %s", w.Code, w.Body.String())
+	}
+	// 方案 JSON 已清
+	if _, err := os.Stat(filepath.Join(dir, "analysis", "EP01_direct_plan.json")); err == nil {
+		t.Errorf("方案 JSON 未清理")
+	}
+	// 镜头 mp4 已清
+	if _, err := os.Stat(filepath.Join(dir, "clips", "EP01", "01.mp4")); err == nil {
+		t.Errorf("镜头 mp4 未清理")
+	}
+	// 接缝 latent 已清(本项目)
+	if _, err := os.Stat(filepath.Join(dir, "comfy_output", "h3_context", "zz_cacheclear_test_EP01", "lat.pt")); err == nil {
+		t.Errorf("接缝 latent 未清理")
+	}
+	// 其他项目 latent 未误删
+	if _, err := os.Stat(filepath.Join(dir, "comfy_output", "h3_context", "other_proj_EP01", "lat.pt")); err != nil {
+		t.Errorf("其他项目 latent 被误删")
+	}
+	// 定妆照/成片未误删
+	if _, err := os.Stat(filepath.Join(dir, "assets", "characters", "c.png")); err != nil {
+		t.Errorf("定妆照被误删")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "EP01_成片.mp4")); err != nil {
+		t.Errorf("成片被误删")
+	}
+}
+
+// TestManjuCacheClearAdvanced 高级清理(2026-08-25「高级」按钮):普通清理基础上额外清空
+// ComfyUI 共享 input/output 目录产物;模型权重(../models)与目录本身不触碰。
+func TestManjuCacheClearAdvanced(t *testing.T) {
+	oldComfy := comfyParams()
+	SetComfyParams("", "", "")
+	defer SetComfyParams(oldComfy.url, oldComfy.in, oldComfy.out)
+	oldShared := ComfySharedDir
+	shared := filepath.Join(os.TempDir(), "nilix-test-comfy-shared-adv")
+	ComfySharedDir = shared
+	defer func() { ComfySharedDir = oldShared }()
+	_ = os.RemoveAll(shared)
+	defer os.RemoveAll(shared)
+	mk := func(p string) { _ = os.MkdirAll(p, 0755) }
+	mk(filepath.Join(shared, "input"))
+	mk(filepath.Join(shared, "output"))
+	mk(filepath.Join(shared, "models")) // 权重目录:高级清理不得触碰
+	_ = os.WriteFile(filepath.Join(shared, "input", "ref.png"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(shared, "output", "manju_asset_00001_.png"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(shared, "output", "EP01_成片.mp4"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(shared, "models", "huge.safetensors"), []byte("keep"), 0644)
+
+	proj := "zz_cacheclear_adv_test"
+	dir := filepath.Join(ManjuRootDir, proj)
+	_ = os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+	mk(filepath.Join(dir, "analysis"))
+	_ = os.WriteFile(filepath.Join(dir, "analysis", "EP01_direct_plan.json"), []byte(`{}`), 0644)
+	cfg := `{"paths":{"workdir":"` + filepath.ToSlash(dir) + `","comfy_output":"` + filepath.ToSlash(filepath.Join(shared, "output")) + `","comfy_shared":"` + filepath.ToSlash(shared) + `"},"project":"` + proj + `"}`
+	_ = os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0644)
+
+	w, res := doReq(t, "POST", "/api/manju/cache/clear", map[string]any{
+		"config": filepath.Join(dir, "config.json"), "advanced": true,
+	})
+	if w.Code != 200 || res["ok"] != true {
+		t.Fatalf("高级清理失败: %d %s", w.Code, w.Body.String())
+	}
+	if res["advanced"] != true {
+		t.Fatalf("advanced 未回传: %v", res)
+	}
+	// input/output 产物已清
+	if _, err := os.Stat(filepath.Join(shared, "input", "ref.png")); err == nil {
+		t.Errorf("input 产物未清理")
+	}
+	if _, err := os.Stat(filepath.Join(shared, "output", "manju_asset_00001_.png")); err == nil {
+		t.Errorf("output 产物未清理")
+	}
+	if _, err := os.Stat(filepath.Join(shared, "output", "EP01_成片.mp4")); err == nil {
+		t.Errorf("output 成片未清理")
+	}
+	// 模型权重未触碰
+	if _, err := os.Stat(filepath.Join(shared, "models", "huge.safetensors")); err != nil {
+		t.Errorf("模型权重被误删")
+	}
+}
+
 // TestTokenInjectRootPath 根路径(kb 工作台页)FileServer 注入会话令牌:
 // HTML 替换占位符 → 真实 token;无占位符残留;静态 js 透传不缓冲
 func TestTokenInjectRootPath(t *testing.T) {

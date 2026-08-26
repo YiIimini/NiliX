@@ -377,6 +377,14 @@ body.panel-open::after {
   display: flex; align-items: center; gap: 10px;
   flex-wrap: wrap;
 }
+/* 2026-08-24 用户要求:刷新/使用说明/系统设置统一右上角——状态胶囊与操作按钮间加细分隔线 */
+.hrs-tools-sep {
+  width: 1px; height: 22px;
+  background: var(--panel-border);
+  margin: 0 2px;
+  flex: none;
+}
+.hrs-tools .hrs-btn-icon { flex: none; }
 .hrs-status {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 6px 14px;
@@ -511,7 +519,7 @@ body.panel-open::after {
   font-size: 12.5px; line-height: 1.8;
   color: var(--muted); letter-spacing: 0.5px;
 }
-/* 操作失败提示行 */
+/* 操作失败提示行(兼容旧逻辑;新提示统一走 .manju-tips tip 气泡,2026-08-24 用户要求) */
 .hrs-err {
   margin: -6px 0 10px;
   font-size: 12.5px;
@@ -519,6 +527,29 @@ body.panel-open::after {
   letter-spacing: 0.5px;
   text-shadow: 0 0 10px color-mix(in srgb, var(--danger, #e7000b) 40%, transparent);
 }
+
+/* ---- tip 气泡(2026-08-24 用户要求:所有提示都是 tip 气泡) ---- */
+.manju-tips {
+  position: fixed; top: 14px; right: 14px; z-index: 4000;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  pointer-events: none; max-width: min(440px, 90vw);
+}
+.manju-tip {
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 12.5px; line-height: 1.55;
+  color: #e8ecf6;
+  background: rgba(16, 24, 42, 0.96);
+  border: 1px solid rgba(120, 140, 180, 0.35);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  animation: manjuTipIn 0.28s ease-out;
+  overflow-wrap: anywhere;
+}
+.manju-tip.success { border-color: rgba(124, 252, 154, 0.5); }
+.manju-tip.error { border-color: rgba(255, 107, 107, 0.6); }
+.manju-tip.info { border-color: rgba(90, 162, 255, 0.5); }
+.manju-tip.out { opacity: 0; transform: translateX(14px); transition: opacity 0.3s, transform 0.3s; }
+@keyframes manjuTipIn { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
 /* 服务日志面板(置于页面底部,与 iframe 之间留上边距) */
 .hrs-log-wrap {
   margin-top: 10px;
@@ -2647,6 +2678,16 @@ body.view-dir-active .top-search { display: none; }
   flex-shrink: 0;
 }
 .manju-side-title { font-size: 13px; font-weight: 700; letter-spacing: 2px; color: var(--text); }
+/* 2026-08-25 用户要求:底部「产物 · n集」标题居中展示 + 呼吸动效(柔和辉光脉冲) */
+#manju-out-fold { position: relative; justify-content: center; }
+#manju-out-fold .manju-side-title {
+  animation: manju-breathe 2.8s ease-in-out infinite;
+}
+#manju-out-fold .manju-side-fold-btn { position: static; transform: none; margin-left: 8px; flex-shrink: 0; } /* 2026-08-26 用户要求:折叠按钮随标题一起居中(不再钉死右侧) */
+@keyframes manju-breathe {
+  0%, 100% { opacity: .9; text-shadow: 0 0 5px color-mix(in srgb, var(--accent) 20%, transparent); }
+  50% { opacity: 1; text-shadow: 0 0 16px color-mix(in srgb, var(--accent) 60%, transparent); }
+}
 /* 运行状态卡系统监测行:CPU/内存/GPU 三项对称排列(每 2 秒刷新) */
 .manju-sysmon {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 0;
@@ -2741,7 +2782,7 @@ body.view-dir-active .top-search { display: none; }
   flex-shrink: 0;
 }
 .manju-side-nav .dir-path { max-width: 190px; }
-.manju-side-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; }
+.manju-side-body { flex: 0 0 auto; min-height: 0; overflow: visible; padding: 12px; display: flex; flex-direction: column; }
 /* 左栏目录浏览:卡片单列,封面图设最大宽高(避免随侧栏宽度变形),居中 */
 .manju-list { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
 .manju-list .dir-empty { padding: 16px 8px; }
@@ -2749,8 +2790,11 @@ body.view-dir-active .top-search { display: none; }
 .manju-list .fm-card { max-width: 320px; margin: 0 auto; width: 100%; }
 .manju-list .fm-poster { max-height: 200px; }
 .manju-list .shelf-head { padding: 0 2px 8px; }
-/* 右栏内运行日志压缩高度 */
-.manju-side-right .manju-log { max-height: 38vh; min-height: 80px; }
+/* 右栏内运行日志:独立 flex:1 撑满 side 剩余空间(2026-08-25 移出 side-body 后)——
+   产物收起时日志占满,产物展开时日志让位但至少 120px 可读,不再被 side-body 内部滚动隐藏 */
+.manju-side-right .manju-log { flex: 1; min-height: 120px; max-height: none; margin: 0 12px 0; }
+/* 产物区限高(≤35% 侧栏,内部滚动):给日志区更多空间 */
+.manju-side-right #manju-out-body { flex: 0 1 35%; min-height: 0; overflow-y: auto; }
 .manju-side-right .manju-row { flex-wrap: nowrap; }
 /* 右栏产物区折叠/展开(只折叠产物主体,运行状态区不受影响) */
 .manju-fold-head { cursor: pointer; user-select: none; transition: background 0.2s; }
@@ -2770,8 +2814,8 @@ body.view-dir-active .top-search { display: none; }
 /* 管线流程图(横向时间轴) */
 .manju-flow {
   display: flex; flex-direction: row; align-items: flex-start;
-  gap: 0; margin-bottom: 10px; padding: 14px 10px 10px;
-  border: 1px solid var(--panel-border); border-radius: 10px;
+  gap: 0; margin-bottom: 6px; padding: 8px 8px 6px;
+  border: 1px solid var(--panel-border); border-radius: 8px;
   background: var(--chip-bg); overflow-x: auto;
 }
 .manju-flow-step {
@@ -2823,13 +2867,24 @@ body.view-dir-active .top-search { display: none; }
   padding: 16px 18px;
   flex-shrink: 0;
 }
-.manju-card-title {
-  margin: 0 0 14px;
+.manju-card-title {  margin: 0 0 14px;
   font-size: 11.5px; font-weight: 700; letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--accent-2);
   display: flex; align-items: center; gap: 8px;
 }
+/* 视频管理卡片折叠(项目/参数/小说来源/执行管线/快速执行):标题 ::after 画折叠箭头 */
+.manju-fold-head { cursor: pointer; user-select: none; }
+.manju-fold-head::after { content: "▾"; font-size: 10px; color: var(--accent); margin-left: auto; }
+.manju-card.foldable.folded > .manju-fold-head::after { content: "▸"; }
+/* 折叠内容:标题(h3 或 card-head)之后的直接兄弟隐藏 */
+.manju-card.foldable.folded > h3 ~ *,
+.manju-card.foldable.folded > .manju-card-head ~ * { display: none; }
+/* 执行管线卡内「快速执行」子区独立折叠 */
+.manju-fold-quick { cursor: pointer; user-select: none; }
+.manju-fold-quick::after { content: "▾"; color: var(--accent); margin-left: 6px; font-size: 10px; }
+.manju-fold-quick.folded::after { content: "▸"; }
+.manju-fold-quick.folded ~ * { display: none; }
 .manju-card-title::before {
   content: ""; width: 4px; height: 14px; border-radius: 2px;
   background: linear-gradient(180deg, var(--accent), var(--accent-2));
@@ -2939,12 +2994,14 @@ select.manju-input {
   background: var(--bg-code, color-mix(in srgb, #000 40%, transparent));
   border: 1px solid var(--panel-border);
   border-radius: 10px;
-  padding: 8px 10px;
+  padding: 6px 8px;
   font-size: 11.5px; line-height: 1.5;
   font-family: ui-monospace, Consolas, 'Courier New', monospace;
   max-height: 260px; min-height: 60px; overflow: auto;
-  white-space: pre-wrap; word-break: break-all; color: var(--text);
+  color: var(--text);
   margin: 0;
+  /* 2026-08-25:容器 div 化——不再用 pre-wrap(块级结构+pre-wrap 冲突产生多余空行/顶部黑块) */
+  white-space: normal;
 }
 .manju-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .manju-table th { text-align: left; color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; padding: 5px 9px; border-bottom: 1px solid var(--panel-border); }
@@ -2980,8 +3037,8 @@ select.manju-input {
 }
 .manju-modal-close:hover { color: var(--danger); border-color: var(--danger); transform: rotate(90deg); }
 .manju-modal-close svg { width: 15px; height: 15px; }
-/* 使用说明等宽窗口 */
-.manju-modal-panel.wide { width: min(1280px, 96vw); }
+/* 使用说明等宽窗口(2026-08-26 角色管理加宽:1280→1500,角色卡片顶部 tab/按钮不再拥挤) */
+.manju-modal-panel.wide { width: min(1500px, 96vw); }
 .manju-form { display: flex; flex-direction: column; gap: 10px; }
 .manju-form label { font-size: 12.5px; color: var(--muted); }
 .manju-check { display: flex; align-items: center; gap: 6px; }
@@ -3129,27 +3186,34 @@ select.manju-input {
   background: color-mix(in srgb, var(--ok, #00a63e) 12%, transparent);
   padding: 1px 6px;
 }
-.manju-vids { display: flex; flex-direction: column; gap: 6px; }
+/* 2026-08-25 用户要求:产物视频与预览图一样从左向右依次排列(流式换行卡片) */
+.manju-vids { display: flex; flex-wrap: wrap; gap: 8px; }
 /* 成片条目:主色描边高亮,与分镜镜头区分 */
 .manju-vid-final {
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .manju-vid-final .manju-vid-name { color: var(--accent); font-weight: 600; }
+/* 视频卡片:竖排(播放钮在上、名称/大小在下),等宽卡片从左向右排,悬停浮起 */
 .manju-vid {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 10px; border: 1px solid var(--panel-border); border-radius: 9px;
-  cursor: pointer; transition: border-color 0.2s, background 0.2s;
+  flex: 0 0 auto; width: 150px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 8px 8px 7px; border: 1px solid var(--panel-border); border-radius: 10px;
+  cursor: pointer; position: relative; text-align: center;
+  transition: border-color 0.2s, background 0.2s, transform 0.15s;
 }
-.manju-vid:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.manju-vid:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); transform: translateY(-2px); }
 .manju-vid-play {
-  width: 24px; height: 24px; flex: 0 0 auto;
+  width: 34px; height: 34px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 50%; font-size: 10px;
+  border-radius: 50%; font-size: 11px; margin-top: 2px;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   color: #08131f;
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 40%, transparent);
 }
-.manju-vid-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; }
+.manju-vid-name { flex: none; width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
+.manju-vid .manju-meta { font-size: 10px; color: var(--muted); line-height: 1.4; }
+.manju-vid .manju-stale-tag { font-size: 9px; line-height: 1.3; }
 
 /* 图片灯箱 / 视频播放器 */
 .manju-img-preview { position: relative; display: flex; align-items: center; justify-content: center; padding: 6px 0; }
@@ -3190,7 +3254,7 @@ select.manju-input {
 
 /* 角色抽卡 */
 .manju-gacha-sub { margin: -8px 0 12px; }
-.manju-gacha-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 16px; }
+.manju-gacha-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(316px, 1fr)); gap: 16px; }
 
 /* 角色卡片:更宽更精致,层次分明 */
 .manju-char {
@@ -3255,9 +3319,10 @@ select.manju-input {
 }
 .manju-char-actions .hrs-btn:disabled { opacity: 0.5; }
 
-/* 多视图 tab:正面/全身/侧面/细节,圆角胶囊式(更清爽) */
+/* 多视图 tab:正面/全身/侧面/细节,圆角胶囊式(更清爽)。
+   2026-08-26:允许换行(flex-wrap)——窄卡/多 tab 时折两行,不再横向滚动把尾部按钮藏掉 */
 .manju-view-tabs {
-  display: flex; gap: 4px; padding: 8px 10px 4px; overflow-x: auto; scrollbar-width: thin;
+  display: flex; flex-wrap: wrap; gap: 4px; row-gap: 4px; padding: 8px 10px 4px;
 }
 .manju-view-tab {
   flex: 1; min-width: 0; padding: 5px 6px; font-size: 11px; cursor: pointer;
@@ -3441,8 +3506,8 @@ select.manju-input {
   100% { background-position: 200% 0; }
 }
 
-/* 流程卡片 */
-.manju-flow { border-radius: 12px; padding: 10px 12px; }
+/* 流程卡片(2026-08-24 紧凑化,防日志顶部空白) */
+.manju-flow { border-radius: 10px; padding: 8px 8px 6px; }
 
 /* 弹窗：毛玻璃 */
 .manju-modal-panel {
@@ -3523,6 +3588,13 @@ select.manju-input {
 .manju-project-col .manju-chips .manju-chip + .manju-chip {
   border-top: 1px solid color-mix(in srgb, var(--panel-border) 50%, transparent);
 }
+/* 2026-08-25 用户要求:悬浮项目卡「参数」单独收起/展开(大类分项,带 ▸/▾ 折叠钮) */
+.manju-project-col .manju-chips-fold {
+  display: flex; align-items: center; gap: 5px;
+  cursor: pointer; user-select: none;
+}
+.manju-project-col .manju-chips-fold:hover { color: var(--accent-2); }
+.manju-project-col .manju-chips.is-folded { display: none; }
 
 /* 执行管线卡片(右悬浮列内):按钮换行、不挤压 */
 .manju-pipeline-col {
@@ -3636,12 +3708,13 @@ select.manju-input {
   .view-manju .manju-body { grid-template-columns: var(--mj-left-w, 260px) 5px minmax(0, 1fr) 5px var(--mj-right-w, 320px); }
   .view-manju .manju-main { grid-template-columns: 200px minmax(0, 1fr) 220px; max-width: 1060px; }
 }
-/* 平板：漫剧右栏折叠隐藏 + 执行管线悬浮列隐藏(回到左项目+内容两列) */
+/* 平板：漫剧三列收窄——右栏(运行状态/运行日志)保留显示,仅收窄到 280px
+   2026-08-25 修复:旧逻辑 max-width:1080px 时 #manju-side-right display:none,
+   窗口 ≤1080px 运行日志被整体隐藏(用户实测 txt 宽度 2px="隐藏起来的运行日志"根因)。 */
 @media (max-width: 1080px) {
   .view-manju .manju-body {
-    grid-template-columns: var(--mj-left-w, 250px) 5px minmax(0, 1fr);
+    grid-template-columns: var(--mj-left-w, 240px) 5px minmax(0, 1fr) 5px 280px;
   }
-  .view-manju #manju-side-right, .view-manju #manju-divider-right { display: none; }
   .view-manju .manju-main { grid-template-columns: 210px minmax(0, 1fr); max-width: 960px; }
   .view-manju .manju-pipeline-col { display: none; }
 }
@@ -3655,7 +3728,7 @@ select.manju-input {
   .view-manju .manju-side { width: 100% !important; position: static; }
   .view-manju .manju-main { display: flex; flex-direction: column; max-width: none; overflow: visible; padding: 0; }
   .manju-project-col, .manju-pipeline-col { position: static; }
-  .view-manju .manju-side-right .manju-log { max-height: 200px; }
+  .view-manju .manju-side-right .manju-log { max-height: 42vh; }
   .manju-side-toggle-btn { display: none; }
 }
 /* 移动端：顶栏精简、书架单列、卡片全宽 */
@@ -4645,9 +4718,9 @@ select option { text-align: center; }
   transform: scale(1.15);
 }
 
-/* 产物条目 ⋮ 菜单按钮:行尾(视觉右上角),悬停显形,点击弹删除确认 */
+/* 产物条目 ⋮ 菜单按钮:卡片右上角,悬停显形,点击弹删除确认 */
 .manju-vid-menu {
-  margin-left: auto; flex: 0 0 auto;
+  position: absolute; top: 4px; right: 4px;
   min-width: 24px; height: 24px; padding: 0 6px;
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 15px; line-height: 1; color: var(--text);
@@ -4732,20 +4805,47 @@ select option { text-align: center; }
 .mj-tl-row.sub.warn .mj-tl-main { color: #fbbf24; opacity: 1; }
 .mj-tl-row.sub.ok .mj-tl-main { color: color-mix(in srgb, var(--ok, #34d399) 65%, var(--text)); opacity: 1; }
 .mj-tl-fold { padding: 2px 0 8px 62px; color: var(--muted); font-size: 10.5px; opacity: .8; }
-/* 2026-08-23:运行日志按阶段分组折叠展示(mj-tl2) */
-.mj-tl2 { display: flex; flex-direction: column; gap: 4px; }
-.mj-tl2-sec { border: 1px solid color-mix(in srgb, var(--muted) 28%, transparent); border-radius: 7px; overflow: hidden; }
-.mj-tl2-sec.err { border-color: color-mix(in srgb, #f87171 55%, transparent); }
-.mj-tl2-sec summary { cursor: pointer; padding: 4px 9px; font-size: 11.5px; background: color-mix(in srgb, var(--muted) 8%, transparent); user-select: none; list-style: none; }
+/* 2026-08-23:运行日志按阶段分组折叠展示(mj-tl2)
+   2026-08-25 升级(用户反馈:行距高/顶部黑块/要时间轴/产物收起时日志要撑满):
+   - 容器 div 化(非 pre),消除 pre-wrap 与块级结构冲突的空行/顶部黑块;
+   - 每行 = 竖向时间轴:左列时间戳(等宽右对齐) | 轴线圆点 | 右侧内容,竖线贯穿;
+   - ━━━ 阶段行 → 居中渐变横幅(.mj-stage-banner);
+   - 语义着色:✅完成绿/❌失败红/⚠️警告橙/[i/n]进度蓝/图标紫;
+   - 阶段 summary 状态圆点(.mj-dot-*) + 行数 pill(.mj-tl2-cnt)。 */
+.mj-tl2 { display: block; }
+/* 阶段分组卡片 */
+.mj-tl2-sec { border: 1px solid color-mix(in srgb, var(--muted) 30%, transparent); border-radius: 9px; overflow: hidden; background: color-mix(in srgb, var(--bg) 55%, transparent); box-shadow: 0 1px 3px rgba(0,0,0,.10); margin-bottom: 6px; }
+.mj-tl2-sec.err { border-color: color-mix(in srgb, #f87171 60%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, #f87171 18%, transparent) inset; }
+.mj-tl2-sec summary { cursor: pointer; padding: 5px 10px; font-size: 12px; background: color-mix(in srgb, var(--muted) 10%, transparent); user-select: none; list-style: none; display: flex; align-items: center; gap: 5px; }
 .mj-tl2-sec summary::-webkit-details-marker { display: none; }
-.mj-tl2-sec summary::before { content: "▸ "; color: var(--muted); }
-.mj-tl2-sec[open] summary::before { content: "▾ "; }
+.mj-tl2-sec summary::before { content: "▸"; color: var(--muted); font-size: 10px; flex: none; transition: transform .12s ease; }
+.mj-tl2-sec[open] summary::before { content: "▾"; }
 .mj-tl2-sec summary:hover { background: color-mix(in srgb, var(--muted) 18%, transparent); }
-.mj-tl2-sec summary b { font-size: 12.5px; }
-.mj-tl2-sec summary i { font-style: normal; color: var(--muted); font-size: 10px; margin-left: 4px; }
-.mj-tl2-sec .mj-tl2-cnt { color: var(--muted); font-size: 10px; margin-left: 6px; }
-.mj-tl2-sec summary em { color: var(--accent); font-style: normal; font-size: 10px; margin-left: 6px; }
-.mj-tl2-sec pre { margin: 0; padding: 6px 10px; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; max-height: 42vh; overflow: auto; color: color-mix(in srgb, var(--text) 88%, transparent); }
+.mj-tl2-sec summary b { font-size: 12.5px; letter-spacing: .2px; }
+.mj-tl2-sec summary i { font-style: normal; color: var(--muted); font-size: 10.5px; margin-left: 2px; }
+.mj-tl2-sec summary em { color: var(--accent); font-style: normal; font-size: 10px; margin-left: auto; font-weight: 600; }
+.mj-tl2-sec .mj-tl2-cnt { color: var(--muted); font-size: 10px; margin-left: auto; padding: 1px 7px; border-radius: 99px; background: color-mix(in srgb, var(--muted) 14%, transparent); }
+.mj-tl2-sec summary em + .mj-tl2-cnt { margin-left: 6px; }
+/* 状态圆点(阶段通过/失败/进行中) */
+.mj-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.mj-dot-ok { background: #34d399; box-shadow: 0 0 5px rgba(52,211,153,.7); }
+.mj-dot-err { background: #f87171; box-shadow: 0 0 5px rgba(248,113,113,.7); }
+.mj-dot-run { background: #fbbf24; box-shadow: 0 0 5px rgba(251,191,36,.7); animation: mj-dot-pulse 1.4s ease-in-out infinite; }
+@keyframes mj-dot-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+/* 日志正文:纯文本流式行(2026-08-25 终版)——时间戳+内容同一行 block,任何浏览器不可能塌陷。
+   之前 flex/grid 列布局(ts列|dot|txt)在部分行内容列塌陷 2px(用户截图证实),
+   彻底弃用列布局;语义着色(整行)保留,阶段分组折叠保留。 */
+.mj-tl2-body { margin: 0; padding: 4px 8px 6px; font-size: 11px; line-height: 1.55; max-height: 46vh; overflow: auto; font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Consolas, "JetBrains Mono", monospace; }
+.mj-ln2 { display: block; padding: 2px 0; border-bottom: 1px solid color-mix(in srgb, var(--muted) 10%, transparent); color: var(--text); word-break: break-all; white-space: pre-wrap; }
+.mj-ln2:last-child { border-bottom: none; }
+.mj-ln2-ts { color: color-mix(in srgb, var(--muted) 60%, transparent); font-size: 9px; font-family: Consolas, "JetBrains Mono", monospace; }
+.mj-ln2.err { color: #f87171; font-weight: 500; }
+.mj-ln2.ok { color: #4ade80; }
+.mj-ln2.warn { color: #fbbf24; }
+.mj-ln2.prog { color: #93c5fd; }
+.mj-ln2.mj-ic { color: #c4b5fd; }
+/* 阶段横幅:居中渐变底,一眼定位阶段切换 */
+.mj-stage-banner { display: flex; align-items: center; gap: 6px; margin: 3px 0; padding: 3px 10px; border-radius: 6px; font-weight: 600; font-size: 11.5px; letter-spacing: .5px; color: color-mix(in srgb, var(--accent) 82%, var(--text)); background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 14%, transparent), color-mix(in srgb, var(--accent) 4%, transparent)); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); }
 @media (max-width: 560px) {
   .mj-tl-row { grid-template-columns: 44px 14px 1fr 42px; }
   .mj-tl::before { left: 51px; }
@@ -4812,3 +4912,57 @@ select option { text-align: center; }
 .manju-out-ops { font-size: 11.5px; font-weight: 700; color: var(--muted); letter-spacing: 1px; }
 .manju-out-tools .manju-out-actions { display: flex; align-items: center; gap: 8px; }
 .manju-out-tools .hrs-btn { padding: 3px 10px; font-size: 11.5px; }
+
+/* 2026-08-26 用户要求:底部「产物」标题收起后居中——上方历史规则 .manju-fold-head::after(▾ 箭头,
+   margin-left:auto)把伪元素变成 flex item 参与主轴分布,把 #manju-out-fold 的 justify-content:center
+   挤偏(产物头自带 absolute 折叠按钮,伪元素属旧卡片体系残留)。此处按 ID 特异性消灭该伪元素,
+   标题成为唯一 flex item,收起/展开两态均真正居中 */
+#manju-out-fold::after { content: none; }
+
+/* 2026-08-26 用户要求:ComfyUI 页底部常驻日志行(同步展示真实运行日志,点击展开完整面板) */
+.cfy-log-bar {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 8px; padding: 7px 12px;
+  border: 1px solid var(--panel-border); border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer; user-select: none;
+  overflow: hidden;
+  transition: border-color .2s, background .2s;
+}
+.cfy-log-bar:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+.cfy-log-bar-tag {
+  flex-shrink: 0; font-size: 10px; font-weight: 700; letter-spacing: 1px;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 5px; padding: 1px 6px;
+}
+.cfy-log-line {
+  flex: 1; min-width: 0;
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.5;
+  color: var(--text-soft, var(--text)); opacity: .92;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 2026-08-26 用户要求:产物区从右侧栏底部移至窗口底部横跨全宽(正式实现此前 div 错位
+   意外呈现并被用户认可的布局)。面板与 manju-body 并列,展开时最高 40vh 不吃掉工作区,
+   内部滚动;收起态只剩标题行。折叠/记忆逻辑不变 */
+.manju-out-panel {
+  flex-shrink: 0;
+  display: flex; flex-direction: column;
+  margin-top: 8px;
+  max-height: 40vh;
+  min-height: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.manju-out-panel:hover { border-color: var(--accent); }
+/* 产物主体:占满面板剩余高度、内部纵向滚动(缩略图带自带的横向滚动不受影响) */
+#manju-out-panel #manju-out-body {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+}
+/* 收起态:面板整体只剩标题行(配合既有 .manju-side-body.is-folded display:none) */
+.manju-out-panel:has(> #manju-out-body.is-folded) { max-height: none; }
+/* 底部面板内分区标题与视频行沿用既有样式;宽度变大后缩略图/视频自然铺开 */
+#manju-out-panel .manju-out-sec .manju-sec-body { padding: 8px 2px; }

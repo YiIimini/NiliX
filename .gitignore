@@ -35,3 +35,7 @@ manju/
 ...tmp*
 server/
 ComfyUI/
+petwin.json
+
+# go test 误落在包目录的 analysis 运行产物(正常应在 t.TempDir)
+internal/api/analysis/

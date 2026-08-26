@@ -20,6 +20,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 // ---- 漫剧工作台(manju) 本地服务编排层 ----
@@ -86,14 +89,15 @@ var manjuPhases = map[string]bool{
 type manjuIntField struct{ min, max int }
 
 var manjuRenderIntFields = map[string]manjuIntField{
-	"width":            {128, 2048},
-	"height":           {128, 2048},
-	"fps":              {8, 60},
-	"steps":            {1, 60},
-	"turbo_steps":      {1, 30},
-	"min_shot_seconds": {1, 15},
-	"max_shot_seconds": {1, 15},
-	"shots_per_take":   {1, 3},
+	"width": {128, 2048},
+	"height": {128, 2048},
+	"fps":                {8, 60},
+	"steps":              {1, 60},
+	"turbo_steps":        {1, 30},
+	"min_shot_seconds":   {1, 15},
+	"max_shot_seconds":   {1, 15},
+	"shots_per_take":     {1, 3},
+	"motion_audio_context": {1, 96},
 }
 
 // manjuRenderStrFields 渲染参数字符串字段(模型名/地址 + 运行参数)
@@ -113,10 +117,13 @@ var manjuRenderStrFields = []string{
 var manjuRenderBoolFields = []string{"sage_attention", "draft_judge", "fl2va_end_frame", "subtitle", "voiceover"}
 
 // manjuRenderFloatFields 渲染参数浮点字段 + 取值范围 [min,max]
+// chars_per_sec(2026-08-26):中文语音字速预算,台词+旁白总字数÷字速 ≤ 镜头时长;
+// 默认 4(保守,防 H3 念一半切镜),爽文技能契约上限 5
 var manjuRenderFloatFields = map[string][2]float64{
-	"draft_scale": {0.2, 0.95},
-	"bgm_gain":    {0, 1},
-	"bgm_duck":    {0, 1},
+	"draft_scale":   {0.2, 0.95},
+	"bgm_gain":      {0, 1},
+	"bgm_duck":      {0, 1},
+	"chars_per_sec": {2, 8},
 }
 
 // manjuSeedPolicies 合法 seed 重试策略
@@ -738,14 +745,14 @@ func manjuSaveRender(w http.ResponseWriter, r *http.Request) {
 		}
 		R["res_tier"] = s
 	}
-	// 定妆引擎合法值(2026-08-23):zimage/krea2/sdxl,非法回退 zimage
+	// 定妆引擎合法值(2026-08-24 用户规则:SDXL 已禁用,观感差):仅 zimage/krea2,非法回退 zimage
 	if v, present := body["char_engine"]; present {
 		s := strings.TrimSpace(str(v))
 		if s == "" {
 			s = "zimage"
 		}
 		switch s {
-		case "zimage", "krea2", "sdxl":
+		case "zimage", "krea2":
 		default:
 			s = "zimage"
 		}
@@ -916,6 +923,14 @@ func manjuCreate(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(str(body["name"]))
 	novel := strings.TrimSpace(str(body["novel"]))
 	apiKey := strings.TrimSpace(str(body["apiKey"]))
+	// 2026-08-24 用户要求:选目录即自动填充剧名(前端已自动填,后端兜底防手动清空/绕过前端)
+	if name == "" && novel != "" {
+		base := strings.TrimRight(novel, `/\`)
+		if strings.HasSuffix(strings.ToLower(base), ".md") || strings.HasSuffix(strings.ToLower(base), ".txt") {
+			base = filepath.Dir(base)
+		}
+		name = filepath.Base(base)
+	}
 	if name == "" {
 		http.Error(w, `{"error":"请填剧名（小说可选：留空=视频脚本直出模式）"}`, http.StatusBadRequest)
 		return
@@ -1309,6 +1324,344 @@ func manjuScriptImportFromNovel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": scriptPath, "source": src, "chapter": chap, "script_mode": true})
 }
 
+// manjuScriptEnable 落盘脚本并启用脚本直出模式:写 <workdir>/script/<ep>.md
+// + config paths.script 指向它(脚本文件指纹变化自动使旧方案过期重生成)。
+func manjuScriptEnable(configPath, scriptPath string, cfg map[string]any, src string, text []byte) (map[string]any, error) {
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(scriptPath, text, 0o644); err != nil {
+		return nil, err
+	}
+	P, _ := cfg["paths"].(map[string]any)
+	if P == nil {
+		P = map[string]any{}
+		cfg["paths"] = P
+	}
+	P["script"] = scriptPath
+	if err := writeManjuConfig(configPath, cfg); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true, "path": scriptPath, "source": src, "script_mode": true}, nil
+}
+
+// sbItem 分镜脚本扫描项
+type sbItem struct {
+	Path     string `json:"path"`
+	Name     string `json:"name"`
+	Size     int64  `json:"size"`
+	Preview  string `json:"preview,omitempty"`
+	Chapter  string `json:"chapter,omitempty"`
+	Episode  string `json:"episode,omitempty"`
+	Selected bool   `json:"selected"`
+}
+
+// scanStoryboardDir 扫描目录(含 素材/分镜脚本 子目录)检测分镜脚本:
+// 文件名含"分镜脚本"/"分镜" 或内容含 H3 分镜特征([Shot / 分镜表)即视为分镜脚本;
+// 按集号(EP01→第001章)标记 Selected,排序按章号数字升序(第1章<第2章<第10章)。
+// preview/内容统一走 readTextFileUTF8(容忍 BOM/GBK,防乱码)。
+func scanStoryboardDir(dir, episode string) ([]sbItem, string) {
+	ep := normalizeEpisode(orDefault(episode, "EP01"))
+	chap := ""
+	if n, aerr := strconv.Atoi(strings.TrimPrefix(ep, "EP")); aerr == nil && n > 0 {
+		chap = fmt.Sprintf("%03d", n)
+	}
+	var items []sbItem
+	seen := map[string]bool{}
+	scanDirs := []string{dir}
+	if sd := filepath.Join(dir, "素材", "分镜脚本"); dirExists(sd) {
+		scanDirs = append(scanDirs, sd)
+	}
+	for _, sd := range scanDirs {
+		entries, rerr := os.ReadDir(sd)
+		if rerr != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			full := filepath.Join(sd, name)
+			if seen[full] {
+				continue
+			}
+			ext := strings.ToLower(filepath.Ext(name))
+			if ext != ".md" && ext != ".txt" && ext != ".markdown" {
+				continue
+			}
+			if !strings.Contains(strings.ToLower(name), "分镜") && !storyboardContentHint(full) {
+				continue
+			}
+			seen[full] = true
+			info, ierr := e.Info()
+			sz := int64(0)
+			if ierr == nil {
+				sz = info.Size()
+			}
+			item := sbItem{Path: full, Name: name, Size: sz}
+			if pb, perr := readTextFileUTF8(full); perr == nil {
+				pv := strings.TrimSpace(string(pb))
+				if len(pv) > 220 {
+					pv = pv[:220] + "…"
+				}
+				item.Preview = pv
+			}
+			if m := reChapter.FindStringSubmatch(name); m != nil && len(m) > 1 {
+				item.Chapter = m[1]
+				if cn, aerr := strconv.Atoi(item.Chapter); aerr == nil {
+					item.Episode = fmt.Sprintf("EP%02d", cn)
+				}
+			}
+			item.Selected = chap != "" && item.Chapter == chap
+			items = append(items, item)
+		}
+	}
+	// 排序:本集(选中)优先,其余按章号数字升序(兼容未补零),无章号按名称
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Selected != items[j].Selected {
+			return items[i].Selected
+		}
+		ni := chapterNumber(items[i].Chapter)
+		nj := chapterNumber(items[j].Chapter)
+		if ni != nj {
+			return ni < nj
+		}
+		return items[i].Name < items[j].Name
+	})
+	return items, ep
+}
+
+// manjuScriptScanDir 手动选择目录 → 检测分镜脚本
+// (hasStoryboard=false 时前端引导把目录当小说源走 LLM 直出)
+func manjuScriptScanDir(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Dir     string `json:"dir"`
+		Episode string `json:"episode"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	dir := strings.TrimSpace(body.Dir)
+	if dir == "" {
+		writeErr(w, http.StatusBadRequest, "缺少目录")
+		return
+	}
+	st, err := os.Stat(dir)
+	if err != nil || !st.IsDir() {
+		writeErr(w, http.StatusBadRequest, "目录不存在: "+dir)
+		return
+	}
+	items, ep := scanStoryboardDir(dir, body.Episode)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":            true,
+		"dir":           dir,
+		"episode":       ep,
+		"hasStoryboard": len(items) > 0,
+		"storyboards":   items,
+	})
+}
+
+// manjuScriptImportAllDir 批量导入目录检测到的全部分镜脚本(2026-08-24 用户要求):
+// 每个分镜脚本按章号 → <workdir>/script/EPxx.md(第001章→EP01),一次全部导入;
+// config paths.script 指向当前集(episode)脚本;源目录 素材/(人物生成提示词.md 等)
+// 复制到 workdir/素材/ 供脚本模式定妆照参考。内容统一编码转换(防 GBK 乱码)。
+func manjuScriptImportAllDir(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Project string `json:"project"`
+		Episode string `json:"episode"`
+		Dir     string `json:"dir"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	dir := strings.TrimSpace(body.Dir)
+	if dir == "" {
+		writeErr(w, http.StatusBadRequest, "缺少目录")
+		return
+	}
+	st, err := os.Stat(dir)
+	if err != nil || !st.IsDir() {
+		writeErr(w, http.StatusBadRequest, "目录不存在: "+dir)
+		return
+	}
+	configPath, _, workdir, err := manjuScriptTarget(body.Project, body.Episode)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	cfg, err := readManjuConfig(configPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items, ep := scanStoryboardDir(dir, body.Episode)
+	if len(items) == 0 {
+		writeErr(w, http.StatusNotFound, "目录未检测到分镜脚本")
+		return
+	}
+	// 复制源目录 素材/ → workdir/素材/(人物提示词文档,定妆照参考;不覆盖已有)
+	copyNovelAssetsToWorkdir(dir, workdir)
+	// 逐个导入:章号 → EPxx.md
+	results := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		epFile := it.Episode
+		if epFile == "" { // 无章号的文件按当前集兜底
+			epFile = ep
+		}
+		text, rerr := readTextFileUTF8(it.Path)
+		if rerr != nil {
+			continue
+		}
+		scriptPath := filepath.Join(workdir, "script", epFile+".md")
+		if _, werr := manjuScriptEnable(configPath, scriptPath, cfg, it.Path, text); werr != nil {
+			continue
+		}
+		results = append(results, map[string]any{
+			"path": scriptPath, "source": it.Path, "episode": epFile, "chapter": it.Chapter,
+		})
+	}
+	if len(results) == 0 {
+		writeErr(w, http.StatusInternalServerError, "全部脚本导入失败")
+		return
+	}
+	// paths.script 指向当前集脚本(渲染按集号选文件,见 manjuScriptTarget 的 script 目录逻辑)
+	curFile := filepath.Join(workdir, "script", ep+".md")
+	if !fileExists(curFile) {
+		curFile = str(results[0]["path"])
+	}
+	P, _ := cfg["paths"].(map[string]any)
+	if P == nil {
+		P = map[string]any{}
+		cfg["paths"] = P
+	}
+	P["script"] = curFile
+	if err := writeManjuConfig(configPath, cfg); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "imported": len(results), "total": len(items), "script_mode": true,
+		"path": curFile, "dir": dir, "results": results,
+	})
+}
+
+// copyNovelAssetsToWorkdir 源目录 素材/(人物生成提示词.md/场景提示词.md/渲染提示词总集.md)
+// 复制到 workdir/素材/(已存在不覆盖),供脚本直出模式定妆照/场景参考
+func copyNovelAssetsToWorkdir(srcDir, workdir string) {
+	src := filepath.Join(srcDir, "素材")
+	if !dirExists(src) {
+		return
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		dstF := filepath.Join(workdir, "素材", e.Name())
+		if fileExists(dstF) {
+			continue
+		}
+		b, rerr := readTextFileUTF8(filepath.Join(src, e.Name()))
+		if rerr != nil {
+			continue
+		}
+		if mkerr := os.MkdirAll(filepath.Dir(dstF), 0o755); mkerr != nil {
+			continue
+		}
+		_ = os.WriteFile(dstF, b, 0o644)
+	}
+}
+
+// readTextFileUTF8 读文本文件并统一为 UTF-8(容忍 UTF-8 BOM;GBK/GB18030 自动转码,防乱码)
+func readTextFileUTF8(path string) ([]byte, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return toUTF8(b), nil
+}
+
+// toUTF8 字节 → UTF-8:去 UTF-8 BOM;合法 UTF-8 原样;否则按 GBK/GB18030 解码
+// (Windows 中文文件/旧编辑器产物常见 GBK,直接 UTF-8 读会乱码——2026-08-24 用户反馈)
+func toUTF8(b []byte) []byte {
+	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})
+	if utf8.Valid(b) {
+		return b
+	}
+	if dec := simplifiedchinese.GBK.NewDecoder(); dec != nil {
+		if out, derr := dec.Bytes(b); derr == nil {
+			return out
+		}
+	}
+	if dec := simplifiedchinese.GB18030.NewDecoder(); dec != nil {
+		if out, derr := dec.Bytes(b); derr == nil {
+			return out
+		}
+	}
+	return b // 无法识别:原样返回
+}
+
+// chapterNumber 章号字符串转数字(第001章→1;解析失败返回大数排最后)
+func chapterNumber(s string) int {
+	if s == "" {
+		return int(^uint(0) >> 1) // 最大 int
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return int(^uint(0) >> 1)
+}
+
+// storyboardContentHint 读文件头部检测 H3 分镜格式特征([Shot N] / 分镜表)
+func storyboardContentHint(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 8192)
+	n, _ := f.Read(buf)
+	s := string(buf[:n])
+	return strings.Contains(s, "[Shot ") || strings.Contains(s, "分镜表") || strings.Contains(s, "## 一、分镜表")
+}
+
+// manjuScriptImportDir 导入手动选择的目录里检测到的分镜脚本文件 → 启用脚本直出
+// (复制到 <workdir>/script/<ep>.md + config paths.script,指纹变化自动使旧方案过期)
+func manjuScriptImportDir(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Project string `json:"project"`
+		Episode string `json:"episode"`
+		File    string `json:"file"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	file := strings.TrimSpace(body.File)
+	if file == "" {
+		writeErr(w, http.StatusBadRequest, "缺少分镜脚本文件路径")
+		return
+	}
+	text, err := readTextFileUTF8(file)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "读取分镜脚本失败: "+err.Error())
+		return
+	}
+	configPath, scriptPath, _, err := manjuScriptTarget(body.Project, body.Episode)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	cfg, err := readManjuConfig(configPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	res, err := manjuScriptEnable(configPath, scriptPath, cfg, file, text)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 // manjuScriptStatus 脚本直出模式状态(active/path/preview,供前端显示与切换)
 func manjuScriptStatus(w http.ResponseWriter, r *http.Request) {
 	project := strings.TrimSpace(r.URL.Query().Get("project"))
@@ -1330,8 +1683,8 @@ func manjuScriptStatus(w http.ResponseWriter, r *http.Request) {
 		if b, rerr := os.ReadFile(sp); rerr == nil {
 			runes := []rune(string(b))
 			res["bytes"] = len(runes)
-			if len(runes) > 160 {
-				res["preview"] = string(runes[:160]) + "…"
+			if len(runes) > 500 {
+				res["preview"] = string(runes[:500]) + "…"
 			} else {
 				res["preview"] = string(runes)
 			}
@@ -1511,6 +1864,12 @@ func startManjuRun(configPath, chapters, episode, phase, only, novel string, aut
 	writeManjuDiskState(projName, &manjuDiskState{Running: true, Stage: orDefault(phase, "all"), StartedAt: time.Now().Unix(), Episode: episode, PID: os.Getpid()})
 
 	// 新管线:章节/集号/镜头从 config.render 读取(render.chapters/episode/shots),先写入再启动
+	// 立项.render 变更同步(2026-08-26):立项.json 更新后自动重新合并(幂等,显式配置优先)
+	if msg := syncLixiRenderPlan(configPath); msg != "" {
+		manjuState.mu.Lock()
+		manjuState.log += msg + "\n"
+		manjuState.mu.Unlock()
+	}
 	if err := writeManjuRunParams(configPath, chapters, episode, only); err != nil {
 		manjuState.mu.Lock()
 		manjuState.running = false
@@ -1902,6 +2261,83 @@ func manjuStatusFor(config string) map[string]any {
 		return manjuDiskStatus(cfgName, loadManjuDiskState(cfgName))
 	}
 	return manjuDiskStatus("", nil)
+}
+
+// manjuFlowCheck 检测项目是否已有渲染流程产物(方案/镜头/成片)。
+// 前端点「一条龙」时据此询问「从头重渲 or 续跑」:有产物 → 弹窗询问;
+// 无 → 直接启动。资产(定妆照/场景图)不算流程,避免误报。
+func manjuFlowCheck(w http.ResponseWriter, r *http.Request) {
+	configPath := r.URL.Query().Get("config")
+	if configPath == "" {
+		writeErr(w, http.StatusBadRequest, "missing config")
+		return
+	}
+	cp, err := manjuGuardConfig(configPath)
+	if err != nil {
+		writeErr(w, http.StatusForbidden, err.Error())
+		return
+	}
+	cfg, err := readManjuConfig(cp)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	res := map[string]any{"hasFlow": false, "plans": 0, "clips": 0, "finals": 0, "detail": ""}
+	P, _ := cfg["paths"].(map[string]any)
+	workdir := str(P["workdir"])
+	if workdir == "" {
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+	// 方案文件(analysis/*.json)
+	plans := 0
+	if entries, err := os.ReadDir(filepath.Join(workdir, "analysis")); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+				plans++
+			}
+		}
+	}
+	// 镜头(clips/<EP>/*.mp4 或 clips/*.mp4)
+	clips := 0
+	if entries, err := os.ReadDir(filepath.Join(workdir, "clips")); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				if fs, err := os.ReadDir(filepath.Join(workdir, "clips", e.Name())); err == nil {
+					for _, f := range fs {
+						if !f.IsDir() && strings.HasSuffix(f.Name(), ".mp4") {
+							clips++
+						}
+					}
+				}
+			} else if strings.HasSuffix(e.Name(), ".mp4") {
+				clips++
+			}
+		}
+	}
+	// 成片(workdir/*_成片.mp4)
+	finals := 0
+	if entries, err := os.ReadDir(workdir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), "_成片.mp4") {
+				finals++
+			}
+		}
+	}
+	parts := []string{}
+	if plans > 0 {
+		parts = append(parts, fmt.Sprintf("方案 %d 个", plans))
+	}
+	if clips > 0 {
+		parts = append(parts, fmt.Sprintf("镜头 %d 个", clips))
+	}
+	if finals > 0 {
+		parts = append(parts, fmt.Sprintf("成片 %d 个", finals))
+	}
+	res["plans"], res["clips"], res["finals"] = plans, clips, finals
+	res["hasFlow"] = len(parts) > 0
+	res["detail"] = strings.Join(parts, "、")
+	writeJSON(w, http.StatusOK, res)
 }
 
 // listManjuMedia 列出目录内指定扩展名的媒体文件(name/path/size),按名称排序
@@ -2495,6 +2931,9 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/manju/script/save", manjuScriptSave)
 	mux.HandleFunc("POST /api/manju/script/clear", manjuScriptClear)
 	mux.HandleFunc("POST /api/manju/script/import-from-novel", manjuScriptImportFromNovel)
+	mux.HandleFunc("POST /api/manju/script/scan-dir", manjuScriptScanDir)
+	mux.HandleFunc("POST /api/manju/script/import-dir", manjuScriptImportDir)
+	mux.HandleFunc("POST /api/manju/script/import-all-dir", manjuScriptImportAllDir)
 	mux.HandleFunc("GET /api/manju/models", manjuModels)
 	mux.HandleFunc("POST /api/manju/env", manjuEnv)
 	mux.HandleFunc("POST /api/manju/run", manjuRun)
@@ -2513,6 +2952,16 @@ func registerManjuRoutes(mux *http.ServeMux) {
 		res["agent"] = agentStatusSummary(configPath)
 		writeJSON(w, http.StatusOK, res)
 	})
+	// 清空运行日志(2026-08-26 用户反馈:清空日志按钮只在前端覆盖一条「(就绪)」,
+	// 后端 manjuState.log 未清,2 秒后轮询又把旧日志拉回来)。只清内存展示,run.log
+	// 落盘文件保留(排障证据);运行中允许清(后续日志继续追加)。
+	mux.HandleFunc("POST /api/manju/log/clear", func(w http.ResponseWriter, r *http.Request) {
+		manjuState.mu.Lock()
+		manjuState.log = ""
+		manjuState.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("GET /api/manju/flow", manjuFlowCheck)
 	mux.HandleFunc("POST /api/manju/kill", manjuKill)
 	mux.HandleFunc("GET /api/manju/outputs", manjuOutputs)
 	mux.HandleFunc("GET /api/manju/plan", manjuPlan)

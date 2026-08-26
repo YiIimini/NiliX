@@ -29,6 +29,19 @@ type Settings struct {
 	Window WindowSettings `json:"window,omitempty"`
 	// Island 灵动岛悬浮胶囊配置(启用/禁用;默认启用)
 	Island IslandSettings `json:"island,omitempty"`
+	// Cleanup 每日维护:凌晨清空 ComfyUI 共享 input/output(接替原 Windows 计划任务,
+	// 其护栏锁旧 AppData 路径,自包含迁移后对新位置自动失效;默认启用)。
+	Cleanup CleanupSettings `json:"cleanup,omitempty"`
+}
+
+// CleanupSettings 每日清理配置。
+type CleanupSettings struct {
+	Daily *bool `json:"daily,omitempty"` // nil=未设置(默认启用)
+}
+
+// DailyEnabled 是否启用每日清理(缺省启用)。
+func (c CleanupSettings) DailyEnabled() bool {
+	return c.Daily == nil || *c.Daily
 }
 
 // IslandSettings 灵动岛 HUD 悬浮胶囊配置。
@@ -83,6 +96,10 @@ type RenderSettings struct {
 	VaeVideo       string            `json:"vae_video"`
 	VaeAudio       string            `json:"vae_audio"`
 	TurboLora      string            `json:"turbo_lora"`
+	// TurboLoraR2V 角色镜(Ref2VA)专用 Turbo LoRA(lightx2v ref2v;空=R2V 沿用 turbo_lora)。
+	// 2026-08-26 教训:该字段缺位时,启动 Load→Save 循环会把 settings.json 里手写的
+	// turbo_lora_r2v 静默抹掉,角色镜永远吃不上专用 LoRA——强类型字段必须与管线键对齐。
+	TurboLoraR2V   string            `json:"turbo_lora_r2v,omitempty"`
 	ZImageUnet     string            `json:"z_image_unet"`
 	ZImageClip     string            `json:"z_image_clip"`
 	ZImageVae      string            `json:"z_image_vae"`
@@ -130,7 +147,7 @@ func Default() *Settings {
 			Height:         1344,
 			FPS:            24,
 			Steps:          20,
-			TurboSteps:     8,
+			TurboSteps:     4,
 			MinShotSeconds: 4,
 			MaxShotSeconds: 12,
 			Seed:           1688,
@@ -139,15 +156,17 @@ func Default() *Settings {
 			Clip:           "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
 			VaeVideo:       "minimax_h3_video_vae_fp16.safetensors",
 			VaeAudio:       "minimax_h3_audio_vae_fp32.safetensors",
-			TurboLora:      "minimax_h3_turbo_4step_ema.safetensors",
+			TurboLora:      "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors",
+			TurboLoraR2V:   "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
 			ZImageUnet:     "z_image_turbo_bf16.safetensors",
 			ZImageClip:     "qwen_3_4b.safetensors",
 			ZImageVae:      "ae.safetensors",
 			CharModels:     map[string]string{"女": "animagine-xl-3.1.safetensors", "男": "sd_xl_base_1.0.safetensors"},
 		},
 		Paths: PathSettings{
-			ComfyInput:  `C:\Users\Administrator\AppData\Local\Comfy-Desktop\ComfyUI-Shared\input`,
-			ComfyOutput: `C:\Users\Administrator\AppData\Local\Comfy-Desktop\ComfyUI-Shared\output`,
+			// 输入/输出缺省跟随共享目录(自包含),不再内置 AppData 绝对路径——
+			// Load 以 defaults 打底,留着旧绝对路径会在 settings.json 缺省时"复活",
+			// 新机上直接指向不存在的目录
 		},
 	}
 }

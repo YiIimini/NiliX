@@ -922,15 +922,48 @@ def cmd_assemble(args):
     print(f"  ✅ 帧 {total_v} / 音频块 {total_a}，成片已写入")
 
 
+def _detect_face_rect(im):
+    """cv2 FaceDetectorYN(YuNet)人脸检测;返回最大脸框 (x,y,w,h) 或 None。
+
+    固定百分比窗口对不同构图的定妆照不鲁棒(主图是大头照时 8%-52% 只裁到下半脸,
+    人物偏移时水平居中裁掉半张脸——2026-08-26 用户实测 *_face.png 脸部不全),
+    检测到脸就以脸为中心裁,检测失败由调用方回退启发式窗口。
+    模型按「本脚本同目录(Go 内嵌释放 face_detection_yunet onnx)」查找
+    (opencv-python 5.x 已移除 CascadeClassifier,统一走 YuNet DNN 检测)。
+    """
+    try:
+        import cv2
+        import numpy as np
+        # 抑制 cv2 5.x DNN 新引擎的 target 告警(WARN: Targets are not supported by
+        # the new graph engine)——不影响检测结果,只刷屏污染运行日志
+        try:
+            cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+        except Exception:
+            pass
+        onnx = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "face_detection_yunet_2023mar.onnx")
+        if not os.path.exists(onnx):
+            return None
+        w, h = im.size
+        det = cv2.FaceDetectorYN.create(onnx, "", (w, h), score_threshold=0.5)
+        faces, _ = det.detect(cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR))
+        if faces is None or len(faces) == 0:
+            return None
+        best = max(faces, key=lambda f: float(f[2]) * float(f[3]))  # 最大框
+        return int(best[0]), int(best[1]), int(best[2]), int(best[3])
+    except Exception:
+        return None
+
+
 def cmd_facecrop(args):
     """从定妆照切出完整正脸/头肩特写,作为 R2V 参考。
 
     H3 人脸 token 极少(视觉 VAE 32× 下采样),全身立绘脸占比小、锁定弱;
     用正脸特写可让脸部占满参考帧,身份锁定大幅增强。
-    关键:输出按渲染同比例(默认 1344x768,可用 --ratio 覆盖)——ref_image_size=match
+    关键:输出按渲染同比例(默认 768x1344,可用 --ratio 覆盖)——ref_image_size=match
     会把参考图缩放/裁剪到输出尺寸,比例不一致会被压扁变形,脸部遵循直接劣化;
-    同比例 + 紧凑脸区(垂直 8%-52% 额头到肩,水平居中同比例窗口)保证脸部占满且不变形。
-    裁剪范围覆盖完整头部(发顶/额头/下巴)+ 少量肩,避免只裁到"半张脸"。
+    同比例 + 紧凑脸区(检测到脸以脸为中心;否则启发式 垂直 8%-52% 水平居中)保证
+    脸部占满且不变形、完整覆盖发顶/额头/下巴+少量肩。
     """
     from PIL import Image
     im = Image.open(args.src).convert("RGB")
@@ -944,14 +977,38 @@ def cmd_facecrop(args):
     if tw <= 0 or th <= 0:
         tw, th = 1344, 768
     ratio = tw / th
-    top, bot = int(h * 0.08), int(h * 0.52)  # 垂直 8%-52%:发顶到肩,裁掉地面/远景
-    ch = bot - top
-    cw = int(ch * ratio)
-    if cw > w:  # 目标窗口超宽(竖图定妆照):限宽后按比例缩高
-        cw = w
-        ch = int(cw / ratio)
-        bot = top + ch
-    left = (w - cw) // 2
+    # 兽类(--beast):YuNet 只检测人脸,兽脸必然未命中——跳过检测直接启发式窗口,
+    # 免白跑一次检测+刷「未命中」告警
+    face = None if getattr(args, "beast", False) else _detect_face_rect(im)
+    if face is not None:
+        # 以脸为中心:脸框上方留 0.25 脸高(发顶),下巴下方 0.4 脸高(脖颈+肩),
+        # 水平按输出比例取窗口并夹在图界内——脸再偏也裁得全
+        fx, fy, fw, fh = [int(v) for v in face]
+        cx, cy = fx + fw / 2.0, fy + fh / 2.0
+        top = max(0, int(cy - fh * 0.75))
+        bot = min(h, int(cy + fh * 0.90))
+        ch = bot - top
+        cw = int(ch * ratio)
+        if cw > w:
+            cw = w
+            ch = int(cw / ratio)
+            top = max(0, min(int(cy - ch * 0.42), h - ch))
+            bot = top + ch
+        left = int(min(max(cx - cw / 2.0, 0), w - cw))
+        print("  ✂️ 人脸检测命中:脸框 %dx%d,以脸为中心裁切" % (fw, fh))
+    else:
+        top, bot = int(h * 0.08), int(h * 0.52)  # 启发式:垂直 8%-52%,检测失败兜底
+        ch = bot - top
+        cw = int(ch * ratio)
+        if cw > w:  # 目标窗口超宽(竖图定妆照):限宽后按比例缩高
+            cw = w
+            ch = int(cw / ratio)
+            bot = top + ch
+        left = (w - cw) // 2
+        if getattr(args, "beast", False):
+            print("  ✂️ 兽类角色:按启发式窗口(垂直 8%-52% 水平居中)裁切兽首参考")
+        else:
+            print("  ✂️ 人脸检测未命中,按启发式窗口(垂直 8%-52% 水平居中)裁切")
     crop = im.crop((left, top, left + cw, bot))
     # 放大到目标分辨率(只放不放缩,放大后脸部占满参考帧)
     scale = min(th / crop.height, tw / crop.width)
@@ -1635,6 +1692,7 @@ def main():
     f.add_argument("--src", required=True)
     f.add_argument("--dst", required=True)
     f.add_argument("--ratio", default="")  # 目标宽x高(默认 1344x768,与渲染同比例防变形)
+    f.add_argument("--beast", action="store_true")  # 兽类角色:跳过人脸检测直接启发式(YuNet 只识人脸)
     pr = sub.add_parser("probe")
     pr.add_argument("--file", required=True)
     ins = sub.add_parser("inspect")

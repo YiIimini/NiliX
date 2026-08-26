@@ -602,12 +602,12 @@ style 取值规则(基底 + 补充,禁止替换基底):
 - 整体用 + 连接(如 ink+ancient Chinese aesthetic+watercolor / 2.5d+cyberpunk+neon lighting),总元素不超过 7 个
 - 所有新增题材元素词必须是英文(H3 提示词直接使用),中文风格词自行翻译
 params 取值规则(渲染优化参数,按题材节奏判断,全部给出):
-{"res_tier": "standard", "draft_judge": true, "seed_policy": "increment", "transition": "cut", "shots_per_take": 1}
+{"res_tier": "standard", "draft_judge": true, "seed_policy": "increment", "transition": "cut", "shots_per_take": 2}
 - res_tier 分辨率档位:常规成片 standard;快速试片/预告优先 draft(约 1/3 像素量);高清大片质感 fhd
 - draft_judge 草稿预审:审片返工轮半分辨率草稿、通过后全分辨率定稿(审片轮提速约 3/4),常规推荐 true
 - seed_policy 返工 seed 策略:increment=每轮返工换 seed 更有效(推荐);fixed=全剧严格同 seed
 - transition 镜头转场:快节奏打脸/爽点短剧 cut(硬切利落);连续叙事/情感递进 dissolve(叠化);古风/意境/回忆 fade(闪黑)
-- shots_per_take 多切点长镜(实验特性):保守 1;同场景对话交锋密集、镜头多机位切换的可给 2
+- shots_per_take 多切点长镜:2=同场景对话交锋密集、镜头多机位切换连拍(组内时长和≤15s,配单镜5-7s);1=保守单镜
 reason: 不超过 100 字中文,说明在用户基底风格上补充了哪些元素、与题材/基调的匹配理由。`
 	baseDesc := old
 	if strings.TrimSpace(old) == "" {
@@ -670,10 +670,15 @@ reason: 不超过 100 字中文,说明在用户基底风格上补充了哪些元
 			params["转场"] = tr
 		}
 		if n, ok2 := manjuToInt(pm["shots_per_take"]); ok2 && n >= 1 && n <= 3 {
-			RN["shots_per_take"] = n
-			if n > 1 {
+			// 2026-08-26 修复:脚本直出项目强制单镜——脚本六段式提示词逐字权威,多切点分组
+			// 会让组头用单镜提示词渲染多镜时长,组内其余镜头内容整镜丢失(渲染层同样禁用)。
+			if ctx.scriptMode && n > 1 {
+				n = 1
+				params["长镜"] = "单镜(脚本直出不分组)"
+			} else if n > 1 {
 				params["长镜"] = fmt.Sprintf("%d镜/组", n)
 			}
+			RN["shots_per_take"] = n
 		}
 	}
 	// AI 一条龙:小说总集负面提示词写回 render.neg_prompt(用户规则:仅此路径
@@ -1638,8 +1643,15 @@ func agentAssembleCheck(ctx *manjuCtx, lg *manjuLogger) {
 	if !fileExists(final) {
 		return
 	}
+	args := []string{"qc", "--file", final}
+	// 2026-08-24 用户反馈:成片终检误报"字幕位文字"——烧录字幕时字幕是预期内容,OCR 会把它当
+	// "字幕位文字渗漏"(rapidocr 抽帧识别烧录的对白/旁白字幕)。烧录字幕(subtitle=true)时跳过 OCR,
+	// 仅保留时长/黑屏/静音/音轨检查;未烧录字幕时才开 OCR 抓真渗漏。
+	if sub, _ := ctx.R["subtitle"].(bool); sub {
+		args = append(args, "--no-ocr")
+	}
 	// qc 发现问题时 exit 1(不等于执行失败),stdout 仍带完整报告——只看输出内容
-	out, _ := ctx.runMediaOutStop([]string{"qc", "--file", final}, lg.stopped)
+	out, _ := ctx.runMediaOutStop(args, lg.stopped)
 	for _, ln := range strings.Split(out, "\n") {
 		t := strings.TrimSpace(ln)
 		if t == "" || strings.HasPrefix(t, "质检") {

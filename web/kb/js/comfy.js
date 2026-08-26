@@ -26,6 +26,9 @@ const ComfyView = {
       if (this.online) window.open(this.comfyUrl(), "_blank");
     });
     $("cfy-log-btn").addEventListener("click", () => this.toggleLog());
+    // 2026-08-26 底部常驻日志行:点击同样展开/收起完整面板
+    const logBar = document.getElementById("cfy-log-bar");
+    if (logBar) logBar.addEventListener("click", () => this.toggleLog());
     // 内嵌页面加载完成(或失败)后收起加载占位
     const frame = document.getElementById("cfy-frame");
     frame.addEventListener("load", () => this.onFrameReady());
@@ -88,6 +91,25 @@ const ComfyView = {
     const txt = d.logTail && d.logTail.trim() ? d.logTail : I18N.t("comfy.noLog");
     if (el.textContent !== txt) el.textContent = txt;
     el.scrollTop = el.scrollHeight;
+    this.renderLogLine(txt);
+  },
+
+  /* 2026-08-26 底部常驻日志行:取日志尾部最后一条非空行同步展示(真实运行日志,
+     来自后端 logs/comfy.log 尾部;截断超长行防撑破布局) */
+  renderLogLine(tail) {
+    const line = document.getElementById("cfy-log-line");
+    if (!line) return;
+    let last = "";
+    if (tail && tail.trim()) {
+      const rows = tail.split("\n");
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const r = rows[i].trim();
+        if (r) { last = r; break; }
+      }
+    }
+    if (last.length > 240) last = "…" + last.slice(-240);
+    const next = last || (this.online ? "暂无日志(ComfyUI 由外部启动,读不到其控制台输出)" : "服务未运行,等待启动…");
+    if (line.textContent !== next) line.textContent = next;
   },
 
   /* 服务不可达:状态行/指示灯明确离线(不再静默卡旧值) */
@@ -213,12 +235,18 @@ const ComfyView = {
     if (this.online) this.setErr("停止超时(20s),请查看日志面板;必要时手动结束进程");
   },
 
-  /* 实时轮询:10s 检测服务状态(仅 Comfy 页激活时) */
+  /* 实时轮询:10s 检测服务状态(仅 Comfy 页激活时);
+     日志轮询 2s 一次(底部日志行同步展示真实运行日志,本地文件 tail 开销极小) */
   startPolling() {
     if (this._timer) return;
     this._timer = setInterval(() => {
       if (!document.getElementById("view-comfy").classList.contains("is-active")) return;
       this.renderStatus();
     }, 10000);
+    this._logTimer = setInterval(() => {
+      if (!document.getElementById("view-comfy").classList.contains("is-active")) return;
+      this.renderLog();
+    }, 2000);
+    this.renderLog(); // 进入页面立即刷一次日志行
   },
 };

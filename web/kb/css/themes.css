@@ -118,11 +118,175 @@ html[data-theme="harness"] {
   --shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
 }
 
+/* 7. 银河系列(2026-08-26 公众号《小众古法五色·复刻静谧银河色调》整合):
+   每套主题=图中一组三色组合的原值直用——最深色=底色、中间色=辅色(accent-2/层次)、
+   最亮色=主色(accent);三色全部来自原图组合,不再另行配底。 */
+
+/* 7.1 galaxy-gold 银河·流金:#4C396C 暗紫底 × #4CB679 翠绿辅 × #F9C270 金黄主 */
+html[data-theme="galaxy-gold"] {
+  --bg: #4c396c;
+  --bg-grad-1: rgba(249, 194, 112, 0.10);
+  --bg-grad-2: rgba(76, 182, 121, 0.08);
+  --surface: #5f4c82;
+  --surface-2: #6e5a93;
+  --panel: rgba(95, 76, 130, 0.88);
+  --panel-border: rgba(249, 194, 112, 0.30);
+  --text: #f3eff9;
+  --muted: #a79fc2;
+  --accent: #f9c270;
+  --accent-2: #4cb679;
+  --line: rgba(249, 194, 112, 0.18);
+  --glow: rgba(249, 194, 112, 0.42);
+  --chip-bg: rgba(249, 194, 112, 0.12);
+  --shadow: 0 18px 50px rgba(30, 20, 48, 0.55);
+}
+
+/* 7.2 galaxy-jade 银河·翠玉:#140D4A 深夜蓝底 × #4C396C 暗紫辅 × #4CB679 翠绿主 */
+html[data-theme="galaxy-jade"] {
+  --bg: #140d4a;
+  --bg-grad-1: rgba(76, 182, 121, 0.10);
+  --bg-grad-2: rgba(76, 57, 108, 0.10);
+  --surface: #251c5e;
+  --surface-2: #332875;
+  --panel: rgba(37, 28, 94, 0.88);
+  --panel-border: rgba(76, 182, 121, 0.28);
+  --text: #efedf8;
+  --muted: #9c97b8;
+  --accent: #4cb679;
+  --accent-2: #4c396c;
+  --line: rgba(76, 182, 121, 0.16);
+  --glow: rgba(76, 182, 121, 0.40);
+  --chip-bg: rgba(76, 182, 121, 0.11);
+  --shadow: 0 18px 50px rgba(10, 7, 32, 0.60);
+}
+
+/* 7.3 galaxy-night 银河·夜紫:#140D4A 深夜蓝底 × #4C396C 暗紫辅 × #733791 皇家紫主(三重紫组合) */
+html[data-theme="galaxy-night"] {
+  --bg: #140d4a;
+  --bg-grad-1: rgba(115, 55, 145, 0.14);
+  --bg-grad-2: rgba(76, 57, 108, 0.10);
+  --surface: #251c5e;
+  --surface-2: #332875;
+  --panel: rgba(37, 28, 94, 0.88);
+  --panel-border: rgba(158, 157, 205, 0.26);
+  --text: #efedf8;
+  --muted: #9c97b8;
+  --accent: #733791;
+  --accent-2: #4c396c;
+  --line: rgba(158, 157, 205, 0.18);
+  --glow: rgba(115, 55, 145, 0.50);
+  --chip-bg: rgba(115, 55, 145, 0.16);
+  --shadow: 0 18px 50px rgba(10, 7, 32, 0.60);
+}
+
+/* 7.4 galaxy-crimson 银河·朱砂(亮色组):#C2C2E1 淡紫底 × #9E9DCD 浅紫辅 × #E83839 朱红主 */
+html[data-theme="galaxy-crimson"] {
+  --bg: #c2c2e1;
+  --bg-grad-1: rgba(232, 56, 57, 0.06);
+  --bg-grad-2: rgba(158, 157, 205, 0.08);
+  --surface: #d4d4ec;
+  --surface-2: #b3b3d8;
+  --panel: rgba(228, 228, 244, 0.92);
+  --panel-border: rgba(232, 56, 57, 0.26);
+  --text: #2e2840;
+  --muted: #6b6685;
+  --accent: #e83839;
+  --accent-2: #9e9dcd;
+  --line: rgba(110, 90, 160, 0.22);
+  --glow: rgba(232, 56, 57, 0.35);
+  --chip-bg: rgba(158, 157, 205, 0.22);
+  --shadow: 0 18px 45px rgba(46, 40, 64, 0.16);
+}
+
+/* 7.5 galaxy-amethyst 银河·紫晶:#733791 皇家紫底 × #C2C2E1 淡紫辅 × #E83839 朱红主 */
+html[data-theme="galaxy-amethyst"] {
+  --bg: #733791;
+  --bg-grad-1: rgba(232, 56, 57, 0.08);
+  --bg-grad-2: rgba(194, 194, 225, 0.08);
+  --surface: #8552a1;
+  --surface-2: #9466ad;
+  --panel: rgba(133, 82, 161, 0.88);
+  --panel-border: rgba(194, 194, 225, 0.32);
+  --text: #f7f2fa;
+  --muted: #c0a9ce;
+  --accent: #e83839;
+  --accent-2: #c2c2e1;
+  --line: rgba(194, 194, 225, 0.22);
+  --glow: rgba(232, 56, 57, 0.40);
+  --chip-bg: rgba(194, 194, 225, 0.14);
+  --shadow: 0 18px 50px rgba(40, 16, 52, 0.55);
+}
+
+/* 7.6 galaxy-lilac 银河·丁香:#4C396C 暗紫底 × #9E9DCD 浅紫主 × #C2C2E1 淡紫辅 */
+html[data-theme="galaxy-lilac"] {
+  --bg: #4c396c;
+  --bg-grad-1: rgba(158, 157, 205, 0.12);
+  --bg-grad-2: rgba(194, 194, 225, 0.08);
+  --surface: #5f4c82;
+  --surface-2: #6e5a93;
+  --panel: rgba(95, 76, 130, 0.88);
+  --panel-border: rgba(158, 157, 205, 0.30);
+  --text: #f3eff9;
+  --muted: #a79fc2;
+  --accent: #9e9dcd;
+  --accent-2: #c2c2e1;
+  --line: rgba(158, 157, 205, 0.22);
+  --glow: rgba(158, 157, 205, 0.42);
+  --chip-bg: rgba(158, 157, 205, 0.14);
+  --shadow: 0 18px 50px rgba(30, 20, 48, 0.55);
+}
+
+/* 7.7 galaxy-olive 银河·橄榄(亮色组):#FEF7F6 米白底 × #B6B679 橄榄辅 × #C2C270 黄绿主 */
+html[data-theme="galaxy-olive"] {
+  --bg: #fef7f6;
+  --bg-grad-1: rgba(194, 194, 112, 0.08);
+  --bg-grad-2: rgba(182, 182, 121, 0.06);
+  --surface: #ffffff;
+  --surface-2: #f3f0e3;
+  --panel: rgba(255, 255, 255, 0.92);
+  --panel-border: rgba(194, 194, 112, 0.32);
+  --text: #34332b;
+  --muted: #7a786c;
+  --accent: #c2c270;
+  --accent-2: #b6b679;
+  --line: rgba(182, 182, 121, 0.26);
+  --glow: rgba(194, 194, 112, 0.35);
+  --chip-bg: rgba(194, 194, 112, 0.14);
+  --shadow: 0 18px 45px rgba(52, 51, 43, 0.14);
+}
+
+/* 7.8 galaxy-flare 银河·星芒:#140D4A 深夜蓝底 × #733791 皇家紫辅 × #FFFF10 亮黄主 */
+html[data-theme="galaxy-flare"] {
+  --bg: #140d4a;
+  --bg-grad-1: rgba(255, 255, 16, 0.06);
+  --bg-grad-2: rgba(115, 55, 145, 0.12);
+  --surface: #251c5e;
+  --surface-2: #332875;
+  --panel: rgba(37, 28, 94, 0.88);
+  --panel-border: rgba(255, 255, 16, 0.26);
+  --text: #efedf8;
+  --muted: #9c97b8;
+  --accent: #ffff10;
+  --accent-2: #733791;
+  --line: rgba(255, 255, 16, 0.16);
+  --glow: rgba(255, 255, 16, 0.38);
+  --chip-bg: rgba(255, 255, 16, 0.09);
+  --shadow: 0 18px 50px rgba(10, 7, 32, 0.60);
+}
+
 /* 表单控件配色方案:让原生 <select> 下拉列表随主题深浅渲染(否则暗色主题下未选中项一片白) */
 html[data-theme="nebula"],
 html[data-theme="quantum"],
 html[data-theme="aurora"],
-html[data-theme="harness"] { color-scheme: dark; }
+html[data-theme="harness"],
+html[data-theme="galaxy-gold"],
+html[data-theme="galaxy-jade"],
+html[data-theme="galaxy-night"],
+html[data-theme="galaxy-amethyst"],
+html[data-theme="galaxy-lilac"],
+html[data-theme="galaxy-flare"] { color-scheme: dark; }
 
 html[data-theme="starlight"],
-html[data-theme="deepseek"] { color-scheme: light; }
+html[data-theme="deepseek"],
+html[data-theme="galaxy-crimson"],
+html[data-theme="galaxy-olive"] { color-scheme: light; }

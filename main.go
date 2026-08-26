@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -39,6 +39,7 @@ import (
 	"nilix/internal/api"
 	"nilix/internal/autostart"
 	"nilix/internal/backend"
+	"nilix/internal/cleanup"
 	"nilix/internal/config"
 	"nilix/internal/island"
 	"nilix/internal/kb_work"
@@ -467,9 +468,23 @@ func runMainWindowWebView() {
 }
 
 var (
-	procEnumWindows = user32Lazy.NewProc("EnumWindows")
-	procGetTextW    = user32Lazy.NewProc("GetWindowTextW")
+	procEnumWindows      = user32Lazy.NewProc("EnumWindows")
+	procGetTextW         = user32Lazy.NewProc("GetWindowTextW")
+	procSetWindowRgn     = user32Lazy.NewProc("SetWindowRgn")
+	procEnumChildWindows = user32Lazy.NewProc("EnumChildWindows")
+	procGetWindowLongPtrW = user32Lazy.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtrW = user32Lazy.NewProc("SetWindowLongPtrW")
+	procCallWindowProcW   = user32Lazy.NewProc("CallWindowProcW")
+	procDefWindowProcW    = user32Lazy.NewProc("DefWindowProcW")
 )
+
+var (
+	gdi32Lazy         = syscall.NewLazyDLL("gdi32.dll")
+	procCreateRectRgn = gdi32Lazy.NewProc("CreateRectRgn")
+	procCombineRgn    = gdi32Lazy.NewProc("CombineRgn")
+	procDeleteObject  = gdi32Lazy.NewProc("DeleteObject")
+)
+
 
 // findMainWindow 枚举顶层窗口按标题精确匹配管理主窗口(title 恒为 "NiliX";
 // 灵动岛窗口标题为 "NiliX HUD" 已区�?不用 FindWindowW 因其对动�?title 前后缀不可�?�?
@@ -577,6 +592,12 @@ func main() {
 	}
 	// ComfyUI 启动参数单一数据�?settings.json �?HUD 卡片 / Comfy 页面 / 实际启动命令共用�?
 	api.SetComfyParams(cfg.Render.ComfyURL, comfyIn, comfyOut)
+	// 自包含自愈(2026-08-26):整个 NiliX 目录拷到新电脑后,开机自启注册表里的旧
+	// 绝对路径自动更新到当前 exe;每日 00:00 清空共享 input/output(内置,接替旧计划任务)
+	if exe, err := os.Executable(); err == nil {
+		autostart.SelfHeal(exe)
+	}
+	cleanup.Start(cfg.Cleanup.DailyEnabled(), comfyIn, comfyOut, api.ComfyBusy)
 	// 智能体全局默认(settings.json agent �?�?全项目共�?与全局设置读写入口�?
 	api.SetGlobalAgentCfg(cfg)
 	api.SetManjuSettingsStore(store)
@@ -617,6 +638,14 @@ func main() {
 				gApp.Quit()
 			}
 		}
+	}()
+
+	// 渲染崩溃自动恢复:启动后检测「渲染中异常退出」的任务并自动续跑
+	// (磁盘 run_state 显示 running 但进程已死 → 崩溃残留;主动停止/已完成不恢复)。
+	// 2026-08-24 实测发现此前从未被调用,强杀/崩溃后任务静默停摆——这里补上接入。
+	go func() {
+		time.Sleep(3 * time.Second) // 等 HTTP 服务就绪;ComfyUI 由上方自动拉起 goroutine 负责
+		api.AutoRecoverRendering()
 	}()
 
 	// ========== wails 应用(单进�?主窗�?+ 灵动岛胶�?+ 托盘,一�?exe) ==========
@@ -678,6 +707,7 @@ var (
 	smXVirtual           = 76
 	smYVirtual           = 77
 	smCXVirtual          = 78
+	smCYVirtual          = 79
 )
 
 // openMainWindow 打开主窗�?已关闭则重建,已存在则显示置前
@@ -694,8 +724,8 @@ func openMainWindow(url string) {
 // 审计 F9:窗口引用在控制端口 handler(HTTP goroutine)/托盘回调/动画 goroutine 间共享,
 // 裸指针读写是数据竞争(go build -race 可检出)——读写统一走 winRefMu 保护的 getter/setter
 var (
-	winRefMu    sync.RWMutex
-	mainWinRef  *application.WebviewWindow
+	winRefMu      sync.RWMutex
+	mainWinRef    *application.WebviewWindow
 	capsuleWinRef *application.WebviewWindow
 )
 
@@ -1019,6 +1049,7 @@ func startControlServers(app *application.App, url string) {
 			}
 		}()
 	})
+	// 桌宠交互区上报 → 已删除(2026-08-24 用户要求移除桌宠)
 	go func() {
 		if err := http.ListenAndServe("127.0.0.1:8788", controlGuard(mux2)); err != nil {
 			log.Printf("胶囊控制端口退出: %v", err)

@@ -7,13 +7,16 @@ import (
 
 // 定妆照尺寸固定 1024×1024,与项目画幅/分辨率解耦:横屏/竖屏/不同档位项目生成的定妆照同尺寸同构图,
 // 保证同一角色跨项目形象一致(H3 参考图内容随画幅漂移会导致角色不一致)。
+// 2026-08-24 用户规则:SDXL 禁用,一律 Z-Image(EmptySD3LatentImage 1024×1024)。
 func TestManjuPortraitFixedSize(t *testing.T) {
-	// 构造两个画幅完全不同的 ctx(横屏 1344x768 / 竖屏 768x1344),风格非写实走 SDXL
+	// 构造两个画幅完全不同的 ctx(横屏 1344x768 / 竖屏 768x1344),定妆照尺寸与画幅解耦
 	for _, c := range []struct{ name string; w, h int }{
 		{"landscape", 1344, 768},
 		{"portrait", 768, 1344},
 	} {
-		ctx := &manjuCtx{style: "2.5d+ink", w: c.w, h: c.h, R: map[string]any{"char_models": map[string]any{"男": "animagine-xl-3.1.safetensors"}, "animagine_ckpt": "animagine-xl-3.1.safetensors"}}
+		ctx := &manjuCtx{style: "2.5d+ink", w: c.w, h: c.h, R: map[string]any{
+			"z_image_unet": "u.safetensors", "z_image_clip": "c.safetensors", "z_image_vae": "v.safetensors",
+		}}
 		wf := ctx.portraitWF("a boy", 123, "manju_asset", map[string]any{"gender": "男"}, "", 0)
 		var w, h int
 		for _, node := range wf {

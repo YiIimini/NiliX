@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -379,8 +380,8 @@ func mustAtoi(s string) int {
 	return v
 }
 
-// wfSDXL 人物定妆照/抽卡(SDXL checkpoint;写实风格用 Z-Image 时走 wfZImage)
-// initImage 非空 → img2img(保留身份重绘视角;视图生成用);initStrength 0-1(缺省 0.6)
+// wfSDXL 人物定妆照/抽卡(SDXL checkpoint)——2026-08-24 用户规则:SDXL 已禁用(观感差),
+// 定妆照一律 Z-Image/Krea-2。本函数保留仅供兼容历史 workflow/测试引用,生产管线不再调用。
 func wfSDXL(prompt, ckpt string, seed, w, h int, prefix, neg, initImage string, initStrength float64) map[string]any {
 	wf := map[string]any{}
 	wfImage(wf, "sdxl", prompt, neg, seed, w, h, 25, 7.0, ckpt, "", "", "", "", prefix, initImage, initStrength)
@@ -408,7 +409,9 @@ func wfKrea2(prompt, unet, clipName, vae string, seed, w, h int, prefix, neg, in
 
 // manjuNegPrompt 内置默认负面提示词(render.neg_prompt 未配置/为空时的兜底)
 // 2026-08-23 用户规则:动漫风格也禁止日本人物形象——禁日本式脸型/日漫大眼,不禁 anime/cartoon 风格词本身
-const manjuNegPrompt = "lowres, bad anatomy, bad hands, text, error, extra digit, no text, no watermark, no deformed hands, flickering frames, temporal discontinuity, inconsistent lighting, japanese anime face, japanese manga face, japanese-style face, japanese cartoon character, anime eyes, manga eyes, big sparkly anime eyes, sharp anime chin"
+// 2026-08-24 用户规则升级:加防真人(photorealistic/real person/actual photo)——定妆照必须「写实拟动漫」,
+// 既不是日漫脸也不是真人照片(真人=侵权风险)。与正向 manjuPortraitAnchor 双路夹击。
+const manjuNegPrompt = "lowres, bad anatomy, bad hands, text, error, extra digit, no text, no watermark, no deformed hands, flickering frames, temporal discontinuity, inconsistent lighting, japanese anime face, japanese manga face, japanese-style face, japanese cartoon character, anime eyes, manga eyes, big sparkly anime eyes, sharp anime chin, photorealistic, real person, real human, actual photo, photograph, realistic photo, lifelike human, portrait photo"
 
 // manjuModelRefs 载入 H3 三件套(clip / vae_video / vae_audio),返回 [clip, vae, audioVae]
 func h3Loaders(workflow map[string]any, R map[string]any) (clip, vae, audioVae string) {
@@ -447,8 +450,16 @@ func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs [
 		if sceneRef != "" {
 			refs = append(refs, refOf(wfAdd(wf, "LoadImage", map[string]any{"image": sceneRef})))
 		}
+		// 2026-08-24 实测修复:ref_images 必须用 Autogrow 平铺键(ref_image_0/1/2...)。
+		// 旧代码传数组 []any——ComfyUI 新版(MiniMaxH3ReferenceToVideo 的 ref_images 是
+		// COMFY_AUTOGROW_V3,TemplatePrefix "ref_image_")静默忽略数组,参考图从未编进条件缓存,
+		// 渲染全部按纯文本生成 → 同一场景镜头画面趋同(用户实测 EP01 六镜几乎一模一样)。
+		// 实测:数组/嵌套 dict 均只产出 3 tokens 纯文本缓存(63KB);平铺键产出 5120 tokens
+		// 含参考图编码(21MB)。补齐场景图后序号从角色图之后继续。
 		if len(refs) > 0 {
-			inputs["ref_images"] = refs
+			for i, r := range refs {
+				inputs[fmt.Sprintf("ref_images.ref_image_%d", i)] = r
+			}
 		}
 		condID = wfAdd(wf, "MiniMaxH3ReferenceToVideo", inputs)
 	} else {
@@ -480,24 +491,41 @@ func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs [
 }
 
 // turboLoRASpec 不同 Turbo LoRA 的最优参数(按文件名识别,数据驱动可扩展):
-// 采样器/强度/推荐步数不兼容会明显劣化画质甚至出废片,换 LoRA 无需改代码。
+// 采样器/强度/步数/shift 不兼容会明显劣化画质甚至出废片,换 LoRA 无需改代码。
+// 2026-08-26 v0.34.0 升级同步 lightx2v 官方家族(ModelTC/Minimax-H3-Turbo specs +官方工作流):
+// 参数依据 = 官方 example_workflows 实测值:euler + 强度 1.0 + MiniMaxH3SigmaShift + simple,
+// FL2V 768p 版 shift 6/3(训练分辨率 1344×768,与生产 768×1344 对口),544p/Ref2V 版 12/3。
 type turboLoRASpec struct {
-	Strength  float64
-	Sampler   string
-	Scheduler string
-	Steps     int
-	FL2VOnly  bool // FL2V 专用蒸馏版(Kijai LightX2V):R2V 镜头不挂,自动回退全步数
+	Strength   float64
+	Sampler    string
+	Scheduler  string
+	Steps      int
+	FL2VOnly   bool    // FL2V 专用蒸馏版:R2V 镜头不挂(除非另配 turbo_lora_r2v)
+	R2VOnly    bool    // R2V 专用蒸馏版(lightx2v ref2v):FL2V 空镜不挂,自动回退全步数
+	VideoShift float64 // >0 时 model 链挂 MiniMaxH3SigmaShift(蒸馏训练 shift,官方工作流同款)
+	AudioShift float64
 }
 
 func turboLoRASpecOf(name string) turboLoRASpec {
 	n := strings.ToLower(name)
-	if strings.Contains(n, "lightx2v") || strings.Contains(n, "kijai") {
-		// Kijai LightX2V 4 步蒸馏版(HuggingFace Kijai/MiniMax-H3_comfy,ComfyUI 原生适配):
-		// 强度 0.75 + 采样器 sa_solver + 4 步(er_sde 亦可);音频质量比其它 4 步方案好。
-		// 注意:该版为 FL2V 蒸馏,R2V(角色镜头)不兼容——h3RenderWorkflow 会对 R2V 自动摘除
-		return turboLoRASpec{Strength: 0.75, Sampler: "sa_solver", Scheduler: "simple", Steps: 4, FL2VOnly: true}
+	step := 4
+	if strings.Contains(n, "8step") {
+		step = 8
 	}
-	// larryvrh 系 4step EMA 等旧默认(FL2V/R2V 通用)
+	switch {
+	case strings.Contains(n, "ref2v") && (strings.Contains(n, "turbo") || strings.Contains(n, "step")):
+		// lightx2v Ref2VA Turbo(角色镜专用):官方 ref2v 工作流 euler/1.0/Shift(12,3)
+		return turboLoRASpec{Strength: 1.0, Sampler: "euler", Scheduler: "simple", Steps: step, R2VOnly: true, VideoShift: 12, AudioShift: 3}
+	case strings.Contains(n, "fl2v") || strings.Contains(n, "lightx2v") || strings.Contains(n, "kijai"):
+		// lightx2v FL2VA Turbo 家族(空镜/文生视频,均为 4/8 步蒸馏,缺步数标记按 4 步):
+		// 768p 版 shift 6/3(训练分辨率 1344×768=生产档),544p 版 12/3
+		shift := 12.0
+		if strings.Contains(n, "768p") {
+			shift = 6.0
+		}
+		return turboLoRASpec{Strength: 1.0, Sampler: "euler", Scheduler: "simple", Steps: step, FL2VOnly: true, VideoShift: shift, AudioShift: 3}
+	}
+	// larryvrh 系 4step EMA 等旧默认(FL2V/R2V 通用,无官方 shift)
 	return turboLoRASpec{Strength: 0.8, Sampler: "res_multistep", Scheduler: "simple", Steps: 8}
 }
 
@@ -563,6 +591,14 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 			steps = n
 		}
 	}
+	if !hasChar && spec.R2VOnly {
+		// 对称回退:R2V 专用 LoRA(lightx2v ref2v)不挂 FL2V 空镜
+		loraName = ""
+		spec = turboLoRASpecOf("")
+		if n, ok := manjuToInt(R["steps"]); ok && n > 0 {
+			steps = n
+		}
+	}
 	if loraName != "" {
 		model = wfAdd(wf, "LoraLoaderModelOnly", map[string]any{"model": refOf(model), "lora_name": loraName, "strength_model": spec.Strength})
 	}
@@ -570,13 +606,20 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 	// 长序列注意力量化加速,RTX 50 系白捡提速。默认关。
 	// 节点名用 sageAttnGuard 探测到的实际注册名——KJNodes 上游把类名拼错为
 	// PathchSageAttentionKJ(非 Patch),用错名字 ComfyUI 会报 missing_node_type 400。
-	if b, _ := R["sage_attention"].(bool); b {
-		nodeName := "PatchSageAttentionKJ"
-		if n := str(R["sage_node_name"]); n != "" {
-			nodeName = n
+		if b, _ := R["sage_attention"].(bool); b {
+			nodeName := "PatchSageAttentionKJ"
+			if n := str(R["sage_node_name"]); n != "" {
+				nodeName = n
+			}
+			model = wfAdd(wf, nodeName, map[string]any{
+				"model": refOf(model), "sage_attention": "auto", "allow_compile": false,
+			})
 		}
-		model = wfAdd(wf, nodeName, map[string]any{
-			"model": refOf(model), "sage_attention": "auto", "allow_compile": false,
+	// SigmaShift 挂 LoRA 之后(官方 lightx2v 工作流:蒸馏 shift 是采样网格的一部分,
+	// BasicGuider 与 BasicScheduler 共用 shift 后的 model;768p 版 6/3,544p/Ref2V 版 12/3)
+	if spec.VideoShift > 0 {
+		model = wfAdd(wf, "MiniMaxH3SigmaShift", map[string]any{
+			"model": refOf(model), "shift_video": spec.VideoShift, "shift_audio": spec.AudioShift,
 		})
 	}
 	vae := wfAdd(wf, "VAELoader", map[string]any{"vae_name": str(R["vae_video"])})
@@ -589,9 +632,18 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 	trimFramesID := ""
 	if chained {
 		latLoad := wfAdd(wf, "MiniMaxH3MotionContextLoadLatent", map[string]any{"latent_path": "h3_context/" + latentNS, "clip_index": prevIdx})
+		// audio_context_length 默认 1(≈25ms,2026-08-26 多重配音修复):MotionContext 会把上一镜
+		// 尾部音频 pin 进本镜,H3 设计上"续念"该音频——与 <d> 标记的本镜台词并行 = 两路人声
+		// 交叠(上一镜台词尾音被重复念一遍)。短剧一镜一句台词、台词结尾即切镜,叠音伤害远大于
+		// 音频不连续,默认只 pin 25ms 保音画对齐。需要音频连续接缝可配 render.motion_audio_context
+		// =24(0.6s)。注意节点语义 a_frames = int(v) or span:传 0 是 falsy 反而取全窗口,禁传 0。
+		audioCtx := "1"
+		if n, ok := manjuToInt(R["motion_audio_context"]); ok && n >= 1 && n <= 96 {
+			audioCtx = strconv.Itoa(n)
+		}
 		mc := wfAdd(wf, "MiniMaxH3MotionContext", map[string]any{
 			"conditioning": refOf(condID), "vae": refOf(vae), "latent": refOf(latentID),
-			"context_length": "22", "audio_context_length": 24,
+			"context_length": "22", "audio_context_length": audioCtx,
 			"context_latent": refOf(latLoad),
 		})
 		// MotionContext 输出 0=conditioning, 1=trim_frames

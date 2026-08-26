@@ -107,6 +107,56 @@ func mustMkdir(t *testing.T, p string) {
 	}
 }
 
+// 分镜脚本列表按章节号增序(2026-08-26 用户反馈:详情页右侧栏「第10章」被字典序
+// 排在「第1章」「第2章」之间)。sortExtras 后 storyboard 组内必须 1→2→10。
+func TestSortExtrasChapterAsc(t *testing.T) {
+	exs := []dirFile{
+		{Name: "第2章_阿财开口_分镜脚本.md", Kind: "storyboard"},
+		{Name: "第10章_卷末_分镜脚本.md", Kind: "storyboard"},
+		{Name: "第1章_一碗馊面_分镜脚本.md", Kind: "storyboard"},
+		{Name: "人物生成提示词.md", Kind: "prompt"},
+		{Name: "第1章_分镜脚本草稿.md", Kind: "storyboard"},
+	}
+	sortExtras(exs)
+	var sbNames []string
+	for _, e := range exs {
+		if e.Kind == "storyboard" {
+			sbNames = append(sbNames, e.Name)
+		}
+	}
+	want := []string{"第1章_一碗馊面_分镜脚本.md", "第1章_分镜脚本草稿.md", "第2章_阿财开口_分镜脚本.md", "第10章_卷末_分镜脚本.md"}
+	if strings.Join(sbNames, "|") != strings.Join(want, "|") {
+		t.Fatalf("storyboard 组内应按章号增序:\n got %v\nwant %v", sbNames, want)
+	}
+}
+
+// 端到端:analyzeDir 输出的 Extras 中 storyboard 保持章号增序(10+ 章不乱)
+func TestAnalyzeDirStoryboardOrder(t *testing.T) {
+	dir := t.TempDir()
+	book := filepath.Join(dir, "排序书")
+	sbDir := filepath.Join(book, "素材", "分镜脚本")
+	mustMkdir(t, sbDir)
+	// os.ReadDir 按字典序返回:第10章 会排在 第2章 前——修复后必须被纠正
+	for _, n := range []string{"第1章_启程_分镜脚本.md", "第2章_遇袭_分镜脚本.md", "第10章_终局_分镜脚本.md"} {
+		mustWrite(t, filepath.Join(sbDir, n), "## 分镜")
+	}
+	res := analyzeDir(dir)
+	projs, _ := res["projects"].([]dirProject)
+	if len(projs) != 1 {
+		t.Fatalf("projects = %d, want 1", len(projs))
+	}
+	var got []string
+	for _, e := range projs[0].Extras {
+		if e.Kind == "storyboard" {
+			got = append(got, e.Name)
+		}
+	}
+	wantOrder := []string{"第1章_启程_分镜脚本.md", "第2章_遇袭_分镜脚本.md", "第10章_终局_分镜脚本.md"}
+	if strings.Join(got, "|") != strings.Join(wantOrder, "|") {
+		t.Fatalf("分镜脚本应按章号增序:\n got %v\nwant %v", got, wantOrder)
+	}
+}
+
 func mustWrite(t *testing.T, p, content string) {
 	t.Helper()
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {

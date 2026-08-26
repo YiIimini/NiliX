@@ -125,6 +125,20 @@ func sortChapters(chs []dirFile) {
 	})
 }
 
+// sortExtras 创作输出(分镜脚本/提示词)排序:文件名含章号的按章号增序——
+// 「第10章」的 '0' 小于「第1章_」的 '章',字典序会把 10 排在 1 与 2 之间(2026-08-26
+// 用户反馈详情页右侧栏分镜脚本乱序);无章号的殿后按文件名。稳定排序保持
+// 同 kind 分组内的相对顺序,前端按 kind 过滤后组内即为章号增序。
+func sortExtras(exs []dirFile) {
+	sort.SliceStable(exs, func(i, j int) bool {
+		ni, nj := chapterNo(exs[i].Name), chapterNo(exs[j].Name)
+		if ni != nj {
+			return ni < nj
+		}
+		return exs[i].Name < exs[j].Name
+	})
+}
+
 func isImageFile(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" || ext == ".gif"
@@ -177,6 +191,7 @@ func analyzeDir(dir string) map[string]any {
 		}
 		walkProject(full, full, &p, 0)
 		sortChapters(p.Chapters)
+		sortExtras(p.Extras)
 		p.Cover = pickCover(p.covers)
 		p.Covers = p.covers
 		projects = append(projects, p)

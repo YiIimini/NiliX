@@ -2,6 +2,7 @@
 package autostart
 
 import (
+	"log"
 	"strings"
 
 	"golang.org/x/sys/windows/registry"
@@ -11,6 +12,26 @@ const (
 	runKey    = `Software\Microsoft\Windows\CurrentVersion\Run`
 	valueName = "NiliX"
 )
+
+// SelfHeal 自启路径自愈:整个 NiliX 目录拷贝到新电脑后,Run 键里的旧绝对路径指向
+// 不存在的位置(自启静默失效)。已启用自启但值不含当前 exe 路径时自动更新;
+// 未启用自启则尊重现状不动。
+func SelfHeal(exePath string) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)
+	if err != nil {
+		return
+	}
+	defer k.Close()
+	v, _, err := k.GetStringValue(valueName)
+	if err != nil {
+		return
+	}
+	if exePath != "" && !strings.Contains(v, exePath) {
+		if err := Enable(exePath); err == nil {
+			log.Printf("[自愈] 开机自启路径已更新 → %s", exePath)
+		}
+	}
+}
 
 // Enabled 查询是否已设置开机自启。
 func Enabled() bool {

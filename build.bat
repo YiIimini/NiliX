@@ -1,13 +1,24 @@
 @echo off
+chcp 65001 >nul
 cd /d "%~dp0"
-echo 正在自动刷新前端版本参数 (?v=)...
-powershell -NoProfile -Command "$p='web\kb\index.html'; $b=[IO.File]::ReadAllBytes((Resolve-Path $p)); $s=[Text.Encoding]::UTF8.GetString($b); $v='?v=' + (Get-Date -Format 'yyyyMMdd') + 'x'; $n=[regex]::Replace($s, '\?v=20\d{6}[a-z]?\d*', $v); if ($n -ne $s) { [IO.File]::WriteAllText((Resolve-Path $p), $n, [Text.UTF8Encoding]::new($false)); Write-Host '已刷新 ?v=' $v } else { Write-Host '?v 格式未识别(跳过)' }"
-echo 正在编译 NiliX（GUI 子系统 · 无终端窗口）...
+
+rem Refresh frontend cache-buster (?v=) using PowerShell (UTF-8 safe).
+rem 2026-08-25 修复:缓存戳用 年月日时分(精确到分钟)——旧逻辑固定 yyyyMMdd+'x',
+rem 同一天多次 build 戳不变,浏览器缓存旧 JS/CSS(改前端不生效的隐性根源);自定义戳(xbb 等)
+rem 也因正则不匹配而永远不刷新。
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$p='web\kb\index.html';" ^
+  "$b=[IO.File]::ReadAllBytes((Resolve-Path $p));" ^
+  "$s=[Text.Encoding]::UTF8.GetString($b);" ^
+  "$v='?v=' + (Get-Date -Format 'yyyyMMddHHmm');" ^
+  "$n=[regex]::Replace($s, '\?v=20\d{6,12}[a-z]*\d*', $v);" ^
+  "if ($n -ne $s) { [IO.File]::WriteAllText((Resolve-Path $p), $n, [Text.UTF8Encoding]::new($false)); Write-Host 'refreshed ?v=' $v } else { Write-Host '?v up-to-date' }"
+
+rem Compile as GUI subsystem (no terminal window on launch).
 go build -ldflags "-H windowsgui -s -w" -o NiliX.exe .
 if %errorlevel%==0 (
-  echo 编译成功: NiliX.exe
-  timeout /t 2 /nobreak >nul
+  echo BUILD OK: NiliX.exe
   exit /b 0
 )
-echo 编译失败，请检查错误信息。
-pause
+echo BUILD FAILED. See error above.
+exit /b 1

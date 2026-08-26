@@ -79,10 +79,18 @@
     { ic: "🚀", t: "快速开始", ps: [
       "1. <b>新建项目</b>：填剧名、选小说、可填 DeepSeek API Key，一键生成完整配置",
       "2. 顶部选择<b>项目</b>（自动扫描 manju 目录）",
-      "3. <b>小说来源</b>：默认带出项目配置的小说；点「选择文件」换任意小说（运行时覆盖，不改配置）",
+      "3. <b>内容来源</b>（小说解析 / 视频脚本直出 二选一）：按解析结果自动展示——默认小说解析带出项目配置的小说（点「选择文件」可换，运行时覆盖不改配置）；启用脚本直出后自动切到脚本区块",
       "4. <b>角色管理</b>：在「渲染配置」里点「角色管理」按钮，抽卡/采纳生成定妆照",
       "5. <b>章节</b>默认 0=解析小说总章数(可改具体范围)；<b>集数</b>默认 0=按总章数每章一集全渲染；集数 N>0 只渲染第 N 集(第 N 章)",
       "6. 一条龙 = 方案→资产→编码→渲染→质检→合成；中断/失败后,右侧栏状态区出现<b>黄色提示条</b>(上次中断于 X 阶段),点<b>▶ 续跑</b>一键恢复(幂等跳过已完成)",
+    ] },
+    { ic: "🎬", t: "视频脚本直出", ps: [
+      "输入方式二选一（内容来源卡片<b>自动按解析结果展示</b>）：📖 小说解析 或 🎬 视频脚本直出",
+      "新建项目弹窗选「🎬 视频脚本直出」：可直接粘贴 H3 官方格式分镜脚本 / 插入官方模板 / <b>📁 从目录检测分镜脚本</b>（手动选任意目录 → 自动识别 → 创建后自动导入）",
+      "<b>选择目录检测脚本</b>：目录里有分镜脚本（文件名含「分镜脚本/分镜」，或内容含 <code>[Shot N]</code>/分镜表）→ 列表点击<b>直接读取</b>并启用脚本直出；目录无脚本 → 引导把该目录当小说走 <b>LLM 直出</b>（小说解析）",
+      "<b>剧名自动填充</b>：选小说目录或脚本目录都会自动填项目名（手动输入后不再覆盖；创建时仍有兜底）",
+      "主页「内容来源」卡片按解析结果自动展示当前模式；「清除脚本(回小说)」一键切回小说解析",
+      "脚本为镜头级分镜（<code>[Shot N]</code> 时间码/画面/台词/音效/环境声/配乐），LLM 一步直出完整渲染方案；脚本预览超长自动滚动",
     ] },
     { ic: "🎭", t: "角色管理", ps: [
       "入口在「渲染配置」卡右上角：「角色管理」按钮打开抽卡弹窗",
@@ -129,10 +137,11 @@
     { ic: "🎨", t: "渲染风格", ps: [
       "8 个预设：<b>2.5D 动漫 / 写实 / 3D CG / 二次元 / 手绘 / 纸艺 / 粘土 / 水墨</b>",
       "<b>预设可多选叠加</b>：点击即选中/取消，可同时组合多个，如 2.5D+水墨",
-      "<b>自定义风格</b>：输入框可一次输入<b>多个元素</b>——用 + 或逗号分隔(如「东方神话+东方修仙+东方玄幻+美女如云」),<b>回车或点「应用」自动解析</b>逐词叠加,无需逐个输入;中文/英文词均可(中文原样保留为风格词),与预设重复的词自动过滤",
+      "<b>自定义风格</b>：输入框可一次输入<b>多个元素</b>——用 + 或逗号分隔(如「real+cyberpunk」「水墨+古风」),<b>回车或点「应用」自动解析</b>逐词叠加,无需逐个输入;英文风格词原样使用,中文风格词自动翻译成英文(白名单:写实/动漫/水墨/赛博朋克/古风/国潮/科幻/Q版等)",
+      "<b>风格词自动净化</b>(2026-08-25)：<b>非美术风格词会被自动剔除</b>并日志提示——角色塑造/内容价值观/括号指令(如「反派磕碜」「Q版呆萌可爱小角色(用于对应角色的动态内心独白)」「真情实意」「玄幻修仙」等跨书残留)混进英文提示词会把画面拉偏(实测赛博朋克剧被拉向修仙、角色被画成 Q 版),一律不再注入 image_prompt/H3 提示词",
       "风格为<b>提示词级注入</b>：拼成一句英文分别写入定妆照/场景图、每镜 Ref2VA 开头与空镜 [Shot 1],全片画风统一",
       "点风格区右上角 <b>「?」</b>可查看 8 个官方示例动图,并<b>详细展示当前风格解析后的英文措辞</b>(三个注入位置各一段)",
-      "组合含<b>写实</b>时定妆照走 Z-Image(真人级)；改后下次运行生效(已渲染镜头不受影响)",
+      "定妆照<b>统一 Z-Image / Krea-2 出图</b>(2026-08-24 用户规则:<b>SDXL 已禁用</b>)：Z-Image 写实拟动漫(默认)或 Krea-2 强指令;禁日漫(animagine 等一律拒绝)、禁真人照片(防侵权);改后下次运行生效(已渲染镜头不受影响)",
     ] },
     { ic: "📐", t: "渲染参数", ps: [
       "<b>画幅</b>官方 6 档：21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16，竖屏短剧推荐 <b>9:16（768×1344）</b>",
@@ -144,9 +153,9 @@
       "<b>时长</b> min/max 4–15s，大模型逐镜时长在此区间自动 clamp",
     ] },
     { ic: "🔗", t: "模型与一致性", ps: [
-      "高级模型配置为<b>下拉选择</b>（从 ComfyUI 模型目录读取），避免手输误操作",
+      "高级配置为<b>下拉选择</b>（从 ComfyUI 模型目录读取），避免手输误操作",
       "人物一致性 = H3 <b>R2V 参考链</b>：定妆照作为 <code>&lt;Picture 1&gt;</code> 锁脸/服装",
-      "<b>定妆照按风格分流</b>：写实风格用 <b>Z-Image</b>（真人级）；其余风格用 <b>SDXL checkpoint</b>（char_models 按性别选：男 sd_xl_base / 女 animagine）",
+      "<b>定妆照统一 Z-Image / Krea-2</b>(2026-08-24 用户规则:SDXL 已禁用):Z-Image 写实拟动漫(默认)或 Krea-2 强指令;禁日漫模型、禁真人照片(防侵权),定妆照与视频画风一致",
       "场景图始终用 Z-Image；负面提示词作用于定妆照与场景图生成",
       "<b>模型名须与磁盘完全一致</b>（含大小写）；配置里的模型已缺失会标注「已缺失」",
     ] },
@@ -301,20 +310,32 @@
       this.timer = null;
     },
 
-    setErr(msg) {
-      const el = $("manju-err");
-      el.textContent = msg || "";
-      el.classList.toggle("hidden", !msg);
+    /* tip 气泡(2026-08-24 用户要求:所有提示都是 tip 气泡)——右上角悬浮,自动消失;
+       kind: success 成功 / error 失败 / info 信息 */
+    showTip(msg, kind) {
+      if (!msg) return;
+      let box = $("manju-tips");
+      if (!box) {
+        box = document.createElement("div");
+        box.id = "manju-tips";
+        box.className = "manju-tips";
+        document.body.appendChild(box);
+      }
+      const t = document.createElement("div");
+      t.className = "manju-tip " + (kind || "info");
+      t.textContent = msg;
+      box.appendChild(t);
+      setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 350); }, 3800);
     },
 
-    /* 绿色成功提示(复用人性化前缀,5 秒后消失) */
+    setErr(msg) {
+      // 2026-08-24 用户要求:提示统一 tip 气泡(不再用页面顶部常驻红字)
+      this.showTip(msg, "error");
+    },
+
+    /* 绿色成功提示(复用人性化前缀,3.8 秒后自动消失) */
     setNote(msg) {
-      const el = $("manju-err");
-      if (!el) return;
-      el.textContent = "✅ " + msg;
-      el.classList.remove("hidden");
-      clearTimeout(this._noteTimer);
-      this._noteTimer = setTimeout(() => { el.classList.add("hidden"); }, 6000);
+      this.showTip(msg, "success");
     },
 
     /* 中断续跑提示:上次任务被中断/失败且日志有失败痕迹 → 动态创建「一键续跑」横幅;
@@ -403,17 +424,25 @@
     },
 
 
-    /* ---- 运行日志:完整日志按阶段分组折叠展示(2026-08-23 用户要求) ----
+    /* ---- 运行日志:按阶段分组折叠展示,倒序显示(2026-08-25 用户要求:最新在最上) ----
        完整日志(不截断)按「━━━ 阶段 xxx ━━━」分段:
-       已通过阶段默认收起(<details>),点击展开;当前/最新阶段自动展开;
-       产物收起状态下日志完整展开到底,容器滚动条可拉到底。 */
+       阶段按时间倒序渲染——最新阶段在最上方且默认展开,历史阶段按时间倒序往下排;
+       每段内部的行同样倒序(该段最新的行在最上面);产物收起状态下日志完整展开到底。 */
     renderLog(text) {
       const log = $("manju-log");
       if (!log) return;
       const src = String(text || "");
       this._logSrc = src;
       if (log.dataset.last === src) return;
-      const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+      // 2026-08-24 用户反馈:运行中日志节点乱跳——先记录用户手动展开/收起的段,
+      // 重渲染后恢复(否则每 2 秒 poll 重建 innerHTML 会把用户展开的历史阶段重置收起)
+      const prevOpen = {};
+      log.querySelectorAll("details.mj-tl2-sec").forEach((d) => {
+        const b = d.querySelector("summary b");
+        if (b) prevOpen[b.textContent] = d.open;
+      });
+      // 2026-08-25 倒序:阅读位置=顶部(最新),只有用户停在顶部时才跟随滚动到顶
+      const nearTop = log.scrollTop < 80;
       const wasEmpty = !log.dataset.last;
       log.dataset.last = src;
       const stageCN = { env: "项目体检", plan: "方案", assets: "资产", encode: "编码", render: "渲染", qc: "质检", assemble: "合成", upscale: "云端 2K" };
@@ -435,21 +464,52 @@
         if (/✅|🎉/.test(raw)) cur.ok = true;
       }
       const last = sections.length ? sections[sections.length - 1] : null;
-      // 渲染:每段 <details>,当前段(最后一段有内容)展开,其余收起
+      // 渲染(倒序):最新阶段(=源日志最后一段)排最上并强制展开,历史阶段按时间倒序下排
+      const secs = [...sections].reverse();
       let html = `<div class="mj-tl2">`;
-      sections.forEach((sec, i) => {
+      secs.forEach((sec) => {
         const isLast = sec === last && sec.rows.length > 0;
         const status = sec.err ? "❌" : (isLast ? "⏳" : (sec.ok ? "✅" : ""));
-        const rowsTxt = sec.rows.map((r) => esc(r)).join("\n");
-        html += `<details class="mj-tl2-sec ${sec.err ? "err" : ""}" ${isLast ? "open" : ""}>
-          <summary>${status ? status + " " : ""}<b>${esc(sec.cn)}</b>${sec.name ? " <i>(" + esc(sec.name) + ")</i>" : ""} <span class="mj-tl2-cnt">${sec.rows.length} 行</span>${isLast ? " <em>当前</em>" : ""}</summary>
-          <pre>${rowsTxt}</pre>
+        // 2026-08-25 日志面板终版(用户截图证实:flex/grid 列布局在部分行内容列塌陷 2px):
+        //  彻底放弃列布局,改纯文本流式行——时间戳+内容同一行 block,任何浏览器 100% 不塌陷。
+        //  语义着色保留(✅绿/❌红/⚠️橙/[i/n]蓝/图标紫),阶段分组折叠保留。
+        const rowHtml = (r) => {
+          // 时间戳拆出
+          let ts = "";
+          let body = r;
+          const tm = r.match(/^(\[\d{2}:\d{2}:\d{2}\])\s*/);
+          if (tm) { ts = tm[1]; body = r.slice(tm[0].length); }
+          // 阶段横幅(━━━ 阶段 xxx ━━━)
+          if (/━━━\s*阶段/.test(body)) {
+            const stm = body.match(/阶段\s*(\w+)\s*━━━/);
+            const cn = stm ? (stageCN[stm[1]] || stm[1]) : "运行";
+            return `<div class="mj-stage-banner">📌 ${esc(cn)}</div>`;
+          }
+          let cls = "";
+          if (/❌|失败|错误|异常|已停止/.test(body)) cls = "err";
+          else if (/✅|🎉|完成|成功/.test(body)) cls = "ok";
+          else if (/⚠️|警告|未通过|超时|缺失/.test(body)) cls = "warn";
+          else if (/^\[\d+\/\d+\]/.test(body)) cls = "prog";
+          else if (/^(🎨|🎬|📖|🤖|🧬|📎|🔧|♻️|⏹|📝|✨|⏱|🧹|🎞)/.test(body)) cls = "mj-ic"; // 2026-08-25 修复:原 "ic" 命中全局 .ic{width:15px} 图标规则,日志行被压成 15x15
+          return `<div class="mj-ln2 ${cls}">${ts ? `<span class="mj-ln2-ts">${esc(ts)}</span> ` : ""}<span class="mj-ln2-txt">${esc(body)}</span></div>`;
+        };
+        // 2026-08-25 倒序:段内行最新在上
+        const rowsTxt = [...sec.rows].reverse().map(rowHtml).join("");
+        // 用户手动展开过的保持;从未见过的新段默认收起(除当前段)
+        const userOpen = prevOpen[sec.cn] !== undefined ? prevOpen[sec.cn] : false;
+        const open = isLast ? true : userOpen;
+        const stateDot = sec.err ? '<span class="mj-dot mj-dot-err" title="本阶段有错误"></span>'
+          : (isLast && sec.rows.length > 0 ? '<span class="mj-dot mj-dot-run" title="进行中"></span>'
+            : (sec.ok ? '<span class="mj-dot mj-dot-ok" title="已完成"></span>' : ''));
+        html += `<details class="mj-tl2-sec ${sec.err ? "err" : ""}" ${open ? "open" : ""}>
+          <summary>${stateDot}${status ? status + " " : ""}<b>${esc(sec.cn)}</b>${sec.name ? " <i>(" + esc(sec.name) + ")</i>" : ""} <span class="mj-tl2-cnt">${sec.rows.length} 行</span>${isLast ? " <em>当前</em>" : ""}</summary>
+          <div class="mj-tl2-body">${rowsTxt}</div>
         </details>`;
       });
       html += `</div>`;
       log.innerHTML = html;
-      // 完整日志:默认拉到底出现滚动条(用户上滚查看历史后不强制)
-      if (nearBottom || wasEmpty) log.scrollTop = log.scrollHeight;
+      // 倒序日志:默认停在顶部(最新);用户下滚看历史后不强制
+      if (nearTop || wasEmpty) log.scrollTop = 0;
     },
 
     /* 一次性提示(启动/提交中等瞬时文案):下次 poll 会用时间轴接管 */
@@ -482,6 +542,18 @@
       // 角色抽卡卡片默认收起,点击标题展开/收起
       $("manju-gacha-head").addEventListener("click", () => this.toggleGacha());
 
+      // 悬浮项目卡「参数」大类分项收起/展开(2026-08-25 用户要求)
+      const chipsTitle = $("manju-chips-title");
+      if (chipsTitle) chipsTitle.addEventListener("click", () => {
+        const f = !chipsTitle.classList.contains("is-folded");
+        chipsTitle.classList.toggle("is-folded", f);
+        const cEl = $("manju-chips");
+        if (cEl) cEl.classList.toggle("is-folded", f);
+        const fb = chipsTitle.querySelector(".manju-sec-foldbtn");
+        if (fb) fb.textContent = f ? "▸" : "▾";
+        try { localStorage.setItem("manju-chips-fold", f ? "1" : "0"); } catch (e) {}
+      });
+
       // 小说
       // 小说
       $("manju-novel").addEventListener("input", (e) => { this.novel = e.target.value; ls("novel", this.novel); });
@@ -492,17 +564,36 @@
       // 视频脚本直出(H3 官方格式分镜脚本,与小说解析二选一)
       $("manju-script-paste").addEventListener("click", () => this.openScriptPaste());
       $("manju-script-clear").addEventListener("click", () => this.doScriptClear());
-      // 2026-08-23 用户要求:模板示例移至新建项目弹窗,主页不再提供
-      // 2026-08-23 用户要求:主页脚本卡片收起/展开(只展示结果,配置在新建项目弹窗)
-      const stog = $("manju-script-toggle");
-      const sbody = $("manju-script-body");
-      if (stog && sbody) {
-        stog.addEventListener("click", () => {
-          const hidden = sbody.style.display === "none";
-          sbody.style.display = hidden ? "" : "none";
-          stog.textContent = (hidden ? "▾ " : "▸ ") + "视频脚本直出";
+      // 2026-08-24 用户要求:「小说来源」+「视频脚本直出」合并为「内容来源」大卡片——
+      // radio 切换显示对应区块(仅显示切换,不改配置)
+      $("mc-content-novel").addEventListener("change", () => this.applyContentMode());
+      $("mc-content-script").addEventListener("change", () => this.applyContentMode());
+
+      // 视频管理卡片折叠(项目/渲染配置/小说来源/执行管线/快速执行):点标题收起/展开 + localStorage 记忆
+      const foldLs = (k, v) => {
+        try { return v === undefined ? localStorage.getItem("manju-fold-" + k) : localStorage.setItem("manju-fold-" + k, v); }
+        catch (e) { return null; }
+      };
+      document.querySelectorAll(".manju-fold-head").forEach((h) => {
+        const card = h.closest(".manju-card");
+        const k = h.dataset.fold;
+        if (!card || !k) return;
+        if (foldLs(k) === "1") card.classList.add("folded"); // 恢复记忆(默认展开)
+        h.addEventListener("click", (e) => {
+          if (e.target.closest("button, a, input, select, label")) return; // 标题区按钮不触发折叠
+          card.classList.toggle("folded");
+          foldLs(k, card.classList.contains("folded") ? "1" : "0");
         });
-      }
+      });
+      document.querySelectorAll(".manju-fold-quick").forEach((l) => {
+        const k = l.dataset.fold;
+        if (!k) return;
+        if (foldLs(k) === "1") l.classList.add("folded");
+        l.addEventListener("click", () => {
+          l.classList.toggle("folded");
+          foldLs(k, l.classList.contains("folded") ? "1" : "0");
+        });
+      });
 
       // 风格:预设按钮按单一数据源渲染;点击即多选切换(点中=选中,再点=取消,组合以 + 连接)
       this.renderStylePresets();
@@ -560,11 +651,11 @@
         })
       );
 
-      // 高级模型折叠
+      // 高级配置折叠
       $("manju-adv-toggle").addEventListener("click", () => {
         const adv = $("manju-adv");
         const open = adv.classList.toggle("hidden") === false;
-        $("manju-adv-toggle").textContent = (open ? "▾ " : "▸ ") + "高级模型配置";
+        $("manju-adv-toggle").textContent = (open ? "▾ " : "▸ ") + "高级配置";
       });
       // 加载模型下拉选项(首次绑定)
       this.loadModels();
@@ -589,7 +680,7 @@
       $("manju-only").addEventListener("input", (e) => { this.only = e.target.value; ls("only", this.only); });
       $("manju-wholebook").addEventListener("click", () => { this.chapters = "1-999"; $("manju-chapters").value = this.chapters; ls("chapters", this.chapters); });
 
-      // 阶段执行
+      // 阶段执行:一条龙(all)路由进 runStage → runAllCheck(已有流程检测:从头重渲 or 续跑)
       document.querySelectorAll("#view-manju [data-phase]").forEach((b) =>
         b.addEventListener("click", () => this.runStage(b.dataset.phase))
       );
@@ -597,14 +688,18 @@
       $("manju-agent-run").addEventListener("click", () => this.runAgent());
       $("manju-env").addEventListener("click", () => this.openHealth());
       $("manju-stop").addEventListener("click", () => this.stop());
-      $("manju-clear-log").addEventListener("click", () => { this.logNote("(就绪)"); });
-
-      // 弹窗
-      $("manju-modal-close").addEventListener("click", () => this.closeModal());
-      $("manju-modal").addEventListener("click", (e) => { if (e.target === $("manju-modal")) this.closeModal(); });
-      document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape" && !$("manju-modal").classList.contains("hidden")) this.closeModal();
+      // 清空日志(2026-08-26 修复:此前只在前端盖一条「(就绪)」,后端 logTail 未清,
+      // 2 秒轮询把旧日志又拉回来)——调后端清 manjuState.log,本地同步置空即时反馈
+      $("manju-clear-log").addEventListener("click", () => {
+        post("/api/manju/log/clear", {})
+          .then(() => { if (this.status) this.status.logTail = ""; this.logNote("(已清空)"); })
+          .catch(() => this.logNote("(清空失败: 后端未响应)"));
       });
+
+      // 弹窗:多级弹窗(2026-08-24 用户要求)——每个弹窗独立遮罩层压栈管理,
+      // 弹窗里再弹窗时父弹窗保留,关闭子弹窗自动露出父弹窗(绑定见 openModal)
+      // Esc 单例监听:一次 Esc 只关当前顶层弹窗(每层各自绑定会一次关多层)
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.closeModal(); });
 
       // 左右栏拖拽改变宽度
       this.bindResizers();
@@ -629,6 +724,55 @@
       if (tr) tr.addEventListener("click", () => this.makeTrailer());
       const cleanBtn = $("manju-cleanup");
       if (cleanBtn) cleanBtn.addEventListener("click", () => this.openCleanup());
+      // 2026-08-25 用户要求:导航栏右侧「扫帚」按钮,一键清理旧缓存(方案/镜头/条件缓存/接缝)
+      const ccBtn = $("nav-cache-clear");
+      if (ccBtn) ccBtn.addEventListener("click", () => this.clearCache());
+    },
+
+    /* 一键清理旧缓存(2026-08-25):弹窗二选一——
+       「确认」= 普通清理:analysis 方案 JSON + 镜头 mp4 + 条件缓存 + 接缝 latent(定妆照/场景图/成片/2K 不动);
+       「高级」= 普通清理 + 清空 ComfyUI 共享 input/output 目录全部产物(彻底清场,慎用)。
+       用途:分镜脚本修复后旧 plan 的错误时长/缺失台词会让修复不生效;新项目也常被旧缓存影响。 */
+    clearCache() {
+      if (!this.project) { this.setErr("请先选择项目后再清理缓存"); return; }
+      const fmtB = this._fmtBytes;
+      this.openModal("🧹 清理缓存",
+        `<div class="manju-confirm">
+          <p class="mc-q">选择清理范围:</p>
+          <div class="mc-opt" style="margin-bottom:14px">
+            <p style="margin:6px 0;font-size:13px;color:var(--muted)"><b style="color:var(--text)">确认(普通清理)</b> — 删除本项目旧缓存:方案 JSON(plan/characters/prompts) + 镜头 mp4 + 条件缓存 + 接缝 latent。<br>定妆照 / 场景图 / 成片 / 2K 产物不受影响。</p>
+            <p style="margin:6px 0;font-size:13px;color:var(--muted)"><b style="color:var(--err)">高级(彻底清场)</b> — 在普通清理基础上,<b style="color:var(--err)">删除 ComfyUI 共享 input 与 output 目录里的全部产物</b>(含其他项目的图片/视频/中间产物)并<b style="color:var(--err)">清空运行日志数据</b>(界面日志与各项目 run.log)。<br><span style="color:var(--err)">⚠ 渲染产物将被清空,需重新渲染;请确认 ComfyUI 未在运行关键任务。</span></p>
+          </div>
+          <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+            <button id="cc-confirm" class="hrs-btn hrs-btn-primary">确认(普通)</button>
+            <button id="cc-advanced" class="hrs-btn hrs-btn-danger" style="background:var(--err);color:#fff">高级(清 ComfyUI)</button>
+            <button id="cc-cancel" class="hrs-btn">取消</button>
+          </div>
+        </div>`);
+      const btn = $("nav-cache-clear");
+      $("cc-cancel").addEventListener("click", () => this.closeModal());
+      $("cc-confirm").addEventListener("click", () => { this.closeModal(); this._runCacheClear(btn, false); });
+      $("cc-advanced").addEventListener("click", () => {
+        if (!confirm("高级清理将删除 ComfyUI 共享 input/output 目录里的全部产物(含其他项目的图片/视频)。\n此操作不可恢复,确定继续？")) return;
+        this.closeModal();
+        this._runCacheClear(btn, true);
+      });
+    },
+    _runCacheClear(btn, advanced) {
+      if (btn) { btn.disabled = true; btn.style.opacity = ".5"; }
+      post("/api/manju/cache/clear", { config: this.project, advanced: !!advanced })
+        .then((r) => {
+          const parts = (r.cleaned || []).map((c) => `${c.target} ${c.files}个(${this._fmtBytes(c.bytes || 0)})`);
+          this.setErr("🧹 缓存已清理" + (advanced ? "(高级:含 ComfyUI input/output)" : "") + ": " + (parts.join("、") || "无残留"));
+          setTimeout(() => this.setErr(""), 6000);
+          this.refreshOutputs();
+          this.loadPlan();
+        }).catch((e) => this.setErr(e.message))
+        .finally(() => { if (btn) { btn.disabled = false; btn.style.opacity = ""; } });
+    },
+    _fmtBytes(n) {
+      if (n == null) return "0B";
+      return n >= 1048576 ? (n / 1048576).toFixed(1) + "MB" : n >= 1024 ? Math.round(n / 1024) + "KB" : n + "B";
     },
 
     /* 预告片自动剪辑:高分镜头掐头去尾拼接 30s(音量归一+字幕),产物落工作目录 */
@@ -927,7 +1071,7 @@
         : (n.hasKey
           ? `<span class="st-ok">✅ 已保存默认 Key（${esc(n.masked || "")}）</span>`
           : `<span class="st-bad">⚠️ 未设置任何 Key，LLM 调用会报 401</span>`);
-      this.openModal("设置",
+      this.rerenderModal("设置",
         `<div class="manju-form manju-settings">
           <div class="manju-set-card manju-set-hero">
             <div class="manju-set-head">
@@ -1453,7 +1597,20 @@
       if (items.length === 0) { hideAll(); return; } // 无数据:整个参数卡(含边框)都不显示
       el.hidden = false;
       el.innerHTML = items.map((c) => `<span class="manju-chip">${esc(c)}</span>`).join("");
-      if (tt) tt.hidden = false;
+      if (tt) {
+        tt.hidden = false;
+        // 2026-08-25 用户要求:悬浮项目卡「参数」单独收起/展开(大类分项,状态记忆)
+        const folded = this._chipsFolded();
+        tt.classList.toggle("is-folded", folded);
+        el.classList.toggle("is-folded", folded);
+        const fb = tt.querySelector(".manju-sec-foldbtn");
+        if (fb) fb.textContent = folded ? "▸" : "▾";
+      }
+    },
+    _chipsFolded() {
+      let v = null;
+      try { v = localStorage.getItem("manju-chips-fold"); } catch (e) {}
+      return v === "1";
     },
 
     /* ---- 表单回填 ---- */
@@ -1618,7 +1775,7 @@
       num("manju-bgm-gain", R.bgm_gain != null && R.bgm_gain !== "" ? R.bgm_gain : 0.28);
       // 2026-08-23 新增:定妆引擎/字幕/配音/Krea2 回填(解析脚本后同步显示)
       set("manju-char-engine", R.char_engine || "zimage");
-      $("manju-subtitle").checked = R.subtitle !== false;
+      $("manju-subtitle").checked = R.subtitle === true; // 2026-08-24 默认关:H3 原生对白音轨已含台词
       $("manju-voiceover").checked = !!R.voiceover;
       set("manju-krea2-unet", R.krea2_unet);
       set("manju-krea2-clip", R.krea2_clip);
@@ -1752,7 +1909,7 @@
       });
     },
 
-    /* 高级模型配置：从 ComfyUI 模型目录加载可选模型，填充下拉（避免手输误操作） */
+    /* 高级配置：从 ComfyUI 模型目录加载可选模型，填充下拉（避免手输误操作） */
     loadModels() {
       get("/api/manju/models").then((r) => {
         const opts = r || {};
@@ -1868,7 +2025,7 @@
       set("manju-take", R.shots_per_take != null && R.shots_per_take !== "" ? R.shots_per_take : 1);
       // 2026-08-23 新增:定妆引擎/字幕/配音/Krea2 回填
       set("manju-char-engine", R.char_engine || "zimage");
-      $("manju-subtitle").checked = R.subtitle !== false; // 缺省 true(向后兼容);config 显式 false=关
+      $("manju-subtitle").checked = R.subtitle === true; // 2026-08-24 默认关:H3 原生对白音轨已含台词,烧录字幕多余且触发 OCR 误报
       $("manju-voiceover").checked = !!R.voiceover;
       set("manju-krea2-unet", R.krea2_unet);
       set("manju-krea2-clip", R.krea2_clip);
@@ -1981,12 +2138,46 @@
     runStage(phase) {
       if (this.denyNoProject()) return;
       if (this.denyIfRunning()) return;
+      if (phase === "all") { this.runAllCheck(); return; } // 一条龙:先检测已有流程,再决定从头 or 续跑
       this._agentRun = false; // 单阶段执行不是 AI 一条龙
       this.setErr("");
       this.logNote("(启动 " + phase + " ...)");
       post("/api/manju/run", {
         config: this.project, chapters: this.chapters, episode: this.episode,
         phase: phase, only: this.only, novel: this.novel,
+      }).then(() => { this.poll(); }).catch((e) => this.setErr(e.message));
+    },
+
+    /* 一条龙:先检测项目是否已有渲染流程产物(方案/镜头/成片)——有则询问「从头重渲 or 续跑」 */
+    runAllCheck() {
+      get("/api/manju/flow?config=" + encodeURIComponent(this.project)).then((f) => {
+        if (!f || !f.hasFlow) { this.runAll(false); return; }
+        this.openModal("🔄 检测到已有渲染流程",
+          `<div class="manju-confirm">
+            <p class="mc-q">项目已存在渲染产物（${esc(f.detail || "方案/镜头/成片")}）</p>
+            <p class="mc-d">「从头渲染」清空旧产物（方案/镜头/成片/缓存，定妆照与场景图保留）重新生成；<br>「续跑」跳过已完成阶段，从上次中断处继续。</p>
+            <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+              <button id="mc-all-fresh" class="hrs-btn hrs-btn-primary">🔄 从头渲染</button>
+              <button id="mc-all-resume" class="hrs-btn">▶ 续跑</button>
+            </div>
+          </div>`);
+        $("mc-all-fresh").addEventListener("click", () => { this.closeModal(); this.runAll(true); });
+        $("mc-all-resume").addEventListener("click", () => { this.closeModal(); this.runAll(false); });
+      }).catch((e) => this.setErr("检测渲染流程失败: " + e.message));
+    },
+
+    /* 一条龙本体:phase=all;fresh=true 从头重渲(清旧产物),false 续跑(幂等跳过已完成) */
+    runAll(fresh) {
+      if (this.denyNoProject()) return;
+      if (this.denyIfRunning()) return;
+      this._agentRun = false; // 普通一条龙(非 AI 一条龙)
+      this.setErr("");
+      this.logNote(fresh
+        ? "(🔄 一条龙 · 从头渲染: 清空旧产物重新生成 ...)"
+        : "(▶ 一条龙 · 续跑: 幂等跳过已完成阶段 ...)");
+      post("/api/manju/run", {
+        config: this.project, chapters: this.chapters, episode: this.episode,
+        phase: "all", only: this.only, novel: this.novel, fresh: fresh,
       }).then(() => { this.poll(); }).catch((e) => this.setErr(e.message));
     },
 
@@ -2128,7 +2319,8 @@
 
     /* 绑定当前弹窗内的「一键修复」按钮 */
     _bindHealthFix() {
-      document.querySelectorAll("#manju-modal .mj-hi-fix").forEach((b) =>
+      if (!this._modalEl) return;
+      this._modalEl.querySelectorAll(".mj-hi-fix").forEach((b) =>
         b.addEventListener("click", () => this.fixHealth(b.dataset.fix, b))
       );
     },
@@ -2139,7 +2331,7 @@
         // 代次守卫:弹窗已被关闭/切换 → 放弃渲染,不弹回
         if (gen !== undefined && gen !== this._modalGen) return;
         if (showModal) {
-          this.openModal("🔍 项目体检", this._healthItemsHTML(items), true);
+          this.rerenderModal("🔍 项目体检", this._healthItemsHTML(items), true);
         } else {
           this._health = items;
           this._healthFix = items.filter((it) => it.fixable && it.status !== "ok");
@@ -2152,7 +2344,7 @@
       if (showModal) {
         get("/api/manju/agent/health?config=" + encodeURIComponent(this.project)).then((r) => render(r.items || [])).catch((e) => {
           if (gen !== undefined && gen !== this._modalGen) return;
-          this.openModal("🔍 项目体检", '<div class="mj-health"><div class="mj-health-load">体检失败: ' + esc(e.message) + '</div></div>', true);
+          this.rerenderModal("🔍 项目体检", '<div class="mj-health"><div class="mj-health-load">体检失败: ' + esc(e.message) + '</div></div>', true);
         });
       } else {
         get("/api/manju/agent/health?config=" + encodeURIComponent(this.project)).then((r) => render(r.items || [])).catch(() => {});
@@ -2429,9 +2621,8 @@
       return map[k] || k || "准备";
     },
 
-    /* 悬浮助手云朵:汇总逻辑统一在 App.mascotStatus */
+    /* 悬浮助手云朵 → 桌宠已删除(2026-08-24 用户要求):保留空实现避免调用点报错 */
     reportMascot(s) {
-      if (typeof App !== "undefined" && App.mascotStatus) App.mascotStatus(s);
     },
     renderStatus() {
       const s = this.status;
@@ -2479,9 +2670,12 @@
           badge.textContent = "空闲";
         }
       }
-      if (s.logFull !== undefined && s.logFull !== log.dataset.last) {
-        // 2026-08-23:优先完整日志(产物收起也完整展开到底,按阶段折叠)
-        this.renderLog(s.logFull || "");
+      // 2026-08-24 修复:日志节点反复隐藏/显示——根因是 logFull(全文)与 logTail(尾部截断)
+      // 两个内容不同的源,logFull 无变化时 fallback logTail 会造成每 2 秒在两者间交替重建,
+      // logTail 视图里前面的已通过阶段节点整段消失,下一轮 logFull 又回来 → 节点闪跳。
+      // 修复:logFull 存在时只用 logFull(单源),logTail 仅作 logFull 缺失/为空时的兜底。
+      if (s.logFull !== undefined && s.logFull !== "") {
+        if (s.logFull !== log.dataset.last) this.renderLog(s.logFull);
       } else if (s.logTail !== undefined && s.logTail !== log.dataset.last) {
         this.renderLog(s.logTail || "");
       }
@@ -2516,7 +2710,8 @@
       const s = this.status || {};
       const cur = s.currentStage || "";
       const running = !!s.running;
-      const done = s.done && s.rc !== null && s.rc !== undefined && s.rc !== 0;
+      // 2026-08-24 修复:done=失败才标 fail;成功(rc===0)当前阶段标 done(不是 fail)
+      const failed = s.done && s.rc !== null && s.rc !== undefined && s.rc !== 0;
       const STAGE_ORDER = ["env", "plan", "assets", "encode", "render", "qc", "assemble"];
       let curIdx = STAGE_ORDER.indexOf(cur);
       document.querySelectorAll("#view-manju [data-phase]").forEach((b) => {
@@ -2527,7 +2722,7 @@
         if (idx < 0) return;
         if (curIdx >= 0 && idx === curIdx) {
           if (running) b.classList.add("mj-ph-run");
-          else if (done) b.classList.add("mj-ph-fail");
+          else if (failed) b.classList.add("mj-ph-fail");
           else b.classList.add("mj-ph-done");
         } else if (curIdx >= 0 && idx < curIdx) {
           b.classList.add("mj-ph-done");
@@ -2575,7 +2770,7 @@
       pct.textContent = Math.round(val) + "%";
     },
 
-    /* 管线流程图(垂直步进) */
+    /* 管线流程图(横向步进) */
     renderFlow() {
       const el = $("manju-flow");
       if (!el) return;
@@ -2584,16 +2779,23 @@
       let curIdx = FLOW.findIndex((f) => f.key === cur);
       const running = !!s.running;
       const failed = s.done && s.rc !== null && s.rc !== undefined && s.rc !== 0;
+      // 2026-08-24 用户反馈:日志顶部闪白——状态未变化时不重建(每 2 秒 poll 全量 innerHTML 重建会闪)
+      const sig = [cur, running, failed, s.done].join("|");
+      if (this._flowSig === sig) return;
+      this._flowSig = sig;
 
       el.innerHTML = `<div class="manju-flow">` + FLOW.map((f, i) => {
         let cls = "pending", mark = "";
-        if (i < curIdx) { cls = "done"; mark = "✓"; }
-        else if (i === curIdx) {
+        // 2026-08-24 修复:任务完成时只标「实际跑到 currentStage」之前的阶段为 done,
+        // 之后未执行的阶段保持 pending——此前 !running&&done&&rc===0 把全部节点标 ✓,
+        // 单阶段运行(如只跑 plan)时资产/渲染/合成被误标为已完成(节点与实际流程不符)。
+        const ranUpTo = curIdx >= 0 ? curIdx : (s.done && s.rc === 0 ? FLOW.length - 1 : -1);
+        if (i < ranUpTo) { cls = "done"; mark = "✓"; }
+        else if (i === ranUpTo) {
           if (running) cls = "current";
           else if (failed) { cls = "failed"; mark = "✗"; }
-          else { cls = "done"; mark = "✓"; }
+          else if (s.done) { cls = "done"; mark = "✓"; }
         }
-        if (!running && s.done && s.rc === 0) { cls = "done"; mark = "✓"; }
         return `<div class="manju-flow-step ${cls}">
           <span class="manju-flow-dot"></span>
           <span class="manju-flow-name">${f.name}</span>
@@ -2657,7 +2859,7 @@
       const el = $("manju-gacha");
       if (!el) return;
       const adopted = ((this.outputs && this.outputs.characters) || [])
-        .filter((c) => !/(_face|_full|_side|_detail)\./i.test(c.name || ""));
+        .filter((c) => !/(_face|_full|_side|_detail|_board)\./i.test(c.name || ""));
       const fileUrl = (p) => "/api/fs/file?path=" + encodeURIComponent(p);
       let html = "";
       if (!adopted.length) {
@@ -2684,8 +2886,8 @@
     openGachaModal() {
       if (this.denyNoProject()) return;
       const gen = this._modalGen; // 代次守卫:弹窗关闭/切换后放弃回弹,防止劫持当前弹窗
-      this.renderGachaModal();          // 先渲染(可能已有 plan)
-      this.loadPlan(() => { if (gen === this._modalGen) this.renderGachaModal(); }); // 拉最新方案再刷一次
+      this.renderGachaModal(true);      // 首次打开:压新层
+      this.loadPlan(() => { if (gen === this._modalGen) this.renderGachaModal(); }); // 拉最新方案原地刷新
     },
 
     /* 生成角色/场景方案(前置·角色抽卡,char_gacha.py --plan-characters) */
@@ -2737,10 +2939,21 @@
       return !!this.charViewOfficial(id, view);
     },
 
-    renderGachaModal() {
+    renderGachaModal(fresh) {
+      // fresh=true=首次打开(压新层);内部刷新(视图/候选/抽卡完成)=原地替换,不压栈
       const p = this.plan || {};
       const fileUrl = (p2) => "/api/fs/file?path=" + encodeURIComponent(p2);
-      const VIEWS = [["", "正面", "🎭"], ["full", "全身", "🧍"], ["side", "侧面", "↔️"], ["detail", "细节", "🔍"], ["q", "Q版", "🐣"]];
+      // 2026-08-25 即梦角色版:新增「角色板」视图(三视图+特写+服饰+表情+配色+人设整合图,控全剧一致性)
+      // 2026-08-26 用户要求展示顺序:角色板(权威整合展示,基于主图生成)置顶 → 正面/全身/侧面/细节/Q版
+      const VIEWS = [["board", "角色板", "🪪"], ["", "正面", "🎭"], ["full", "全身", "🧍"], ["side", "侧面", "↔️"], ["detail", "细节", "🔍"], ["q", "Q版", "🐣"]];
+      // 2026-08-26 用户要求:角色卡标注 年龄/性别/角色定位(正角/反派/配角/演员/灵宠/妖兽)
+      const roleTag = (c) => {
+        if (c.species) return c.species;          // 灵宠/妖兽/神兽/精怪…
+        if (c.role === "反派") return "反派";
+        if (c.role === "功能配角") return "配角";
+        if (c.role === "正角") return "正角";
+        return "演员";                             // 无标注的普通角色
+      };
       let html = "";
       if (!p.exists) {
         html = `<div class="manju-empty">
@@ -2788,7 +3001,7 @@
               return `<div class="manju-char">
                 <div class="manju-char-head">
                   <span class="manju-char-name" title="${esc(c.id)}">${esc(c.id)}</span>
-                  <span class="manju-char-tag">${readyTag}${esc(c.gender || "")}${c.age ? "·" + esc(c.age) : ""}</span>
+                  <span class="manju-char-tag">${readyTag}${[c.gender, c.age, roleTag(c)].filter(Boolean).map(esc).join("·")}</span>
                 </div>
                 <div class="manju-view-tabs">${tabs}</div>
                 <div class="manju-char-preview">${preview}</div>
@@ -2804,26 +3017,29 @@
           <input id="manju-upload-file" type="file" accept="image/png,image/jpeg,image/webp" style="display:none">`
           : '<div class="manju-empty">方案中无角色</div>';
       }
-      this.openModal("角色抽卡", html, true);
+      if (fresh) this.openModal("角色抽卡", html, true);
+      else this.rerenderModal("角色抽卡", html, true);
       const planBtn = $("mg-plan");
       if (planBtn) planBtn.addEventListener("click", () => this.genCharacters());
       const cnt = $("mg-count");
       if (cnt) cnt.addEventListener("change", () => ls("gachaCount", cnt.value));
       const da = $("mg-draw-all");
       if (da) da.addEventListener("click", () => this.drawAllGacha());
-      document.querySelectorAll("#manju-modal [data-gacha]").forEach((b) =>
+      const mgel = this._modalEl; // 多级弹窗:只绑定当前弹窗内的抽卡控件
+      if (!mgel) return;
+      mgel.querySelectorAll("[data-gacha]").forEach((b) =>
         b.addEventListener("click", () => this.drawGacha(b.dataset.gacha, b, b.dataset.view || ""))
       );
-      document.querySelectorAll("#manju-modal [data-upload]").forEach((b) =>
+      mgel.querySelectorAll("[data-upload]").forEach((b) =>
         b.addEventListener("click", () => this.uploadCharPick(b.dataset.upload, b.dataset.view || ""))
       );
       const upFile = $("manju-upload-file");
       if (upFile) upFile.addEventListener("change", (e) => this.uploadCharFile(e.target.files[0]));
-      document.querySelectorAll("#manju-modal [data-adopt]").forEach((b) =>
+      mgel.querySelectorAll("[data-adopt]").forEach((b) =>
         b.addEventListener("click", () => this.adoptGacha(b.dataset.adopt, b.dataset.view || ""))
       );
       // 视图 tab 切换
-      document.querySelectorAll("#manju-modal [data-viewtab]").forEach((b) =>
+      mgel.querySelectorAll("[data-viewtab]").forEach((b) =>
         b.addEventListener("click", () => {
           const g = this.gacha[b.dataset.viewtab];
           if (!g) return;
@@ -2832,7 +3048,7 @@
         })
       );
       // 候选缩略图点选:切换当前查看/采纳的候选(按视图)
-      document.querySelectorAll("#manju-modal [data-cand]").forEach((b) =>
+      mgel.querySelectorAll("[data-cand]").forEach((b) =>
         b.addEventListener("click", () => {
           const g = this.gacha[b.dataset.cand];
           if (!g) return;
@@ -2843,7 +3059,7 @@
         })
       );
       // 角色照片点击预览大图
-      document.querySelectorAll("#manju-modal .manju-char-img").forEach((el) =>
+      mgel.querySelectorAll(".manju-char-img").forEach((el) =>
         el.addEventListener("click", () => this.previewImage(el.dataset.img, el.dataset.name))
       );
     },
@@ -2977,7 +3193,7 @@
     renderOutputs() {
       const o = this.outputs;
       // 人物只显示正式定妆照(排除 _face/_full/_side/_detail 视图与正脸参考,避免重复)
-      const chars = (o.characters || []).filter((c) => !/(_face|_full|_side|_detail)\./i.test(c.name || ""));
+      const chars = (o.characters || []).filter((c) => !/(_face|_full|_side|_detail|_board)\./i.test(c.name || ""));
       const scenes = o.scenes || [];
       const eps = o.episodes || [];
       const fileUrl = (p) => "/api/fs/file?path=" + encodeURIComponent(p);
@@ -3010,33 +3226,35 @@
       html += `</div></div>`;
 
       // 视频按集区分(默认展开,每集独立折叠记忆;成片置顶高亮;云端 2K 产物带徽标)
+      // 2026-08-24 用户反馈:产物区只显示 EP01——EP02 只有方案(无镜头)被 renderEp 整块 return 丢弃。
+      // 修复:有方案文件也算该集存在,集区块照常展示(无视频时占位「已出方案 · 待渲染」)
       const renderEp = (ep) => {
         const clips = ep.clips || [];
         const ups = ep.upscaled || [];
         const final = ep.final;
         const vids = (final ? [final] : []).concat(clips);
-        if (!vids.length && !ups.length) return "";
         const arts = Object.keys(ep.artifacts || {});
+        // 该集完全无产物(无镜头/2K/成片/方案文件)才跳过;已出方案的集也占位展示
+        if (!vids.length && !ups.length && !arts.length) return "";
         const secKey = "video-" + (ep.episode || "");
+        const hasVids = !!(vids.length || ups.length);
         let h = `<div class="manju-out-sec${this._secFolded(secKey) ? " is-folded" : ""}" data-sec="${secKey}">`;
-        h += `<div class="manju-out-title"><span class="manju-sec-foldbtn">${this._secFolded(secKey) ? "▸" : "▾"}</span>🎬 ${esc(ep.episode)} <span class="manju-out-count">${clips.length} 镜头${final ? " · 成片" : ""}${ups.length ? " · ☁️2K×" + ups.length : ""}</span>${clips.length ? `<span class="manju-out-actions"><button class="hrs-btn manju-up2k-btn" data-up2k="${esc(ep.episode || "")}" title="云端 2K 定稿:本地定稿镜提交 MiniMax 升 2K(需在设置里填 MiniMax Key),产物落 clips/${esc(ep.episode || "")}/2k/">☁️ 2K</button><button class="hrs-btn manju-up2k-btn" data-jy="${esc(ep.episode || "")}" title="导出剪映草稿:视频轨+字幕轨(不烧录,可在剪映继续编辑);需 venv 安装 pyJianYingDraft">📦 剪映</button></span>` : ""}</div>`;
+        h += `<div class="manju-out-title"><span class="manju-sec-foldbtn">${this._secFolded(secKey) ? "▸" : "▾"}</span>🎬 ${esc(ep.episode)} <span class="manju-out-count">${clips.length} 镜头${final ? " · 成片" : ""}${ups.length ? " · ☁️2K×" + ups.length : ""}${!hasVids && arts.length ? " · 已出方案" : ""}</span>${clips.length ? `<span class="manju-out-actions"><button class="hrs-btn manju-up2k-btn" data-up2k="${esc(ep.episode || "")}" title="云端 2K 定稿:本地定稿镜提交 MiniMax 升 2K(需在设置里填 MiniMax Key),产物落 clips/${esc(ep.episode || "")}/2k/">☁️ 2K</button><button class="hrs-btn manju-up2k-btn" data-jy="${esc(ep.episode || "")}" title="导出剪映草稿:视频轨+字幕轨(不烧录,可在剪映继续编辑);需 venv 安装 pyJianYingDraft">📦 剪映</button></span>` : ""}</div>`;
         h += `<div class="manju-sec-body">`;
-        h += `<div class="manju-vids">${vids.map((v) => {
-          const isFinal = v === final;
-          return `<div class="manju-vid${isFinal ? " manju-vid-final" : ""}" data-video="${esc(v.path)}" data-name="${esc(v.name)}" title="播放 ${esc(v.name)}"><span class="manju-vid-play">▶</span><span class="manju-vid-name">${esc(v.name)}</span><span class="manju-meta">${isFinal ? "成片 · " : ""}${fmtSize(v.size)}</span>${v.stale ? '<span class="manju-stale-tag" title="提示词/定妆照/画幅已变,此产物是旧的;下次渲染自动删旧重渲">⚠️ 已过期</span>' : ""}<button class="manju-vid-menu" data-menu="${esc(v.path)}" data-ep="${esc(ep.episode || "")}" data-isfinal="${isFinal ? "1" : ""}" title="更多操作">⋮</button></div>`;
-        }).join("")}</div>`;
-        if (ups.length) h += `<div class="manju-vids" style="margin-top:6px">${ups.map((v) => `<div class="manju-vid manju-vid-2k" data-video="${esc(v.path)}" data-name="${esc(v.name)}" title="播放 ${esc(v.name)}(云端 2K)"><span class="manju-vid-play">▶</span><span class="manju-vid-name">☁️ ${esc(v.name)}</span><span class="manju-meta">2K · ${fmtSize(v.size)}</span><button class="manju-vid-menu" data-menu="${esc(v.path)}" data-ep="${esc(ep.episode || "")}" data-isfinal="0" title="更多操作">⋮</button></div>`).join("")}</div>`;
-        if (arts.length) h += `<div class="manju-meta" style="margin-top:6px">📋 ${arts.map(esc).join("、")}</div>`;
+        if (hasVids) {
+          h += `<div class="manju-vids">${vids.map((v) => {
+            const isFinal = v === final;
+            return `<div class="manju-vid${isFinal ? " manju-vid-final" : ""}" data-video="${esc(v.path)}" data-name="${esc(v.name)}" title="播放 ${esc(v.name)}"><span class="manju-vid-play">▶</span><span class="manju-vid-name">${esc(v.name)}</span><span class="manju-meta">${isFinal ? "成片 · " : ""}${fmtSize(v.size)}</span>${v.stale ? '<span class="manju-stale-tag" title="提示词/定妆照/画幅已变,此产物是旧的;下次渲染自动删旧重渲">⚠️ 已过期</span>' : ""}<button class="manju-vid-menu" data-menu="${esc(v.path)}" data-ep="${esc(ep.episode || "")}" data-isfinal="${isFinal ? "1" : ""}" title="更多操作">⋮</button></div>`;
+          }).join("")}</div>`;
+          if (ups.length) h += `<div class="manju-vids" style="margin-top:6px">${ups.map((v) => `<div class="manju-vid manju-vid-2k" data-video="${esc(v.path)}" data-name="${esc(v.name)}" title="播放 ${esc(v.name)}(云端 2K)"><span class="manju-vid-play">▶</span><span class="manju-vid-name">☁️ ${esc(v.name)}</span><span class="manju-meta">2K · ${fmtSize(v.size)}</span><button class="manju-vid-menu" data-menu="${esc(v.path)}" data-ep="${esc(ep.episode || "")}" data-isfinal="0" title="更多操作">⋮</button></div>`).join("")}</div>`;
+          if (arts.length) h += `<div class="manju-meta" style="margin-top:6px">📋 ${arts.map(esc).join("、")}</div>`;
+        } else {
+          h += `<div class="manju-empty">📋 已出方案 · 待渲染（点「一条龙 / 续跑」生成该集镜头）</div>`;
+        }
         h += `</div></div>`;
         return h;
       };
       html += eps.map(renderEp).join("");
-
-      // 仅出方案尚未渲染的集
-      const plannedOnly = eps.filter((ep) => !(ep.clips || []).length && !ep.final).map((ep) => ep.episode);
-      if (plannedOnly.length) {
-        html += `<div class="manju-meta" style="margin-top:8px">📋 已出方案未渲染：${plannedOnly.map(esc).join("、")}</div>`;
-      }
 
       $("manju-outputs").innerHTML = html;
 
@@ -3254,7 +3472,20 @@
       const idx = imgs.findIndex((x) => x.path === path);
       this._previewImgs = imgs;
       this._previewIdx = idx >= 0 ? idx : 0;
+      // 2026-08-24 用户反馈:预览器应单窗口浏览当前项目全部产出图,不要一张图一个弹窗——
+      // 已有预览弹窗(未关闭)时原地复用并提升到栈顶,不再压新层
+      if (this._pvOverlay && document.body.contains(this._pvOverlay)) this.promotePreview();
       this.renderPreview();
+    },
+    /* 预览弹窗复用:把已开的预览弹窗提升到弹窗栈顶(翻页/再点图共用同一窗口) */
+    promotePreview() {
+      const stack = this._modalStack = this._modalStack || [];
+      const idx = stack.indexOf(this._pvOverlay);
+      if (idx >= 0) stack.splice(idx, 1);
+      stack.push(this._pvOverlay);
+      this._pvOverlay.style.zIndex = String(1200 + stack.length * 10);
+      this._modalEl = this._pvOverlay;
+      document.body.appendChild(this._pvOverlay); // 移到 DOM 末尾确保可见
     },
     renderPreview() {
       const list = this._previewImgs || [];
@@ -3266,15 +3497,25 @@
         <button id="mp-prev" class="manju-pv-arrow" title="上一张 (←)" ${i === 0 ? "disabled" : ""}>◂</button>
         <button id="mp-next" class="manju-pv-arrow" title="下一张 (→)" ${i === list.length - 1 ? "disabled" : ""}>▸</button>`
         : "";
-      this.openModal(`${cur.name || "预览"}（${i + 1}/${list.length}）`,
-        `<div class="manju-img-preview">
+      const title = `${cur.name || "预览"}（${i + 1}/${list.length}）`;
+      const body = `<div class="manju-img-preview">
           ${arrows}
           <div class="manju-pv-stage">
             <img src="/api/fs/file?path=${encodeURIComponent(cur.path)}" alt="">
             ${list.length > 1 ? `<span class="manju-pv-count">${i + 1} / ${list.length}</span>` : ""}
           </div>
-        </div>`);
-      const prev = $("mp-prev"), next = $("mp-next");
+        </div>`;
+      // 2026-08-24 用户反馈:单窗口预览——首次才 openModal 压层,
+      // 翻页/再点图(已有预览弹窗)原地刷新同一窗口,不再每张图叠一个弹窗
+      if (!this._pvOverlay || !document.body.contains(this._pvOverlay)) {
+        this.openModal(title, body);
+        this._pvOverlay = this._modalEl;
+      } else {
+        this._pvOverlay.querySelector(".manju-modal-title").textContent = title;
+        this._pvOverlay.querySelector(".manju-modal-body").innerHTML = body;
+      }
+      const pv = this._pvOverlay;
+      const prev = pv.querySelector("#mp-prev"), next = pv.querySelector("#mp-next");
       const go = (d) => {
         if (list.length < 2) return;
         const ni = Math.max(0, Math.min(list.length - 1, i + d));
@@ -3287,7 +3528,7 @@
       // 键盘 ←/→ 翻页(每次渲染重新绑定,避免重复监听)
       if (this._pvKey) document.removeEventListener("keydown", this._pvKey);
       this._pvKey = (e) => {
-        if ($("manju-modal").classList.contains("hidden")) return;
+        if (!this._modalEl) return; // 当前无弹窗(多级弹窗:仅顶层响应翻页)
         if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
         else if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
       };
@@ -3300,17 +3541,34 @@
         `<div class="manju-video-preview"><video src="/api/fs/file?path=${encodeURIComponent(path)}" controls autoplay></video></div>`);
     },
 
-    /* ---- 弹窗 ---- */
+    /* ---- 弹窗(多级:2026-08-24 用户要求) ---- */
+    /* 每个弹窗独立遮罩层,压栈管理——弹窗里再弹窗时父弹窗保留在后面,
+       关闭子弹窗自动露出父弹窗,不再"弹窗里弹窗就全部关闭"。 */
     openModal(title, bodyHtml, wide) {
-      if (!this._bound) this.bind();   // 自愈:任何页面(未进漫剧页)调用弹窗都先绑定关闭/遮罩/Esc
+      if (!this._bound) this.bind();   // 自愈:任何页面(未进漫剧页)调用弹窗都先绑定
       // 代次守卫:任何开/关弹窗都会使挂起的异步渲染(设置/体检)失效,
       // 防止"请求完成时弹窗已被关闭 → 又弹回来"的关闭失效竞态
       this._modalGen = (this._modalGen || 0) + 1;
-      $("manju-modal-title").textContent = title;
-      $("manju-modal-body").innerHTML = bodyHtml;
-      const panel = document.querySelector("#manju-modal .manju-modal-panel");
-      if (panel) panel.classList.toggle("wide", !!wide);
-      $("manju-modal").classList.remove("hidden");
+      const overlay = document.createElement("div");
+      overlay.className = "manju-modal";
+      this._modalStack = this._modalStack || [];
+      overlay.style.zIndex = String(1200 + this._modalStack.length * 10); // 后开的在上层
+      overlay.innerHTML =
+        `<div class="manju-modal-panel${wide ? " wide" : ""}">
+          <div class="manju-modal-head">
+            <h3 class="manju-modal-title"></h3>
+            <button class="manju-modal-close" title="关闭" aria-label="Close">✕</button>
+          </div>
+          <div class="manju-modal-body"></div>
+        </div>`;
+      overlay.querySelector(".manju-modal-title").textContent = title;
+      overlay.querySelector(".manju-modal-body").innerHTML = bodyHtml;
+      // 关闭:关闭按钮 / 点遮罩空白(Esc 由 bind 单例监听,一次只关顶层)
+      overlay.querySelector(".manju-modal-close").addEventListener("click", () => this.closeModal());
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) this.closeModal(); });
+      this._modalEl = overlay;
+      this._modalStack.push(overlay);
+      document.body.appendChild(overlay);
     },
     closeModal() {
       this._modalGen = (this._modalGen || 0) + 1;   // 关闭即作废所有挂起的异步渲染
@@ -3318,10 +3576,27 @@
         document.removeEventListener("keydown", this._pvKey);
         this._pvKey = null;
       }
-      const v = $("manju-modal-body").querySelector("video");
-      if (v) { v.pause(); v.removeAttribute("src"); }
-      $("manju-modal").classList.add("hidden");
+      const overlay = this._modalEl;
+      if (overlay) {
+        if (overlay === this._pvOverlay) this._pvOverlay = null; // 预览弹窗关闭:清引用,下次重新开
+        const v = overlay.querySelector("video");
+        if (v) { v.pause(); v.removeAttribute("src"); }
+        overlay.remove();
+      }
+      this._modalStack = this._modalStack || [];
+      this._modalStack.pop();
+      this._modalEl = this._modalStack.length ? this._modalStack[this._modalStack.length - 1] : null;
       this.picker = null;
+    },
+    /* 原地重渲染当前顶层弹窗(不压新层)——目录翻页/抽卡视图切换等"同弹窗刷新"场景,
+       避免多级弹窗栈膨胀;当前无弹窗时退回 openModal 新开 */
+    rerenderModal(title, bodyHtml, wide) {
+      if (!this._modalEl) { this.openModal(title, bodyHtml, wide); return; }
+      const overlay = this._modalEl;
+      overlay.querySelector(".manju-modal-title").textContent = title;
+      overlay.querySelector(".manju-modal-body").innerHTML = bodyHtml;
+      const panel = overlay.querySelector(".manju-modal-panel");
+      if (panel) panel.classList.toggle("wide", !!wide);
     },
 
     /* 使用说明 */
@@ -3432,6 +3707,10 @@
           <textarea id="msp-text" class="manju-input manju-textarea" rows="14" spellcheck="false" placeholder="粘贴分镜脚本…（[Shot 1] 景别,运镜。画面动作。&#10;台词:角色:&quot;原文&quot;&#10;音效:…）">${esc(this.scriptText)}</textarea>
           <div id="msp-err" class="manju-err-text"></div>
           <div class="manju-row" style="justify-content:flex-start;margin:6px 0">
+            <button id="msp-scan" class="hrs-btn">📁 选择目录检测脚本</button>
+            <span style="opacity:.6;font-size:12px;margin-left:8px">手动选任意目录 → 自动检测分镜脚本:有则直接读取,无则引导 LLM 直出</span>
+          </div>
+          <div class="manju-row" style="justify-content:flex-start;margin:6px 0">
             <button id="msp-import" class="hrs-btn">📂 从小说分镜脚本导入（阶段6 产物）</button>
             <span style="opacity:.6;font-size:12px;margin-left:8px">自动定位 小说目录/素材/分镜脚本/第NNN章…_分镜脚本.md（EP01→第001章）</span>
           </div>
@@ -3443,6 +3722,7 @@
       $("msp-text").addEventListener("input", (e) => { this.scriptText = e.target.value; });
       $("msp-cancel").addEventListener("click", () => this.closeModal());
       $("msp-do").addEventListener("click", () => this.doSaveScript());
+      $("msp-scan").addEventListener("click", () => this.openPicker("scan"));
       $("msp-import").addEventListener("click", () => this.importScriptFromNovel());
     },
     doSaveScript() {
@@ -3476,6 +3756,9 @@
       if (!confirm("清除视频脚本并回到小说解析模式？本集已生成的方案不会自动删除(下次运行按小说重新生成)。")) return;
       post("/api/manju/script/clear?project=" + encodeURIComponent(this.projName()), {}).then((r) => {
         this.refreshScriptStatus();
+        // 2026-08-24 合并「内容来源」卡片:清除脚本=回小说 → 自动切回小说区块
+        const sr = $("mc-content-script");
+        if (sr && sr.checked) { sr.checked = false; this.applyContentMode(); }
         this.setNote((r && r.ok) ? "已清除脚本,回到小说解析模式" : "清除失败: " + ((r && r.error) || ""));
       }).catch((e) => this.setErr("清除失败: " + e.message));
     },
@@ -3501,11 +3784,131 @@
         $("msp-err").textContent = "导入失败: " + e.message;
       });
     },
+    /* ---- 手动选择目录 → 检测分镜脚本(有则直接读取,无则引导 LLM 直出) ---- */
+    /* mode: import=主页导入当前项目 / create=新建项目(记住脚本,创建后自动导入) */
+    scanScriptDir(dir, mode) {
+      this.scanDir = dir;
+      this.scanMode = mode || "import";
+      if (mode === "create") this.autoFillCreateName(dir); // 选脚本目录自动填充剧名
+      this.closeModal();
+      const ep = this.episode || "EP01";
+      this.setNote("🔍 正在检测目录分镜脚本: " + dir + " …");
+      post("/api/manju/script/scan-dir", { dir, episode: ep }).then((r) => {
+        if (!r || !r.ok) { this.setNote("❌ 目录检测失败: " + ((r && r.error) || "未知错误")); return; }
+        if (r.hasStoryboard && r.storyboards && r.storyboards.length) {
+          this.showScanResult(r); // 有分镜脚本 → 列表直接读取
+        } else {
+          this.showScanEmpty(r);  // 无 → 引导 LLM 直出
+        }
+      }).catch((e) => this.setNote("❌ 目录检测失败: " + e.message));
+    },
+    showScanResult(r) {
+      const rows = (r.storyboards || []).map((s) => `
+        <div class="manju-file" data-file="${esc(s.path)}" data-ep="${esc(s.episode || "")}">
+          <span class="manju-file-name">🎬 ${esc(s.name)}${s.selected ? " <span class='manju-md'>(匹配本集)</span>" : ""}</span>
+          <span class="manju-meta">${s.episode ? "集号 " + esc(s.episode) + " · " : ""}${fmtSize(s.size)}</span>
+          ${s.preview ? `<div class="manju-meta" style="white-space:pre-wrap;margin-top:2px">${esc(s.preview)}</div>` : ""}
+        </div>`).join("");
+      this.openModal("检测到分镜脚本",
+        `<div class="manju-picker">
+          <div class="manju-meta" style="margin:0 0 8px">目录: <code>${esc(r.dir)}</code> · 共 ${(r.storyboards || []).length} 个分镜脚本（已按章号排序）<br>📥 全部导入 = 每章一个脚本 → EP01/EP02…（渲染时按集号选对应脚本）<br>点击单项 → 只导入为当前集脚本（${esc(r.episode)}）</div>
+          <div class="manju-filelist">${rows || '<div class="manju-empty">无</div>'}</div>
+          <div class="manju-row">
+            <button id="msr-all" class="hrs-btn hrs-btn-primary">📥 全部导入</button>
+            <button id="msr-rescan" class="hrs-btn">📁 换目录</button>
+            <button id="msr-cancel" class="hrs-btn">取消</button>
+          </div>
+        </div>`);
+      if (!this._modalEl) return;
+      this._modalEl.querySelectorAll(".manju-file").forEach((f) =>
+        f.addEventListener("click", () => this.scanMode === "create"
+          ? this.rememberScriptFile(f.dataset.file, f.dataset.ep)
+          : this.importScriptFile(f.dataset.file, f.dataset.ep)));
+      $("msr-all").addEventListener("click", () => this.importScriptAllFromDir(r.dir));
+      $("msr-rescan").addEventListener("click", () => this.openPicker(this.scanMode === "create" ? "scan-create" : "scan"));
+      $("msr-cancel").addEventListener("click", () => this.closeModal());
+    },
+    /* 全部导入:目录里所有分镜脚本按章号 → script/EP01..EPxx.md(每章一集)。
+       新建场景(scanMode=create):记住目录,创建项目后自动批量导入 */
+    importScriptAllFromDir(dir) {
+      if (this.scanMode === "create") {
+        this.createScriptFrom = dir;   // 目录(全部导入)
+        this.createScriptAll = true;
+        this.createScriptEp = this.episode || "EP01";
+        this.closeModal();
+        this.renderCreate();
+        this.setNote("已选择目录，点「创建项目」后自动导入所有分镜脚本（每章一集）");
+        return;
+      }
+      if (!this.project) { this.closeModal(); this.setNote("请先选择项目"); return; }
+      this.setNote("正在批量导入分镜脚本…");
+      post("/api/manju/script/import-all-dir", { project: this.projName(), episode: this.episode || "EP01", dir }).then((r) => {
+        if (r && r.ok) {
+          this.closeModal();
+          this.refreshScriptStatus();
+          this.loadProject(); // 脚本模式参数同步刷新
+          this.setNote("已全部导入 " + (r.imported || 0) + "/" + (r.total || 0) + " 个分镜脚本（每章一集），渲染配置选集号即可选择对应脚本");
+        } else {
+          this.setNote("批量导入失败: " + ((r && r.error) || "未知错误"));
+          this.closeModal();
+        }
+      }).catch((e) => { this.setNote("批量导入失败: " + e.message); this.closeModal(); });
+    },
+    /* 新建场景:记住选中的分镜脚本路径,创建项目后自动导入 */
+    rememberScriptFile(file, ep) {
+      this.createScriptFrom = file;
+      this.createScriptEp = ep || "EP01";
+      this.closeModal();
+      this.renderCreate();
+      this.setNote("📌 已选择分镜脚本，点「创建项目」后自动导入并启用脚本直出");
+    },
+    /* 直接读取检测到的分镜脚本 → 导入为当前集脚本,启用脚本直出 */
+    importScriptFile(file, ep) {
+      if (!this.project) { this.closeModal(); this.setNote("❌ 请先选择项目"); return; }
+      const episode = ep || this.episode || "EP01";
+      this.setNote("📥 正在读取分镜脚本…");
+      post("/api/manju/script/import-dir", { project: this.projName(), episode, file }).then((r) => {
+        if (r && r.ok) {
+          this.closeModal();
+          this.refreshScriptStatus();
+          this.loadProject(); // 脚本模式参数同步刷新
+          this.setNote("🎬 已直接读取分镜脚本(" + (r.source || "") + ")，脚本直出模式已启用");
+        } else {
+          this.setNote("❌ 读取失败: " + ((r && r.error) || "未知错误"));
+          this.closeModal();
+        }
+      }).catch((e) => { this.setNote("❌ 读取失败: " + e.message); this.closeModal(); });
+    },
+    /* 目录无分镜脚本 → 引导 LLM 直出(小说解析模式) */
+    showScanEmpty(r) {
+      this.openModal("目录未检测到分镜脚本",
+        `<div class="manju-form">
+          <div class="manju-meta" style="margin:0 0 8px">目录 <code>${esc(r.dir)}</code> 中未找到分镜脚本<br>（识别规则：文件名含「分镜脚本/分镜」，或内容含 <code>[Shot N]</code> / 分镜表）。</div>
+          <div class="manju-meta" style="margin:0 0 8px">💡 <b>LLM 直出</b>：若该目录含小说正文（<code>正文/</code> 或 <code>全本/*.md</code>），将其作为小说来源即可由 LLM 一步直出完整渲染方案：<br>· 新建项目 → 选「📖 小说解析」并把此目录设为小说目录；<br>· 已有项目 → 主页「小说来源」填此目录后重新生成方案。</div>
+          <div class="manju-row">
+            <button id="mse-rescan" class="hrs-btn">📁 换目录</button>
+            <button id="mse-cancel" class="hrs-btn">取消</button>
+          </div>
+        </div>`);
+      $("mse-rescan").addEventListener("click", () => this.openPicker(this.scanMode === "create" ? "scan-create" : "scan"));
+      $("mse-cancel").addEventListener("click", () => this.closeModal());
+    },
     projName() {
       // this.project 是完整 configPath(.../manju/<项目名>/config.json) → 取目录名
       return (this.project || "").split(/[\\/]/).filter(Boolean).slice(-2, -1)[0] || "";
     },
-    refreshScriptStatus() {
+    /* 内容来源卡片:小说解析 / 视频脚本直出 区块显示切换(仅显示,不改配置)
+       自动模式:加载项目/刷新状态时按解析结果(脚本 active?)自动展示对应区块 */
+    applyContentMode(noAuto, skipRefresh) {
+      const script = $("mc-content-script") && $("mc-content-script").checked;
+      const nb = $("content-novel-block");
+      const sb = $("content-script-block");
+      if (nb) nb.style.display = script ? "none" : "";
+      if (sb) sb.style.display = script ? "" : "none";
+      // 切到脚本区块时刷新脚本状态(noAuto:手动切换不触发自动切回,避免弹回;skipRefresh:内部联动只切显示)
+      if (script && this.project && !skipRefresh) this.refreshScriptStatus(noAuto);
+    },
+    refreshScriptStatus(noAuto) {
       const el = $("manju-script-meta");
       const clearBtn = $("manju-script-clear");
       if (!el) return;
@@ -3513,11 +3916,19 @@
       get("/api/manju/script?project=" + encodeURIComponent(this.projName())).then((r) => {
         if (r && r.active) {
           el.innerHTML = "🎬 <b>脚本直出模式</b>：<code>" + esc(r.path || "") + "</code>（" + (r.bytes || 0) + " 字）<br>" +
-            "<div style='opacity:.75;margin-top:4px;white-space:pre-wrap'>" + esc(r.preview || "") + "</div>";
+            "<div style='opacity:.75;margin-top:4px;white-space:pre-wrap;max-height:150px;overflow-y:auto;padding-right:6px;line-height:1.7'>" + esc(r.preview || "") + "</div>";
           if (clearBtn) clearBtn.classList.remove("hidden");
+          // 内容来源卡片自动联动:解析结果是脚本 → 自动切到脚本区块
+          const sr = $("mc-content-script");
+          if (sr && !sr.checked) { sr.checked = true; this.applyContentMode(true, true); }
         } else {
           el.innerHTML = "小说解析模式（未启用脚本直出）";
           if (clearBtn) clearBtn.classList.add("hidden");
+          // 内容来源卡片自动联动:解析结果是小说 → 自动切回小说区块(手动切换除外)
+          if (!noAuto) {
+            const sr = $("mc-content-script");
+            if (sr && sr.checked) { sr.checked = false; this.applyContentMode(true, true); }
+          }
         }
       }).catch(() => {});
     },
@@ -3525,13 +3936,14 @@
     /* 新建项目 */
     openCreate() {
       this.createName = ""; this.createNovel = ""; this.createKey = ""; this.createErr = ""; this.creating = false; this.savedKey = "";
+      this._createNameAuto = ""; // 剧名自动填充标记(选目录后自动填,用户手动输入即失效)
+      this.createScriptFrom = ""; this.createScriptEp = ""; this.createScriptAll = false; // 新建场景记住的脚本/目录(创建后自动导入),每次重置
       get("/api/manju/settings").then((r) => { if (r && r.hasKey && r.masked) this.savedKey = r.masked; this.renderCreate(); }).catch(() => this.renderCreate());
     },
     renderCreate() {
       const saved = this.savedKey ? "（已存默认: " + esc(this.savedKey) + "）" : "";
       if (this.createMode === undefined) this.createMode = "novel";
-      this.openModal("新建项目",
-        `<div class="manju-form">
+      const html = `<div class="manju-form">
           <label>剧名（项目目录名）</label>
           <input id="mc-name" class="manju-input" placeholder="如：吞灵帝尊" value="${esc(this.createName)}">
           <label>输入方式</label>
@@ -3552,8 +3964,10 @@
             <textarea id="mc-script-text" class="manju-input manju-textarea" rows="8" spellcheck="false" placeholder="[Shot 1] 景别,运镜。画面动作。&#10;台词:角色:&quot;原文&quot;&#10;音效:…">${esc(this.createScript)}</textarea>
             <div class="manju-row" style="margin-top:6px">
               <button id="mc-script-tpl" class="hrs-btn">📋 插入官方格式模板</button>
+              <button id="mc-script-scan" class="hrs-btn">📁 从目录检测分镜脚本</button>
               <span class="manju-meta" style="margin-left:8px">创建后自动启用脚本直出</span>
             </div>
+            ${this.createScriptFrom ? `<div class="manju-meta" style="color:var(--ok);margin-top:4px">📌 已选择${this.createScriptAll ? "目录（全部导入）" : "分镜脚本"}: <code>${esc(this.createScriptFrom.split(/[\\/]+/).filter(Boolean).pop())}</code> — 点「创建项目」后自动${this.createScriptAll ? "导入所有分镜脚本" : "导入"}</div>` : ""}
           </div>
           <label>DeepSeek API Key${saved}</label>
           <input id="mc-key" class="manju-input" placeholder="${this.savedKey ? "留空自动用默认 Key" : "sk-...（留空则用已保存的默认 Key）"}">
@@ -3563,42 +3977,69 @@
             <button id="mc-cancel" class="hrs-btn">取消</button>
             <button id="mc-do" class="hrs-btn hrs-btn-primary">创建项目</button>
           </div>
-        </div>`);
-      $("mc-name").addEventListener("input", (e) => { this.createName = e.target.value; });
-      $("mc-novel").addEventListener("input", (e) => { this.createNovel = e.target.value; });
-      $("mc-key").addEventListener("input", (e) => { this.createKey = e.target.value; });
-      $("mc-novel-pick").addEventListener("click", () => this.openPicker("create"));
-      $("mc-cancel").addEventListener("click", () => this.closeModal());
-      $("mc-do").addEventListener("click", () => this.doCreate());
-      const st = $("mc-script-text");
+        </div>`;
+      // 2026-08-24 关键修复(用户反馈:全部导入后新建弹窗按钮全失效):
+      // 多级弹窗下若当前顶层已是新建弹窗则【原地重渲染】(rerenderModal 不压新栈),
+      // 否则首次才 openModal 压栈。此前每次 renderCreate 都 openModal 压新栈,
+      // 而 $("mc-*") 全局绑定落在旧弹窗 → 新弹窗(用户看到的顶层)按钮全部无绑定。
+      const isFresh = !(this._modalEl && this._modalEl.querySelector("#mc-name"));
+      if (isFresh) this.openModal("新建项目", html);
+      else this.rerenderModal("新建项目", html);
+      // 绑定必须限定当前弹窗(this._modalEl),多级弹窗下全局 $() 会绑定到旧弹窗
+      const root = this._modalEl;
+      if (!root) return;
+      root.querySelector("#mc-name").addEventListener("input", (e) => { this.createName = e.target.value; this._createNameAuto = ""; }); // 手动输入后不再自动覆盖剧名
+      root.querySelector("#mc-novel").addEventListener("input", (e) => { this.createNovel = e.target.value; });
+      root.querySelector("#mc-key").addEventListener("input", (e) => { this.createKey = e.target.value; });
+      root.querySelector("#mc-novel-pick").addEventListener("click", () => this.openPicker("create"));
+      root.querySelector("#mc-cancel").addEventListener("click", () => this.closeModal());
+      root.querySelector("#mc-do").addEventListener("click", () => this.doCreate());
+      const st = root.querySelector("#mc-script-text");
       if (st) st.addEventListener("input", (e) => { this.createScript = e.target.value; });
-      const tpl = $("mc-script-tpl");
+      const tpl = root.querySelector("#mc-script-tpl");
       if (tpl) tpl.addEventListener("click", () => {
-        const s = $("mc-script-text");
+        const s = root.querySelector("#mc-script-text");
         // 2026-08-23 用户要求:模板示例移至新建项目弹窗——用完整 H3 官方格式模板
         s.value = this.scriptTemplate();
         this.createScript = s.value;
       });
+      const scan = root.querySelector("#mc-script-scan");
+      if (scan) scan.addEventListener("click", () => this.openPicker("scan-create"));
       // 输入方式切换:脚本直出模式隐藏小说目录行,显示脚本粘贴区(2026-08-23 用户要求:新建弹窗直接配置脚本)
       const applyMode = () => {
-        this.createMode = $("mc-mode-script").checked ? "script" : "novel";
-        $("mc-novel-row").style.display = this.createMode === "script" ? "none" : "";
-        $("mc-script-tip").style.display = this.createMode === "script" ? "" : "none";
-        $("mc-script-row").style.display = this.createMode === "script" ? "" : "none";
+        this.createMode = root.querySelector("#mc-mode-script").checked ? "script" : "novel";
+        root.querySelector("#mc-novel-row").style.display = this.createMode === "script" ? "none" : "";
+        root.querySelector("#mc-script-tip").style.display = this.createMode === "script" ? "" : "none";
+        root.querySelector("#mc-script-row").style.display = this.createMode === "script" ? "" : "none";
       };
-      $("mc-mode-novel").addEventListener("change", applyMode);
-      $("mc-mode-script").addEventListener("change", applyMode);
+      root.querySelector("#mc-mode-novel").addEventListener("change", applyMode);
+      root.querySelector("#mc-mode-script").addEventListener("change", applyMode);
     },
     doCreate() {
-      this.createName = $("mc-name").value.trim();
-      this.createNovel = this.createMode === "script" ? "" : $("mc-novel").value.trim();
-      this.createKey = $("mc-key").value.trim();
-      if (!this.createName) { $("mc-err").textContent = "请填剧名"; return; }
-      if (this.createMode !== "script" && !this.createNovel) { $("mc-err").textContent = "请选择小说目录（或切换「视频脚本直出」模式）"; return; }
+      // 2026-08-24 修复:多级弹窗下必须限定当前弹窗(全局 $("mc-*") 会读到旧弹窗)
+      const root = this._modalEl;
+      if (!root) return;
+      this.createName = root.querySelector("#mc-name").value.trim();
+      this.createNovel = this.createMode === "script" ? "" : root.querySelector("#mc-novel").value.trim();
+      this.createKey = root.querySelector("#mc-key").value.trim();
+      // 剧名兜底(2026-08-24 用户要求:选目录即自动填充;LLM 直出时才需要用户填):
+      // 选了小说目录/脚本目录但剧名仍为空(被手动清空)→ 自动补上
+      // (createScriptFrom 可能是分镜脚本文件 → 取所在目录名;也可能是目录 → 直接取)
+      if (!this.createName) {
+        let src = this.createNovel || this.createScriptFrom || "";
+        if (src) {
+          const parts = String(src).split(/[\\/]+/).filter(Boolean);
+          if (parts.length && /\.(md|txt|markdown)$/i.test(parts[parts.length - 1])) parts.pop(); // 脚本文件 → 父目录
+          if (parts.length) this.autoFillCreateName(parts.join("/"), true);
+        }
+        this.createName = this.createName || "";
+      }
+      if (!this.createName) { const m = "请填剧名（或选择小说目录/脚本目录自动填充）"; root.querySelector("#mc-err").textContent = m; this.showTip(m, "error"); return; }
+      if (this.createMode !== "script" && !this.createNovel) { const m = "请选择小说目录（或切换「视频脚本直出」模式）"; root.querySelector("#mc-err").textContent = m; this.showTip(m, "error"); return; }
       this.creating = true;
-      $("mc-do").textContent = "创建中…";
-      $("mc-do").disabled = true;
-      const remember = $("mc-remember").checked;
+      root.querySelector("#mc-do").textContent = "创建中…";
+      root.querySelector("#mc-do").disabled = true;
+      const remember = root.querySelector("#mc-remember").checked;
       const key = this.createKey;
       const saveFirst = (remember && key)
         ? post("/api/manju/settings", { apiKey: key }).catch(() => ({}))
@@ -3616,49 +4057,67 @@
           if (r.scriptMode) {
             // 2026-08-23 用户要求:视频脚本直出配置直接在新建弹窗操作——
             // 新建时粘贴的脚本自动保存并启用脚本直出;留空则提示后续配置
-            const script = (this.createScript || "").trim();
-            if (script) {
-              const proj = String(r.configPath || "").split(/[\\/]/).filter(Boolean).slice(-2, -1)[0] || this.createName;
-              post("/api/manju/script/save", { project: proj, episode: "EP01", text: script }).then((sr) => {
+            const proj = String(r.configPath || "").split(/[\\/]/).filter(Boolean).slice(-2, -1)[0] || this.createName;
+            if (this.createScriptFrom) {
+              // 「📁 从目录检测分镜脚本」选中的 → 创建后自动导入:
+              // createScriptAll=true 全部导入(目录里所有脚本每章一集),否则单项导入
+              const imp = this.createScriptAll
+                ? post("/api/manju/script/import-all-dir", { project: proj, episode: this.createScriptEp || "EP01", dir: this.createScriptFrom })
+                : post("/api/manju/script/import-dir", { project: proj, episode: this.createScriptEp || "EP01", file: this.createScriptFrom });
+              imp.then((sr) => {
                 this.refreshScriptStatus();
-                this.setNote(sr && sr.ok ? "🎬 项目已创建，脚本直出已启用（脚本已保存）" : "🎬 项目已创建（脚本直出）");
-              }).catch(() => this.setNote("🎬 项目已创建（脚本直出，脚本保存失败可到主页补充）"));
+                this.setNote(this.createScriptAll
+                  ? (sr && sr.ok ? "🎬 项目已创建，已全部导入 " + (sr.imported || 0) + "/" + (sr.total || 0) + " 个分镜脚本（每章一集）" : "🎬 项目已创建（脚本导入失败，可到主页补充）")
+                  : (sr && sr.ok ? "🎬 项目已创建，分镜脚本已直接导入（脚本直出已启用）" : "🎬 项目已创建（脚本导入失败，可到主页补充）"));
+              }).catch(() => this.setNote("🎬 项目已创建（脚本导入失败，可到主页补充）"));
+              this.createScriptFrom = ""; this.createScriptEp = ""; this.createScriptAll = false;
             } else {
-              this.setNote("🎬 项目已创建（视频脚本直出）→ 主页卡片粘贴脚本或从小说分镜脚本导入");
+              const script = (this.createScript || "").trim();
+              if (script) {
+                post("/api/manju/script/save", { project: proj, episode: "EP01", text: script }).then((sr) => {
+                  this.refreshScriptStatus();
+                  this.setNote(sr && sr.ok ? "🎬 项目已创建，脚本直出已启用（脚本已保存）" : "🎬 项目已创建（脚本直出）");
+                }).catch(() => this.setNote("🎬 项目已创建（脚本直出，脚本保存失败可到主页补充）"));
+              } else {
+                this.setNote("🎬 项目已创建（视频脚本直出）→ 主页卡片粘贴脚本、从小说分镜脚本导入或选择目录检测");
+              }
             }
           }
         } else {
-          $("mc-do").textContent = "创建项目";
-          $("mc-do").disabled = false;
-          $("mc-err").textContent = (r.output || r.error || "创建失败").trim();
+          root.querySelector("#mc-do").textContent = "创建项目";
+          root.querySelector("#mc-do").disabled = false;
+          root.querySelector("#mc-err").textContent = (r.output || r.error || "创建失败").trim();
         }
       }).catch((e) => {
         this.creating = false;
-        $("mc-do").textContent = "创建项目";
-        $("mc-do").disabled = false;
-        $("mc-err").textContent = "创建失败: " + e.message;
+        root.querySelector("#mc-do").textContent = "创建项目";
+        root.querySelector("#mc-do").disabled = false;
+        // 2026-08-24:失败必须可见(此前静默恢复按钮→用户"点了没反应")
+        const msg = (e && e.message) || "创建失败";
+        root.querySelector("#mc-err").textContent = msg;
+        this.setNote("创建项目失败: " + msg);
       });
     },
 
     /* 文件选择 */
     openPicker(mode) {
-      const cur = mode === "create" ? this.createNovel : this.novel;
+      const cur = mode === "create" ? this.createNovel : (mode === "scan" || mode === "scan-create" ? this.scanDir : this.novel);
       const start = cur ? dirOf(cur) : "C:/Mi/Ai/WorkBench/novel";
       this.picker = { mode, dir: start, entries: [], error: "" };
-      this.listDir(start);
+      this.listDir(start, true); // 首次:压新层(父弹窗保留,多级弹窗)
     },
-    listDir(dir) {
+    listDir(dir, fresh) {
       get("/api/fs/list?dir=" + encodeURIComponent(dir)).then((r) => {
         this.picker.dir = r.dir || dir;
         this.picker.entries = r.items || [];
         this.picker.error = r.error || "";
-        this.renderPicker();
+        this.renderPicker(fresh);
       }).catch((e) => {
         this.picker.error = e.message;
-        this.renderPicker();
+        this.renderPicker(fresh);
       });
     },
-    renderPicker() {
+    renderPicker(fresh) {
       const p = this.picker;
       const entries = p.entries.map((e) => {
         const isDir = e.isDir;
@@ -3670,9 +4129,10 @@
       }).join("");
       const adoptDir = p.mode === "create"
         ? `<button id="mp-adopt" class="hrs-btn hrs-btn-primary">选择此目录</button>`
-        : "";
-      this.openModal(p.mode === "create" ? "选择小说目录" : "选择小说文件",
-        `<div class="manju-picker">
+        : (p.mode === "scan" || p.mode === "scan-create"
+          ? `<button id="mp-adopt" class="hrs-btn hrs-btn-primary">检测此目录</button>`
+          : "");
+      const html = `<div class="manju-picker">
           <div class="manju-row">
             <span class="manju-meta manju-picker-path">${esc(p.dir)}</span>
             ${adoptDir}
@@ -3681,23 +4141,38 @@
           </div>
           ${p.error ? `<div class="manju-err-text">${esc(p.error)}</div>` : ""}
           <div class="manju-filelist">${entries || '<div class="manju-empty">空目录</div>'}</div>
-        </div>`);
-      document.querySelectorAll("#manju-modal .manju-file").forEach((f) =>
+        </div>`;
+      const title = p.mode === "create" ? "选择小说目录" : (p.mode === "scan" || p.mode === "scan-create" ? "选择目录检测分镜脚本" : "选择小说文件");
+      // 首次=压新层(父弹窗保留);上级/翻页=原地替换不压栈
+      if (fresh) this.openModal(title, html);
+      else this.rerenderModal(title, html);
+      if (this._modalEl) this._modalEl.querySelectorAll(".manju-file").forEach((f) =>
         f.addEventListener("click", () => this.pickGo(f.dataset.name, f.dataset.dir === "1"))
       );
       $("mp-up").addEventListener("click", () => this.listDir(dirOf(p.dir)));
       $("mp-cancel").addEventListener("click", () => this.closeModal());
       if (p.mode === "create") {
         $("mp-adopt").addEventListener("click", () => this.pickDir(p.dir));
+      } else if (p.mode === "scan") {
+        $("mp-adopt").addEventListener("click", () => this.scanScriptDir(p.dir, "import"));
+      } else if (p.mode === "scan-create") {
+        $("mp-adopt").addEventListener("click", () => this.scanScriptDir(p.dir, "create"));
       }
     },
     pickDir(dir) {
       this.createNovel = dir;
-      // 剧名自动填充目录名（用户可再改）
-      if (!this.createName) {
-        this.createName = String(dir).split(/[\\/]+/).filter(Boolean).pop() || "";
-      }
+      // 选小说目录自动填充剧名(用户手动改过则不覆盖;换目录时若未手动改则跟随更新)
+      this.autoFillCreateName(dir);
       this.renderCreate();
+    },
+    /* 剧名自动填充:取目录名;用户未手动改(空/仍是上次自动值)才更新;force=空名也直接填 */
+    autoFillCreateName(dir, force) {
+      const name = String(dir).split(/[\\/]+/).filter(Boolean).pop() || "";
+      if (!name) return;
+      if (force || !this.createName || this.createName === this._createNameAuto) {
+        this.createName = name;
+        this._createNameAuto = name;
+      }
     },
     pickGo(name, isDir) {
       const base = String(this.picker.dir).replace(/[\\/]+$/, "");
@@ -3706,9 +4181,7 @@
       else {
         if (this.picker.mode === "create") {
           this.createNovel = next;
-          if (!this.createName) {
-            this.createName = String(base).split(/[\\/]+/).filter(Boolean).pop() || "";
-          }
+          this.autoFillCreateName(base); // 选小说文件所在目录自动填充剧名
           this.renderCreate();
         } else {
           this.novel = next;
@@ -3722,4 +4195,9 @@
   };
 
   window.ManjuWorkbench = ManjuWorkbench;
+
+  // 2026-08-24:全局 JS 错误可见化(此前"点击没反应"= 异常被吞)
+  window.addEventListener("error", (e) => {
+    if (ManjuWorkbench.showTip) ManjuWorkbench.showTip("页面错误: " + (e.message || "未知错误"), "error");
+  });
 })();
