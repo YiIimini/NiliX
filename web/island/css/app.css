@@ -703,12 +703,16 @@ body:not(.no-effects) .core i {
 
 /* ============ 设备控制中心(2026-08-26 定稿排版:数据行同构 .row,操作区单行) ============ */
 .hw-row { align-items: center; }
-.hw-data { color: var(--txt, #cfe3ff); font-size: 11px; }
+/* 数据行:CPU/GPU 两组居中,竖线分隔(2026-08-26 用户定稿规格) */
+.hw-io { flex: 1; justify-content: center; gap: 12px; }
+.hw-io b { font-weight: 700; color: var(--txt, #cfe3ff); font-size: 11.5px; }
+.hw-io > span.mono > span { color: var(--muted, #7d8db0); }
+.hw-vsep { width: 1px; height: 13px; background: rgba(125, 141, 176, .45); flex: none; }
 .hw-ops {
-  display: flex; align-items: center; gap: 7px;
-  padding: 2px 12px 9px;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 2px 12px 4px;
 }
-.hw-modes { display: flex; gap: 5px; flex: 1; min-width: 0; }
+.hw-modes { display: flex; gap: 5px; }
 .hw-mode {
   flex: 1; height: 22px; padding: 0 2px;
   border: 1px solid rgba(125, 141, 176, .35); border-radius: 6px;

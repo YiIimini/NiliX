@@ -72,7 +72,7 @@
     const sh = el.scrollHeight || 0;
     let rh = 0;
     try { rh = Math.ceil(el.getBoundingClientRect().height); } catch (e) {}
-    return Math.max(1, sh, rh) + 16;
+    return Math.max(1, sh, rh) + 4; // 余量收窄:过多会在 footer 下留白(2026-08-26)
   }
   // 按内容高度自适应窗口(offsetHeight 同步强制布局,类切换后立即量到最终高度)
   function syncIslandSize() {
@@ -256,13 +256,12 @@
   // 设备控制中心渲染(2026-08-26 定稿排版):数据行=风扇双值;note 仅异常态显示(正常留白);
   // 未授权→按钮照常可点(点击即弹 UAC)
   function renderHW(hw) {
-    const fans = $("hw-fans"), note = $("hw-note");
+    const note = $("hw-note");
     const modes = $("hw-modes");
     const cool = $("hw-cool"), oc = $("hw-oc");
-    if (!fans) return;
-    if (hw.ok && hw.cpuFan > 0) {
-      fans.textContent = "CPU " + hw.cpuFan + "% · GPU " + (hw.gpuFan || "--") + "%";
-    } else { fans.textContent = "风扇 --"; }
+    const set2 = (id, v, unit) => { const el = $(id); if (el) el.textContent = (hw.ok && v > 0 ? Math.round(v) + unit : "--" + (unit === "%" ? "" : "°")); };
+    set2("hw-cpu", hw.cpuFan, "%"); set2("hw-gpu", hw.gpuFan, "%");
+    set2("hw-cput", hw.cpuTemp, "°"); set2("hw-gput", hw.gpuTemp, "°");
     if (hw.denied) {
       if (modes) modes.querySelectorAll(".hw-mode").forEach((b) => b.classList.remove("on"));
       if (note) note.textContent = "本机无雷神同源 root\wmi ACPIMethod 通道";
