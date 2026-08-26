@@ -1515,8 +1515,14 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 		lg.logf("📖 章节 " + ctx.chapters + "（" + strconv.Itoa(runes) + " 字）")
 	}
 	if runes > 20000 {
-		// 超长静默截断会让超出部分的剧情根本没进方案,视频自然对不上——必须明示
-		lg.logf("  ⚠️ 内容 " + strconv.Itoa(runes) + " 字超出 20000 字上限,超出部分可能未被方案覆盖(建议缩小章节范围或分集)")
+		// 超长静默截断会让超出部分的剧情根本没进方案,视频自然对不上——必须明示。
+		// 脚本直出:全文程序化解析(分镜表+六段式逐字),不受 LLM 20000 字上限约束;
+		// 仅当程序化解析失败回退 LLM 直出时才有真实截断风险(回退点另行告警)。
+		if ctx.scriptMode {
+			lg.logf("  ℹ️ 脚本 " + strconv.Itoa(runes) + " 字:直出模式全文程序化解析(不受 20000 字 LLM 上限约束;若解析失败回退 LLM 才有截断风险)")
+		} else {
+			lg.logf("  ⚠️ 内容 " + strconv.Itoa(runes) + " 字超出 20000 字上限,超出部分可能未被方案覆盖(建议缩小章节范围或分集)")
+		}
 	}
 	lg.logf("🤖 大模型直出 人物/场景/分镜" + manjuModeTag(ctx.scriptMode) + "...")
 	// 2026-08-25 防污染:style 净化丢弃词 + knowledge 模板缺失——明示用户,防静默(此前配置串里的

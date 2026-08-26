@@ -426,3 +426,47 @@ Cinematic film still, a giant divine fox true form with storm fur
 		t.Fatalf("无真身标注不应有 second_form, got %+v", chars)
 	}
 }
+
+// TestScriptValidateAutoPatch 未同步台词自动补写(2026-08-26):分镜表有、六段式无 →
+// 程序直接补 <d>/画外音,渲染含此句配音;重复校验不二次追加(幂等)。
+func TestScriptValidateAutoPatch(t *testing.T) {
+	manjuState.mu.Lock()
+	manjuState.log = ""
+	manjuState.mu.Unlock()
+	lg := &manjuLogger{state: manjuState}
+	raws := []scriptShotRaw{
+		{ID: 1, Duration: 6, Dialogue: "苏薇:你听不到我的声音吗", Narration: "旁白：雨夜的风声掠过屋顶。",
+			H3Prompt: "detailed_description: [Shot 1] At 00:06.000 已有的画面描述 <d>[中文]既有台词</d>"},
+	}
+	scriptValidateShots(raws, lg)
+	manjuState.mu.Lock()
+	logged := manjuState.log
+	manjuState.mu.Unlock()
+	if !strings.Contains(logged, "已自动补写") {
+		t.Fatalf("未同步台词应触发自动补写, log: %s", logged)
+	}
+	p := raws[0].H3Prompt
+	if !strings.Contains(p, "<d>你听不到我的声音吗</d>") {
+		t.Fatalf("对白应补进 <d>: %s", p)
+	}
+	if !strings.Contains(p, "off-screen voiceover: <d>雨夜的风声掠过屋顶</d>") {
+		t.Fatalf("旁白应补画外音: %s", p)
+	}
+	if !strings.Contains(p, "<d>[中文]既有台词</d>") {
+		t.Fatalf("既有对白不应被破坏: %s", p)
+	}
+	// 幂等:补后再校验,不再重复追加
+	manjuState.mu.Lock()
+	manjuState.log = ""
+	manjuState.mu.Unlock()
+	scriptValidateShots(raws, lg)
+	manjuState.mu.Lock()
+	logged = manjuState.log
+	manjuState.mu.Unlock()
+	if strings.Contains(logged, "已自动补写") {
+		t.Fatalf("补写后复核应零补写(幂等), log: %s", logged)
+	}
+	if strings.Count(raws[0].H3Prompt, "你听不到我的声音吗") != 1 {
+		t.Fatalf("不应重复补写: %s", raws[0].H3Prompt)
+	}
+}

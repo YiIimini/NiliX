@@ -403,29 +403,53 @@ func scriptValidateShots(raws []scriptShotRaw, lg *manjuLogger) {
 	if len(raws) >= 6 && len(durSet) == 1 {
 		lg.logf(fmt.Sprintf("  ⚠️ 机械质检: %d 镜时长全部 %ds,节奏单一(建议按内容疏密分布,快节奏镜短、抒情镜长)", len(raws), raws[0].Duration))
 	}
-	// 3) 台词/旁白 ↔ 六段式同步(前 8 字 Contains;超短句跳过)
-	for _, r := range raws {
+	// 3) 台词/旁白 ↔ 六段式同步:未同步句**自动补写**进提示词(对白 <d>/旁白画外音 <d>),
+	//    2026-08-26 升级:此前仅告警——分镜表台词列有、六段式没有时,渲染真的没有此句配音
+	//    (混沌灵根 15 镜实测),「提示用户核对」不如程序直接修好。
+	for i := range raws {
+		r := &raws[i]
 		if r.H3Prompt == "" {
 			continue
 		}
 		miss := 0
-		lines := strings.Split(r.Dialogue, "\n")
-		if narr := strings.TrimSpace(r.Narration); narr != "" {
-			lines = append(lines, narr)
-		}
-		for _, line := range lines {
+		var patch string
+		for _, line := range strings.Split(r.Dialogue, "\n") {
 			line = strings.TrimSpace(line)
-			if i := strings.IndexAny(line, ":："); i >= 0 && i < 16 {
-				line = strings.TrimSpace(line[i+1:])
+			if line == "" {
+				continue
+			}
+			if j := strings.IndexAny(line, ":："); j >= 0 && j < 16 {
+				line = strings.TrimSpace(line[j+1:])
 			}
 			key := string([]rune(line)[:minInt(8, len([]rune(line)))])
 			if len([]rune(key)) < 4 || strings.Contains(r.H3Prompt, key) {
 				continue
 			}
 			miss++
+			patch += "\n<d>" + line + "</d>"
+		}
+		if narr := strings.TrimSpace(r.Narration); narr != "" {
+			n := strings.TrimPrefix(narr, "旁白")
+			n = strings.TrimPrefix(strings.TrimPrefix(n, ":"), "：")
+			n = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(n, "。"), "."))
+			if n != "" {
+				key := string([]rune(n)[:minInt(8, len([]rune(n)))])
+				if len([]rune(key)) >= 4 && !strings.Contains(r.H3Prompt, key) {
+					miss++
+					// 官方画外音写法(base-en.txt §4.4):旁白由 H3 直出,不用 TTS
+					patch += "\nThe narrator says in an off-screen voiceover: <d>" + n + "</d> while the on-screen characters' lips remain completely closed."
+				}
+			}
 		}
 		if miss > 0 {
-			lg.logf(fmt.Sprintf("  ⚠️ 机械质检: 镜头 %d 有 %d 句台词/旁白未同步进六段式提示词(渲染将无此句配音,请核对 <d> 标记与 overall_soundscape)", r.ID, miss))
+			// 插到最后一个 </d> 之后(与既有对白同段);无 </d> 则追加末尾
+			if k := strings.LastIndex(r.H3Prompt, "</d>"); k >= 0 {
+				k += len("</d>")
+				r.H3Prompt = r.H3Prompt[:k] + patch + r.H3Prompt[k:]
+			} else {
+				r.H3Prompt += patch
+			}
+			lg.logf(fmt.Sprintf("  ✅ 机械质检: 镜头 %d 检出 %d 句台词/旁白未同步进六段式,已自动补写(<d>对白/画外音,渲染含此句配音)", r.ID, miss))
 		}
 	}
 }
