@@ -705,9 +705,11 @@ body:not(.no-effects) .core i {
 .hw-row { align-items: center; }
 /* 数据行:CPU/GPU 两组居中,竖线分隔(2026-08-26 用户定稿规格) */
 .hw-io { flex: 1; justify-content: center; gap: 12px; }
-.hw-io b { font-weight: 700; color: var(--txt, #cfe3ff); font-size: 11.5px; }
-.hw-io > span.mono > span { color: var(--muted, #7d8db0); }
-.hw-vsep { width: 1px; height: 13px; background: rgba(125, 141, 176, .45); flex: none; }
+/* 层次:标签弱(muted) → 数值亮(粗) → 温度中弱,一眼先看到数值 */
+.hw-io .mono { color: var(--muted, #7d8db0); font-size: 10.5px; letter-spacing: .5px; }
+.hw-io b { font-weight: 700; color: var(--txt, #e8f1ff); font-size: 11.5px; letter-spacing: 0; }
+.hw-io .mono > span { color: color-mix(in srgb, var(--txt, #cfe3ff) 62%, transparent); }
+.hw-vsep { width: 1px; height: 12px; background: rgba(125, 141, 176, .3); flex: none; }
 .hw-ops {
   display: flex; align-items: center; justify-content: center; gap: 10px;
   padding: 2px 12px 4px;

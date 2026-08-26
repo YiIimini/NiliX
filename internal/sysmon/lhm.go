@@ -44,7 +44,10 @@ func lhmExePath() string {
 
 // lhmsensor 只读传感器、双开无冲突;外部已跑的实例 stdout 我们读不到,
 // 绝不能因「进程已存在」而放弃自启——那会让温度永远回退 ACPI 热区假值(2026-08-26 修复)。
+// 2026-08-26 补丁:启动前清理孤儿(旧服务被杀残留,曾堆积 8 个×60MB);
+// 子进程绑 Job Object(KILL_ON_JOB_CLOSE)——服务退出/被杀时 OS 自动回收,不再产生新孤儿。
 func (l *LHM) run() {
+	killOrphanLHM()
 	exe := lhmExePath()
 	if exe == "" {
 		return
@@ -57,6 +60,7 @@ func (l *LHM) run() {
 	if err := cmd.Start(); err != nil {
 		return
 	}
+	bindJobKillOnParentExit(cmd.Process)
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1<<20), 1<<20)
 	for scanner.Scan() {
