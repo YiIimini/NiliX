@@ -253,32 +253,27 @@
   };
 
   // 设备控制中心渲染:助手/管理员任一在位→数据全亮;未授权→按钮照常可点(点击即弹 UAC)
+  // 设备控制中心渲染(2026-08-26 定稿排版):数据行=风扇双值;note 仅异常态显示(正常留白);
+  // 未授权→按钮照常可点(点击即弹 UAC)
   function renderHW(hw) {
-    const box = $("hw-box");
-    if (!box) return;
-    const fans = $("hw-fans"), fanmax = $("hw-fanmax"), note = $("hw-note");
+    const fans = $("hw-fans"), note = $("hw-note");
     const modes = $("hw-modes");
     const cool = $("hw-cool"), oc = $("hw-oc");
+    if (!fans) return;
     if (hw.ok && hw.cpuFan > 0) {
-      fans.textContent = "CPU 风扇 " + hw.cpuFan + "%";
-    } else { fans.textContent = "CPU 风扇 --"; }
-    if (hw.ok && hw.gpuFan > 0) {
-      $("gpu-fan").textContent = "风扇 GPU " + hw.gpuFan + "%";
-    } else { $("gpu-fan").textContent = ""; }
-    fanmax.textContent = "";
-
-    box.classList.toggle("locked", !hw.ok); // 未就绪整体轻提示,但按钮不禁用
+      fans.textContent = "CPU " + hw.cpuFan + "% · GPU " + (hw.gpuFan || "--") + "%";
+    } else { fans.textContent = "风扇 --"; }
     if (hw.denied) {
       if (modes) modes.querySelectorAll(".hw-mode").forEach((b) => b.classList.remove("on"));
-      if (note) note.textContent = "本机无雷神同源 root\\wmi ACPIMethod 通道";
+      if (note) note.textContent = "本机无雷神同源 root\wmi ACPIMethod 通道";
       return;
     }
     if (!hw.ok) {
       if (modes) modes.querySelectorAll(".hw-mode").forEach((b) => b.classList.remove("on"));
-      if (note) note.textContent = "风扇/模式/温度待授权——点击任意操作即弹管理员授权(仅一次)";
+      if (note) note.textContent = "点击任意操作即请求管理员授权(仅一次),确认后数据自动点亮";
       return;
     }
-    if (note) note.textContent = "模式 " + (hw.modeName || hw.mode) + (hw.quickCool ? " · 制冷中" : "");
+    if (note) note.textContent = ""; // 正常态零冗余:模式高亮/开关态已自明
     if (hw.modeOK && modes) {
       modes.querySelectorAll(".hw-mode").forEach((b) => {
         b.classList.toggle("on", Number(b.dataset.mode) === hw.mode);
