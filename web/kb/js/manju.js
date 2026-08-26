@@ -768,9 +768,28 @@
       $("cc-cancel").addEventListener("click", () => this.closeModal());
       $("cc-confirm").addEventListener("click", () => { this.closeModal(); this._runCacheClear(btn, false); });
       $("cc-advanced").addEventListener("click", () => {
-        if (!confirm("高级清理将删除 ComfyUI 共享 input/output 目录里的全部产物(含其他项目的图片/视频)。\n此操作不可恢复,确定继续？")) return;
-        this.closeModal();
-        this._runCacheClear(btn, true);
+        // 应用内危险确认弹窗(2026-08-26 美化:弃原生 confirm 白框,与主题统一)
+        this.openModal("⚠️ 确认彻底清场?",
+          `<div class="cc-confirm">
+            <div class="cc-confirm-ic">🔥</div>
+            <p class="cc-confirm-q">即将删除以下内容,且<b>不可恢复</b>:</p>
+            <ul class="cc-confirm-list">
+              <li>ComfyUI input / output <b>全部产物</b>(含其他项目的图片/视频)</li>
+              <li>成片 / 预告片 · 运行日志数据</li>
+              <li>普通清理的全部内容(方案 / 镜头 / 缓存)</li>
+            </ul>
+            <p class="cc-confirm-warn">请确认 ComfyUI 未在运行关键任务</p>
+            <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+              <button id="ccx-cancel" class="hrs-btn">取消</button>
+              <button id="ccx-go" class="hrs-btn cc-btn-danger">我已确认,清场</button>
+            </div>
+          </div>`);
+        $("ccx-cancel").addEventListener("click", () => this.closeModal());
+        $("ccx-go").addEventListener("click", () => {
+          this.closeModal(); // 确认弹窗
+          this.closeModal(); // 清理选择弹窗
+          this._runCacheClear(btn, true);
+        });
       });
     },
     _runCacheClear(btn, advanced) {
