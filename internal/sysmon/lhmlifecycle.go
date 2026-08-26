@@ -7,6 +7,7 @@ package sysmon
 //     OS 自动终结 job 内子进程——根治。
 
 import (
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -83,8 +84,12 @@ func bindJobKillOnParentExit(proc *os.Process) {
 		}
 		var info extendedLimit
 		info.basic.limitFlags = 0x2000 // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-		si.Call(h, 9, uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info))
-		ap.Call(h, hp.Handle())
+		if r1, _, e1 := si.Call(h, 9, uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info)); r1 == 0 {
+			log.Printf("[lhm] SetInformationJobObject 失败: %v", e1)
+		}
+		if r2, _, e2 := ap.Call(h, hp.Handle()); r2 == 0 {
+			log.Printf("[lhm] AssignProcessToJobObject 失败: %v", e2)
+		}
 		// handle 故意不关:保持 job 存活至本进程结束;进程退出 OS 关句柄→job 内子进程终结
 	})
 }

@@ -17,6 +17,7 @@ type LHM struct {
 	cpu *float64
 	mem *float64
 	gpu *float64
+	pid int // lhmsensor 子进程 PID(退出时主动回收:Job 保险之外的确定手段)
 }
 
 func NewLHM() *LHM {
@@ -60,6 +61,9 @@ func (l *LHM) run() {
 	if err := cmd.Start(); err != nil {
 		return
 	}
+	l.mu.Lock()
+	l.pid = cmd.Process.Pid
+	l.mu.Unlock()
 	bindJobKillOnParentExit(cmd.Process)
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1<<20), 1<<20)
@@ -108,6 +112,21 @@ func (l *LHM) MemTemp() (float64, bool) {
 		return 0, false
 	}
 	return *l.mem, true
+}
+
+// Kill 终止自己拉起的 lhmsensor(服务优雅退出时主动回收;对 taskkill /F 场景,
+// 由下次启动的 killOrphanLHM 兜底清扫)。
+func (l *LHM) Kill() {
+	l.mu.Lock()
+	pid := l.pid
+	l.pid = 0
+	l.mu.Unlock()
+	if pid <= 0 {
+		return
+	}
+	if p, err := os.FindProcess(pid); err == nil {
+		_ = p.Kill()
+	}
 }
 
 // GPUTemp LHM 的 GPU 温度(仅作 nvidia-smi 失效时的兜底源)。

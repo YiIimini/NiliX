@@ -73,6 +73,12 @@ func RunHWAgent() int {
 		for i := 0; i < 3; i++ {
 			if c, ok := readHWCMD(); ok && c.ID != lastID {
 				lastID = c.ID
+				if c.Act == "exit" {
+					// 主服务退出时优雅关停(管理员进程外部杀不动,文件命令自退)
+					writeHWCMDResult(c, nil)
+					_ = os.Remove(hwStatePath()) // 清状态文件,防主服务误判助手健康
+					os.Exit(0)
+				}
 				writeHWCMDResult(c, execHWCMD(e, c))
 				break
 			}
@@ -184,6 +190,12 @@ func SendHWCmd(act string, val interface{}) error {
 		time.Sleep(300 * time.Millisecond)
 	}
 	return fmt.Errorf("硬件助手未响应(状态文件无结果)")
+}
+
+// ShutdownHWAgent 请求提权助手退出(exit 文件命令,助手自退;权限无关)。
+// 旧版助手(<2026-08-26 exit 命令)不认识该命令会忽略——需任务管理器手动结束一次完成换代。
+func ShutdownHWAgent() {
+	writeHWJSON(hwCmdPath(), hwCmdFile{ID: uint64(time.Now().UnixNano()), Act: "exit"})
 }
 
 // EnsureHWAgent 拉起提权助手(UAC 弹窗一次);返回错误=用户取消/失败。

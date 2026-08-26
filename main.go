@@ -467,6 +467,9 @@ func runMainWindowWebView() {
 	w.Run()
 }
 
+// gSysmon 系统采集器引用(onExit 主动回收 lhmsensor)。
+var gSysmon *sysmon.Collector
+
 var (
 	procEnumWindows      = user32Lazy.NewProc("EnumWindows")
 	procGetTextW         = user32Lazy.NewProc("GetWindowTextW")
@@ -625,6 +628,7 @@ func main() {
 	outDir := "clips"
 	renderMgr := render.NewManager(backend.NewComfyUIClient(cfg.Render.ComfyURL))
 	sysmonCol := sysmon.NewCollector()
+	gSysmon = sysmonCol // onExit 优雅退出时主动回收 lhmsensor 子进程
 	// 启动即请求一次硬件助手授权(UAC 弹一次;点否后 CTL 按钮可再次触发)——
 	// 用户体验定调 2026-08-26:启动弹授权或点按钮弹授权,拒绝「解锁」前置概念。
 	go sysmon.AutoEnsureHWAgent()
@@ -1429,6 +1433,16 @@ func onExit() {
 	_ = os.MkdirAll("logs", 0755)
 	_ = os.WriteFile(filepath.Join("logs", "graceful_exit"), []byte(time.Now().Format(time.RFC3339)), 0644)
 	closeMainWindow() // 全退(灵动岛 X / 托盘结束应用):一并关闭管理主窗口
+	// 全家桶清理(2026-08-26 用户反馈「退出后残留进程」):
+	// ①提权硬件助手(管理员进程外部杀不动→文件通道 exit 命令自退);
+	// ②ComfyUI(本服务代管拉起的,随服务退出而停)。
+	sysmon.ShutdownHWAgent()
+	if gSysmon != nil {
+		gSysmon.LHM().Kill() // lhmsensor 主动回收(Job 兜底之外,正常退出 100% 覆盖)
+	}
+	if err := api.ComfyStop(); err != nil {
+		log.Printf("onExit: 停止 ComfyUI: %v", err)
+	}
 	log.Println("NiliX 已退出")
 }
 

@@ -280,12 +280,31 @@ func stopComfy() error {
 	}
 	// 兜底:按当前生效端口找(可能用户手动重启过 ComfyUI,进程非本服务启动)
 	pid := findPortPID(currentPort())
+	if pid > 0 {
+		cmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		if err := cmd.Run(); err == nil {
+			killComfyWorkers()
+			return nil
+		}
+	}
+	// 端口已无人监听(主进程已死)仍可能有 spawn worker 孤儿残留(2026-08-26 实测)——
+	// 按命令行精确清扫:只杀命令行含 ComfyUI 路径的 python,绝不误伤其他 python
+	killComfyWorkers()
 	if pid == 0 {
 		return errors.New("comfy not running")
 	}
-	cmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+	return nil
+}
+
+// killComfyWorkers 清扫自包含 ComfyUI(ComfyRootDir)的 python 孤儿 worker。
+// 匹配限定本程序目录——用户另装的 ComfyUI Desktop(.hub 等)是独立应用,绝不误杀(2026-08-26)。
+func killComfyWorkers() {
+	root := strings.ReplaceAll(ComfyRootDir, "'", "''")
+	script := `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like '*` + root + `*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return cmd.Run()
+	_ = cmd.Run()
 }
 
 func comfyLogTail() string {

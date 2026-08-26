@@ -187,6 +187,9 @@ func NewCollector() *Collector {
 // EC 设备控制中心句柄(供 API 控制端点调用)。
 func (c *Collector) EC() *ECHW { return c.ec }
 
+// LHM lhmsensor 句柄(服务优雅退出时主动 Kill,防子进程残留)。
+func (c *Collector) LHM() *LHM { return c.lhm }
+
 // ecLoop 后台轮询 EC 状态(3s)。数据源优先级(2026-08-26 定稿):
 //   - 主服务自身管理员 → 直接 PS 采样(原通道);
 //   - 否则读提权助手 logs/hw/hw_state.json(UAC 一次授权后常驻);助手未跑=未授权态,
