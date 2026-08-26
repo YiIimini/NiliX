@@ -755,7 +755,7 @@
             <ul class="cc-list">
               <li>普通清理全部内容</li>
               <li>ComfyUI input / output 全部产物</li>
-              <li><b>成片 / 预告片</b> · 运行日志数据</li>
+              <li><b>成片 / 预告片</b> · <b>角色定妆照</b> · 运行日志</li>
             </ul>
             <p class="cc-keep cc-warn">⚠ 渲染产物将被清空需重渲;含其他项目文件</p>
             <button id="cc-advanced" class="hrs-btn cc-btn-danger">高级清理</button>
@@ -775,7 +775,8 @@
             <p class="cc-confirm-q">即将删除以下内容,且<b>不可恢复</b>:</p>
             <ul class="cc-confirm-list">
               <li>ComfyUI input / output <b>全部产物</b>(含其他项目的图片/视频)</li>
-              <li>成片 / 预告片 · 运行日志数据</li>
+              <li>成片 / 预告片 · 角色定妆照(characters 全部)</li>
+              <li>运行日志数据</li>
               <li>普通清理的全部内容(方案 / 镜头 / 缓存)</li>
             </ul>
             <p class="cc-confirm-warn">请确认 ComfyUI 未在运行关键任务</p>
