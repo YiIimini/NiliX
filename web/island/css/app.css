@@ -730,7 +730,6 @@ body:not(.no-effects) .core i {
 }
 .hw-unlock:hover { background: rgba(251, 191, 36, .16); box-shadow: 0 0 10px rgba(251, 191, 36, .25); }
 .hw-unlock:disabled { opacity: .6; cursor: wait; }
-/* 锁定态:操作按钮常驻但禁用半透明(不隐藏,保持排版完整) */
-.hw-box.locked .hw-mode { opacity: .38; cursor: not-allowed; }
-.hw-box.locked .hw-mode:hover { border-color: rgba(125, 141, 176, .35); color: var(--muted, #7d8db0); }
-.hw-box.locked .hw-sw { opacity: .55; cursor: not-allowed; }
+/* 未就绪态(待授权):数据文字淡化,按钮保持可点(点击即弹 UAC 授权) */
+.hw-box.locked .hw-fans, .hw-box.locked .hw-fanmax { opacity: .4; }
+#hw-note.hw-note-flash { color: #fbbf24; }

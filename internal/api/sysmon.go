@@ -3,8 +3,6 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"time"
 
 	"nilix/internal/sysmon"
 )
@@ -15,12 +13,36 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.sysmon.Snapshot())
 }
 
+// ecExec EC 控制路由(2026-08-26 用户体验定稿——授权即点即弹,拒绝「解锁」前置概念):
+// 主服务自身管理员 → 直执;提权助手健康 → 文件通道下发;否则拉起助手(UAC 一次)并返回 pending。
+func (s *Server) ecExec(act string, val interface{}) (pending bool, err error) {
+	if sysmon.IsAdmin() {
+		ec := s.sysmon.EC()
+		switch act {
+		case "mode":
+			v, _ := val.(float64)
+			return false, ec.SetMode(uint32(v))
+		case "cool":
+			v, _ := val.(bool)
+			return false, ec.SetQuickCool(v)
+		}
+		return false, nil
+	}
+	if _, ok := sysmon.ReadHWAgentState(); ok {
+		return false, sysmon.SendHWCmd(act, val)
+	}
+	// 未授权:拉起提权助手(UAC 弹窗一次);授权后数据自动点亮,本次操作稍后重试即可
+	if e := sysmon.EnsureHWAgent(); e != nil {
+		return false, e
+	}
+	return true, nil
+}
+
 // handleHWCtl 设备控制中心(雷神同源通道):
 //
-//	{"act":"mode","val":2}          性能模式 0 轻效 / 1 进阶 / 2 巅峰(需管理员)
-//	{"act":"cool","val":true}       快速制冷 开/关(需管理员)
-//	{"act":"oc","val":true}         一键超频 开/关(NVAPI,免管理员)
-//	{"act":"elevate"}               以管理员重启 NiliX 解锁 EC 通道
+//	{"act":"mode","val":2}    性能模式 0 轻效 / 1 进阶 / 2 巅峰
+//	{"act":"cool","val":true} 快速制冷 开/关
+//	{"act":"oc","val":true}   一键超频 开/关(NVAPI,免管理员)
 func (s *Server) handleHWCtl(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Act string          `json:"act"`
@@ -30,16 +52,15 @@ func (s *Server) handleHWCtl(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "参数错误")
 		return
 	}
-	ec := s.sysmon.EC()
 	switch req.Act {
 	case "mode":
-		var v uint32
+		var v float64
 		if json.Unmarshal(req.Val, &v) != nil || v > 3 {
 			writeErr(w, http.StatusBadRequest, "模式值非法(0 轻效 / 1 进阶 / 2 巅峰)")
 			return
 		}
-		if err := ec.SetMode(v); err != nil {
-			writeErr(w, http.StatusForbidden, err.Error())
+		if pending, err := s.ecExec("mode", v); pending || err != nil {
+			writeHWCtlResult(w, pending, err)
 			return
 		}
 	case "cool":
@@ -48,8 +69,8 @@ func (s *Server) handleHWCtl(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "布尔值非法")
 			return
 		}
-		if err := ec.SetQuickCool(v); err != nil {
-			writeErr(w, http.StatusForbidden, err.Error())
+		if pending, err := s.ecExec("cool", v); pending || err != nil {
+			writeHWCtlResult(w, pending, err)
 			return
 		}
 	case "oc":
@@ -66,25 +87,20 @@ func (s *Server) handleHWCtl(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusConflict, "超频设置未生效(NVAPI 不可用或显卡拒绝)")
 			return
 		}
-	case "elevate":
-		exe, err := os.Executable()
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "定位自身失败: "+err.Error())
-			return
-		}
-		if err := sysmon.ElevateRestart(exe, "-config settings.json -port 8787"); err != nil {
-			writeErr(w, http.StatusForbidden, "提权被取消或失败: "+err.Error())
-			return
-		}
-		// 新管理员实例即将拉起;旧实例让出端口(响应先送达,再延迟退出)
-		go func() {
-			time.Sleep(1200 * time.Millisecond)
-			os.Exit(0)
-		}()
 	default:
 		writeErr(w, http.StatusBadRequest, "未知操作: "+req.Act)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "pending": false})
+}
+
+// writeHWCtlResult pending=已弹 UAC 待确认(200,前端提示);err=真失败(403)。
+func writeHWCtlResult(w http.ResponseWriter, pending bool, err error) {
+	if err != nil {
+		writeErr(w, http.StatusForbidden, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "pending": true, "msg": "已请求管理员授权(仅一次),确认后风扇/模式/温度自动点亮"})
 }

@@ -247,42 +247,30 @@
     setFill(fillEl, pct);
   };
 
-  // 设备控制中心渲染:EC 可用→风扇/模式/开关实时态;被拒→解锁按钮引导提权
+  // 设备控制中心渲染:助手/管理员任一在位→数据全亮;未授权→按钮照常可点(点击即弹 UAC)
   function renderHW(hw) {
     const box = $("hw-box");
     if (!box) return;
     const fans = $("hw-fans"), fanmax = $("hw-fanmax"), note = $("hw-note");
-    const modes = $("hw-modes"), unlock = $("hw-unlock");
+    const modes = $("hw-modes");
     const cool = $("hw-cool"), oc = $("hw-oc");
-    // GPU 风扇副行(独立于控制卡,CPU 风扇并入控制卡首行)
     if (hw.ok && hw.cpuFan > 0) {
-      fans.textContent = "CPU " + hw.cpuFan + " RPM";
-    } else { fans.textContent = "CPU --"; }
+      fans.textContent = "CPU 风扇 " + hw.cpuFan + "%";
+    } else { fans.textContent = "CPU 风扇 --"; }
     if (hw.ok && hw.gpuFan > 0) {
-      $("gpu-fan").textContent = "风扇 GPU " + hw.gpuFan + " RPM";
+      $("gpu-fan").textContent = "风扇 GPU " + hw.gpuFan + "%";
     } else { $("gpu-fan").textContent = ""; }
-    if (hw.ok && hw.gpuFanMax > 0) {
-      fanmax.textContent = "/ " + hw.gpuFanMax;
-    } else { fanmax.textContent = ""; }
+    fanmax.textContent = "";
 
-    const locked = !!hw.denied || (!hw.ok && !hw.admin);
-    box.classList.toggle("locked", locked);
-    if (unlock) unlock.classList.toggle("hidden", !locked);
-    // 操作按钮常驻可见(用户要求):锁定态禁用半透明,不整块隐藏
-    if (modes) {
-      modes.querySelectorAll(".hw-mode").forEach((b) => { b.disabled = locked; });
-    }
-    const swRow = document.querySelector(".hw-switches");
-    if (swRow) {
-      cool.disabled = locked; // 超频免管理员恒可用,制冷锁定态禁用
-    }
-    if (locked) {
+    box.classList.toggle("locked", !hw.ok); // 未就绪整体轻提示,但按钮不禁用
+    if (hw.denied) {
       if (modes) modes.querySelectorAll(".hw-mode").forEach((b) => b.classList.remove("on"));
-      if (note) note.textContent = "模式/制冷/风扇需管理员令牌(超频免提权),点下方解锁";
+      if (note) note.textContent = "本机无雷神同源 root\\wmi ACPIMethod 通道";
       return;
     }
     if (!hw.ok) {
-      if (note) note.textContent = "本机无雷神同源 root\\wmi ACPIMethod 通道";
+      if (modes) modes.querySelectorAll(".hw-mode").forEach((b) => b.classList.remove("on"));
+      if (note) note.textContent = "风扇/模式/温度待授权——点击任意操作即弹管理员授权(仅一次)";
       return;
     }
     if (note) note.textContent = "模式 " + (hw.modeName || hw.mode) + (hw.quickCool ? " · 制冷中" : "");
@@ -295,16 +283,21 @@
     if (oc) oc.checked = !!hw.overclock;
   }
 
-  // 设备控制事件:模式/制冷/超频/提权解锁
+  // 设备控制事件:模式/制冷/超频;pending=已弹 UAC 待确认,note 内联提示(不打断)
   function hwPost(act, val) {
     const body = val === undefined ? { act: act } : { act: act, val: val };
     const headers = { "Content-Type": "application/json" };
     if (nilixTok()) headers["X-NiliX-Token"] = nilixTok();
     return fetch("/api/hwctl", { method: "POST", headers: headers, body: JSON.stringify(body) })
-      .then((r) => {
-        if (r.ok) return;
-        return r.json().catch(() => ({})).then((j) => { throw new Error(j.error || "HTTP " + r.status); });
-      });
+      .then((r) => r.json().catch(() => ({})).then((j) => {
+        if (r.ok && j.pending) return j; // 200+pending:UAC 已弹,等待用户确认
+        if (r.ok && j.ok) return j;
+        throw new Error(j.error || "HTTP " + r.status);
+      }));
+  }
+  function hwNote(msg) {
+    const n = $("hw-note");
+    if (n) { n.textContent = msg; n.classList.add("hw-note-flash"); setTimeout(() => n.classList.remove("hw-note-flash"), 2600); }
   }
   function bindHW() {
     const modes = $("hw-modes");
@@ -312,29 +305,24 @@
       const b = e.target.closest(".hw-mode");
       if (!b || b.classList.contains("on")) return;
       b.dataset.label = b.textContent; b.textContent = "…";
-      hwPost("mode", Number(b.dataset.mode)).catch(alertErr).finally(() => {
+      hwPost("mode", Number(b.dataset.mode)).then((j) => {
+        if (j && j.pending) hwNote(j.msg || "已请求授权,确认后自动生效");
+      }).catch((e) => hwNote("操作失败: " + (e.message || e))).finally(() => {
         b.textContent = b.dataset.label || b.textContent;
       });
     });
     const cool = $("hw-cool");
     if (cool) cool.addEventListener("change", function () {
       const on = this.checked; this.checkedLocked = true;
-      hwPost("cool", on).catch((e) => { this.checked = !on; alertErr(e); }).finally(() => { this.checkedLocked = false; });
+      hwPost("cool", on).then((j) => {
+        if (j && j.pending) { hwNote(j.msg || "已请求授权,确认后自动生效"); this.checked = !on; }
+      }).catch((e) => { this.checked = !on; hwNote("操作失败: " + (e.message || e)); }).finally(() => { this.checkedLocked = false; });
     });
     const oc = $("hw-oc");
     if (oc) oc.addEventListener("change", function () {
       const on = this.checked;
-      hwPost("oc", on).catch((e) => { this.checked = !on; alertErr(e); });
+      hwPost("oc", on).catch((e) => { this.checked = !on; hwNote("操作失败: " + (e.message || e)); });
     });
-    const unlock = $("hw-unlock");
-    if (unlock) unlock.addEventListener("click", function () {
-      if (!confirm("将以管理员身份重启 NiliX(UAC 弹窗确认一次),解锁风扇/性能模式/核心温度。继续?")) return;
-      this.textContent = "提权中…"; this.disabled = true;
-      hwPost("elevate").catch((e) => { alertErr(e); this.textContent = "🔒 解锁设备控制"; this.disabled = false; });
-    });
-  }
-  function alertErr(e) {
-    try { console.warn("hwctl:", e && e.message); } catch (_) {}
   }
 
   function renderCores(cores) {

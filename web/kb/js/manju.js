@@ -2611,7 +2611,7 @@
         setBar("gpu", gpuPct != null ? gpuPct : 0, g.present);
         // 风扇转速(雷神同源 EC 通道;需管理员,未解锁时留空)+ GPU 卡 title 补显存/算力明细
         const hw = r.hw || {};
-        const fanTxt = (v) => (hw.ok && v > 0 ? Math.round(v) + "rpm" : "");
+        const fanTxt = (v) => (hw.ok && v > 0 ? Math.round(v) + "%" : "");   // EC 风扇值为占空比 0-100
         ["cpu", "gpu"].forEach((k) => {
           const el = wrap.querySelector(`[data-k="${k}"] .ms-fan`);
           if (el) el.textContent = fanTxt(k === "cpu" ? hw.cpuFan : hw.gpuFan);
@@ -2626,7 +2626,7 @@
         if (cpuIt) {
           const cores = (c.cores || []).length;
           cpuIt.title = "CPU " + pct(c.usage) + " · " + cores + " 线程" + (c.hasTemp ? " · 核心 " + Math.round(c.temp) + "℃" : "")
-            + (hw.ok && hw.cpuFan > 0 ? " · 风扇 " + hw.cpuFan + "rpm" : "");
+            + (hw.ok && hw.cpuFan > 0 ? " · 风扇 " + hw.cpuFan + "%" : "");
         }
         // 温度不可用时给出可行动的提示:CPU 核心温度唯一来源 LHM 需要管理员权限(2026-08-26)
         const cpuEm = wrap.querySelector('[data-k="cpu"] em');

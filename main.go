@@ -527,6 +527,12 @@ func main() {
 		return
 	}
 
+	// 提权硬件助手模式:UAC 授权后常驻,替普通权限主服务读写 EC(风扇/模式/温度)。
+	// 通信走 logs/hw/ 文件通道,详见 internal/sysmon/hwagent.go。
+	if len(os.Args) > 1 && os.Args[1] == "--hwagent" {
+		os.Exit(sysmon.RunHWAgent())
+	}
+
 	port := flag.String("port", "8787", "监听端口")
 	cfgPath := flag.String("config", "settings.json", "设置文件路径")
 	kbRoot := flag.String("kb", `C:\Mi\Ai\WorkBench\zhishiku`, "知识库根目录")
@@ -606,6 +612,9 @@ func main() {
 	outDir := "clips"
 	renderMgr := render.NewManager(backend.NewComfyUIClient(cfg.Render.ComfyURL))
 	sysmonCol := sysmon.NewCollector()
+	// 启动即请求一次硬件助手授权(UAC 弹一次;点否后 CTL 按钮可再次触发)——
+	// 用户体验定调 2026-08-26:启动弹授权或点按钮弹授权,拒绝「解锁」前置概念。
+	go sysmon.AutoEnsureHWAgent()
 	kbStore := kb_work.NewStore(*kbRoot)
 	kbSub, _ := fs.Sub(kbFS, "web/kb")
 	islandSub, _ := fs.Sub(islandFS, "web/island")

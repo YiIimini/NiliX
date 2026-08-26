@@ -187,11 +187,18 @@ func NewCollector() *Collector {
 // EC 设备控制中心句柄(供 API 控制端点调用)。
 func (c *Collector) EC() *ECHW { return c.ec }
 
-// ecLoop 后台轮询 EC(3s);权限被拒时指数退避至 30s(提权重启后自动恢复)。
+// ecLoop 后台轮询 EC 状态(3s)。数据源优先级(2026-08-26 定稿):
+//   - 主服务自身管理员 → 直接 PS 采样(原通道);
+//   - 否则读提权助手 logs/hw/hw_state.json(UAC 一次授权后常驻);助手未跑=未授权态,
+//     由 AutoEnsureHWAgent / CTL 按钮点击拉起,采样循环自身绝不弹 UAC。
 func (c *Collector) ecLoop() {
-	backoff := 3 * time.Second
 	for {
-		s := c.ec.Sample()
+		var s ECHWSample
+		if IsAdmin() {
+			s = c.ec.Sample()
+		} else if st, ok := ReadHWAgentState(); ok {
+			s = st
+		}
 		c.mu.Lock()
 		c.hwCache = HW{
 			OK: s.OK, Denied: s.Denied, Admin: IsAdmin(),
@@ -203,14 +210,7 @@ func (c *Collector) ecLoop() {
 		}
 		c.hwAt = time.Now()
 		c.mu.Unlock()
-		if s.OK {
-			backoff = 3 * time.Second
-		} else if s.Denied {
-			if backoff < 30*time.Second {
-				backoff *= 2
-			}
-		}
-		time.Sleep(backoff)
+		time.Sleep(3 * time.Second)
 	}
 }
 
