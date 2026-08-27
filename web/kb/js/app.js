@@ -853,19 +853,31 @@ const App = {
       cur = null;
       if (tip) { tip.remove(); tip = null; }
     };
-    const show = (el, x, y) => {
+    /* 锚定气泡:元素中心上方;视口贴边时水平夹紧、贴顶时翻到元素下方。
+       箭头(::before)跟随元素中心,夹紧/翻转都不脱离目标——否则气泡会像在提示别的元素。 */
+    const positionTip = (el) => {
+      const r = el.getBoundingClientRect();
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      let tx = r.left + r.width / 2 - tw / 2;
+      tx = Math.max(8, Math.min(innerWidth - tw - 8, tx));
+      let ty = r.top - th - 12;
+      const flip = ty < 8;
+      if (flip) ty = r.bottom + 12;              // 贴顶翻到下方,箭头翻底朝上
+      tip.style.left = tx + "px";
+      tip.style.top = ty + "px";
+      tip.classList.toggle("flip", flip);
+      // 箭头贴到元素中心正上方(气泡被夹紧后中心已偏离元素,箭头必须跟锚点走)
+      const ax = r.left + r.width / 2 - tx;
+      tip.style.setProperty("--tip-arrow-x", Math.max(10, Math.min(tw - 10, ax)) + "px");
+    };
+    const show = (el) => {
       if (tip) tip.remove();
       tip = document.createElement("div");
       tip.className = "tip-bubble";
       tip.textContent = el.dataset.tip || "";
       if (!tip.textContent.trim()) { tip = null; return; }
       document.body.appendChild(tip);
-      const r = tip.getBoundingClientRect();
-      let tx = x - r.width / 2, ty = y - r.height - 12;
-      tx = Math.max(8, Math.min(innerWidth - r.width - 8, tx));
-      if (ty < 8) ty = y + 16;                       // 贴顶时翻到下方
-      tip.style.left = tx + "px";
-      tip.style.top = ty + "px";
+      positionTip(el);                           // offsetWidth 强制同步布局,首次即锚定元素
       tip.classList.add("show");
     };
     document.addEventListener("mouseover", (e) => {
@@ -880,20 +892,12 @@ const App = {
         el.dataset.tip = el.getAttribute("title");
         el.removeAttribute("title");
       }
-      timer = setTimeout(() => { if (cur === el) show(el, e.clientX, e.clientY); }, 350);
+      timer = setTimeout(() => { if (cur === el) show(el); }, 350);
     });
     // 气泡锚定目标元素(不跟随鼠标跳动):目标中心上方
     document.addEventListener("mousemove", (e) => {
       if (!cur || !tip) return;
-      const el = cur;
-      const r = el.getBoundingClientRect();
-      const tw = tip.offsetWidth, th = tip.offsetHeight;
-      let tx = r.left + r.width / 2 - tw / 2;
-      tx = Math.max(8, Math.min(innerWidth - tw - 8, tx));
-      let ty = r.top - th - 12;
-      if (ty < 8) ty = r.bottom + 12;
-      tip.style.left = tx + "px";
-      tip.style.top = ty + "px";
+      positionTip(cur);
     });
     document.addEventListener("mouseout", (e) => {
       const el = e.target instanceof Element ? e.target.closest("[title], [data-tip]") : null;

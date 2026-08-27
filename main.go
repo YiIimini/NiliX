@@ -13,6 +13,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"io/fs"
 	"log"
 	"math"
@@ -59,6 +60,9 @@ var kbFS embed.FS
 
 //go:embed web/island
 var islandFS embed.FS
+
+//go:embed web/splash
+var splashFS embed.FS
 
 // iconPNG 从 icon.ico 提取的 PNG 字节(wails 托盘/菜单位图只认 PNG,
 // 直接传 ICO 给 CreateSmallHIconFromImage 会失败——见 icotest 验证)。
@@ -635,6 +639,8 @@ func main() {
 	kbStore := kb_work.NewStore(*kbRoot)
 	kbSub, _ := fs.Sub(kbFS, "web/kb")
 	islandSub, _ := fs.Sub(islandFS, "web/island")
+	splashSub, _ := fs.Sub(splashFS, "web/splash")
+	api.SetSplashFS(splashSub)
 	// 安全:会话令牌(随机 32 hex)注入所有写请求鉴权;fs 根目录白名单(知识�?漫剧/小说/Comfy 目录)
 	tok := make([]byte, 16)
 	if _, rerr := rand.Read(tok); rerr == nil {
@@ -693,8 +699,11 @@ func main() {
 		gApp.SetIcon(iconICO)
 	}
 
-	// 主窗�?frameless 自定义标题栏,控制按钮/拖拽�?8799 同进程直接调窗口 API)
-	createMainWindow(gApp, url)
+	// 启动动态窗口(2026-08-27 用户要求):先显示 splash;主服务就绪后由回调创建主窗口
+	// (延后创建=主界面在 splash 之后才出现,2026-08-27 用户反馈"两窗同屏"的修复;
+	// 不走 Hidden 隐藏创建——WebView2 隐藏父窗初始化崩溃已实测回退),再淡出关 splash。
+	splashWin := createSplashWindow(gApp, url)
+	go watchSplash(splashWin, url, func() { ensureMainWindow(gApp, url) })
 
 	// 灵动岛胶囊窗�?透明悬浮 + 隐藏任务�?展开/收起�?8788 同进程动�?SetSize)
 	setCapsuleWin(createCapsuleWindow(gApp, url))
@@ -739,11 +748,25 @@ var (
 // openMainWindow 打开主窗�?已关闭则重建,已存在则显示置前
 func openMainWindow(url string) {
 	if mainWinClosed.Load() || getMainWin() == nil {
-		createMainWindow(gApp, url)
+		ensureMainWindow(gApp, url)
 	} else {
 		getMainWin().Show()
 		getMainWin().Focus()
 	}
+}
+
+// mainWinCreating 主窗口创建互斥(2026-08-27 splash 延后创建):启动就绪回调、8799 /open
+// 唤起、托盘「工作台」可能并发触发创建 → 双主窗(控制端口只认最后引用,另一窗成孤儿)。
+// CAS 保证任意时刻仅一个创建在途;创建完成后复位(主窗关闭后的重建不受阻)。
+var mainWinCreating atomic.Bool
+
+// ensureMainWindow 创建主窗口(并发安全)
+func ensureMainWindow(app *application.App, url string) {
+	if !mainWinCreating.CompareAndSwap(false, true) {
+		return // 已有创建在途
+	}
+	defer mainWinCreating.Store(false)
+	createMainWindow(app, url)
 }
 
 // mainWinRef 当前主窗�?关闭后重建用)
@@ -782,6 +805,77 @@ func setCapsuleWin(w *application.WebviewWindow) {
 // mainWinClosed 主窗口是否已关闭(托盘「工作台」重�?
 var mainWinClosed atomic.Bool
 
+// splashWinRef 启动动态窗口引用(就绪检测协程持有;一次性,关后置 nil)
+var splashWinRef atomic.Pointer[application.WebviewWindow]
+
+// createSplashWindow 启动动态窗口(2026-08-27 用户要求):无边框透明置顶小窗,
+// 加载 /splash/(品牌字呼吸+加载点+进度流动 CSS 动画);主服务就绪+主窗口首帧缓冲后
+// ExecJS 淡出再关闭。创建即定尺寸居中(首帧尺寸铁律),不占任务栏不可缩放。
+func createSplashWindow(app *application.App, url string) *application.WebviewWindow {
+	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:            "NiliX Splash",
+		Width:            480,
+		Height:           320,
+		InitialPosition:  application.WindowCentered,
+		Frameless:        true,
+		AlwaysOnTop:      true,
+		DisableResize:    true,
+		BackgroundType:   application.BackgroundTypeTransparent,
+		BackgroundColour: application.NewRGBA(0, 0, 0, 0),
+		URL:              url + "/splash/",
+		Windows: application.WindowsWindow{
+			DisableFramelessWindowDecorations: true,
+			HiddenOnTaskbar:                   true,
+		},
+	})
+	splashWinRef.Store(win)
+	return win
+}
+
+// watchSplash 启动动态窗口就绪检测:主服务 HTTP 连续 200 且最短展示期已过 → 回调创建
+// 主窗口(延后创建=主界面在 splash 之后才出现,2026-08-27 用户要求;不走 Hidden 隐藏创建
+// ——WebView2 隐藏父窗初始化崩溃已实测回退)→ 主窗口首帧缓冲 600ms → 页面淡出 380ms →
+// 关窗;10s 兜底(HTTP 异常也回调创建并关 splash,防卡死挂脸)。
+func watchSplash(win *application.WebviewWindow, url string, onReady func()) {
+	if win == nil {
+		if onReady != nil {
+			onReady()
+		}
+		return
+	}
+	born := time.Now()
+	client := &http.Client{Timeout: 2 * time.Second}
+	ok200 := 0
+	ready := false
+	for time.Since(born) < 10*time.Second {
+		time.Sleep(250 * time.Millisecond)
+		resp, err := client.Get(url + "/splash/")
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				ok200++
+			} else {
+				ok200 = 0
+			}
+		}
+		if ok200 >= 2 && time.Since(born) >= 900*time.Millisecond {
+			ready = true
+			break
+		}
+	}
+	if onReady != nil {
+		onReady() // 创建主窗口(创建即显示,此时 splash 仍置顶遮盖)
+	}
+	if ready {
+		time.Sleep(600 * time.Millisecond) // 主窗口 WebView 首帧缓冲
+	}
+	win.ExecJS("window.__splashFade && window.__splashFade();")
+	time.Sleep(380 * time.Millisecond)
+	win.Close()
+	splashWinRef.Store(nil)
+}
+
 // createMainWindow 创建主窗�?frameless,加载管理�?8787,记忆尺寸/位置)
 func createMainWindow(app *application.App, url string) *application.WebviewWindow {
 	mw, mh, mx, my := loadMainWinState()
@@ -803,6 +897,12 @@ func createMainWindow(app *application.App, url string) *application.WebviewWind
 	saveWin := func() {
 		w2, h2 := win.Size()
 		px, py := win.Position()
+		// 关闭/最小化瞬间窗口已移出屏幕/销毁中,Size()/Position() 会读到失效值
+		// (实测 160x28、-32000,-32000),直接写盘会污染记忆致下次启动校验失败
+		// 回退默认尺寸——无效值一律丢弃,只认真实可见尺寸。
+		if !mainWinStateValid(w2, h2, px, py) {
+			return
+		}
 		b, _ := json.Marshal(map[string]int{"w": w2, "h": h2, "x": px, "y": py})
 		_ = os.WriteFile(statePath, b, 0644)
 	}
@@ -897,11 +997,18 @@ func loadMainWinState() (w, h, x, y int) {
 		var st struct {
 			W, H, X, Y int
 		}
-		if json.Unmarshal(b, &st) == nil && st.W > 400 && st.H > 300 {
+		if json.Unmarshal(b, &st) == nil && mainWinStateValid(st.W, st.H, st.X, st.Y) {
 			w, h, x, y = st.W, st.H, st.X, st.Y
 		}
 	}
 	return
+}
+
+// mainWinStateValid 窗口记忆值是否可信:尺寸需达到最小可视门槛,
+// 位置排除 Windows 的屏幕外标记坐标(-32000,窗口隐藏/销毁/最小化时的标准值)。
+// 保存与加载共用同一判定,防止关闭瞬间的失效值既污染记忆又带偏启动位置。
+func mainWinStateValid(w, h, x, y int) bool {
+	return w >= 400 && h >= 300 && x > -10000 && y > -10000
 }
 
 func exeDir() string {

@@ -106,7 +106,8 @@ func TestSageAttnGuard(t *testing.T) {
 	state := &manjuTask{}
 	lg := newManjuLogger(state, nil, "p", "EP01")
 	// 1. 开关关闭:不探测不降级(sageChecked 保持 false)
-	ctx := &manjuCtx{R: map[string]any{}}
+	// (sageEnabled 缺省开启的语义变更后,「关闭」须显式 false——空 R 现按开启处理)
+	ctx := &manjuCtx{R: map[string]any{"sage_attention": false}}
 	ctx.sageAttnGuard(lg)
 	if ctx.sageChecked {
 		t.Fatal("sage_attention 关闭时不应探测节点")

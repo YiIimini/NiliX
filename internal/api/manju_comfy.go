@@ -109,6 +109,24 @@ func (c *comfyClient) history(promptID string) map[string]any {
 // history 无记录可能是"还在长队列排队"而非"任务丢失";tryReclaim 据此避免
 // 90s 误判后重新提交造成同一镜头双任务烧两遍 GPU
 // 返回 (是否在队列, 查询是否成功):查询失败(网络/超时)= ComfyUI 忙,不是"不在队列"
+// queueBusy ComfyUI 队列是否忙碌(有任务在跑或排队)。空闲自动释放显存用。
+func (c *comfyClient) queueBusy() (bool, error) {
+	resp, err := c.client.Get(c.base + "/queue")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	var q struct {
+		QueueRunning []any `json:"queue_running"`
+		QueuePending []any `json:"queue_pending"`
+	}
+	if err := json.Unmarshal(data, &q); err != nil {
+		return false, err
+	}
+	return len(q.QueueRunning) > 0 || len(q.QueuePending) > 0, nil
+}
+
 func (c *comfyClient) inQueue(promptID string) (bool, error) {
 	resp, err := c.client.Get(c.base + "/queue")
 	if err != nil {
@@ -345,7 +363,11 @@ func wfImage(workflow map[string]any, typ, prompt, neg string, seed, w, h, steps
 	denoise := 1.0
 	if initImage != "" {
 		load := add("LoadImage", map[string]any{"image": initImage})
-		latentID = add("VAEEncode", map[string]any{"pixels": refOf(load), "vae": refOf(vaeID)})
+		// 2026-08-27 修复:img2img latent 尺寸此前=init 图原尺寸(w/h 参数被忽略)——主图
+		// 方形 1024 导致 full/side 竖幅目标(832×1248)失效,视图永远方形半身。插 ImageScale
+		// 把 init 图缩放到目标画幅(latent 尺寸随动);高重绘(0.9+)下 init 仅作构图引导。
+		scaled := add("ImageScale", map[string]any{"image": refOf(load), "upscale_method": "lanczos", "width": w, "height": h, "crop": "disabled"})
+		latentID = add("VAEEncode", map[string]any{"pixels": refOf(scaled), "vae": refOf(vaeID)})
 		if initStrength > 0 && initStrength < 1 {
 			denoise = initStrength
 		} else {
@@ -407,11 +429,14 @@ func wfKrea2(prompt, unet, clipName, vae string, seed, w, h int, prefix, neg, in
 	return wf
 }
 
-// manjuNegPrompt 内置默认负面提示词(render.neg_prompt 未配置/为空时的兜底)
+// manjuNegPrompt 内置负面(2026-08-27 三修:前置服装禁裸段——精卫 Q 版袒胸实锤负面通道
+// 此前对裸露零防御:正向否定句(no cleavage 写在正向里)对 Z-Image 遵循弱,负面词才是
+// 强通道;chibi/手办/BJD 语义自带性感素体先验,必须负面显式压制)
+// render.neg_prompt 未配置时的兜底;已配置时 negPrompt() 追加在内置之后(只增不减)。
 // 2026-08-23 用户规则:动漫风格也禁止日本人物形象——禁日本式脸型/日漫大眼,不禁 anime/cartoon 风格词本身
 // 2026-08-24 用户规则升级:加防真人(photorealistic/real person/actual photo)——定妆照必须「写实拟动漫」,
 // 既不是日漫脸也不是真人照片(真人=侵权风险)。与正向 manjuPortraitAnchor 双路夹击。
-const manjuNegPrompt = "lowres, bad anatomy, bad hands, text, error, extra digit, no text, no watermark, no deformed hands, flickering frames, temporal discontinuity, inconsistent lighting, japanese anime face, japanese manga face, japanese-style face, japanese cartoon character, anime eyes, manga eyes, big sparkly anime eyes, sharp anime chin, photorealistic, real person, real human, actual photo, photograph, realistic photo, lifelike human, portrait photo"
+const manjuNegPrompt = "nsfw, nudity, nude, naked, bare chest, bare torso, exposed chest, exposed torso, exposed breasts, cleavage, deep neckline, low-cut top, open jacket showing skin, open coat showing skin, open robe showing skin, unbuttoned shirt, lingerie, underwear as outerwear, shirtless, topless, lowres, bad anatomy, bad hands, text, error, extra digit, no text, no watermark, no deformed hands, flickering frames, temporal discontinuity, inconsistent lighting, japanese anime face, japanese manga face, japanese-style face, japanese cartoon character, anime eyes, manga eyes, big sparkly anime eyes, sharp anime chin, photorealistic, real person, real human, actual photo, photograph, realistic photo, lifelike human, portrait photo"
 
 // manjuModelRefs 载入 H3 三件套(clip / vae_video / vae_audio),返回 [clip, vae, audioVae]
 func h3Loaders(workflow map[string]any, R map[string]any) (clip, vae, audioVae string) {
@@ -431,7 +456,10 @@ func wfAdd(workflow map[string]any, classType string, inputs map[string]any) str
 // hasChar: 有角色 → MiniMaxH3ReferenceToVideo(角色+场景多参考);空镜 → MiniMaxH3ImageToVideo(场景首帧),
 // 若 R["_scene_end"] 提供尾帧且节点可用 → MiniMaxH3Fl2VA 首尾双帧插值(审计升级 P1)
 // charRefs: 全部登场角色的参考图(正脸优先),多角色同镜逐一传入锁身份
-func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs []string, sceneRef, cacheName string, hasChar bool) map[string]any {
+// charVoices(2026-08-26 音色锁定):该镜登场说话角色的配音音色音频(ComfyUI input 相对路径,
+// 如 audio/voice_EP01_阿拾.mp3),按登场顺序传入,与 prompt 的 <Audio N> 编号一一对应;
+// 仅角色镜(Ref2VA)支持音频参考,空镜节点无 ref_audios 输入
+func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs []string, charVoices []string, sceneRef, cacheName string, hasChar bool) map[string]any {
 	wf := map[string]any{}
 	clip, vae, audioVae := h3Loaders(wf, R)
 	var condID string
@@ -460,6 +488,16 @@ func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs [
 			for i, r := range refs {
 				inputs[fmt.Sprintf("ref_images.ref_image_%d", i)] = r
 			}
+		}
+		// 音色参考(2026-08-26 H3 原生音色锁定,验证通过):该镜说话角色的配音音色音频,
+		// 平铺键 ref_audios.ref_audio_N(与 ref_images 并列,互不冲突),<Audio N+1> 与
+		// prompt subject_definitions 的音色定义一一对应
+		for i, av := range charVoices {
+			if av == "" {
+				continue
+			}
+			aud := wfAdd(wf, "LoadAudio", map[string]any{"audio": av})
+			inputs[fmt.Sprintf("ref_audios.ref_audio_%d", i)] = refOf(aud)
 		}
 		condID = wfAdd(wf, "MiniMaxH3ReferenceToVideo", inputs)
 	} else {
@@ -606,7 +644,7 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 	// 长序列注意力量化加速,RTX 50 系白捡提速。默认关。
 	// 节点名用 sageAttnGuard 探测到的实际注册名——KJNodes 上游把类名拼错为
 	// PathchSageAttentionKJ(非 Patch),用错名字 ComfyUI 会报 missing_node_type 400。
-		if b, _ := R["sage_attention"].(bool); b {
+		if sageEnabled(R) {
 			nodeName := "PatchSageAttentionKJ"
 			if n := str(R["sage_node_name"]); n != "" {
 				nodeName = n

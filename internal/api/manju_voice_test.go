@@ -1,0 +1,190 @@
+package api
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// ensureVoiceBindings:LLM 漏写 <Audio> 定义时程序补写 subject_definitions,有引用则不重复
+func TestEnsureVoiceBindings(t *testing.T) {
+	bindings := []voiceBinding{{CharID: "阿拾", Audio: "<Audio 1>"}, {CharID: "陈鱼", Audio: "<Audio 2>"}}
+
+	// 完全无引用 → 补写到 subject_definitions 段(以 summary: 为界)
+	hp := "subject_definitions:\n<Subject 1> is ...\n\nsummary:\n[reference generation] ...\ndetailed_description:\n..."
+	out := ensureVoiceBindings(hp, bindings)
+	if !strings.Contains(out, "<Audio 1> is the voice-timbre reference for the voice of 阿拾 (S1)") {
+		t.Fatalf("补写缺少 <Audio 1> 定义:\n%s", out)
+	}
+	if !strings.Contains(out, "<Audio 2> is the voice-timbre reference for the voice of 陈鱼 (S2)") {
+		t.Fatalf("补写缺少 <Audio 2> 定义:\n%s", out)
+	}
+	// 定义必须在 subject_definitions 段(summary: 之前)
+	si, mi := strings.Index(out, "<Audio 1>"), strings.Index(out, "summary:")
+	if si < 0 || mi < 0 || si > mi {
+		t.Fatalf("<Audio> 定义不在 subject_definitions 段")
+	}
+
+	// 已有引用 → 信任 LLM,不重复定义
+	hp2 := "subject_definitions:\n<Subject 1> is ...\n<Audio 1> is the voice-timbre reference ...\n\nsummary:\n..."
+	if out2 := ensureVoiceBindings(hp2, bindings); out2 != hp2 {
+		t.Fatalf("已有 <Audio> 引用时不应重复补写:\n%s", out2)
+	}
+
+	// 空绑定 → 原样返回
+	if out3 := ensureVoiceBindings(hp, nil); out3 != hp {
+		t.Fatalf("无绑定不应改动提示词")
+	}
+}
+
+// h3EncWorkflow:角色镜挂 ref_audios.ref_audio_N 平铺键(与 ref_images 并列),空镜不挂
+func TestEncWorkflowVoiceRefs(t *testing.T) {
+	wf := h3EncWorkflow(map[string]any{
+		"unet_fl2va": "f.safetensors", "unet_ref2va": "r.safetensors",
+		"clip": "c.safetensors", "vae_video": "v.safetensors", "vae_audio": "a.safetensors",
+	}, "prompt", 768, 1344, 145, []string{"img1.png"}, []string{"audio/voice_a.mp3", "audio/voice_b.mp3"}, "", "cache", true)
+
+	loadAudios := map[string]string{} // nodeID -> audio 值
+	var refKeys []string
+	var refAudioVals []string
+	// 第一遍收集 LoadAudio(nodeID→文件);第二遍收集 ref_audios 引用——
+	// 单遍循环依赖 map 遍历顺序,RefToVideo 可能先于 LoadAudio 出现导致映射未填充
+	for id, n := range wf {
+		m, _ := n.(map[string]any)
+		if m == nil {
+			continue
+		}
+		if str(m["class_type"]) == "LoadAudio" {
+			ins, _ := m["inputs"].(map[string]any)
+			loadAudios[id] = str(ins["audio"])
+		}
+	}
+	for _, n := range wf {
+		m, _ := n.(map[string]any)
+		if m == nil || str(m["class_type"]) != "MiniMaxH3ReferenceToVideo" {
+			continue
+		}
+		ins, _ := m["inputs"].(map[string]any)
+		for k, v := range ins {
+			if strings.HasPrefix(k, "ref_audios.") {
+				refKeys = append(refKeys, k)
+				if arr, ok := v.([]any); ok && len(arr) > 0 {
+					refAudioVals = append(refAudioVals, loadAudios[str(arr[0])])
+				}
+			}
+		}
+	}
+	if len(refKeys) != 2 {
+		t.Fatalf("ref_audios 平铺键数量错误: %v", refKeys)
+	}
+	// map 遍历无序,排序后断言(键集合 + 文件对应)
+	sort.Strings(refKeys)
+	sort.Strings(refAudioVals)
+	if refKeys[0] != "ref_audios.ref_audio_0" || refKeys[1] != "ref_audios.ref_audio_1" {
+		t.Fatalf("ref_audios 平铺键错误: %v", refKeys)
+	}
+	if len(refAudioVals) != 2 || refAudioVals[0] != "audio/voice_a.mp3" || refAudioVals[1] != "audio/voice_b.mp3" {
+		t.Fatalf("ref_audios 引用与音频文件不对应(应 voice_a→Audio1/voice_b→Audio2): %v", refAudioVals)
+	}
+
+	// 空镜(MiniMaxH3ImageToVideo)无 ref_audios
+	wf2 := h3EncWorkflow(map[string]any{
+		"unet_fl2va": "f.safetensors", "unet_ref2va": "r.safetensors",
+		"clip": "c.safetensors", "vae_video": "v.safetensors", "vae_audio": "a.safetensors",
+	}, "prompt", 768, 1344, 145, nil, []string{"audio/voice_a.mp3"}, "scene.png", "cache", false)
+	for _, n := range wf2 {
+		m, _ := n.(map[string]any)
+		if m == nil {
+			continue
+		}
+		if str(m["class_type"]) == "LoadAudio" {
+			t.Fatalf("空镜不应挂音色参考(ImageToVideo 无 ref_audios 输入)")
+		}
+	}
+}
+
+// audioNum:"<Audio 3>" → 3
+func TestAudioNum(t *testing.T) {
+	if n := audioNum("<Audio 3>"); n != 3 {
+		t.Fatalf("audioNum(<Audio 3>) = %d, want 3", n)
+	}
+	if n := audioNum(""); n != 1 {
+		t.Fatalf("audioNum('') = %d, want 1(兜底)", n)
+	}
+}
+
+// autoVoiceFor 按角色人设自动匹配风格音色库(2026-08-27 用户需求:预置音色库自动选择)
+func TestAutoVoiceFor(t *testing.T) {
+	ctx := &manjuCtx{charInfo: map[string]map[string]any{
+		"男少年": {"gender": "男", "age": "少年"},
+		"男青年": {"gender": "男", "age": "青年"},
+		"男中年": {"gender": "男", "age": "中年"},
+		"男老年": {"gender": "男", "age": "老年"},
+		"女少女": {"gender": "女", "age": "少女"},
+		"女青年": {"gender": "女", "age": "青年"},
+		"女中年": {"gender": "女", "age": "中年"},
+		"女老年": {"gender": "女", "age": "老年"},
+		"男反派": {"gender": "男", "age": "青年", "role": "反派"},
+		"女反派": {"gender": "女", "age": "青年", "role": "反派"},
+		"灵宠": {"gender": "女", "age": "幼年", "species": "灵宠"},
+		"无信息": {},
+	}}
+	cases := []struct{ cid, want string }{
+		{"男少年", "zh-CN-YunxiaNeural"},
+		{"男青年", "zh-CN-YunxiNeural"},
+		{"男中年", "zh-CN-YunjianNeural"},
+		{"男老年", "zh-CN-YunyangNeural"},
+		{"女少女", "zh-CN-XiaoyiNeural"},
+		{"女青年", "zh-CN-XiaoxiaoNeural"},
+		{"女中年", "zh-HK-HiuMaanNeural"},
+		{"女老年", "zh-HK-HiuMaanNeural"},
+		{"男反派", "zh-CN-YunjianNeural"},
+		{"女反派", "zh-HK-HiuMaanNeural"},
+		{"灵宠", "zh-CN-XiaoyiNeural"},
+		{"无信息", "zh-CN-XiaoxiaoNeural"}, // 有角色卡但字段空 → 兜底温柔女声(有音色比没有强)
+	}
+	for _, c := range cases {
+		if got := ctx.autoVoiceFor(c.cid); got != c.want {
+			t.Fatalf("autoVoiceFor(%s) = %s, want %s", c.cid, got, c.want)
+		}
+	}
+	// 角色不存在(charInfo 无此 id)→ 空(不匹配)
+	if got := ctx.autoVoiceFor("不存在"); got != "" {
+		t.Fatalf("autoVoiceFor(不存在) = %s, want 空", got)
+	}
+}
+
+// charVoiceNames/voiceBindingsFor 集成:确定性命名查文件,无音色角色跳过,编号与登场顺序一致
+func TestCharVoiceNamesIntegration(t *testing.T) {
+	comfyIn := filepath.Join(os.TempDir(), "nilix-test-comfy-in")
+	_ = os.MkdirAll(filepath.Join(comfyIn, "audio"), 0755)
+	// 只给「阿拾」建音色文件(路人/小雅无音色)
+	_ = os.WriteFile(filepath.Join(comfyIn, "audio", "voice_testproj_阿拾.mp3"), []byte("x"), 0644)
+	ctx := &manjuCtx{project: "testproj", comfyInput: comfyIn}
+	s := manjuShot{Characters: []string{"阿拾", "路人", "小雅"}}
+
+	got := ctx.charVoiceNames(s)
+	if len(got) != 1 || got[0] != "audio/voice_testproj_阿拾.mp3" {
+		t.Fatalf("charVoiceNames = %v, want [audio/voice_testproj_阿拾.mp3](无音色角色跳过)", got)
+	}
+	vbs := ctx.voiceBindingsFor(s)
+	if len(vbs) != 1 || vbs[0].CharID != "阿拾" || vbs[0].Audio != "<Audio 1>" {
+		t.Fatalf("voiceBindingsFor = %+v, want 阿拾→<Audio 1>", vbs)
+	}
+	// 音色文件删除后视为未绑定
+	_ = os.Remove(filepath.Join(comfyIn, "audio", "voice_testproj_阿拾.mp3"))
+	if got := ctx.charVoiceNames(s); len(got) != 0 {
+		t.Fatalf("音色文件删除后 charVoiceNames 应为空: %v", got)
+	}
+	// 超过 3 角色只取前 3
+	for i := 0; i < 4; i++ {
+		_ = os.WriteFile(filepath.Join(comfyIn, "audio", fmt.Sprintf("voice_testproj_c%d.mp3", i)), []byte("x"), 0644)
+	}
+	s4 := manjuShot{Characters: []string{"c0", "c1", "c2", "c3"}}
+	if got := ctx.charVoiceNames(s4); len(got) != 3 {
+		t.Fatalf("超过 3 角色应只取前 3: %v", got)
+	}
+}

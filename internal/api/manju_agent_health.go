@@ -170,7 +170,7 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 			items = append(items, ok("bgm", "就绪 "+filepath.Base(bgm)+"(对白自动闪避)"))
 		}
 	}
-	if b, _ := R["sage_attention"].(bool); b {
+	if sageEnabled(R) {
 		if _, cerr := ctx.comfy.online(); cerr == nil && !ctx.comfy.hasNode("PatchSageAttentionKJ") {
 			items = append(items, manjuHealthItem{Key: "sage", Label: "SageAttention", Status: "bad", Detail: "已开启但 ComfyUI 缺 PatchSageAttentionKJ 节点,渲染提交会失败", FixHint: "安装 ComfyUI-KJNodes,或在渲染参数里关闭 SageAttn"})
 		} else if cerr == nil {

@@ -282,6 +282,20 @@ func manjuCacheClear(w http.ResponseWriter, r *http.Request) {
 		if n > 0 {
 			clean = append(clean, map[string]any{"target": "runlog", "files": n, "bytes": b, "dir": filepath.Join(ManjuRootDir, "<项目>/run.log")})
 		}
+		// 7) 项目诊断文件(2026-08-27 用户要求:高级清理同步清 manju/logs 里项目相关文件):
+		// manju/logs/diagnose/<项目>_diagnose.json——诊断快照记录旧配置/环境信息,项目重开应
+		// 重新生成;logs/media 工具文件(人脸模型/媒体脚本)与平台日志保留不动
+		if p := manjuDiagnosePath(ctx.project); fileExists(p) {
+			fi, err := os.Stat(p)
+			if err == nil {
+				if os.Remove(p) == nil {
+					clean = append(clean, map[string]any{"target": "diagnose", "files": 1, "bytes": fi.Size(), "dir": filepath.Dir(p)})
+				} else if len(failed) < 8 {
+					failed = append(failed, filepath.Base(p))
+					totalFails++
+				}
+			}
+		}
 	}
 	resp := map[string]any{"ok": true, "advanced": advanced, "cleaned": clean}
 	if totalFails > 0 {

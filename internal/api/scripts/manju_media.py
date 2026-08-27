@@ -106,6 +106,66 @@ def check_video(path, threshold=0.5):
     }
 
 
+def trim_frozen_tail(path, min_tail=0.5, max_cut_ratio=0.4, sample_every=2):
+    """段尾冻结自动截尾(2026-08-27 用户反馈"像PPT/质检多数不合格")。
+
+    H3 长镜存在运动衰减:动作早早 settle 后画面趋静止(实测 freeze_ratio 0.33~1.0),
+    且换 seed 重渲也不解决(模型固有特性)——旧 QC 判不合格触发重渲纯属烧 GPU。
+    正确姿势:程序检测冻结尾巴并 packet-copy 截除(无损重封装,秒级完成)。
+
+    逻辑:每 sample_every 帧采样整帧灰度均值,从尾部向前找连续冻结游程
+    (相邻差 < 0.8,容忍 1 个孤立抖动点);冻结尾 >= min_tail 秒且不超过总时长
+    max_cut_ratio 时截到冻结起点前(留 0.2s 余量)。返回截除秒数(0=未处理)。
+    """
+    import av
+    c = av.open(path)
+    v = c.streams.video[0]
+    fps = float(v.average_rate) if v.average_rate else 24.0
+    means = []
+    n = 0
+    for fr in c.decode(v):
+        if n % sample_every == 0:
+            g = fr.to_ndarray(format="gray")
+            means.append(float(g.mean()))
+        n += 1
+    c.close()
+    if len(means) < 8 or n == 0:
+        return 0.0
+    # 从尾向前的冻结游程(容忍 1 个孤立非冻结抖动点)
+    TH = 0.8
+    j = len(means) - 1
+    outlier = False
+    while j > 0:
+        if abs(means[j] - means[j - 1]) >= TH:
+            if not outlier:
+                outlier = True
+            else:
+                break
+        j -= 1
+    tail_sec = (len(means) - j) * sample_every / fps
+    total_sec = n / fps
+    if tail_sec < min_tail or tail_sec > total_sec * max_cut_ratio or total_sec - tail_sec < 1.0:
+        return 0.0
+    keep_sec = max(1.0, (j * sample_every) / fps - 0.2)
+    # packet-copy 无损截断(音视频按各自 pts 过滤;尾 GOP 不完整不影响保留段)
+    tmp = path + ".trim.mp4"
+    inp = av.open(path)
+    out = av.open(tmp, "w")
+    smap = {}
+    for s in inp.streams:
+        smap[s] = out.add_stream_from_template(s)
+    for pkt in inp.demux():
+        if pkt.dts is None or pkt.pts is None:
+            continue
+        if float(pkt.pts * pkt.stream.time_base) <= keep_sec:
+            pkt.stream = smap[pkt.stream]
+            out.mux(pkt)
+    inp.close()
+    out.close()
+    os.replace(tmp, path)
+    return total_sec - keep_sec
+
+
 def scan_text_bleed(path, n_frames=3, width=768):
     """字幕位文字渗漏扫描(整合 ai-film-skills pitfalls ⑫ 实测):
     抽 n_frames 帧,rapidocr 检出文字框后按「位置+宽度」判据判定字幕位文字:
@@ -305,6 +365,28 @@ def cmd_qc(args):
             print("❌ --shots 未命中任何镜头")
             sys.exit(1)
     print(f"质检 {len(files)} 个镜头（近黑帧阈值 {args.threshold}）")
+    # 2026-08-27 升级:①段尾冻结自动截尾(defreeze,默认开)②静音分级(有台词镜静音=丢台词
+    # 判失败;纯空镜静音=环境音弱,降软告警不触发重渲——换 seed 重渲也未必出环境音,
+    # BGM 可兜底)。台词判定读 plan:h3_prompt 含 <d> 即有人声预期(对白/旁白都算)。
+    dlg_shots = set()
+    if getattr(args, "plan", "") and os.path.exists(args.plan):
+        try:
+            with open(args.plan, encoding="utf-8") as f:
+                _plan = json.load(f)
+            for s in _plan.get("shots", []):
+                sid = int(s.get("shot_id") or 0)
+                if not sid:
+                    continue
+                if str(s.get("dialogue", "")).strip() or "<d>" in str(s.get("h3_prompt", "")):
+                    dlg_shots.add(sid)
+        except Exception:
+            pass
+    def _has_dialogue(fn):
+        stem = fn.rsplit(".", 1)[0]
+        try:
+            return int(stem) in dlg_shots
+        except ValueError:
+            return False
     bad = []
     report = {"shots": {}}
     ocr_warned = False
@@ -313,10 +395,22 @@ def cmd_qc(args):
         try:
             r = check_video(p)
             flags = []
+            soft = []  # 软告警(不判失败,不触发重渲)
+            # 段尾冻结自动截尾(2026-08-27):H3 固有运动衰减,截掉冻结尾巴优于换 seed 重渲
+            if r["freeze_ratio"] > 0.6 and not args.no_defreeze:
+                trimmed = trim_frozen_tail(p)
+                if trimmed > 0:
+                    print(f"  ✂️ {f} 段尾冻结自动截除 {trimmed:.1f}s(冻结为 H3 固有特性,程序修复,不再重渲)")
+                    r = check_video(p)
+                    if r["freeze_ratio"] <= 0.6:
+                        soft.append(f"段尾冻结已截尾{trimmed:.1f}s")
             if r["audio_streams"] == 0:
                 flags.append("无音轨")
             elif r["audio_rms"] < 0.02:
-                flags.append(f"静音(rms {r['audio_rms']:.3f})")
+                if _has_dialogue(f):
+                    flags.append(f"静音丢台词(rms {r['audio_rms']:.3f})")
+                else:
+                    soft.append(f"静音告警(rms {r['audio_rms']:.3f},空镜环境音弱)")
             elif r["audio_rate"] > 0 and r["audio_rate"] != 32000:
                 flags.append(f"音轨采样率异常({r['audio_rate']}Hz≠32000)")
             elif r["audio_channels"] > 0 and r["audio_channels"] != 2:
@@ -341,10 +435,12 @@ def cmd_qc(args):
                     n = len(text_bleed["hits"])
                     samples = "、".join(f"#{h['frame']}:{h['text']}" for h in text_bleed["hits"][:3])
                     flags.append(f"字幕位文字×{n}({samples})")
-            status = "OK" if not flags else "⚠️ " + ",".join(flags)
+            status = "OK" if not flags and not soft else ("⚠️ " + ",".join(flags + soft))
+            if not flags and soft:
+                status = "OK·" + ",".join(soft)
             print(f"  {f:12s} {r['duration_s']:6.2f}s {r['resolution']} 音轨:{r['audio_streams']}@{r['audio_rate']}Hz/{r['audio_channels']}ch 响度:{r['audio_rms']:.3f} 近黑:{r['dark_ratio']*100:3.0f}% 冻结:{int(r['freeze_ratio']*100):3d}% {status}")
             report["shots"][f] = {
-                "ok": not flags, "flags": flags, "duration_s": r["duration_s"],
+                "ok": not flags, "flags": flags, "soft_flags": soft, "duration_s": r["duration_s"],
                 "dark_ratio": r["dark_ratio"], "freeze_ratio": r["freeze_ratio"],
                 "audio_streams": r["audio_streams"],
                 "audio_rate": r["audio_rate"], "audio_channels": r["audio_channels"],
@@ -690,6 +786,7 @@ def cmd_assemble(args):
     import numpy as np
     from fractions import Fraction
     from collections import deque
+    srt_cues = []  # 2026-08-26 升级:台词/旁白字幕时间轴(成片秒),最后落盘 srt
     files = sorted(f for f in os.listdir(args.clips_dir) if f.lower().endswith(".mp4"))
     if not files:
         print("❌ 无镜头可合成: " + args.clips_dir)
@@ -715,6 +812,29 @@ def cmd_assemble(args):
         os.makedirs(os.path.dirname(out), exist_ok=True)
     fps = args.fps
     cues_by_id, takes_map = _load_subtitle_cues(args.plan)
+    # 2026-08-27 按分镜表时长截断(用户反馈"像PPT"):H3 帧数按 17k+5 网格量化,产物常比
+    # 计划时长多出最多 ~0.7s 的运动衰减尾巴;冻结尾巴 QC 已截,这里把剩余量化尾巴裁齐
+    # 到分镜表 duration(只截短不补长,成片节奏回归分镜设计)。多切点长镜组头=组内求和。
+    plan_frames = {}
+    if args.plan and os.path.exists(args.plan):
+        try:
+            import json as _json
+            with open(args.plan, encoding="utf-8") as f:
+                _plan = _json.load(f)
+            for s in _plan.get("shots", []):
+                try:
+                    sid = int(s.get("shot_id") or 0)
+                    d = float(s.get("duration") or 0)
+                    if sid and d > 0:
+                        plan_frames[sid] = int(round(d * fps))
+                except (TypeError, ValueError):
+                    pass
+            for grp in _plan.get("takes") or []:
+                ids = [int(x) for x in grp if isinstance(x, (int, float))]
+                if len(ids) >= 2:
+                    plan_frames[ids[0]] = sum(plan_frames.get(i, 0) for i in ids) or plan_frames.get(ids[0], 0)
+        except Exception:
+            plan_frames = {}
     if args.no_subtitle:
         # 不烧录字幕:对白/旁白仅保留 H3 原生音轨,画面不出现字幕文字
         cues_by_id = {}
@@ -803,10 +923,13 @@ def cmd_assemble(args):
         i = av.open(p)
         v = i.streams.video[0]
         a = i.streams.audio[0] if i.streams.audio else None
+        sid = _shot_no(name)
+        plan_max = plan_frames.get(sid) or 0
         dur = float(v.duration * v.time_base)
         if clip_frames is not None:
             dur = clip_frames[name] / fps  # 数帧结果更准(元数据 duration 偶有偏差)
-        sid = _shot_no(name)
+        if plan_max:
+            dur = min(dur, plan_max / fps)  # 分镜表时长截断:量化尾巴不进成片
         # 转场边界判定:本剪辑头(与上一剪辑之间)、本剪辑尾(与下一剪辑之间)
         head_trans = trans_frames > 0 and ci > 0 and sid not in hard_cuts
         next_sid = _shot_no(files[ci + 1]) if ci + 1 < len(files) else 0
@@ -816,6 +939,8 @@ def cmd_assemble(args):
         # 多切点长镜:组头文件承载组内全部台词/旁白
         cue_lines = _cues_for_shot(cues_by_id, takes_map, sid)
         subs = _assign_subtitle_windows(cue_lines, dur, film_sec) if cue_lines else []
+        if args.srt and subs:
+            srt_cues.extend(subs)
         film_sec += dur
         # BGM 闪避窗口 = 字幕窗口(对白时段压 BGM);mixer 在首轮有字幕时构建
         if bgm is not None and bgm_mixer is None and subs:
@@ -826,10 +951,14 @@ def cmd_assemble(args):
         streams = (v, a) if a is not None else (v,)
         cut_v = 0            # 本剪辑内已编码视频帧号(0 起)
         total_frames = clip_frames[name] if clip_frames is not None else None
+        if plan_max:
+            total_frames = min(total_frames, plan_max) if total_frames is not None else plan_max
         tail_buf = deque(maxlen=trans_frames) if tail_trans else None
         atb = float(a.time_base) if a is not None else 0.0
         for frame in i.decode(*streams):
             if isinstance(frame, av.VideoFrame):
+                if plan_max and cut_v >= plan_max:
+                    break  # 分镜表时长已满,丢弃量化/衰减尾巴(音画同步截断)
                 if first:  # PyAV 不自动从帧推断编码器尺寸,首个视频帧显式设定
                     vs.width, vs.height = frame.width, frame.height
                     first = False
@@ -919,6 +1048,9 @@ def cmd_assemble(args):
     for pkt in as_.encode():
         o.mux(pkt)
     o.close()
+    if args.srt and srt_cues:
+        _write_srt(args.srt, srt_cues)
+        print(f"  ✅ 字幕 srt 已导出: {args.srt} ({len(srt_cues)} 条)")
     print(f"  ✅ 帧 {total_v} / 音频块 {total_a}，成片已写入")
 
 
@@ -1220,6 +1352,20 @@ def manju_voiceover(args):
     print("✅ 旁白/画外音配音完成,配音 %d 句,跳过 %d 镜(已有语音)" % (done, skipped))
 
 
+def manju_voice_gen(args):
+    """生成一段 edge-tts 语音作为 H3 音色参考音频(H3 只引用 timbre,文本内容不限)"""
+    try:
+        import edge_tts
+    except Exception as e:
+        print("❌ edge_tts 不可用: %s (venv pip install edge-tts)" % e)
+        sys.exit(1)
+    import asyncio
+    out = os.path.abspath(args.out)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    asyncio.run(edge_tts.Communicate(args.text, args.voice).save(out))
+    print("✅ 音色参考已生成: %s (%s)" % (out, args.voice))
+
+
 def _audio_rms(path):
     """计算视频文件音轨 RMS(粗略响度;0=无音轨/静音)"""
     import math
@@ -1245,6 +1391,36 @@ def _cues_with_weights(lines):
     weights = [max(1, len(l)) for l in lines]
     total = sum(weights)
     return [w / total for w in weights]
+
+
+def _srt_ts(sec):
+    """秒 → SRT 时间戳 HH:MM:SS,mmm"""
+    sec = max(0.0, sec)
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = int(sec % 60)
+    ms = int(round((sec - int(sec)) * 1000))
+    if ms >= 1000:
+        ms = 0
+        s += 1
+    return "%02d:%02d:%02d,%03d" % (h, m, s, ms)
+
+
+def _write_srt(path, cues):
+    """(start_sec, end_sec, text) 列表 → srt 文件(按开始时间排序,去重相邻重叠)"""
+    items = sorted((sa, sb, txt) for sa, sb, txt in cues if txt and txt.strip())
+    out = []
+    idx = 0
+    for sa, sb, txt in items:
+        if sb <= sa:
+            sb = sa + 0.5
+        idx += 1
+        out.append(str(idx))
+        out.append("%s --> %s" % (_srt_ts(sa), _srt_ts(sb)))
+        out.append(txt.strip())
+        out.append("")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out))
 
 
 def _assign_subtitle_windows(cues, dur, film_sec):
@@ -1655,6 +1831,9 @@ def main():
     q.add_argument("--json", default="")
     q.add_argument("--shots", default="", help="只质检指定镜头(如 3 或 1,3;空=全部)")
     q.add_argument("--file", default="", help="单文件质检(成片终检;与 --dir 二选一)")
+    q.add_argument("--plan", default="", help="分镜方案 JSON(静音分级:判定镜头有无台词/旁白)")
+    q.add_argument("--no-defreeze", action="store_true", default=False,
+                   help="关闭段尾冻结自动截尾(H3 固有运动衰减,默认程序截除而非重渲)")
     q.add_argument("--no-ocr", action="store_true", default=False,
                    help="跳过字幕位文字渗漏 OCR 扫描(默认开启;未装 rapidocr 自动跳过)")
     fr = sub.add_parser("frames")
@@ -1679,6 +1858,8 @@ def main():
     a.add_argument("--bgm-duck", type=float, default=0.35, help="对白时段 BGM 压低系数(0-1)")
     a.add_argument("--no-subtitle", action="store_true", default=False,
                    help="不烧录字幕(对白/旁白仅 H3 原生音轨,画面无字幕文字;2026-08-23 用户反馈成片字幕位文字优化)")
+    a.add_argument("--srt", default="",
+                   help="同时导出台词/旁白 srt 字幕文件(2026-08-26 升级:不烧录也可导出,供上传平台/剪映使用)")
     vo = sub.add_parser("voiceover")
     vo.add_argument("--plan", required=True, help="分镜方案 JSON(含 shots.narration/dialogue/characters)")
     vo.add_argument("--clips-dir", required=True, help="镜头目录(直接覆盖该镜 mp4 音轨)")
@@ -1688,6 +1869,10 @@ def main():
     vo.add_argument("--voice-char", default="zh-CN-YunxiNeural", help="画外音角色语音(默认男声)")
     vo.add_argument("--gain", type=float, default=1.2, help="TTS 音量增益(默认 1.2)")
     vo.add_argument("--silence-threshold", type=float, default=0.02, help="静音判定 RMS 阈值:低于才补 TTS(防 H3 原生对白+ TTS 双声)")
+    vg = sub.add_parser("voice-gen")
+    vg.add_argument("--text", required=True, help="参考文本(生成音色参考音频,内容不限)")
+    vg.add_argument("--voice", required=True, help="edge-tts 音色名,如 zh-CN-YunxiNeural")
+    vg.add_argument("--out", required=True, help="输出文件路径(.mp3)")
     f = sub.add_parser("facecrop")
     f.add_argument("--src", required=True)
     f.add_argument("--dst", required=True)
@@ -1748,6 +1933,8 @@ def main():
     elif args.cmd == "bgm-pick":        cmd_bgm_pick(args)
     elif args.cmd == "voiceover":
         manju_voiceover(args)
+    elif args.cmd == "voice-gen":
+        manju_voice_gen(args)
 
 
 if __name__ == "__main__":

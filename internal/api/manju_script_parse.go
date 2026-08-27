@@ -54,17 +54,145 @@ var (
 	// 通用:##/### 编号. 名字（描述）——编号后允许 身份词·名字 形式(如 2.1 主角 · 顾烬)
 	// 2026-08-26 补:盟友/灵宠/坐骑/妖兽/神兽/精怪/兽宠 等身份词(用户实测「盟友 · 陈墨」
 	//  「灵宠 · 吞吞」整串进了角色 id,渲染产物文件名带前缀且 beast/性别画像失准)
-	reMdTitle    = regexp.MustCompile(`(?m)^#{2,3}\s*(?:\d+(?:\.\d+)?[\.、]\s*)?(?:(?:主角|女主|男主|男配|女配|反派|助攻|盟友|调剂位|工具人反派|工具人|传说位|昆仑守山神|灵宠|兽宠|宠物|坐骑|妖兽|神兽|精怪|长老)\s*[·:：\-—]\s*)?([^（(]+?)\s*[（(]([^）)]*)[）)]`)
+	// 2026-08-27 补:群演(群演轻量卡前缀,「群演 · 周管事」→ id=周管事 + minor:true)
+	reMdTitle    = regexp.MustCompile(`(?m)^#{2,3}\s*(?:\d+(?:\.\d+)?[\.、]\s*)?(?:(?:主角|女主|男主|男配|女配|反派|助攻|盟友|调剂位|工具人反派|工具人|传说位|昆仑守山神|灵宠|兽宠|宠物|坐骑|妖兽|神兽|精怪|长老|群演)\s*[·:：\-—]\s*)?([^（(]+?)\s*[（(]([^）)]*)[）)]`)
 	reSceneTitle = regexp.MustCompile(`(?m)^#{2,3}\s*(?:场景[一二三四五六七八九十]+\s*[·:：\-—]\s*|[a-zA-Z\d]+[\.、]\s*)([^（(]+?)\s*[（(]([^）)]*)[）)]`)
+	// 全局段标题黑名单(人物生成提示词.md 中「统一风格前缀/统一质量后缀/通用负向词」等
+	// 所有角色共用的字段;创作侧契约=一级标题,若误写二级/三级标题则被 reMdTitle 当角色,
+	// parseCharCards 命中即跳过。关键词只匹配标题名,正常角色名不会含这些词)
+	reManjuGlobalSection = regexp.MustCompile(`统一|共用|前缀|后缀|负向|负面|通用|说明|备注|清单|记忆点|全书`)
 	// 素材代码块(英文提示词)
 	reMdCodeBlock = regexp.MustCompile("(?s)```[^\\n]*\\n(.*?)\\n```")
 	// 台词:(S1)沈玉衡:"晚老板..."(非贪婪到闭合引号,多句逐条匹配;兼容无引号句)
 	reDialogue = regexp.MustCompile(`\(S\d\)\s*([^：:]+?)\s*[：:]\s*["“]([^"”]+?)["”]|\(S\d\)\s*([^：:]+?)\s*[：:]\s*([^"”]+)`)
+	// 群演轻量卡(2026-08-27):分镜表说话人带 S 声线编号提取((S2)周管事: → 2,周管事)
+	reSpeakerTag = regexp.MustCompile(`\(S(\d+)\)\s*([^：:"“]+?)\s*[：:]`)
+	// 六段式主体定义行:"<Subject 2> is the white-haired steward in <Picture 1>, kneeling..."
+	reSubjectLine = regexp.MustCompile(`(?m)^<Subject\s+\d+>\s+is\s+([^\n]+)$`)
+	// 六段式台词句的说话人描述:"The old steward with a swallowed sob (S2) says:"
+	reH3VoiceDesc = regexp.MustCompile(`([A-Za-z][^\n<>]{0,120}?)\s+\(S(\d+)\)\s+says:`)
+	// 主体描述里的参考图引用(轻量卡形象提示词剥掉它)
+	rePictureRef = regexp.MustCompile(`\s*in\s*<Picture\s+\d+>`)
 	// 时长 "5s"/"6s"/"7s":宽松版(匹配列内任意 Ns,用于列捕获值);
 	// 行尾锚定版(防画面内容里的"0-5s 节拍"等误匹配,用于整行回溯)。
 	reDuration      = regexp.MustCompile(`(\d+)\s*s`)
 	reDurationTail  = regexp.MustCompile(`(\d+)\s*s\s*\|?\s*$`)
 )
+
+// manjuIsOffScreenSpeaker 画外说话人(2026-08-27 用户规则:叙述优先群众议论化,
+// 旁白禁止复述画面):分镜台词列说话人带 `画外·` 前缀(如 `(S2)画外·路人甲`)=
+// 画外群杂——不入画/不生成角色卡/不占 3 角色名额/不触发说话人校验;
+// 照常占语音预算,六段式写 off-screen voiceover(H3 按身份描述分配声线)。
+func manjuIsOffScreenSpeaker(speaker string) bool {
+	return strings.HasPrefix(strings.TrimSpace(speaker), "画外·")
+}
+
+// scriptMinorCast 群演轻量卡(2026-08-27 群演分级体系):有台词但无角色卡的说话人
+// 自动建卡(minor:true)——这类人正脸开口说话,形象跨镜漂移最伤观感,值得一张参考图。
+// 形象提示词取自其首次开口镜的六段式 subject_definitions 主体描述(脚本是权威,零 LLM
+// 成本):按台词句 "The old steward (S2) says:" 的描述词与各 Subject 行词重叠匹配归属;
+// 匹不上取该镜未被认领的首个 Subject;再兜底通用描述。资产阶段对 minor 卡只出 1 张
+// 定妆照+正脸(跳过视图/Q版/音色);氛围群演(无名无台词,如"两名牢卒")不建卡,
+// 由渲染纪律(manjuNoRefGuard/manjuFrameGuard)兜底。
+func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogger) []map[string]any {
+	firstShot := map[string]int{}
+	sNum := map[string]string{}
+	var order []string
+	for i := range raws {
+		for _, m := range reSpeakerTag.FindAllStringSubmatch(raws[i].Dialogue, -1) {
+			name := strings.TrimSpace(m[2])
+			if name == "" || manjuIsOffScreenSpeaker(name) || known[name] {
+				continue
+			}
+			if _, ok := firstShot[name]; !ok {
+				firstShot[name] = raws[i].ID
+				order = append(order, name)
+			}
+			sNum[name] = m[1]
+		}
+	}
+	if len(order) == 0 {
+		return nil
+	}
+	rawByID := map[int]*scriptShotRaw{}
+	for i := range raws {
+		rawByID[raws[i].ID] = &raws[i]
+	}
+	// 主体描述清洗:剥 "in <Picture N>" 与首个逗号后的姿态/情绪分词(定妆照只要身份特征)
+	cleanSubj := func(line string) string {
+		line = rePictureRef.ReplaceAllString(strings.TrimSpace(line), "")
+		if i := strings.Index(line, ","); i > 0 {
+			line = line[:i]
+		}
+		return strings.TrimSpace(strings.Trim(line, "."))
+	}
+	words := func(s string) map[string]bool {
+		out := map[string]bool{}
+		for _, w := range strings.Fields(strings.ToLower(s)) {
+			w = strings.Trim(w, ".,;:!?\"'-")
+			if len([]rune(w)) >= 4 {
+				out[w] = true
+			}
+		}
+		return out
+	}
+	claimed := map[int]map[string]bool{} // 镜号 → 该镜已被其他群演认领的主体描述
+	out := []map[string]any{}
+	for _, name := range order {
+		raw := rawByID[firstShot[name]]
+		desc := ""
+		if raw != nil && raw.H3Prompt != "" {
+			// 台词句 "(SN) says:" 前的说话人描述 → 词集(与 Subject 行词重叠匹配归属)
+			voiceWords := map[string]map[string]bool{}
+			for _, m := range reH3VoiceDesc.FindAllStringSubmatch(raw.H3Prompt, -1) {
+				voiceWords[m[2]] = words(m[1])
+			}
+			vw := voiceWords[sNum[name]]
+			type cand struct {
+				line  string
+				score int
+			}
+			var cands []cand
+			for _, m := range reSubjectLine.FindAllStringSubmatch(raw.H3Prompt, -1) {
+				c := cleanSubj(m[1])
+				if c == "" || (claimed[firstShot[name]] != nil && claimed[firstShot[name]][c]) {
+					continue
+				}
+				sc := 0
+				if vw != nil {
+					for w := range words(c) {
+						if vw[w] {
+							sc++
+						}
+					}
+				}
+				cands = append(cands, cand{c, sc})
+			}
+			best := -1
+			for i, c := range cands {
+				if best < 0 || c.score > cands[best].score {
+					best = i
+				}
+			}
+			if best >= 0 {
+				desc = cands[best].line
+				if claimed[firstShot[name]] == nil {
+					claimed[firstShot[name]] = map[string]bool{}
+				}
+				claimed[firstShot[name]][desc] = true
+			}
+		}
+		if desc == "" {
+			desc = "a minor supporting cast member of this drama, plain period costume, unremarkable commoner face"
+		}
+		out = append(out, map[string]any{
+			"id": name, "minor": true, "role": "群演",
+			"appearance": "", "costume": "", "image_prompt": desc,
+		})
+		lg.logf(fmt.Sprintf("  🎭 群演轻量卡: %s(首次开口镜 %d,形象取自脚本主体描述)", name, firstShot[name]))
+	}
+	return out
+}
 
 // manjuScriptParseVer 脚本程序化解析器代数:写入 plan.script_parse_ver,ensurePlan 复用
 // 校验发现版本落后 → 强制重新解析替换旧 plan。背景(2026-08-26 用户实测:16 分镜脚本
@@ -72,8 +200,14 @@ var (
 // 不受脚本约束(旧版无拆镜密度强制,8 镜常见),plan 落盘后 chapters="script"+指纹一致
 // → 永久复用,升级解析器也不自愈。bump 此值即可让全部脚本直出项目自动重解析。
 // 1=初版(无版本标记的存量 plan);2=分镜表跨行/9列时长/FormatB/镜号去重/时长语音补偿/
-// 机械质检;3=身份词前缀清理(盟友/灵宠·名字)+role/species 画像+中文称谓性别兜底。
-const manjuScriptParseVer = 3
+// 机械质检;3=身份词前缀清理(盟友/灵宠·名字)+role/species 画像+中文称谓性别兜底;
+// 4=人物生成提示词全局段过滤(统一风格前缀/质量后缀/通用负向词等误写二级标题不再当角色);
+// 5=画外群杂契约(台词说话人「画外·」前缀豁免强制入画与角色校验——叙述群众议论化);
+// 6=群演轻量卡(有台词无角色卡的说话人自动建卡 minor:true,characters 纳入说话人——
+//   挂参考图锁形象,资产阶段只出 1 张定妆照,氛围群演仍走渲染纪律);
+// 7=素材四硬规范回写(人物生成提示词存量卡补性别词 male/female+剥背景词/场景叙事句
+//   ——plan.characters 缓存的是旧素材内容,须重解析吸收)。
+const manjuScriptParseVer = 7
 
 // scriptParsePlan 脚本直出程序化解析入口。
 // 解析出 characters/scenes/shots/directing/episode_title/chapters=script。
@@ -248,6 +382,24 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 			charIDs = append(charIDs, id)
 		}
 	}
+	// 群演轻量卡(2026-08-27 群演分级):台词说话人无角色卡 → 自动建卡入名单
+	// (characters 纳入说话人=挂参考图锁形象,charRefNames/指纹链路现成)
+	knownSet := map[string]bool{}
+	for _, cid := range charIDs {
+		knownSet[cid] = true
+	}
+	if minors := scriptMinorCast(raws, knownSet, lg); len(minors) > 0 {
+		for _, mc := range minors {
+			charsArr = append(charsArr, mc)
+			if id, _ := mc["id"].(string); id != "" {
+				charIDs = append(charIDs, id)
+			}
+		}
+	}
+	allIDs := map[string]bool{}
+	for _, cid := range charIDs {
+		allIDs[cid] = true
+	}
 	// 场景名匹配:画面内容含场景卡 id → 绑定;无场景卡的镜 scene 留空(渲染兜底)
 	sceneIDs := []string{}
 	for _, s := range sceneCards {
@@ -287,19 +439,52 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 				charSet[cid] = true
 			}
 		}
-		// 台词说话人强制入画(谁说的就是谁)
+		// 台词说话人强制入画(谁说的就是谁);画外群杂豁免(2026-08-27:画外·前缀
+		// =画外群众议论,不入画不占角色名额——叙述群众议论化的解析契约)
 		for _, dm := range reDialogue.FindAllStringSubmatch(raw.Dialogue+" "+raw.Narration, -1) {
 			speaker := strings.TrimSpace(dm[1])
 			if speaker == "" {
 				speaker = strings.TrimSpace(dm[3])
 			}
-			if speaker != "" {
+			if speaker != "" && !manjuIsOffScreenSpeaker(speaker) {
 				charSet[speaker] = true
 			}
 		}
+		// charArr 排序(2026-08-27 群演分级):说话人优先——参考图名额 ≤3,开口的人
+		// 必须有脸(超员时台词人物先挂参考图,落选者由渲染纪律兜底),其余按角色名单补位
+		spkOrder := []string{}
+		for _, dm := range reDialogue.FindAllStringSubmatch(raw.Dialogue+" "+raw.Narration, -1) {
+			speaker := strings.TrimSpace(dm[1])
+			if speaker == "" {
+				speaker = strings.TrimSpace(dm[3])
+			}
+			if speaker == "" || manjuIsOffScreenSpeaker(speaker) || !charSet[speaker] || !allIDs[speaker] {
+				continue
+			}
+			dup := false
+			for _, s := range spkOrder {
+				if s == speaker {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				spkOrder = append(spkOrder, speaker)
+			}
+		}
 		charArr := []any{}
+		for _, cid := range spkOrder {
+			charArr = append(charArr, cid)
+		}
 		for _, cid := range charIDs {
-			if charSet[cid] {
+			inSpk := false
+			for _, s := range spkOrder {
+				if s == cid {
+					inSpk = true
+					break
+				}
+			}
+			if charSet[cid] && !inSpk {
 				charArr = append(charArr, cid)
 			}
 		}
@@ -476,12 +661,12 @@ func (ctx *manjuCtx) parseScriptAssetCards(lg *manjuLogger) (chars []map[string]
 
 	if charFile != "" {
 		if b, err := os.ReadFile(charFile); err == nil {
-			chars = parseCharCards(string(toUTF8(b)), assetStyle)
+			chars = parseCharCards(string(toUTF8(b)), assetStyle, manjuStyleIs3D(ctx.style))
 		}
 	}
 	if sceneFile != "" {
 		if b, err := os.ReadFile(sceneFile); err == nil {
-			scenes = parseSceneCards(string(toUTF8(b)), assetStyle)
+			scenes = parseSceneCards(string(toUTF8(b)), assetStyle, manjuStyleIs3D(ctx.style))
 		}
 	}
 	if len(chars) == 0 {
@@ -493,7 +678,9 @@ func (ctx *manjuCtx) parseScriptAssetCards(lg *manjuLogger) (chars []map[string]
 // parseCharCards 解析 人物生成提示词.md → characters 卡。
 // 格式:## N. 名字（女主，22岁，身份） 或 ## 2.1 主角 · 顾烬（男主，烛龙血脉） + 英文 image_prompt。
 // image_prompt 支持两种写法:```代码块``` 或 行内 "**生图提示词**：Cinematic..."(吞噬山海素材格式)。
-func parseCharCards(text, assetStyle string) []map[string]any {
+// 2026-08-26 is3D:次世代3D/BJD 风格分档——不做写实词替换、附 3D 虚拟人锚+正面人脸锚
+// (用户反馈"选写实/3D 风格却渲染成动漫形象"的根因是旧链路强制 stylized illustration/painterly)。
+func parseCharCards(text, assetStyle string, is3D bool) []map[string]any {
 	var out []map[string]any
 	sections := splitMdSections(text)
 	for _, sec := range sections {
@@ -504,6 +691,12 @@ func parseCharCards(text, assetStyle string) []map[string]any {
 		name := scriptCleanName(tm[1])
 		desc := strings.TrimSpace(tm[2])
 		if name == "" {
+			continue
+		}
+		// 全局段过滤(2026-08-26 用户实测:顶流遗产把「统一风格前缀(所有角色共用)」等
+		// 全局共用字段写成二级标题 → reMdTitle 匹配成角色卡,产出伪角色+伪视图资产。
+		// 创作侧契约=全局段一级标题、角色卡二级标题;此处黑名单兜底兼容存量书与格式漂移。
+		if reManjuGlobalSection.MatchString(name) {
 			continue
 		}
 		block := ""
@@ -517,13 +710,26 @@ func parseCharCards(text, assetStyle string) []map[string]any {
 				block = strings.TrimSpace(im[1])
 			}
 		}
+		gender := scriptGenderOf(sec.head, desc, block)
+		if gender == "" {
+			// 素材契约(2026-08-27 群演卡):括号描述首段=性别(「男,老年,白发老仆」)——
+			// 群演卡无 女主/男主 身份词与中文称谓,scriptGenderOf 判不出时按首段权威取
+			seg := desc
+			if i := strings.IndexAny(seg, ",,"); i > 0 {
+				seg = seg[:i]
+			}
+			seg = strings.TrimSpace(seg)
+			if seg == "男" || seg == "女" {
+				gender = seg
+			}
+		}
 		card := map[string]any{
 			"id":           name,
-			"gender":       scriptGenderOf(sec.head, desc, block),
+			"gender":       gender,
 			"age":          scriptAgeOf(desc + " " + block),
 			"appearance":   scriptAppearanceOf(sec.body, block),
 			"costume":      "",
-			"image_prompt": scriptImagePrompt(block, assetStyle),
+			"image_prompt": scriptImagePrompt(block, assetStyle, is3D),
 			"views":        map[string]any{},
 		}
 		// 身份词画像(2026-08-26):「盟友 · 陈墨」「灵宠 · 吞吞」等身份前缀解析出 role/species——
@@ -536,10 +742,18 @@ func parseCharCards(text, assetStyle string) []map[string]any {
 				card["species"] = species
 			}
 		}
+		// 群演轻量卡(2026-08-27 群演分级·技能侧源头):爽文技能素材直出的「群演 · 名字」
+		// 条目 → minor:true(资产阶段只出 1 张定妆照+正脸,跳过视图/Q版);说话人在
+		// characters 内=挂参考图锁形象。与 scriptMinorCast 兜底互补:素材直出优先
+		// (形象由作者掌控),素材缺勤的说话人由解析器从六段式主体描述自动补卡。
+		if strings.Contains(sec.head, "群演") {
+			card["minor"] = true
+			card["role"] = "群演"
+		}
 		// 双形态(2026-08-26):素材角色节含「真身提示词」标注(萌宠 Q版↔神话真身、人形↔兽形)
 		// → second_form 字段,assets 阶段额外定妆 <id>_form2.png,渲染遇「真身·<角色名>」镜切换
 		if f2 := scriptSecondForm(sec.body); f2 != "" {
-			card["second_form"] = scriptImagePrompt(f2, assetStyle)
+			card["second_form"] = scriptImagePrompt(f2, assetStyle, is3D)
 		}
 		out = append(out, card)
 	}
@@ -601,7 +815,7 @@ func scriptSecondForm(body string) string {
 // parseSceneCards 解析 场景提示词.md → scenes 卡。
 // 格式:### 场景一 · 烛龙村（雪夜废墟） 或 ## 1. 晚膳小馆（主角主场） + 英文 image_prompt 代码块。
 // 只收"场景N·名字"或"编号. 名字"形式的标题,过滤"主场场景清单/色锚系统"等说明性大节。
-func parseSceneCards(text, assetStyle string) []map[string]any {
+func parseSceneCards(text, assetStyle string, is3D bool) []map[string]any {
 	var out []map[string]any
 	sections := splitMdSections(text)
 	for _, sec := range sections {
@@ -649,7 +863,7 @@ func parseSceneCards(text, assetStyle string) []map[string]any {
 		out = append(out, map[string]any{
 			"id":          name,
 			"description": desc,
-			"image_prompt": scriptScenePrompt(block, assetStyle),
+			"image_prompt": scriptScenePrompt(block, assetStyle, is3D),
 		})
 	}
 	return out
@@ -659,7 +873,21 @@ func parseSceneCards(text, assetStyle string) []map[string]any {
 // 场景图必须空场景无人——①不附加人物锚(manjuPortraitAnchor 含 "East Asian/Chinese character" 会诱导画人物,
 // 此前误用 scriptImagePrompt 导致场景图渲染出角色);②替换 photorealistic→semi-realistic stylized;
 // ③强制附加 manjuSceneAnchor("empty scene, no people") + 多重 no people 排除词。
-func scriptScenePrompt(block, assetStyle string) string {
+// 2026-08-26 is3D 分档:3D 风格不做写实词替换(3D 渲染语汇直接生效),锚用 manju3DSceneAnchor。
+func scriptScenePrompt(block, assetStyle string, is3D bool) string {
+	if is3D {
+		if block == "" {
+			return manju3DSceneAnchor + ", no people, no humans, no characters, no figures, no silhouettes"
+		}
+		p := block
+		if !strings.Contains(p, "3D rendered") && !strings.Contains(p, "3D render") {
+			p = manju3DSceneAnchor + ", " + p
+		}
+		for _, w := range []string{", villagers", ", villager", ", people", ", crowd", ", humans", ", figures", ", soldiers", ", black-armored soldiers", ", soldiers in black armor"} {
+			p = strings.ReplaceAll(p, w, "")
+		}
+		return p + ", no people, no humans, no characters, no figures, no silhouettes"
+	}
 	if block == "" {
 		return manjuSceneAnchor + ", " + assetStyle + ", no people, no humans, no characters, no figures, no silhouettes"
 	}
@@ -717,7 +945,23 @@ func scriptCleanName(raw string) string {
 //  1) 替换 photorealistic/realistic photo/real human 等真人写实措辞 → 半写实拟动漫表述;
 //  2) 追加统一拟动漫正向锚 manjuPortraitAnchor(东方/中式面孔,非日漫,非真人,防侵权)。
 // 与 LLM 直出方案的 image_prompt 同口径(锚一致),保证定妆照与视频画风统一。
-func scriptImagePrompt(block, assetStyle string) string {
+// 2026-08-26 is3D 分档(用户反馈"选写实/3D 风格却渲染成动漫形象"):次世代3D/BJD 风格
+// 不做写实词替换、不拼插画风 assetStyle、不附插画风锚——3D 渲染虚拟人本身非真人照片,
+// 改附 manju3DPortraitAnchor + 正面人脸锚(用户规则:人物角色提示词必须正面人脸)。
+func scriptImagePrompt(block, assetStyle string, is3D bool) string {
+	if is3D {
+		if block == "" {
+			return manju3DPortraitAnchor + manjuPortraitFrontFace
+		}
+		p := block
+		if !strings.Contains(p, "virtual digital human") {
+			p = p + ", " + manju3DPortraitAnchor
+		}
+		if !strings.Contains(p, "front-facing") {
+			p = p + manjuPortraitFrontFace
+		}
+		return p
+	}
 	if block == "" {
 		return assetStyle + ", " + manjuPortraitAnchor
 	}

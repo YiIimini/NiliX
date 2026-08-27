@@ -13,15 +13,15 @@ func TestCharacterCkptBanAnime(t *testing.T) {
 		"animagine_ckpt": "animagine-xl-3.1.safetensors",
 	}}
 	// 男女都显式配了 animagine(日漫)→ 必须回退通用底
-	if got := ctx.characterCkpt(map[string]any{"gender": "女"}); got != "sd_xl_base_1.0.safetensors" {
+	if got := ctx.characterCkpt(map[string]any{"gender": "女"}); got != "" {
 		t.Fatalf("女 用日漫模型应被拒并回退, got %q", got)
 	}
-	if got := ctx.characterCkpt(map[string]any{"gender": "男"}); got != "sd_xl_base_1.0.safetensors" {
+	if got := ctx.characterCkpt(map[string]any{"gender": "男"}); got != "" {
 		t.Fatalf("男 用日漫模型应被拒并回退, got %q", got)
 	}
-	// 无性别 → 兜底 animagine_ckpt(也是日漫)→ 同样回退
-	if got := ctx.characterCkpt(map[string]any{}); got != "sd_xl_base_1.0.safetensors" {
-		t.Fatalf("无性别兜底日漫模型应回退, got %q", got)
+	// 无性别 → 兜底 animagine_ckpt(也是日漫)→ 同样拒绝
+	if got := ctx.characterCkpt(map[string]any{}); got != "" {
+		t.Fatalf("无性别兜底日漫模型应被拒, got %q", got)
 	}
 	// 非日漫模型正常放行
 	ctx2 := &manjuCtx{R: map[string]any{
@@ -34,8 +34,8 @@ func TestCharacterCkptBanAnime(t *testing.T) {
 	// 其他日漫系关键词同样拦截
 	for _, kw := range []string{"anything-v3-0.safetensors", "counterfeitxl.safetensors", "meinamix_11.safetensors", "nijijourney-xl.safetensors"} {
 		ctx3 := &manjuCtx{R: map[string]any{"char_models": map[string]any{"女": kw}}}
-		if got := ctx3.characterCkpt(map[string]any{"gender": "女"}); got != "sd_xl_base_1.0.safetensors" {
-			t.Fatalf("日漫系 %q 应被拒并回退, got %q", kw, got)
+		if got := ctx3.characterCkpt(map[string]any{"gender": "女"}); got != "" {
+			t.Fatalf("日漫系 %q 应被拒, got %q", kw, got)
 		}
 	}
 }

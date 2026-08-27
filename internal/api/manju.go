@@ -114,7 +114,9 @@ var manjuRenderStrFields = []string{
 // 默认关闭(场景图成本翻倍,节点缺失自动回退单图)
 // subtitle(2026-08-23 用户反馈成片字幕位文字优化):合成时是否烧录对白字幕,默认 true(保持向后兼容)
 // voiceover(2026-08-23 用户反馈 03/06 镜静音):合成前给旁白/画外音补 edge-tts 后期配音,默认 false(需显式开启)
-var manjuRenderBoolFields = []string{"sage_attention", "draft_judge", "fl2va_end_frame", "subtitle", "voiceover"}
+// defreeze(2026-08-27 用户反馈"质检多数不合格/像PPT"):QC 段尾冻结自动截尾(H3 固有特性,
+// 程序修优于换 seed 重渲),默认开;false 关闭
+var manjuRenderBoolFields = []string{"sage_attention", "draft_judge", "fl2va_end_frame", "subtitle", "voiceover", "defreeze"}
 
 // manjuRenderFloatFields 渲染参数浮点字段 + 取值范围 [min,max]
 // chars_per_sec(2026-08-26):中文语音字速预算,台词+旁白总字数÷字速 ≤ 镜头时长;
@@ -2650,6 +2652,8 @@ func manjuPlan(w http.ResponseWriter, r *http.Request) {
 				chars = append(chars, map[string]any{
 					"id": m["id"], "gender": m["gender"], "age": m["age"],
 					"appearance": m["appearance"], "costume": m["costume"],
+					"voice_ref": m["voice_ref"], "voice_name": m["voice_name"],
+					"minor": m["minor"], // 群演轻量卡(2026-08-27):角色管理弹窗标「群演」
 				})
 			}
 		}
@@ -2795,6 +2799,40 @@ func sanitizeFileName(s string) string {
 	}, s)
 }
 
+// manjuCharPromptGet 角色形态图提示词(2026-08-27 角色管理「复制提示词」按钮):
+// 按 角色名+视图+口径 重建该图生成时的最终提示词(manjuCharImagePrompt,与生成链同一套
+// 构建函数),前端复制到剪贴板供外部使用/迭代。
+func manjuCharPromptGet(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	configPath := str(body["config"])
+	episode := orDefault(str(body["episode"]), "EP01")
+	char := str(body["char"])
+	view := str(body["view"])
+	kind := str(body["kind"]) // gacha=抽卡候选(默认);official=正式视图资产
+	if configPath == "" || char == "" {
+		http.Error(w, `{"error":"missing config or char"}`, http.StatusBadRequest)
+		return
+	}
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	ctx, err := newManjuCtx(cp, episode, "", "", "")
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	m := ctx.gachaCharInfo(char)
+	if len(m) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "角色不在方案中: " + char})
+		return
+	}
+	pos, neg := manjuCharImagePrompt(ctx, m, char, view, kind)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "prompt": pos, "negative": neg})
+}
+
 // manjuGachaUpload 上传角色图并直接采纳为正式定妆照(覆盖 → 指纹失效 → 后续渲染以它为身份参考)
 func manjuGachaUpload(w http.ResponseWriter, r *http.Request) {
 	// 真上限:MaxBytesReader 限制整个请求体(此前 64MB 只是 ParseMultipartForm 内存阈值,
@@ -2922,6 +2960,178 @@ func manjuGachaPlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// manjuVoiceLib 预置风格音色库(2026-08-27 用户需求:预置多风格参考音频,按角色人设自动选择)。
+// 库音频确定性命名 lib_<name>.mp3 存 ComfyUI input/audio/,由 voice/prepare 预生成或渲染前自动补齐;
+// H3 只引用 timbre,渲染时按角色匹配结果挂 ref_audios 锁定对白音色(已实测生效)。
+// ⚠️ 音色名经过 edge-tts 实机验证(2026-08-27):Xiaochen/Xiaomo/Xiaoshuang/Xiaoyou/Xiaohan 等
+// 已不支持(NoAudioReceived),勿加回;新增音色必须先实测可用。
+// Age/Vibe 是自动匹配标签(gender+age 关键词为主,role/species 特殊处理见 autoVoiceFor)。
+type manjuVoiceLibItem struct {
+	Name   string // edge-tts 音色名
+	Label  string
+	Gender string // 男/女/童
+	Age    string // 少年/青年/中年/老年/儿童(匹配关键词)
+	Vibe   string // 风格描述
+}
+
+var manjuVoiceLib = []manjuVoiceLibItem{
+	{"zh-CN-YunxiaNeural", "云夏 · 少年男声", "男", "少年", "青春"},
+	{"zh-CN-YunxiNeural", "云希 · 阳光男声", "男", "青年", "阳光"},
+	{"zh-CN-YunjianNeural", "云健 · 磁性男声", "男", "青年", "磁性"},
+	{"zh-CN-YunyangNeural", "云扬 · 沉稳男声", "男", "中年", "沉稳"},
+	{"zh-CN-XiaoyiNeural", "晓伊 · 活泼女声", "女", "少女", "活泼"},
+	{"zh-CN-XiaoxiaoNeural", "晓晓 · 温柔女声", "女", "青年", "温柔"},
+	{"zh-CN-XiaoxuanNeural", "晓萱 · 清亮女声", "女", "青年", "清亮"},
+	{"zh-HK-HiuMaanNeural", "晓曼 · 港风女声", "女", "中年", "御姐"},
+	{"zh-CN-liaoning-XiaobeiNeural", "小北 · 东北女声", "女", "中年", "方言"},
+	{"zh-CN-shaanxi-XiaoniNeural", "小妮 · 陕西女声", "女", "青年", "方言"},
+}
+
+// manjuEdgeVoices 兼容视图(前端音色下拉数据源,2026-08-26 起)
+func manjuVoiceLibList() []map[string]any {
+	out := make([]map[string]any, 0, len(manjuVoiceLib))
+	for _, v := range manjuVoiceLib {
+		out = append(out, map[string]any{
+			"name": v.Name, "label": v.Label, "gender": v.Gender, "age": v.Age, "vibe": v.Vibe,
+		})
+	}
+	return out
+}
+
+// manjuVoiceGenText 音色参考音频的固定参考文本(H3 只引用 timbre,内容不限,取一句中性台词)
+const manjuVoiceGenText = "今天天气不错,我们一起去公园走走吧。"
+
+// manjuVoiceList 可用配音音色列表(前端音色下拉数据源)
+func manjuVoiceList(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"voices": manjuVoiceLibList()})
+}
+
+// manjuVoicePrepare 预生成风格音色库中缺失的参考音频(edge-tts → input/audio/lib_<name>.mp3)。
+// 渲染前也会按需自动补齐(autoVoiceFor 命中但文件缺失时);本接口供 UI 一键预生成全部。
+func manjuVoicePrepare(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	configPath := str(body["config"])
+	if configPath == "" {
+		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+		return
+	}
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	ctx, err := newManjuCtx(cp, "EP01", "", "", "")
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "创建上下文失败: " + err.Error()})
+		return
+	}
+	done, failed := ctx.ensureVoiceLib()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "generated": done, "failed": failed})
+}
+
+// manjuVoiceGen 生成角色配音音色参考音频(edge-tts → ComfyUI input/audio/),并写入方案角色绑定。
+// voice 传空 = 解绑(清除该角色音色)。音色文件确定性命名 voice_<项目>_<角色ID>.mp3,
+// 渲染端按同名查找挂载 ref_audios(见 charVoiceRef),plan 只存绑定记录供前端回显。
+func manjuVoiceGen(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	configPath := str(body["config"])
+	episode := orDefault(str(body["episode"]), "EP01")
+	char := sanitizeFileName(str(body["char"]))
+	voice := strings.TrimSpace(str(body["voice"]))
+	if configPath == "" || char == "" {
+		http.Error(w, `{"error":"missing config/char"}`, http.StatusBadRequest)
+		return
+	}
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	configPath = cp
+	ctx, err := newManjuCtx(configPath, episode, "", "", "")
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "创建上下文失败: " + err.Error()})
+		return
+	}
+	plan, _, err := ctx.loadPlan()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "读取方案失败: " + err.Error()})
+		return
+	}
+	// 角色必须存在于方案(防任意写 plan)
+	found := false
+	if arr, ok := plan["characters"].([]any); ok {
+		for _, x := range arr {
+			if m, ok := x.(map[string]any); ok && str(m["id"]) == char {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "角色「" + char + "」不在方案中"})
+		return
+	}
+	rel := "audio/voice_" + ctx.project + "_" + char + ".mp3"
+	out := filepath.Join(ctx.comfyInput, filepath.FromSlash(rel))
+	if voice == "" {
+		// 解绑:删音频 + 清 plan 绑定
+		_ = os.Remove(out)
+		setVoiceBinding(plan, char, "", "")
+		if err := ctx.writePlan(plan); err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "保存方案失败: " + err.Error()})
+			return
+		}
+		ctx.writeCharactersJSON(plan)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "bound": false})
+		return
+	}
+	// 校验音色名在允许列表(库音色名)
+	okName := false
+	for _, v := range manjuVoiceLib {
+		if v.Name == voice {
+			okName = true
+			break
+		}
+	}
+	if !okName {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "未知音色: " + voice})
+		return
+	}
+	args := []string{"voice-gen", "--text", manjuVoiceGenText, "--voice", voice, "--out", out}
+	if _, err := ctx.runMediaOut(args...); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "音色生成失败: " + err.Error()})
+		return
+	}
+	setVoiceBinding(plan, char, filepath.ToSlash(rel), voice)
+	if err := ctx.writePlan(plan); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "保存方案失败: " + err.Error()})
+		return
+	}
+	ctx.writeCharactersJSON(plan)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "bound": true, "voice_ref": filepath.ToSlash(rel), "voice_name": voice})
+}
+
+// setVoiceBinding 写角色音色绑定到方案 characters(voice 为空清绑定)
+func setVoiceBinding(plan map[string]any, char, voiceRef, voiceName string) {
+	arr, _ := plan["characters"].([]any)
+	for _, x := range arr {
+		m, ok := x.(map[string]any)
+		if !ok || str(m["id"]) != char {
+			continue
+		}
+		if voiceRef == "" {
+			delete(m, "voice_ref")
+			delete(m, "voice_name")
+		} else {
+			m["voice_ref"] = voiceRef
+			m["voice_name"] = voiceName
+		}
+	}
+}
+
 // registerManjuRoutes 注册漫剧工作台全部端点
 func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/manju/projects", func(w http.ResponseWriter, r *http.Request) {
@@ -2982,6 +3192,10 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/manju/gacha/upload", manjuGachaUpload)
 	mux.HandleFunc("POST /api/manju/gacha/adopt", manjuGachaAdopt)
 	mux.HandleFunc("POST /api/manju/gacha/plan", manjuGachaPlan)
+	mux.HandleFunc("POST /api/manju/char/prompt", manjuCharPromptGet)
+	mux.HandleFunc("GET /api/manju/voice/list", manjuVoiceList)
+	mux.HandleFunc("POST /api/manju/voice/gen", manjuVoiceGen)
+	mux.HandleFunc("POST /api/manju/voice/prepare", manjuVoicePrepare)
 	mux.HandleFunc("GET /api/manju/notify", func(w http.ResponseWriter, r *http.Request) {
 		// 审计 F11:Token 明文返回泄漏(serverchan/pushplus/wxpusher 均为密钥)——掩码展示
 		n := loadManjuNotify()
@@ -3028,6 +3242,7 @@ func registerManjuRoutes(mux *http.ServeMux) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 	registerUpscaleRoutes(mux)
+	registerIRRoutes(mux)
 	registerAgentRoutes(mux)
 	registerCleanupRoute(mux)
 }

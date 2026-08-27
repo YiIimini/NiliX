@@ -1361,7 +1361,7 @@ func agentRenderPipeline(ctx *manjuCtx, lg *manjuLogger, acfg agent.Config) erro
 		bgmDesc = filepath.Base(b)
 	}
 	sageDesc := ""
-	if b, _ := ctx.R["sage_attention"].(bool); b {
+	if sageEnabled(ctx.R) {
 		sageDesc = " · ⚡SageAttn"
 	}
 	seedPolicyCN := map[string]string{"fixed": "固定", "increment": "重试递增", "random": "重试随机"}[orDefault(ctx.seedPolicy, "fixed")]

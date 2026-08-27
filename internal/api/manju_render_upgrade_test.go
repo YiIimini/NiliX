@@ -83,10 +83,12 @@ func TestSeedFor(t *testing.T) {
 }
 
 // TestH3RenderWorkflowSage SageAttention 开关:开=插入 PatchSageAttentionKJ,关=无
+// (sageEnabled 缺省开启的语义变更后,「关」须显式 false——空 R 现按开启处理)
 func TestH3RenderWorkflowSage(t *testing.T) {
 	base := map[string]any{
 		"unet_ref2va": "u.safetensors", "unet_fl2va": "f.safetensors",
 		"vae_video": "v.safetensors", "vae_audio": "a.safetensors",
+		"sage_attention": false,
 	}
 	hasPatch := func(wf map[string]any) bool {
 		for _, n := range wf {

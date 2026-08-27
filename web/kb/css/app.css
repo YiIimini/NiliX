@@ -3032,7 +3032,9 @@ select.manju-input {
   box-shadow: 0 12px 40px rgba(0,0,0,.25);
 }
 .manju-modal-head { display: flex; align-items: center; justify-content: space-between; }
-.manju-modal-title { margin: 0; font-size: 16px; font-weight: 700; }
+.manju-modal-title { margin: 0; font-size: 16px; font-weight: 700; flex: 1; }
+/* 2026-08-27 用户要求:头部 space-between 会把中间的刷新按钮挤到标题与关闭之间——
+   标题 flex:1 占满左侧空间,刷新(关闭按钮左侧)与关闭按钮并排右对齐 */
 .manju-modal-body { overflow-y: auto; min-height: 0; }
 .manju-modal-close {
   width: 30px; height: 30px; flex: 0 0 auto;
@@ -3284,16 +3286,17 @@ select.manju-input {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .manju-char-tag { font-size: 11px; color: var(--accent); display: flex; align-items: center; gap: 4px; }
-/* 预览区:方形(定妆照 1024×1024),object-fit 完整展示不裁头;底部留候选条空间 */
+/* 预览区(2026-08-27 用户要求:合理显示整张照片):3:4 竖向容器 + contain 完整显示——
+   主图/face 方形与 full/side/Q 竖幅(832×1248)都不裁切;旧 1:1+cover 会把竖幅全身照裁成半身 */
 .manju-char-preview {
-  position: relative; aspect-ratio: 1 / 1; background: #111;
+  position: relative; aspect-ratio: 3 / 4; background: #111;
   display: flex; align-items: center; justify-content: center; overflow: hidden;
 }
 .manju-char-preview::after {
   content: ""; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(180deg, transparent 60%, rgba(0,0,0,0.22));
 }
-.manju-char-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.manju-char-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .manju-char-preview img.manju-char-img { cursor: zoom-in; transition: opacity 0.15s; }
 .manju-char-preview img.manju-char-img:hover { opacity: 0.82; }
 /* 图片加载失败兜底:灰底 + 破图提示(不再撑破卡片/按钮区) */
@@ -3315,6 +3318,21 @@ select.manju-input {
   border: 1px solid rgba(255,255,255,0.18);
 }
 .manju-char-badge.ok { color: #4ade80; border-color: rgba(74,222,128,0.4); }
+/* 复制提示词按钮(2026-08-27):预览图右上角,与左上角状态角标同构成对;
+   点击复制该图生成时的最终提示词(后端按生成链重建) */
+.manju-copy-prompt {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+  color: #fff; background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
+  border: 1px solid rgba(255,255,255,0.18); cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.manju-copy-prompt:hover {
+  background: color-mix(in srgb, var(--accent, #ff6c37) 40%, #000);
+  border-color: color-mix(in srgb, var(--accent, #ff6c37) 60%, transparent);
+}
+.manju-copy-prompt:disabled { opacity: 0.7; cursor: default; }
 /* 操作按钮:等高不换行,flex 均分但文字单行,杜绝变形 */
 .manju-char-actions {
   display: flex; gap: 8px; padding: 10px 12px 12px;
@@ -3327,6 +3345,26 @@ select.manju-input {
   white-space: nowrap; letter-spacing: 0;
 }
 .manju-char-actions .hrs-btn:disabled { opacity: 0.5; }
+
+/* 配音音色行(2026-08-26 H3 音色锁定):下拉 + 生成按钮 + 绑定状态,与操作行同构等宽 */
+.manju-char-voice {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px 12px; border-top: 1px solid var(--panel-border);
+}
+.manju-char-voice .manju-meta { flex: none; }
+.manju-char-voice select {
+  flex: 1 1 0; min-width: 0; height: 30px;
+  font-size: 12px; border-radius: 8px; padding: 0 4px;
+  text-align: center; text-align-last: center;
+  background: var(--input-bg, rgba(255,255,255,0.06));
+  border: 1px solid var(--panel-border); color: inherit;
+}
+.manju-char-voice .hrs-btn {
+  flex: none; height: 30px; padding: 0 10px; font-size: 12px; border-radius: 8px;
+}
+.manju-char-voice .manju-voice-ok {
+  flex: none; font-size: 11px; color: #4ade80; white-space: nowrap;
+}
 
 /* 多视图 tab:正面/全身/侧面/细节,圆角胶囊式(更清爽)。
    2026-08-26:允许换行(flex-wrap)——窄卡/多 tab 时折两行,不再横向滚动把尾部按钮藏掉 */
@@ -4296,11 +4334,16 @@ select option { text-align: center; }
   transition: opacity 0.18s, transform 0.18s;
 }
 .tip-bubble.show { opacity: 1; transform: none; }
-/* 顶部小箭头(深色尖角,贴顶翻转时仍指向元素) */
+/* 气泡常规位=元素上方 → 箭头在气泡底边、尖朝下指向元素;left 由 JS 锚到元素中心(var 默认 50%) */
 .tip-bubble::before {
-  content: ""; position: absolute; left: 50%; top: -5px; margin-left: -5px;
+  content: ""; position: absolute; left: var(--tip-arrow-x, 50%); margin-left: -5px; bottom: -5px;
   width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent;
-  border-bottom: 5px solid color-mix(in srgb, var(--accent, #ff6c37) 35%, transparent);
+  border-top: 5px solid color-mix(in srgb, var(--accent, #ff6c37) 35%, transparent);
+}
+/* 贴顶翻转:气泡在元素下方 → 箭头移到顶边、尖朝上指向元素(两侧对调,勿再弄反) */
+.tip-bubble.flip::before {
+  bottom: auto; top: -5px;
+  border-top: none; border-bottom: 5px solid color-mix(in srgb, var(--accent, #ff6c37) 35%, transparent);
 }
 
 /* 创作表单:? 气泡提示 + 按钮居中 */
@@ -4996,6 +5039,9 @@ select option { text-align: center; }
 /* 弹窗头部刷新按钮(2026-08-26:关闭按钮前,旋转动效由 JS 驱动) */
 .manju-modal-refresh { margin-right: 6px; font-size: 13px; }
 .manju-modal-refresh:hover { color: var(--accent, #4da3ff); }
+/* 2026-08-27 用户要求:弹窗刷新图标换父级(nav-refresh)同款 SVG——给 svg 显式尺寸,
+   与 .settings-btn svg 17px 一致;旋转反馈动画改 transform 作用在 svg 上避免按钮错位 */
+.manju-modal-refresh svg { width: 17px; height: 17px; display: block; }
 
 /* ============ 清理缓存弹窗·双卡选择(2026-08-26 美化) ============ */
 .cc-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 4px; }

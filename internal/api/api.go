@@ -48,6 +48,12 @@ var sessionToken string
 // SetSessionToken 注入会话令牌(main 启动时调用)
 func SetSessionToken(t string) { sessionToken = t }
 
+// splashFSGlobal 启动动态窗口静态资源(全局 setter 注入,不动 NewServer 签名)
+var splashFSGlobal fs.FS
+
+// SetSplashFS 注入启动 splash 页资源(web/splash)
+func SetSplashFS(f fs.FS) { splashFSGlobal = f }
+
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
@@ -103,6 +109,10 @@ func (s *Server) Routes() http.Handler {
 		// island JS 的 httpPost(http://127.0.0.1:8787/api/comfy/start 等写请求)
 		// 必须带 X-NiliX-Token,否则被 auth 拦成 401「会话失效」——重构不能阉割胶囊按钮
 		mux.Handle("/island/", noCacheHTML(s.tokenInject(http.StripPrefix("/island/", http.FileServer(http.FS(s.islandFS))))))
+	}
+	if splashFSGlobal != nil {
+		// 启动动态窗口(splash,2026-08-27 用户要求):静态展示页,无令牌注入无交互
+		mux.Handle("/splash/", noCacheHTML(http.StripPrefix("/splash/", http.FileServer(http.FS(splashFSGlobal)))))
 	}
 	mux.HandleFunc("/manage/", s.handleManage)
 	if s.kbFS != nil {

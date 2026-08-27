@@ -360,7 +360,45 @@ var manjuStyles = map[string]manjuStyleSpec{
 // manjuPortraitAnchor 角色定妆照正向锚(2026-08-24 用户规则升级,强制附加到每个角色 image_prompt):
 // 写实拟动漫 = 半写实风格化插画 + 东方/中式面孔 + 禁日漫 + 禁真人(防侵权)。
 // 无论风格(写实/2.5D/动漫/水墨)一律执行——LLM 直出、脚本素材抽卡、视图派生全部走它。
+// 2026-08-26 例外:次世代3D/BJD 风格(manjuStyleIs3D)改用 manju3DPortraitAnchor——
+// 用户反馈"写实被干成动漫":painterly/illustration 措辞把 3D 渲染拉向 2D 插画;
+// 3D 渲染虚拟人本身非真人照片,防侵权由 3D 锚内"not a real person"声明承担。
 const manjuPortraitAnchor = "semi-realistic stylized illustration of an East Asian/Chinese character, subtly stylized painterly art, not a photorealistic photo of a real person, not a Japanese anime/manga style, avoid japanese-style facial features, avoid japanese anime eyes, avoid resembling any real person"
+
+// manju3DPortraitAnchor 次世代3D/BJD 人偶风格人像锚(2026-08-26 用户新增):
+// 次世代 3D 渲染 + 虚拟数字人 + BJD 人偶质感,替代插画风锚;不做 photorealistic→stylized 替换
+// (3D 渲染语汇本身就是"非真人照片"的防侵权正解,替换反而把 3D 拉向 2D 插画/动漫)。
+const manju3DPortraitAnchor = "next-generation 3D CGI render of a virtual digital human character, BJD doll aesthetic, porcelain-smooth skin with fine subsurface scattering, soft cinematic studio lighting, physically based rendering, clearly a stylized 3D rendered virtual character, not a real person, not a photograph of a real human, not a Japanese anime/manga style, avoid japanese-style facial features, avoid japanese anime eyes"
+
+// manju3DSceneAnchor 次世代3D 风格场景锚(2026-08-26):3D 渲染虚拟场景,空场景无人保留。
+const manju3DSceneAnchor = "3D rendered virtual environment, cinematic set design, physically based rendering, empty scene, no people"
+
+// manjuPortraitFrontFace 正面人脸锚(2026-08-26 用户规则重申:人物角色提示词必须正面人脸,
+// 禁侧面/半面视角):只加在主定妆照与正面全身视图;side 视图/角色板三视图(设计上含侧面)不加。
+const manjuPortraitFrontFace = ", front-facing portrait, head facing the camera directly, symmetrical frontal face, both eyes evenly visible, no profile angle"
+
+// manjuStyleIs3D 风格是否为次世代3D/BJD 人偶向(2026-08-26):token 含 3d/bjd/cg/unreal/
+// blender/zbrush/virtual human/digital human 等。3D 向风格:定妆不替换写实措辞、不用插画风
+// 人像锚,改用 manju3DPortraitAnchor + 正面人脸锚(用户反馈"选写实风却渲染成动漫形象"的根因
+// 是旧锚把所有风格一刀切拉向 stylized illustration/painterly)。
+func manjuStyleIs3D(style string) bool {
+	for _, tok := range strings.Split(style, "+") {
+		t := strings.ToLower(strings.TrimSpace(tok))
+		if t == "" {
+			continue
+		}
+		if strings.Contains(t, "3d") || strings.Contains(t, "bjd") || strings.Contains(t, "unreal") ||
+			strings.Contains(t, "blender") || strings.Contains(t, "zbrush") ||
+			strings.Contains(t, "virtual human") || strings.Contains(t, "digital human") ||
+			strings.Contains(t, "virtual digital human") {
+			return true
+		}
+		if t == "cg" || t == "cgi" {
+			return true
+		}
+	}
+	return false
+}
 
 // manjuSceneAnchor 场景图锚:场景无人脸,只需明亮清晰;不带人物锚(防误伤)。
 const manjuSceneAnchor = "empty scene, no people"
@@ -380,7 +418,7 @@ func manjuStyleHas(style, key string) bool {
 // 2026-08-24 用户反馈:定妆照与视频角色画风割裂——组合风格(real+2.5d+ink)含 real 被一刀切
 // 走 Z-Image 纯写实,而视频按 2.5D 动漫/水墨渲染,定妆照真人脸与视频动漫脸不一致。
 // 修复:风格含这些风格化预设(即使组合里同时含 real)时,定妆照应走 SDXL checkpoint
-// (animagine 等动漫模型)渲染同风格;仅纯写实(real 或 real+自定义写实词)才走 Z-Image。
+// (Krea-2)渲染同风格;仅纯写实(real 或 real+自定义写实词)才走 Z-Image。
 func manjuStyleStylized(style string) bool {
 	for _, p := range strings.Split(style, "+") {
 		switch strings.TrimSpace(p) {
@@ -963,6 +1001,7 @@ subject_definitions:
 <Subject 1> is the character in <Picture 1> and <Picture 2> ... with [完整外观：逐字引用角色卡 appearance（发型/眼睛/疤痕/气质/道具等全部特征逐项覆盖，禁止省略/概括/编造）；服装 costume 全字段；【性别强化】女=feminine facial structure, soft delicate features, long hair（禁男性化），男=masculine jawline, strong brow, broad shoulders（禁女性化）]
 [同一角色多视图:该角色有几个参考图就引用几张——<Subject 1> is the character in <Picture 1> (正面/正脸特写), <Picture 2> (全身/侧面/细节), ...;每张视图对应一个 <Picture N> 标签,顺序与 ref_available 该角色的视图顺序一致,全部引用后统一写 with [外观...]]
 [多角色镜:每个登场角色一行 <Subject N> is the character in <Picture A> and <Picture B> ...,与参考图顺序一致(角色在前场景在后);画面里谁先出现谁 Subject 号靠前]
+[群像镜纪律·强制(2026-08-27 用户反馈:分镜 4 两名牢卒未定义 Subject,模型自由发挥时从参考图复制了白发管事的形象,画面出现重复人物):动作/画面中出现的每一个人物——包括无名群演(牢卒/士兵/侍卫/侍女/随从/路人/仆役)都必须 subject_definitions 逐一定义:有参考图引用 <Picture N>,无参考图写 <Subject N> is [群演身份] with 独立外观描述(年龄/体型/服装颜色,不引用任何 Picture);严禁省略群演、严禁把多人写成复数笼统词(如 two jailers 必须拆成 <Subject N> 与 <Subject N+1> 两个独立个体);每个 Subject 是独立个体,严禁复用/复制其他 Subject 或参考图人物的外观与脸]
 [参考图纪律·强制:ref_available 是「角色+视图」的平铺清单,顺序就是参考图传入顺序;<Picture 1..N> 严格对应清单第 1..N 项(同一角色多视图占多个 Picture 编号),Subject 编号与角色一一对应(Subject 1=清单第 1 个角色,依次),禁止调换/跳过/合并视图;清单外的登场角色(本镜参考图不足)写 <Subject N> is [角色名] with 外观描述(不引用任何 Picture),并保持与参考角色不串脸]
 [外观锁定·强制:每个角色的外观只允许出现角色卡 appearance+costume 里的特征,且逐项覆盖(发型/眼睛/疤痕/服装/道具缺一不可);禁止 generic 泛化词(ordinary/plain/sturdy/average/young man 等),禁止编造角色卡没有的特征(白发/换装/错误年龄);多角色镜严禁把其他角色的特征写进本角色(谁的特征写谁)]
 [拟漫化硬规则·2026-08-24 用户强制:所有角色均为 semi-realistic stylized illustration of an East Asian/Chinese character——参考图已拟漫化,subject_definitions 必须延续此画风;禁止写 photorealistic/realistic photo/real human(真人脸=侵权);禁止写 japanese anime/manga style, japanese-style facial features, japanese anime eyes(禁日漫);角色外形以参考图为准逐字保留,画风恒定拟漫]
@@ -1040,7 +1079,10 @@ const manjuShotWritingRules = `
 30. 【微表情五维拆解·强制】(2026-08-24 知识库「AIGC人物微表情设计指南」整合)表情=眉眼/嘴角/面部肌肉/呼吸节奏/光影质感五要素组合,不是单个情绪词。人物特写/近景镜至少覆盖 3 个维度:眉眼状态(眉位高低/眉形收放/眼部张力/视线聚焦)、嘴角唇部(上扬下压幅度/唇部紧绷/嘴型张合)、面部肌肉(额部/下颌线/鼻唇沟的收紧松弛颤动)、呼吸节奏(平稳/短促/屏息/抽泣停顿)、光影配合(侧光勾情绪/顶光压氛围)。同一情绪分克制/爆发双档(愤怒克制版=眉心紧锁+眼白微露+嘴角紧绷后张开;爆发版=眼裂放大+瞳孔收缩+面部肌肉强烈)
 31. 【哭戏四梯度·强制】(2026-08-24 知识库「AIGC人物微表情设计指南」整合:哭戏的情绪刻度表)哭戏按强度分四档写,禁止笼统"哭了":①强忍泪水(隐忍哭)=眉尾下垂+眼睑轻颤+下眼睑泛红+鼻翼微颤+泪水不落;②无声落泪(安静哭)=泪珠缓慢滑落+眼尾泛红+嘴角微下垂;③抽泣哭(压抑哭)=肩部胸廓起伏+鼻翼煽动+嘴角抽搐;④崩溃大哭(爆发哭)=眼裂放大+泪水滚落+面部张力强。变体:哽咽哭(喉结滚动/泪珠挂睫毛/说不出话)、喜极而泣(嘴角带笑+泪珠眼尾滑落)、委屈哭(下唇轻突+眼睑微颤)。情绪越深越要"少一点更准"(隐忍心动=目光轻回+嘴角极轻上扬+耳尖微红)
 32. 【非对称与克制中断·强制】(2026-08-24 知识库「H3提示词优化5层结构方法论」第三层整合:去 AI 感两手法)①非对称:情绪只让半边脸动,明确"眼部不参与/左脸不动"——全脸同步动=AI 味;②克制与中断:动作启动后写中断点,不写"摇头否认",写"摇头启动后在第 10° 突然减速停止"。情绪演出带肌肉层次和克制(泪锁在睫毛边缘不滑落/笑到一半收住),比写满更真
-33. 【原子需求台账·强制】(2026-08-24 知识库「H3提示词优化5层结构方法论」第四层整合:每条约束必须可验收)每镜详细描述按台账四栏自查并落实:必须出现(核心主体/关键动作/关键道具)/必须保持(发型/瞳色/服装/疤痕/场景布局——写"第 N 秒时仍是长黑发、蓝开衫、圆框眼镜"这类可见终态,不写"保持一致")/允许变化(表情/光线/镜头内可动元素)/禁止出现(无关人物/多余物品/画面文字/水印)。"保持一致"=没写,必须改写成可被结果检查的可见终态;多素材任务显式写清每张图各自负责什么,不让两份素材抢同一核心身份`
+33. 【原子需求台账·强制】(2026-08-24 知识库「H3提示词优化5层结构方法论」第四层整合:每条约束必须可验收)每镜详细描述按台账四栏自查并落实:必须出现(核心主体/关键动作/关键道具)/必须保持(发型/瞳色/服装/疤痕/场景布局——写"第 N 秒时仍是长黑发、蓝开衫、圆框眼镜"这类可见终态,不写"保持一致")/允许变化(表情/光线/镜头内可动元素)/禁止出现(无关人物/多余物品/画面文字/水印)。"保持一致"=没写,必须改写成可被结果检查的可见终态;多素材任务显式写清每张图各自负责什么,不让两份素材抢同一核心身份
+34. 【配音音色绑定·条件强制】(2026-08-26 用户需求,voice_bindings 非空时生效;空则完全忽略本条)输入 voice_bindings 是本镜绑定配音音色的角色编号表([{"char_id": 角色名, "audio": "<Audio 1>"}...],按登场顺序编号,audio 编号严禁改动):①subject_definitions 中为每个绑定角色追加一行音色定义——<Audio N> is the voice-timbre reference for the voice of <Subject M> (Sx), containing a spoken voiceover.(N=voice_bindings 的 audio 编号,M=该角色在 subject_definitions 的 Subject 编号,Sx=该角色说话者 ID);②detailed_description 中该角色说台词处写 with voice timbre referencing <Audio N>(放在 (Sx) 之后、<d> 之前,并入句内自然英语,不另起句);③旁白/画外音不绑定(voice_bindings 只含登场角色);④禁止把 <Audio N> 绑定到别的角色、禁止改写编号、禁止编造 voice_bindings 里没有的 <Audio>
+35. 【链式衔接·气闸原则·强制】(2026-08-27 官方 MotionContext README 核验转化)非首镜的镜头是接上一镜续写的(pinned 头):①detailed_description 开头先承接上一镜的收尾构图约 1 秒(同一构图/人物位置,无新主体无台词),再发展本镜内容——官方实测这种"气闸"衔接比直接硬切更紧;②开头画面的人物安排必须与上一镜收尾一致:提示词若与 pinned 帧矛盾(上一镜结尾 A 特写、本镜开头写 B+C 双人),模型不二选一而是**全部渲染(union)**——这正是"多出不相干人脸"的深层根源;③承接段也要有微小可见动作(a breath/a weight shift/an eyeline change/fabric or hair movement),官方:"静止的 hold 渲染成字面冻结"`
+
 
 func manjuShotPromptSystem(hasChar bool, style string) string {
 	sys := "你是 MiniMax H3 视频生成模型的提示词专家。基于给定镜头的分镜信息与角色/场景卡，直出该镜【完整】H3 提示词（英文主体、中文台词/旁白原文）。\n\n输出严格 JSON：{\"h3_prompt\": \"提示词全文\"}\n\n"

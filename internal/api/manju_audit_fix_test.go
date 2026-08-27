@@ -207,7 +207,7 @@ func TestEncWorkflowDualFrameUsesCoreNode(t *testing.T) {
 		"unet_fl2va": "f.safetensors", "unet_ref2va": "r.safetensors",
 		"clip": "c.safetensors", "vae_video": "v.safetensors", "vae_audio": "a.safetensors",
 		"_scene_end": "dir_scene_1_end.png",
-	}, "prompt", 768, 1344, 145, nil, "dir_scene_1.png", "cache", false)
+	}, "prompt", 768, 1344, 145, nil, nil, "dir_scene_1.png", "cache", false)
 
 	foundDual := false
 	for _, n := range wf {

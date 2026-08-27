@@ -58,6 +58,7 @@ type manjuCtx struct {
 	comfyOutput  string
 	comfyInput   string
 	sharedModels string
+	loraRepair   string // 渲染入口 turbo LoRA 归一化提示(配置引用的 LoRA 文件缺失自动回退时填充,启动日志展示)
 	assetsDir    string
 	analysisDir  string
 	clipsDir     string // <workdir>/clips
@@ -80,6 +81,8 @@ type manjuCtx struct {
 	qcRerender   map[int]int // 质检自愈重渲轮数(镜头号 → 已重渲次数;换 seed 重渲,上限后提示逃生门)
 	visionOnce   sync.Once
 	vision       *agent.VisionClient // 每 run 共享(粘性降级状态跨镜头保留)
+	charInfo     map[string]map[string]any // 方案角色 id → 角色对象(懒加载,自动音色匹配用)
+	voiceLibDone map[string]bool           // 库音色自动补齐去重(每 run 一次,防重复生成)
 }
 
 // sageAttnGuard 检查 SageAttention 节点可用性:ComfyUI 未装对应节点时
@@ -89,9 +92,17 @@ type manjuCtx struct {
 // 审计 3.3:探测结果写入 ctx 字段而非 ctx.R——预编码 goroutine 与渲染主 goroutine 并发,
 // 各自通过 applySageToR 把结果注入自己的 R 副本,消除"主流程写 R 时 goroutine 读 R"的
 // 并发 map 读写(此前靠调用顺序侥幸规避)
+// sageEnabled SageAttention 开关,缺省开启(存量项目 config 缺字段时按 true 处理,
+// 让加速件对新旧项目一致生效;节点缺失时 sageAttnGuard 会自动降级关闭不阻塞渲染)。
+func sageEnabled(R map[string]any) bool {
+	if v, ok := R["sage_attention"].(bool); ok {
+		return v
+	}
+	return true
+}
+
 func (ctx *manjuCtx) sageAttnGuard(lg *manjuLogger) {
-	b, _ := ctx.R["sage_attention"].(bool)
-	if !b || ctx.sageChecked {
+	if !sageEnabled(ctx.R) || ctx.sageChecked {
 		return
 	}
 	ctx.sageChecked = true
@@ -153,13 +164,17 @@ func (ctx *manjuCtx) freeComfyModels(lg *manjuLogger) {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := ctx.comfy.client.Do(req)
 	if err != nil {
-		lg.logf("  ⚠️ 释放 ComfyUI 显存失败(忽略,继续): " + truncate(err.Error(), 80))
+		if lg != nil {
+			lg.logf("  ⚠️ 释放 ComfyUI 显存失败(忽略,继续): " + truncate(err.Error(), 80))
+		}
 		return
 	}
 	defer resp.Body.Close()
 	// 释放后稍等模型卸载完成(大模型卸载需数秒)
 	time.Sleep(2 * time.Second)
-	lg.logf("  🧹 已释放 ComfyUI 模型显存(编码前腾出 Qwen3-VL 空间)")
+	if lg != nil {
+		lg.logf("  🧹 已释放 ComfyUI 模型显存(编码前腾出 Qwen3-VL 空间)")
+	}
 }
 
 func manjuToFloat(v any) (float64, bool) {
@@ -313,6 +328,8 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	// 接缝 latent 命名空间(审计 S6):h3_context/<项目>_<集>/clip_NNNNN——此前 latent 只按镜头号
 	// 落 output/h3_context/ 全局共享,项目 B 定点重渲会接续项目 A 的画面;草稿/定稿分辨率也混用
 	ctx.R["_latent_ns"] = reNonWord.ReplaceAllString(ctx.project, "_") + "_" + reNonWord.ReplaceAllString(ctx.episode, "_")
+	// turbo LoRA 存在性归一化(必须早于 ctx.steps 计算:回退后按实际生效的 LoRA 取步数)
+	ctx.normalizeTurboLora()
 	if n, ok := manjuToInt(R["width"]); ok && n > 0 {
 		ctx.w = n
 	} else {
@@ -377,6 +394,63 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	}
 	ctx.draftJudge, _ = R["draft_judge"].(bool)
 	return ctx, nil
+}
+
+// normalizeTurboLora 渲染入口 turbo LoRA 文件存在性归一化(2026-08-26):
+// 配置引用的 LoRA 文件不在磁盘时,自动回退到 loras 目录里第一个同族文件并写回项目 config
+// ——「minimax_h3_turbo_4step_ema.safetensors(未找到)」类报错的根治:该旧默认名(4step EMA)
+// 随 Turbo LoRA 部署升级停发,新项目默认已对齐新版(见 manjuDefaultConfig),存量项目经此自愈;
+// 回退同时重算 ctx.steps 依赖的 R 值,体检/自检/渲染全链路不再报缺失。
+// 找不到同族文件时保持原值不动(不静默清配置,渲染时 ComfyUI 仍会报具体错误)。
+func (ctx *manjuCtx) normalizeTurboLora() {
+	loraDir := filepath.Join(ctx.sharedModels, "loras")
+	entries, err := os.ReadDir(loraDir)
+	if err != nil {
+		return // 目录不存在(测试环境/未部署):不动
+	}
+	var hasLora []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".safetensors") {
+			hasLora = append(hasLora, e.Name())
+		}
+	}
+	if len(hasLora) == 0 {
+		return
+	}
+	firstOf := func(pat string) string {
+		for _, n := range hasLora {
+			if strings.Contains(strings.ToLower(n), pat) {
+				return n
+			}
+		}
+		return ""
+	}
+	fix := func(key, pat string) string {
+		cur := strings.TrimSpace(str(ctx.R[key]))
+		if cur == "" || fileExists(filepath.Join(loraDir, cur)) {
+			return ""
+		}
+		if fb := firstOf(pat); fb != "" && fb != cur {
+			ctx.R[key] = fb
+			return key + " " + cur + " → " + fb
+		}
+		return ""
+	}
+	var msgs []string
+	if m := fix("turbo_lora", "fl2v"); m != "" {
+		msgs = append(msgs, m)
+	}
+	if m := fix("turbo_lora_r2v", "ref2v"); m != "" {
+		msgs = append(msgs, m)
+	}
+	if len(msgs) == 0 {
+		return
+	}
+	ctx.loraRepair = "🔄 Turbo LoRA 自动修复: " + strings.Join(msgs, "; ") +
+		"(配置引用的 LoRA 文件不存在,已回退磁盘实际存在的同族 LoRA 并写回项目 config)"
+	if err := writeManjuConfig(ctx.configPath, ctx.cfg); err != nil {
+		ctx.loraRepair += "(config 写回失败,仅本次运行生效: " + truncate(err.Error(), 60) + ")"
+	}
 }
 
 // latentNS 接缝 latent 命名空间(审计 S6):<项目>_<集>,防跨项目/跨方案/草稿定稿分辨率串接
@@ -457,10 +531,33 @@ func manjuSanitizeRenderWords(s string) (string, map[string]int) {
 	return out, repl
 }
 
-// manjuFrameGuard H3 多余人脸硬约束(2026-08-25 用户反馈:镜头 05 出现多余不相干人脸):
+// manjuFrameGuard H3 多余人脸硬约束(2026-08-25 用户反馈:镜头 05 出现多余不相干人脸;
+// 2026-08-27 二修:分镜 4 出现重复人物——无名群演(牢卒)未定义 Subject 时模型自由发挥,
+// 从参考图复制了白发管事的形象):
 // 有角色镜追加「画面中只允许出现本镜角色,绝对没有其他人/多余脸/路人/人群」的英文硬约束——
 // 正面列名 + 排除句双管齐下(H3 对否定句敏感,与写作规则 11/19/33 同口径)。
-const manjuFrameGuard = "FRAME DISCIPLINE: this shot contains ONLY the characters listed in subject_definitions; every face in the frame belongs to these characters alone - absolutely no other people, no extra faces, no bystanders, no passers-by, no crowd, no background figures with visible faces"
+// 二修追加「每人独立形象/禁止复制同人/禁止复用他人形象」——自由发挥的群演不复用参考图人物脸。
+const manjuFrameGuard = "FRAME DISCIPLINE: this shot contains ONLY the characters listed in subject_definitions; every face in the frame belongs to these characters alone - absolutely no other people, no extra faces, no bystanders, no passers-by, no crowd, no background figures with visible faces; every person in the frame is a distinct individual with their own unique appearance - never show the same character twice, never duplicate a face, never reuse another character's look for an extra person"
+
+// manjuMotionGuard 运动纪律(2026-08-27 用户反馈"像PPT/运镜不电影级"):H3 长镜存在
+// 运动衰减——动作早早 settle 后画面趋静止,叠加段尾固有冻结,成片观感即幻灯片。这里在
+// 提示词尾部强注入持续运动要求(镜头运动/人物动作/环境动态三选一持续到最后帧),
+// 配合 QC 段尾冻结自动截尾双管齐下:提示词尽量让运动持续,残余冻结尾巴程序裁掉。
+// (官方 MotionContext README 同结论:"a held framing with nothing happening renders
+// as a literal freeze"——hold 必须有事做:a breath, a weight shift, an eyeline change)
+const manjuMotionGuard = "MOTION DISCIPLINE: maintain continuous visible motion through every second of this clip until the final frame - camera movement (push/dolly/pan/handheld drift), character action, or environmental motion (light flicker, floating particles, moving fabric and hair) must never fully stop; the clip must not settle into a static freeze frame before the end"
+
+// manjuChainGuard 链式衔接纪律(2026-08-27 官方 MotionContext README 核验转化,
+// 对治"镜头间不连贯"与"多出不相干人脸"):
+// ①气闸(airlock):接缝镜开头先保持上一镜收尾构图约1秒再发展新内容,官方实测这种
+//   衔接"measure tighter than an ordinary frame-to-frame cut";
+// ②矛盾=并集:提示词的人物安排若与 pinned 开头帧矛盾,模型不会二选一而是全部渲染
+//   (union)——这正是多余人脸的深层机理,FRAME DISCIPLINE 只能防"凭空多人",
+//   防不了"构图矛盾加人";
+// ③静止 hold 要有事做(与 MOTION DISCIPLINE 呼应)。
+// 措辞条件化("if/otherwise")兼容独立返工重渲(fresh 无 pinned 头时自然落空),
+// 因此对所有镜头恒定注入——指纹与链式状态解耦,不会因 latent 文件有无漂移。
+const manjuChainGuard = "CHAIN DISCIPLINE: if this clip opens on pinned continuation frames from the previous clip, hold that exact closing composition for about one second with no new subjects and no dialogue, then develop into this clip's own content; the arrangement of people at the clip opening must match the pinned frames - a contradicting arrangement renders as a union and puts extra people and faces into the frame; otherwise open directly with this clip's own establishing framing. During any held beat keep small visible motion alive (a breath, a weight shift, an eyeline change, fabric or hair movement)"
 
 // ---- 2026-08-25 角色板(角色资料卡)资产:即梦「角色版控制一致性」方法落地 ----
 // 知识库「创作管理/AI漫剧/制作链路/角色板控制一致性教程_即梦角色版.md」:
@@ -524,26 +621,70 @@ func (ctx *manjuCtx) manjuBoardPromptFor(char string, m map[string]any) string {
 	return base + layout + manjuColorAnchor(m)
 }
 
-// finalizeShotPrompt 渲染输入最终化(2026-08-25 用户规则):违规词替换 + 多余人脸硬约束。
-// renderShotTo 入口调用一次——缓存指纹(shotCondFingerprintAt)与预编码(ensureEncodedAt)
-// 都用同一份最终化文本,保证指纹/编码/渲染三处一致。幂等:已含关键短语不重复追加。
+// manjuAudioGuard 台词纪律(2026-08-27 用户反馈:03 镜对话重复)。实测(ASR 实证)H3 会把
+// 六段式描述里的"说话动作"间接引语(如 "She lifts her gaze and asks one flat question")
+// 也合成成语音——与 <d> 标记台词并行 = 同义台词念两遍/凭空加戏。对白与旁白的官方载体
+// 都是 <d> 标签(旁白=off-screen voiceover 句式同样包 <d>,见 manju_script_parse.go
+// 机械质检自动补写),故此处只认 <d>:描述文字一律不发声。
+const manjuAudioGuard = "AUDIO DISCIPLINE: every spoken line in this clip comes ONLY from the text inside <d> tags; never voice, paraphrase, repeat, translate or invent any other dialogue; narration and description sentences outside <d> tags must never be spoken aloud; if this clip opens on pinned continuation frames from the previous clip, keep that opening beat completely silent before the first marked line"
+
+// manjuNoRefGuard 无参考图人物镜纪律(2026-08-27 用户反馈:04/05 镜周管事渲染两次)。
+// 镜头有人物(subject_definitions)但登场角色为空(群演/无卡次要角色,如牢头/牢卒)——
+// 提示词里的 <Picture N> 引用悬空(未挂任何参考图),模型转而从链式上一镜复制形象,
+// 把已登场角色(白发周管事)的长相套到其他主体身上 = 同一人物入画多次。
+const manjuNoRefGuard = "REFERENCE NOTE: no reference picture is attached to this clip; ignore any <Picture N> mention, render each subject strictly as described in subject_definitions, with each person clearly distinct from the others (different age, build, hairstyle and clothing as described); never copy one subject's appearance onto another subject or onto any background figure"
+
+// manjuFinalizePromptPure 渲染输入最终化·纯函数版(2026-08-27 审计修复:指纹对称)。
+// 旧版 guard 只在 renderShotTo 的值拷贝里注入,manifestMark 记的是"含 guard"指纹,
+// 而下次运行的 stale 检查用原始 prompt 算指纹——有角色镜恒 stale 反复重渲。现在指纹
+// 计算与渲染共用本函数,两侧永远一致(幂等:已含关键短语不重复追加)。
+func manjuFinalizePromptPure(hp string, hasChars bool) string {
+	if hp == "" {
+		return hp
+	}
+	if out, _ := manjuSanitizeRenderWords(hp); out != "" {
+		hp = out
+	}
+	// 人物纪律覆盖面(2026-08-27 修复):frameGuard 旧条件是 hasChars(登场角色非空),
+	// 群像无卡镜(subject_definitions 定义了牢头/牢卒等群演,但 characters 为空)整段漏掉
+	// ——无参考图+无纪律,链上白发形象被复制给每个主体 = 周管事入画多次。有主体即约束。
+	hasSubjects := strings.Contains(hp, "subject_definitions")
+	if (hasChars || hasSubjects) && !strings.Contains(hp, "no extra faces") {
+		hp = strings.TrimRight(hp, " \n") + "\n" + manjuFrameGuard
+	}
+	// 无参考图的人物镜:<Picture N> 悬空,显式声明按文字各自成型、禁止形象互抄
+	if !hasChars && hasSubjects && !strings.Contains(hp, "no reference picture is attached") {
+		hp = strings.TrimRight(hp, " \n") + "\n" + manjuNoRefGuard
+	}
+	if !strings.Contains(hp, "AUDIO DISCIPLINE") {
+		hp = strings.TrimRight(hp, " \n") + "\n" + manjuAudioGuard
+	}
+	if !strings.Contains(hp, "MOTION DISCIPLINE") {
+		hp = strings.TrimRight(hp, " \n") + "\n" + manjuMotionGuard
+	}
+	if !strings.Contains(hp, "CHAIN DISCIPLINE") {
+		hp = strings.TrimRight(hp, " \n") + "\n" + manjuChainGuard
+	}
+	return hp
+}
+
+// finalizeShotPrompt 渲染输入最终化(2026-08-25 用户规则):违规词替换 + 多余人脸硬约束
+// + 运动纪律(2026-08-27)。renderShotTo 入口调用一次——缓存指纹(shotCondFingerprintAt)
+// 与预编码(ensureEncodedAt)都用同一份最终化文本,保证指纹/编码/渲染三处一致。
 func (ctx *manjuCtx) finalizeShotPrompt(hp string, s manjuShot, lg *manjuLogger) string {
 	if hp == "" {
 		return hp
 	}
-	// ①违规词替换(同义/谐音)
-	if out, repl := manjuSanitizeRenderWords(hp); len(repl) > 0 {
+	before := hp
+	hp = manjuFinalizePromptPure(hp, len(s.Characters) > 0)
+	// ①违规词替换(同义/谐音)——日志提示
+	if _, repl := manjuSanitizeRenderWords(before); len(repl) > 0 {
 		var parts []string
 		for w, n := range repl {
 			parts = append(parts, fmt.Sprintf("%s×%d→%s", w, n, manjuRenderWordReplace[w]))
 		}
 		sort.Strings(parts)
 		lg.logf(fmt.Sprintf("  ⚠️ 镜头 %d 检测到违规词,已同义/谐音替换: %s", s.ID, strings.Join(parts, "、")))
-		hp = out
-	}
-	// ②多余人脸硬约束(有角色镜)
-	if len(s.Characters) > 0 && !strings.Contains(hp, "no extra faces") {
-		hp = strings.TrimRight(hp, " \n") + "\n" + manjuFrameGuard
 	}
 	return hp
 }
@@ -607,7 +748,14 @@ func (l *manjuLogger) logf(line string) {
 }
 
 func (l *manjuLogger) logStage(key string) {
-	l.logf("━━━ 阶段 " + key + " ━━━")
+	// 阶段横幅带集号(2026-08-26 用户要求:运行日志分清楚集数——多集/全本自动分集时
+	// 逐集跑管线,不带集号则阶段混在一起无法分辨当前属于哪集)。reManjuStage 前缀匹配
+	// 阶段名仍有效(解析到空格即停),前端 renderLog 分组/横幅正则已同步兼容 ` · 集号`。
+	label := "阶段 " + key
+	if l.ep != "" {
+		label += " · " + l.ep
+	}
+	l.logf("━━━ " + label + " ━━━")
 }
 
 func (l *manjuLogger) stopped() bool {
@@ -661,6 +809,9 @@ func manjuPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
 	if phase != "all" {
 		stages = []string{phase}
 	}
+	if ctx.loraRepair != "" {
+		lg.logf(ctx.loraRepair)
+	}
 	for _, st := range stages {
 		if lg.stopped() {
 			lg.logf("⏹ 任务已被手动停止。已完成产物保留,可直接再点同按钮续跑。")
@@ -699,7 +850,33 @@ func manjuPipelineRun(ctx *manjuCtx, phase string, lg *manjuLogger) int {
 			return 1
 		}
 	}
+	// 2026-08-26 升级:渲染完成空闲 N 分钟自动释放 ComfyUI 模型显存(render.idle_free_minutes,0=关)
+	ctx.scheduleIdleFree(lg)
 	return 0
+}
+
+// scheduleIdleFree 渲染完成后空闲 N 分钟且队列无任务时,自动 POST /free 释放模型显存。
+// 默认 10 分钟(留足人工查看/续跑时间),render.idle_free_minutes=0 关闭。
+func (ctx *manjuCtx) scheduleIdleFree(lg *manjuLogger) {
+	mins := 10
+	if v, ok := manjuToFloat(ctx.R["idle_free_minutes"]); ok && v >= 0 {
+		mins = int(v)
+	}
+	if mins <= 0 {
+		return
+	}
+	lg.logf(fmt.Sprintf("  ⏰ 渲染完成,空闲 %d 分钟后自动释放 ComfyUI 显存(/free)", mins))
+	go func() {
+		time.Sleep(time.Duration(mins) * time.Minute)
+		busy, err := ctx.comfy.queueBusy()
+		if err != nil {
+			return
+		}
+		if !busy {
+			ctx.freeComfyModels(nil)
+			lg.logf("  🧹 空闲自动释放 ComfyUI 模型显存完成")
+		}
+	}()
 }
 
 // manjuSetStage 推进实时阶段(内存状态;前端运行状态/气泡据此显示当前步骤)
@@ -990,6 +1167,17 @@ func (ctx *manjuCtx) autoStoryboardForEpisode(lg *manjuLogger) string {
 	}
 	chap := fmt.Sprintf("%03d", n)
 	matches, _ := filepath.Glob(filepath.Join(dir, "第"+chap+"章*.md"))
+	if len(matches) == 0 {
+		// 2026-08-26 兜底:部分分镜脚本文件名无前导零(第1章_xxx.md)——补两位/一位数字匹配
+		for _, w := range []int{2, 1} {
+			if n < 10 || w == 2 {
+				matches, _ = filepath.Glob(filepath.Join(dir, fmt.Sprintf("第%0*d章*.md", w, n)))
+			}
+			if len(matches) > 0 {
+				break
+			}
+		}
+	}
 	if len(matches) == 0 {
 		matches, _ = filepath.Glob(filepath.Join(dir, "EP"+fmt.Sprintf("%02d", n)+".md"))
 	}
@@ -1730,7 +1918,9 @@ func (ctx *manjuCtx) validatePlan(plan map[string]any, shots []manjuShot) []stri
 				if i := strings.Index(line, ":"); i > 0 {
 					speaker := strings.TrimSpace(line[:i])
 					content := strings.TrimSpace(line[i+1:])
-					if !charNames[speaker] {
+					// 画外群杂(画外·前缀)豁免:不入画的角色也能说话(群众议论承载叙述,
+					// 2026-08-27 用户规则:旁白禁止复述画面,背景信息优先群众议论化)
+					if !charNames[speaker] && !manjuIsOffScreenSpeaker(speaker) {
 						problems = append(problems, fmt.Sprintf("镜头 %d 台词说话人「%s」不在登场角色内", s.ID, speaker))
 					}
 					// H3 官方经验值:每句对白 ≤20 字(超长句 H3 语音节奏崩,须拆成多句)
@@ -2118,6 +2308,22 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 	if err := os.MkdirAll(ctx.analysisDir, 0755); err != nil {
 		return err
 	}
+	// 官方 Context IR 扩写(2026-08-26 升级):对空镜三段式提示词做 MiniMax 官方增强,
+	// 输出格式与空镜一致,直接替换;失败降级用本地提示词,不阻塞管线。
+	if irExpandEnabled(ctx.R) {
+		// 从 plan 构造 shots 索引供 IR 读取时长/回写 h3_prompt
+		shotObjs := map[int]map[string]any{}
+		for _, x := range anyArr(plan["shots"]) {
+			if m, ok := x.(map[string]any); ok {
+				if n, ok := manjuToInt(m["shot_id"]); ok {
+					shotObjs[n] = m
+				}
+			}
+		}
+		if err := ctx.expandShotsWithIR(prompts, shotObjs, lg); err != nil {
+			lg.logf("  ⚠️ Context IR 扩写失败(已保留本地提示词继续): " + err.Error())
+		}
+	}
 	pm := map[string]any{}
 	for k, v := range prompts {
 		pm[k] = v
@@ -2205,6 +2411,19 @@ func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]
 		"known_issues":    topAgentIssues(ctx.project, 3),
 		"ref_available":   ctx.shotRefViews(s),
 	}
+	// 配音音色绑定(2026-08-26 用户需求):该镜绑定音色角色的 <Audio N> 编号映射,
+	// LLM 据此在 subject_definitions 写音色定义、对白处引用(见写作规范第 34 条)
+	var vbs []voiceBinding
+	if hasChar {
+		vbs = ctx.voiceBindingsFor(s)
+	}
+	if len(vbs) > 0 {
+		var vbAny []map[string]any
+		for _, b := range vbs {
+			vbAny = append(vbAny, map[string]any{"char_id": b.CharID, "audio": b.Audio})
+		}
+		data["voice_bindings"] = vbAny
+	}
 	// 多切点长镜:附加规范 + 组内各镜字段与切点时间(take_shots 供 LLM 直引,不必自算)
 	if len(s.TakeGroup) > 1 {
 		sys += manjuMultiCutAddon
@@ -2242,7 +2461,7 @@ func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]
 			cd, _ := json.Marshal(compactData)
 			if out2, err2 := ctx.llm.chatJSON(compactSys, string(cd), 0.3); err2 == nil {
 				if hp2 := str(out2["h3_prompt"]); hp2 != "" {
-					return hp2, nil
+					return ensureVoiceBindings(hp2, vbs), nil
 				}
 			}
 		}
@@ -2252,7 +2471,7 @@ func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]
 	if hp == "" {
 		return "", fmt.Errorf("LLM 未返回 h3_prompt")
 	}
-	return hp, nil
+	return ensureVoiceBindings(hp, vbs), nil
 }
 
 // manjuTimecode 秒 → MM:SS.mmm(H3 官方多切点时间戳格式)
@@ -2266,20 +2485,22 @@ func manjuTimecode(sec float64) string {
 
 // ---- 资产(定妆照 SDXL + 场景图 Z-Image,已存在复用) ----
 
-// negPrompt 负面提示词(角色/场景图生成):优先配置 render.neg_prompt(用户配置),
-// 空则用内置默认。用户规则(2026-08):普通管线不解析小说总集负面——
+// negPrompt 负面提示词(角色/场景图生成):内置安全底线恒在(2026-08-27 三修:
+// 用户配置 render.neg_prompt 曾**整体替换**内置——自定义只剩画质词时,禁日漫/禁真人/
+// 服装禁裸全线裸奔,精卫 Q 版袒胸实锤)。改为**追加**语义:内置在前(高权重位),
+// 用户词接后,只增不减。用户规则(2026-08):普通管线不解析小说总集负面——
 // 总集负面仅在「AI 一条龙」分析时读入并写回配置。
 func (ctx *manjuCtx) negPrompt() string {
 	if s := strings.TrimSpace(str(ctx.R["neg_prompt"])); s != "" {
-		return s
+		return manjuNegPrompt + ", " + s
 	}
 	return manjuNegPrompt
 }
 
-// characterCkpt 角色定妆照 checkpoint(按性别,兜底 sd_xl_base)。
+// characterCkpt 角色定妆照 checkpoint(按性别)。
 // 2026-08-24 用户规则:SDXL 全面禁用(观感差),定妆照统一 Z-Image/Krea-2——本函数生产管线
 // 已不再调用(portraitWF 不落 SDXL 分支),仅保留定义供兼容/测试引用。
-// 禁日漫硬防线仍有效:animagine 等日漫系 checkpoint 即便被误传也强制回退 sd_xl_base。
+// 2026-08-26:SDXL/animagine 模型文件已清理,不再有兜底 checkpoint,禁日漫硬防线命中返回空。
 func (ctx *manjuCtx) characterCkpt(char map[string]any) string {
 	cm, _ := ctx.R["char_models"].(map[string]any)
 	g := str(char["gender"])
@@ -2293,13 +2514,10 @@ func (ctx *manjuCtx) characterCkpt(char map[string]any) string {
 	if ckpt == "" {
 		ckpt = str(ctx.R["animagine_ckpt"])
 	}
-	if ckpt == "" {
-		ckpt = "sd_xl_base_1.0.safetensors"
-	}
-	// 禁日漫硬防线:识别日漫系 checkpoint 名(animagine/anything-v3/anythingv3/counterfeit/meinamix 等),
-	// 命中即强制回退通用写实底,杜绝日漫脸定妆照流入渲染
+	// 禁日漫硬防线:识别日漫系 checkpoint 名(animagine/anything-v3/counterfeit/meinamix 等),
+	// 命中即拒绝(返回空),杜绝日漫脸定妆照流入渲染
 	if manjuIsAnimeCheckpoint(ckpt) {
-		return "sd_xl_base_1.0.safetensors"
+		return ""
 	}
 	return ckpt
 }
@@ -2322,6 +2540,11 @@ func manjuIsAnimeCheckpoint(name string) bool {
 // 固定尺寸后同角色跨项目同 prompt 同尺寸 → 形象唯一稳定。
 const manjuPortraitW, manjuPortraitH = 1024, 1024
 
+// manjuViewW/H full/side/Q 版视图画幅(2026-08-27 用户反馈 full 不到脚):
+// 方形 1024 里 7 头身全身脸部占比过小,模型放大人物裁掉下半身;竖幅 2:3 是全身立绘
+// 经典比例,模型有「竖构图=全身立绘」先验。主图/face/detail 仍用方形(形象稳定锚)。
+const manjuViewW, manjuViewH = 832, 1248
+
 // manjuQStrength Q 版 img2img denoise 强度:换装成 chibi 需要高 denoise 彻底重绘构图/比例
 // (0.85 以下容易残留主图的正常 7 头身)。2026-08-26 用户实测「Q版一点也不呆萌」:
 // 0.88 重绘不足,主图写实构图残留压制 Q 萌比例——提到 0.93 让 prompt 主导大头小身,
@@ -2331,8 +2554,27 @@ const manjuQStrength = 0.93
 // manjuViewGen 视图生成逻辑代数(2026-08-26):写入 asset_map.json views_gen,落后则删除全部
 // 旧视图重出。2=Q版两头身(幼态化修正)/视图性别锚(防女性长胡须)/兽形角色板/身份前缀清理;
 // 3=角色板改为基于主图 img2img(板与主图同一人)+板生成顺序提前;
-// 4=Q版呆萌强化(denoise 0.93 + 大头呆萌特征词)。
-const manjuViewGen = 4
+// 4=Q版呆萌强化(denoise 0.93 + 大头呆萌特征词);
+// 6=删角色板(2026-08-27 用户裁决:板零消费——渲染参考只用 front/full/detail/主图,前端过滤不显示,
+//   纯成本且网格重绘易画风漂移)+full/side/detail 引擎切 Krea-2 img2img(与主图同引擎统一画风,
+//   Z-Image 大重绘按照片先验出图导致视图动漫化/与 3D 主图割裂);
+// 5=视图清洗与分工修正(2026-08-26 用户三条反馈:①角色板动漫化 ②full/side/detail 全成正面照
+//   ③Q版应基于全身照)——视图 prompt 剥 Front-facing portrait 前缀(主定妆特写构图污染视图)、
+//   full/side 重绘强度提高(full 0.88 真全身/side 0.90 真 90 度侧面)、Q版 initImage 改用
+//   full 全身照、角色板 3D 档措辞 3D 化+denoise 降 0.86(过度重绘丢主图形象→动漫设定卡先验)。
+const manjuViewGen = 6
+
+// manjuQGen Q 版生成逻辑代数(独立于 views_gen,只清 _q.png):2=发色锁(HAIR LOCK
+// 显式点名发色/毛色,高重绘下双色挑染不再被平均成单色;2026-08-27 用户反馈叶澜黑白发
+// Q 版变纯黑);3=着装锁(OUTFIT LOCK+禁敞开外套露胸+BJD 素体措辞修正,2026-08-27
+// 用户反馈男性 Q 版袒胸露乳);4=着装锁强化(袍服/儒袍/官袍敞胸全覆盖:宽袍交领闭合/
+// 覆盖锁骨与胸口/服装子句剥敞开感词,2026-08-27 用户反馈柳含烟·魏鹤年·魏琮 Q 版
+// 宽袍敞开露胸,旧 "zipped and buttoned" 措辞对无拉链的古风袍服无效)。
+const manjuQGen = 8
+
+// manjuPortraitGen 主图代数(2026-08-27 六修):单人/纯白背景/服装严格锚上线时 bump,
+// stageAssets 检测到落后即清全部旧主图重出(视图/Q版联动)。
+const manjuPortraitGen = 2
 
 // portraitWF 定妆照工作流按风格分流:含写实元素用 Z-Image(真人级),其余用 SDXL checkpoint。
 // 尺寸固定为标准 1024×1024(与项目画幅无关);正脸参考(ensureFaceCrop)再从该图按视频比例裁切。
@@ -2387,6 +2629,16 @@ var manjuBeastBody = []string{
 	"异兽", "精怪", "妖物", "坐骑",
 }
 
+// manjuIsMinorCast 群演轻量卡判定(2026-08-27 群演分级):脚本直出时有台词但无角色卡
+// 的说话人自动建卡(minor:true)——资产阶段只出 1 张定妆照+正脸(跳过视图/Q版/双形态)。
+func manjuIsMinorCast(m map[string]any) bool {
+	if m == nil {
+		return false
+	}
+	b, _ := m["minor"].(bool)
+	return b
+}
+
 // manjuIsBeast 角色是否非人形兽类/生灵:①species 字段权威(非空且非人 → 非人形);
 // ②role/id 含 灵宠/宠物/坐骑/妖兽/神兽;③appearance/image_prompt 命中兽形身体强特征兜底。
 func manjuIsBeast(m map[string]any) bool {
@@ -2406,6 +2658,15 @@ func manjuIsBeast(m map[string]any) bool {
 			return true
 		}
 	}
+	// 2026-08-27 修复(九尾 Q 版渲染成正常比例动漫人,非 Q 版兽形也非 Q 版人形):
+	// ③兜底加人形否决——image_prompt 是形象权威,含人形主体措辞(N-year-old/woman/
+	// girl…)的人形妖怪(九尾狐精人设=26 岁美妆博主)不得因「记忆点含尾巴/九尾」误判
+	// 兽形:兽形分支的 "chibi beast + NOT a human" 与人形 init 图/人形 image_prompt
+	// 完全矛盾,Krea-2 强指令跟随下折中出正常比例动漫人。前两层(species 权威/身份词)
+	// 不受否决——真兽形角色照判。
+	if ip := str(m["image_prompt"]); ip != "" && manjuHumanFigureRe.MatchString(ip) {
+		return false
+	}
 	hay := str(m["appearance"]) + " " + str(m["image_prompt"])
 	for _, k := range manjuBeastBody {
 		if strings.Contains(hay, k) {
@@ -2414,6 +2675,10 @@ func manjuIsBeast(m map[string]any) bool {
 	}
 	return false
 }
+
+// manjuHumanFigureRe image_prompt 人形主体措辞(兽形判定的③兜底否决条件):
+// 人物形象提示词惯例必含 年龄/性别主体词;兽形提示词(beast/creature/furry)不含。
+var manjuHumanFigureRe = regexp.MustCompile(`(?i)\d+\s*[- ]year[- ]s?\s*old|\b(woman|girl|boy|lady|gentleman)\b|\bman\b`)
 
 // manjuIsFemale 女性角色(gender 唯一权威,2026-08-24 用户要求)
 func manjuIsFemale(m map[string]any) bool {
@@ -2525,6 +2790,229 @@ func manjuPortraitPromptFor(prompt string, m map[string]any) string {
 	return p + manjuBeardEnforce(m)
 }
 
+// manjuPortraitSoloBgAnchor 定妆统一锚(2026-08-27 用户四反馈:小男孩定妆画出四个大人/
+// 客人多出外套/背景要纯白):单人 + 纯白背景 + 服装严格按描述。所有角色图(主图/视图/
+// Q版/群演卡)经 portraitPromptFor 统一附加。
+const manjuPortraitSoloBgAnchor = "solo portrait, only this one single character in the frame, absolutely no other people, no additional figures or faces in the background, plain pure white background, clean white studio backdrop, no scenery, no environment, no background objects, wearing exactly the outfit described above, no additional outerwear, coat or jacket that is not described"
+
+// manjuBgStrip 剥 image_prompt 里的场景背景词段(2026-08-27:素材卡常带 office background/
+// evening alley background 等场景词,定妆照被画出环境;白底由 SoloBgAnchor 正向提供)。
+var manjuBgStrip = regexp.MustCompile(`(?i),?\s*[a-z0-9\- ]{0,40}\s+background\b`)
+
+// portraitPromptFor 定妆/视图/Q版提示词统一分档入口(2026-08-26 用户四问题修复):
+// ①Q 版(prompt 含 chibi):不附加任何人像写实/插画锚——旧链路把插画风锚拼进 chibi prompt,
+//   chibi 词被稀释渲染成写实人物形象;改附 chibi 专用锚并显式禁写实(3D 风格=3D chibi 手办)。
+// ②次世代3D/BJD 风格(manjuStyleIs3D):不做 photorealistic→stylized 替换、不附插画风锚,
+//   改附 manju3DPortraitAnchor——写实/3D 被干成动漫的根因即旧锚"stylized illustration/painterly"。
+// ③主定妆与正面视图(frontFace=true):强制正面人脸锚(用户规则:人物角色提示词必须正面人脸)。
+// ④非 3D 风格:维持原拟漫链路(manjuPortraitPromptFor)+正面人脸锚。
+// 2026-08-27 六修:入口统一剥背景词段+单人白底服装严格锚;Q 版 chibi 分支补防日漫正向锚
+// (老龟 Q 版出日漫脸——chibi 分支提前 return 没吃到拟漫锚的漏洞)。
+func (ctx *manjuCtx) portraitPromptFor(prompt string, m map[string]any, frontFace bool) string {
+	p := manjuBgStrip.ReplaceAllString(prompt, "")
+	ap := manjuSanitizeAppearance(m, str(m["appearance"]))
+	if strings.Contains(p, "chibi") {
+		// Q 版:chibi 专用锚 + 显式禁写实人物(防写实形象混入 Q 版)。
+		// 2026-08-27 措辞修正:裸 "BJD doll chibi aesthetic" 会唤起 BJD 素体(无衣服
+		// 娃体)先验,男性潮玩先验更是敞开外套露胸——一律强调 fully dressed 完整着装。
+		if !strings.Contains(p, "NOT a realistic human") {
+			if manjuStyleIs3D(ctx.style) {
+				p = p + ", 3D rendered chibi collectible figure style, fully dressed BJD doll in complete outfit, rounded toy-like shading, big glossy eyes"
+			} else {
+				p = p + ", cute stylized chibi illustration style"
+			}
+			p = p + ", NOT a realistic human, no realistic skin texture, no realistic proportions, no photorealism"
+		}
+		// 防日漫(2026-08-27 老龟 Q 版日漫脸):chibi 分支此前提前 return 没吃到拟漫锚
+		p = p + ", NOT a Japanese anime style, no japanese-style face, no japanese anime eyes, Chinese semi-realistic CG character style"
+		if ap != "" && !strings.Contains(p, ap) {
+			p = p + ", distinct unique face with: " + ap
+		}
+		return p + ", " + manjuPortraitSoloBgAnchor + manjuBeardEnforce(m)
+	}
+	if manjuStyleIs3D(ctx.style) {
+		if !strings.Contains(p, "virtual digital human") {
+			p = p + ", " + manju3DPortraitAnchor
+		}
+		if frontFace && !strings.Contains(p, "front-facing") {
+			p = p + manjuPortraitFrontFace
+		}
+		if ap != "" && !strings.Contains(p, ap) {
+			p = p + ", distinct unique face with: " + ap
+		}
+		return p + ", " + manjuPortraitSoloBgAnchor + manjuBeardEnforce(m)
+	}
+	p = manjuPortraitPromptFor(p, m)
+	if frontFace && !strings.Contains(p, "front-facing") {
+		p = p + manjuPortraitFrontFace
+	}
+	return p + ", " + manjuPortraitSoloBgAnchor
+}
+
+// manjuQStrip 清洗拼入 Q 版的 image_prompt 残段(2026-08-26:Q 版渲染出写实人物形象的另一根因)——
+// 写实皮肤质感/电影镜头/质量词会把 chibi 拉向写实缩小版人物,一律剥除,只留身份特征词。
+// 2026-08-27 三修:补动作残词(walking briskly 等主图动作描述混进 Q 版定妆,诱发动态
+// 构图+姿态失控)与 ultra detailed 质量词。
+func manjuQStrip(s string) string {
+	for _, w := range []string{
+		"realistic skin texture with fine pores", "realistic skin texture", "fine pores",
+		"photorealistic real-world environment", "photorealistic environment", "photorealistic",
+		"realistic skin", "photorealistic", "Photorealistic",
+		"cinematic film still", "cinematic lighting", "Cinematic film still",
+		"85mm lens", "shallow depth of field", "bokeh background", "bokeh", "PBR materials",
+		"8K ultra detailed", "8k ultra detailed", "8K", "8k", "soft facial lighting",
+		"ultra detailed", "walking briskly", "walking quickly", "always walking",
+		"walking down", "walking toward", "walking slowly", "walking ", "running ", "sitting ", "standing ",
+	} {
+		s = strings.ReplaceAll(s, w, "")
+		if len(w) > 1 {
+			s = strings.ReplaceAll(s, strings.ToUpper(w[:1])+w[1:], "")
+		}
+	}
+	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
+}
+
+// manjuViewAnchors full/side/detail 视角硬锚(前置,视图派生独占主导视角)。
+// 2026-08-26 full 视图正面化:旧 "three-quarter or front view" 允许 3/4 侧(用户规则:
+// 人物角色提示词必须正面人脸;全身立绘=正面全身,侧面归 side 视图)。
+// 加 feet visible/standing on the ground 头到脚约束(用户反馈②:full 出半身照)。
+// 2026-08-27 提为包级:视图生成与「复制提示词」接口(charImagePrompt)共用同一事实源。
+var manjuViewAnchors = map[string]string{
+	"full":   "FULL BODY view, standing full figure from head to toe, entire body visible including feet and shoes, standing on the ground, full figure framing with margin above head and below feet, front view facing the camera",
+	"side":   "SIDE PROFILE view, face turned exactly 90 degrees to the side, strong profile silhouette, nose and chin clearly in profile, only one eye visible, head pointing sideways not toward the camera, full body seen from the side",
+	"detail": "EXTREME CLOSE-UP detail shot, zoomed on the single most distinctive feature (ornament/pattern/hairstyle/scar), large detailed close-up composition, macro framing",
+}
+
+// manjuIdentityAnchor 身份锚:强约束多视图与主图同一个人——发色/发型/胡须/五官/服装逐项保留,
+// 防"白发老者侧面变黑发"(2026-08-24 用户反馈)
+const manjuIdentityAnchor = ", same character as the reference image (identical hair color and hairstyle, identical beard if present, identical facial features, identical costume colors and design)"
+
+// manjuCharImagePrompt 角色<视图>形态图的最终生图提示词(2026-08-27 角色管理「复制提示词」用;
+// 与生成链同一套构建函数,复制到的即这张图生成时的真实口径):
+// kind=gacha=抽卡候选(纯文生图探索,无视角硬锚/身份锚);其余=正式资产口径
+// (full/side/detail=视角硬锚+strip+身份锚,Q=chibi 构建);正面主图两口径一致
+// (image_prompt+性别锚,portraitWF 正面人脸锚)。返回 最终正向 / 负向 提示词。
+func manjuCharImagePrompt(ctx *manjuCtx, m map[string]any, char, view, kind string) (string, string) {
+	var p string
+	frontFace := true
+	if view == "q" {
+		p = manjuQPrompt(m)
+		frontFace = false
+	} else if kind != "gacha" && (view == "full" || view == "side" || view == "detail") {
+		p = manjuViewAnchors[view] + ", " + manjuViewStrip(charViewPromptFor(ctx, char, view)) + manjuIdentityAnchor
+		frontFace = false
+	} else {
+		p = charViewPromptFor(ctx, char, view)
+	}
+	return ctx.portraitPromptFor(p, m, frontFace), ctx.negPrompt()
+}
+
+// manjuViewStrip 视图派生前清洗 image_prompt(2026-08-26 用户反馈②:full/side/detail 全渲染成正面照)——
+// 素材/主定妆的 Front-facing portrait 前缀(正面人脸铁律产物)会把所有视图拉回正面半身特写构图;
+// 视图的视角由 viewAnchor 独家主导,这里剥掉一切正面/特写措辞,只留身份与外观特征。
+func manjuViewStrip(s string) string {
+	for _, w := range []string{
+		"Front-facing portrait, head facing the camera directly, symmetrical frontal face, both eyes evenly visible, no profile angle",
+		"front-facing portrait, head facing the camera directly, symmetrical frontal face, both eyes evenly visible, no profile angle",
+		"Front-facing portrait", "front-facing portrait", "Front facing portrait",
+		"head facing the camera directly", "symmetrical frontal face", "both eyes evenly visible",
+		"no profile angle", "facing the camera directly",
+	} {
+		s = strings.ReplaceAll(s, w, "")
+	}
+	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
+}
+
+// manjuHairPhrases 提取角色卡里所有头发/毛色描述短语(2026-08-27 用户反馈:叶澜黑白
+// 挑染发 Q 版变纯黑——Q 版 denoise 0.93 高重绘下发色只靠 initImage,Z-Image 会把
+// 双色挑染"平均"成单色;文本锚必须显式点名具体发色)。取 image_prompt/appearance/
+// views.q 三个来源,按逗号/句号/分号切分,命中 hair/发/fur/wolf-cut/braids 等关键词的
+// 子句全收(去重保序);image_prompt 优先(LLM 逐字提炼,信息最全)。
+func manjuHairPhrases(m map[string]any) []string {
+	vs, _ := m["views"].(map[string]any)
+	sources := []string{str(m["image_prompt"]), str(m["appearance"]), str(vs["q"])}
+	kw := regexp.MustCompile(`(?i)hair|wolf-cut|ponytail|braids?|bangs|locks|mane|highlight|streak|发|鬃`)
+	out := []string{}
+	seen := map[string]bool{}
+	for _, src := range sources {
+		for _, part := range regexp.MustCompile(`[,.;，。；]`).Split(src, -1) {
+			p := strings.TrimSpace(part)
+			if p == "" || len(p) > 90 || seen[p] {
+				continue
+			}
+			if kw.MatchString(p) {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// manjuHairAnchor Q 版发色锁(2026-08-27):显式点名发色 + 强制与参考图一致,
+// 多色/挑染发(黑白、银白挑染)必须保持双色——这是高重绘下唯一可靠的文本防线。
+func manjuHairAnchor(m map[string]any) string {
+	phrases := manjuHairPhrases(m)
+	if len(phrases) == 0 {
+		return ""
+	}
+	// color_palette 第 5 位=发色(契约见方案模板),一并点名
+	if cp := str(m["color_palette"]); cp != "" {
+		hexes := regexp.MustCompile(`#[0-9A-Fa-f]{6}`).FindAllString(cp, -1)
+		if len(hexes) >= 5 {
+			phrases = append(phrases, "hair color from palette "+hexes[4])
+		}
+	}
+	return "HAIR LOCK: the chibi keeps EXACTLY this hair color as the reference portrait — " + strings.Join(phrases, "; ") + " — multi-tone or streaked hair (e.g. black-and-white two-tone) must stay multi-tone, never flatten into a single color"
+}
+
+// manjuLooseClean 敞开感词清洗(2026-08-27 二修:柳含烟/魏鹤年/魏琮 宽袍 Q 版敞胸):
+// 宽松/敞开/未扣的服饰描述复述进 chibi prompt 会强化潮玩素体敞袍先验(Z-Image 高重绘下
+// "宽松官袍"= 敞袍),着装锁提取子句与 Q 版 img 残段一律剥除。
+var manjuLooseClean = regexp.MustCompile(`(?i)\b(?:loose|flowing|unbuttoned|unzipped|open|casually worn)\s*`)
+
+// manjuOutfitAnchor Q 版着装锁(2026-08-27 用户反馈:男性 Q 版外套敞开袒胸露乳——
+// 潮玩/BJD 男娃先验是敞开外套露胸造型,末尾防裸词 "no shirtless" 语义盖不住「敞开
+// 外套露胸」且位置太弱)。从 costume/image_prompt 提取服装子句显式前置,强制与定妆照
+// 同一套完整着装、衣袍交领闭合、躯干全程覆盖。
+// 当日二修(2026-08-27 用户反馈:柳含烟/魏鹤年/魏琮 宽袍/儒袍/官袍 Q 版仍敞胸):
+// ①服装子句提取词扩到 袍/裙/衫/裳/gown/cloak/garment 全服饰;
+// ②提取子句剥敞开感词(loose/open/unbuttoned 等——"宽松官袍"被复述进 prompt 反而
+//   强化敞袍先验,Z-Image 高重绘下宽松描述=敞袍);
+// ③负面句从「外套拉上扣好」扩到「宽袍交领闭合/覆盖锁骨与胸口/永不敞开袍服」——
+//   古风袍服没有拉链扣子,原 "zipped and buttoned" 措辞对袍服无效是漏胸主因。
+func manjuOutfitAnchor(m map[string]any) string {
+	vs, _ := m["views"].(map[string]any)
+	sources := []string{str(m["costume"]), str(m["image_prompt"]), str(vs["q"])}
+	kw := regexp.MustCompile(`(?i)wear|suit|jacket|coat|outfit|hoodie|dress|robe|gown|cloak|garment|clothing|clothes|shirt|uniform|sweater|vest|garb|服装|穿着|袍|衣|裙|衫|裳`)
+	out := []string{}
+	seen := map[string]bool{}
+	for _, src := range sources {
+		for _, part := range regexp.MustCompile(`[,.;，。；]`).Split(src, -1) {
+			p := strings.TrimSpace(part)
+			if p == "" || len(p) > 90 || seen[p] {
+				continue
+			}
+			if kw.MatchString(p) {
+				p = strings.TrimSpace(manjuLooseClean.ReplaceAllString(p, ""))
+				if p == "" {
+					continue
+				}
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return "OUTFIT LOCK: the chibi wears exactly the same complete outfit as the reference portrait" +
+		func() string {
+			if len(out) == 0 {
+				return ""
+			}
+			return " — " + strings.Join(out, "; ")
+		}() +
+		" — torso and chest always fully covered by clothing, collar sits high and closed with overlapping lapels fully covering the collarbone and chest, robes gowns coats and jackets always fully closed at the chest, never an open robe, open coat or open jacket showing bare chest or cleavage"
+}
+
 // manjuQPrompt 构建 Q 版提示词(2026-08-25 用户规则;2026-08-26 修正:Q版=定妆照同一
 // 角色的缩小版Q萌形象——手办/吉祥物感,不是小孩):
 // ①妖兽/灵宠/神兽 → Q版=该妖兽本体萌化小兽形,禁止人形/人类宝宝;
@@ -2535,13 +3023,25 @@ func manjuPortraitPromptFor(prompt string, m map[string]any) string {
 func manjuQPrompt(m map[string]any) string {
 	vs, _ := m["views"].(map[string]any)
 	base := str(vs["q"])
-	img := manjuStripFullBody(str(m["image_prompt"]))
+	// 2026-08-26:Q 版拼入 image_prompt 前先 manjuQStrip 剥写实皮肤/镜头词——
+	// 旧版整段拼接把 "realistic skin texture/85mm lens/cinematic" 带进 chibi prompt,
+	// chibi 被稀释渲染成写实人物形象(用户反馈"Q版形象里还有写实人物")。
+	img := manjuQStrip(manjuStripFullBody(str(m["image_prompt"])))
+	// 2026-08-27:主图 3D 锚的裸 "BJD doll aesthetic" 残词会唤起无衣素体先验,替换为着装版
+	img = strings.ReplaceAll(img, "BJD doll aesthetic", "fully dressed BJD doll aesthetic")
+	// 2026-08-27 二修:image_prompt 残段的宽松/敞开感词(loose minister robes 等)复述进
+	// chibi prompt 会强化敞袍先验,与着装锁提取子句同款清洗
+	img = manjuLooseClean.ReplaceAllString(img, "")
 	ap := str(m["appearance"])
 	if manjuIsBeast(m) {
 		if base == "" {
-			base = "chibi cute style, small adorable chibi animal, big cute eyes"
+			// 2026-08-27 五修:兽形 chibi 同款呆萌构成点名(大头圆眼短腿小爪)
+			base = "chibi cute style, small adorable round chibi animal, oversized head with big sparkling cute eyes, short stubby legs and tiny round paws, soft plush-like fluffy body"
 		}
 		p := base + ", chibi cute version of the same beast creature as in the reference image, same species, same fur and scale color and markings, small fluffy adorable chibi beast form, cute rounded chibi proportions"
+		if anchor := manjuHairAnchor(m); anchor != "" {
+			p = p + ", " + anchor
+		}
 		if img != "" {
 			p = p + ", " + img
 		}
@@ -2551,13 +3051,27 @@ func manjuQPrompt(m map[string]any) string {
 		return p + ", NOT a human, NOT a human face, NOT a human body, NOT a humanoid, NOT a person, NOT wearing human clothes"
 	}
 	if base == "" {
-		base = "chibi cute style, 2-head-tall chibi proportions, oversized round head, chubby cheeks, big sparkly glossy eyes, tiny soft rounded body, plush-figure look, squishy huggable, adorable"
+		// 2026-08-27 用户规则:Q 版体型跟随原角色——原角色不胖就不许渲染胖(删 chubby/squishy/
+		// plush 等胖词,显式禁胖+体型跟随声明;chibi 只改头身比,不改胖瘦)。
+		// 2026-08-27 五修(切 Krea-2 后呆萌感不足):chibi 构成逐项点名——大头占半身/短手
+		// 短腿/小圆手/圆脸小嘴/大亮眼,把「Q版=呆萌」的形态学写成硬约束(Krea-2 强指令
+		// 跟随,锚越具体执行越到位)。
+		base = "chibi cute style, exactly 2-head-tall super-deformed chibi proportions, the oversized round head takes up half of the total body height, big sparkling glossy eyes, tiny stubby arms and legs, small round hands, soft round face with a small cute mouth, compact mini body following the character's original body build, adorable huggable toy-like figure"
 	}
 	p := base
+	if anchor := manjuHairAnchor(m); anchor != "" {
+		p += ", " + anchor
+	}
+	// 着装锁(2026-08-27 用户反馈男性 Q 版袒胸露乳):前置强锚+显式禁「敞开外套露胸」
+	// (旧防裸词 no shirtless 盖不住这种形态,且原位置在 prompt 末尾遵循弱)
+	p += ", " + manjuOutfitAnchor(m)
+	p += ", torso and chest always fully covered by clothing, NOT bare-chested, no exposed torso, no exposed chest, no exposed collarbone, no cleavage, no nudity, no open robe, no open coat, no open jacket, no underwear as outerwear"
 	if manjuIsFemale(m) {
-		p += ", a cute miniature chibi version of the same female character, feminine face, wearing the character's outfit"
+		// 2026-08-27 三修(女性精卫 Q 版袒胸):feminine+手办语义组合唤起性感素体先验,
+		// 显式声明端庄高领+全年龄向玩具设计(负面通道同步前置禁裸词,双路夹击)
+		p += ", a cute miniature chibi version of the same female character, feminine face, same slim build as the character, wearing the character's outfit, modest high-neckline outfit fully covering the chest and collarbone, family-friendly cute toy design"
 	} else if str(m["gender"]) == "男" {
-		p += ", a cute miniature chibi version of the same male character, masculine face, broader figure, wearing the character's outfit"
+		p += ", a cute miniature chibi version of the same male character, masculine face, same body build as the character, wearing the character's outfit"
 	}
 	// 面容随角色本人:面容锚 + 身份锚(与正面照同一人,脸型/发型/胡须/年龄感保留)
 	if ap != "" && !strings.Contains(p, ap) {
@@ -2567,6 +3081,7 @@ func manjuQPrompt(m map[string]any) string {
 	// 2026-08-26 用户规则:Q版=定妆照的缩小版 Q 萌(手办/挂件感),禁止儿童化——
 	// 显式声明「同一角色缩小、原年龄感保留」+ 禁小孩禁词,双保险压制模型幼态化。
 	p = p + ", a palm-size shrink-down of the reference portrait like a cute collectible figure, keeping the character's original age and facial maturity, NOT a child, NOT a kid, NOT a baby, NOT a toddler, NOT aged down, no childish baby face"
+	p = p + ", NOT chubby, NOT overweight, NOT fat, no bloated body, no puffy cheeks, body build strictly follows the original character"
 	if img != "" && !strings.Contains(p, img) {
 		p = p + ", " + img
 	}
@@ -2576,8 +3091,10 @@ func manjuQPrompt(m map[string]any) string {
 
 func (ctx *manjuCtx) portraitWF(prompt string, seed int, prefix string, char map[string]any, initImage string, initStrength float64) map[string]any {
 	// 角色图(人物/妖兽)统一走拟动漫锚(2026-08-25 升级:按种族选锚——人类=东方人像锚,
-	// 妖兽/灵宠=兽类锚防被画成人脸;女性/年轻男性强加无胡须纪律,胡须老者保留胡须)
-	prompt = manjuPortraitPromptFor(prompt, char)
+	// 妖兽/灵宠=兽类锚防被画成人脸;女性/年轻男性强加无胡须纪律,胡须老者保留胡须)。
+	// 2026-08-26 升级:改走 ctx.portraitPromptFor 分档——3D/BJD 风格用 3D 虚拟人锚不替换写实措辞,
+	// Q 版走 chibi 锚,主定妆强制正面人脸锚(用户规则:人物角色提示词必须正面人脸)。
+	prompt = ctx.portraitPromptFor(prompt, char, true)
 	// 定妆引擎(2026-08-24 用户规则,视觉实测定案):
 	//  **只走 Krea-2** —— 强指令跟随能把「stylized illustration, not photorealistic」执行到位,
 	//  出半写实拟漫东方形象(用户要求拟漫化,避免真人照片=侵权)。
@@ -2659,6 +3176,43 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		amap["views_gen"] = manjuViewGen
 		lg.logf(fmt.Sprintf("♻️ 视图生成逻辑已升级:清除 %d 张旧视图,按新逻辑(Q版两头身/性别锚/兽形角色板)重新生成", n))
 	}
+	// Q 版代数(2026-08-27 用户反馈:叶澜黑白挑染发 Q 版变纯黑)——Q 版发色锁(HAIR LOCK
+	// 显式点名发色)上线后,存量旧 Q 版必须重出;独立于 views_gen(只清 _q.png,不动其它视图)。
+	if g, _ := manjuToInt(amap["q_gen"]); g != manjuQGen {
+		n := 0
+		if entries, rerr := os.ReadDir(filepath.Join(ctx.assetsDir, "characters")); rerr == nil {
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), "_q.png") {
+					_ = os.Remove(filepath.Join(ctx.assetsDir, "characters", e.Name()))
+					n++
+				}
+			}
+		}
+		amap["q_gen"] = manjuQGen
+		if n > 0 {
+			lg.logf(fmt.Sprintf("♻️ Q版生成逻辑已升级(发色锁):清除 %d 张旧Q版,按新逻辑(发色/毛色显式锚定)重新生成", n))
+		}
+	}
+	// 主图代数(2026-08-27 六修:用户四反馈——定妆多人/多外套/要纯白背景/日漫脸):
+	// 单人白底服装严格锚上线,存量主图必须重出。只清 <char>.png 主图(无下划线后缀的
+	// png;视图 mtime 联动重出,Q 版 q_gen 管,_gacha 抽卡历史/adopted 不动)。
+	if g, _ := manjuToInt(amap["portrait_gen"]); g != manjuPortraitGen {
+		n := 0
+		if entries, rerr := os.ReadDir(filepath.Join(ctx.assetsDir, "characters")); rerr == nil {
+			for _, e := range entries {
+				nm := e.Name()
+				if e.IsDir() || !strings.HasSuffix(nm, ".png") || strings.Contains(nm, "_") {
+					continue
+				}
+				_ = os.Remove(filepath.Join(ctx.assetsDir, "characters", nm))
+				n++
+			}
+		}
+		amap["portrait_gen"] = manjuPortraitGen
+		if n > 0 {
+			lg.logf(fmt.Sprintf("♻️ 主图生成逻辑已升级(单人/纯白背景/服装严格):清除 %d 张旧主图重新定妆(视图/Q版联动重出)", n))
+		}
+	}
 	chars, _ := plan["characters"].([]any)
 	for _, c := range chars {
 		m, ok := c.(map[string]any)
@@ -2709,34 +3263,38 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 				mainRef = refName
 			}
 		}
+		// 全身照引用(2026-08-26 用户反馈③:Q 版应基于全身照渲染才合理——chibi 是全身形态,
+		// 从半身主图重绘会出构图残留;循环顺序 full 先于 q,full 文件已落盘即可用)。
+		fullRef := ""
+		if fp := filepath.Join(ctx.assetsDir, "characters", sanitizeFileName(cid)+"_full.png"); fileExists(fp) {
+			refName := "dir_char_full_" + sanitizeFileName(cid) + ".png"
+			if copyFile(fp, filepath.Join(ctx.comfyInput, refName)) == nil {
+				fullRef = refName
+			}
+		}
 		// 视图换视角的 denoise 强度:img2img 换视角需要高 denoise 让模型彻底重绘构图——
 		// 但过高(0.92)会把主图身份(发色/胡须/服装)全重绘掉(用户反馈:白发老者侧面变黑发)。
 		// 2026-08-24 平衡:降 denoise 保留主图身份 + 提示词追加身份锚,两路夹击保统一。
-		viewStrength := map[string]float64{"full": 0.82, "side": 0.85, "detail": 0.7}
-		viewAnchor := map[string]string{
-			"full":   "FULL BODY view, standing full figure from head to toe, entire body visible, three-quarter or front view",
-			"side":   "SIDE PROFILE view, face turned exactly 90 degrees to the side, strong profile silhouette, nose and chin clearly in profile",
-			"detail": "EXTREME CLOSE-UP detail shot, zoomed on the single most distinctive feature (ornament/pattern/hairstyle/scar), large detailed close-up composition",
-		}
-		// 身份锚:强约束多视图与主图同一个人——发色/发型/胡须/五官/服装逐项保留,
-		// 防"白发老者侧面变黑发"(2026-08-24 用户反馈)
-		identityAnchor := ", same character as the reference image (identical hair color and hairstyle, identical beard if present, identical facial features, identical costume colors and design)"
-		// 2026-08-26 用户要求:角色板先行(权威整合展示)→ 各视图跟随。顺序:board → full/side/detail → q
-		for _, view := range []string{"board", "full", "side", "detail", "q"} {
+		// 2026-08-26 用户反馈②(full/side/detail 全渲染成正面照)+manjuViewStrip 落地后重调:
+		// full 0.82→0.93(实测 0.88 仍残留主图半身构图——与 Q 版同级才能彻底重构为头到脚全身,
+		// 身份由 identityAnchor+appearance 文本锁;side 0.90 已验证可出真 90 度侧面);
+		// side 0.85→0.90(90 度侧面需要彻底重绘面部朝向,身份由 identityAnchor+appearance 文本锁)。
+		viewStrength := map[string]float64{"full": 0.93, "side": 0.90, "detail": 0.7}
+		// 2026-08-27 用户裁决:角色板(board)删除——渲染参考(charViewRels)只用 front/full/detail/
+		// 主图,前端角色列表也过滤 _board 不显示,板是零消费纯成本(每角色一张渲染时间,且网格
+		// 重绘容易画风漂移)。存量 _board.png 由视图清理逻辑(views_gen 升级)统一删除。
+		// 群演轻量卡(2026-08-27 群演分级):minor=true 跳过全部视图/Q版/双形态——
+		// 只保留上方已生成的主图定妆照+正脸(1张图成本),渲染参考 front 缺视图自动降级主图。
+		if !manjuIsMinorCast(m) {
+			for _, view := range []string{"full", "side", "detail", "q"} {
 			var p string
 			if view == "q" {
-				// 2026-08-24 用户规则:Q 版仅限正角——反派/功能配角不生成 Q 版资产(不配使用)。
-				// role 为空(旧数据/脚本直出无标记)默认生成,向后兼容;LLM 直出模式按角色卡 role 生效。
-				if r := str(m["role"]); r == "反派" || r == "功能配角" {
-					continue
-				}
+				// 2026-08-27 用户规则更新:Q 版资产全角色渲染(反派/配角同样出 Q 版资产备用)——
+				// 旧「仅正角」限定取消;镜级内心戏用不用反派 Q 版仍由分镜/渲染规则决定,资产层不缺席。
 				// 2026-08-25 用户规则:Q 版按角色种族/性别/年龄/胡须构建——
 				// 妖兽/灵宠=萌化小兽本体(禁止人形);人类面容随角色本人(脸型/眼型/发型/胡须/年龄感),
 				// 女性一律无胡须、年轻男性无胡须、胡须老者保留胡须;不再统一宝宝脸。
 				p = manjuQPrompt(m)
-			} else if view == "board" {
-				// 2026-08-25 即梦角色版:角色板/角色资料卡整合图(三视图+特写+服饰分层+表情+配色+人设文字)
-				p = charViewPromptFor(ctx, cid, "board")
 			} else {
 				// 2026-08-24 一致性:full/side/detail 用 image_prompt(含白发/胡须等身份特征)+视图修饰,
 				// 弃用 LLM 泛化的 views.<view>(实测丢发色→侧面变黑发)
@@ -2758,64 +3316,62 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 					}
 				}
 			}
-			if needGen {
-				if view == "q" {
-					// 2026-08-25 用户规则:Q 版也基于主图(正面定妆照)img2img——与 full/side/detail
-					// 同链路(用户要求:生成正面后,全身/侧面/细节/Q版都参考正面照生成,避免形象大变)。
-					// 换装成 chibi 需要高 denoise 彻底重绘构图,身份靠 身份锚+面容锚 双锁。
-					lg.logf(fmt.Sprintf("🎨 角色 %s Q版形象(基于主图 img2img %.2f,种族/性别/胡须/面容随角色) ...", cid, manjuQStrength))
-					wf := wfZImage(manjuPortraitPromptFor(p, m), str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), charSeed(cid, "q"), manjuPortraitW, manjuPortraitH, "manju_asset", ctx.negPrompt(), mainRef, manjuQStrength)
-					if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"(Q版)"); err != nil {
-						lg.logf("  ⚠️ Q版形象生成失败: " + err.Error())
-						continue
-					}
-				} else if view == "board" {
-					// 角色板=整合图(网格排版)。2026-08-26 用户要求板作为角色权威整合展示:
-					// 改为基于主图 img2img(高 denoise 0.9)——身份(脸/发/服装)从主图 latent
-					// 起点继承,网格布局由板布局指令驱动;此前纯文生图的板与主图各画各的,
-					// 板上人物可能不是同一张脸。主图参考缺失(复制失败)回退纯文生图。
-					// 注意:视图(full/side/detail/q)仍基于主图而非板——板是网格拼图,单格
-					// 脸部像素远小于主图且网格布局会污染单视角输出,img2img 参考价值低于主图。
-					if mainRef != "" {
-						lg.logf(fmt.Sprintf("🎨 角色 %s 角色板(基于主图 img2img %.2f,板与主图同一人:三视图+特写+服饰+表情+配色+人设) ...", cid, 0.9))
-						wf := wfZImage(manjuPortraitPromptFor(p, m), str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), charSeed(cid, "board"), manjuPortraitW, manjuPortraitH, "manju_asset", ctx.negPrompt(), mainRef, 0.9)
-						if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"(角色板)"); err != nil {
-							lg.logf("  ⚠️ 角色板生成失败(回退纯文生图): " + err.Error())
-							wf2 := ctx.portraitWF(p, charSeed(cid, "board"), "manju_asset", m, "", 0)
-							if err2 := ctx.comfyGenImage(wf2, vDst, lg, "角色 "+cid+"(角色板·文生图)"); err2 != nil {
-								lg.logf("  ⚠️ 角色板生成失败: " + err2.Error())
-							}
+				if needGen {
+					if view == "q" {
+						// 2026-08-25 用户规则:Q 版与 full/side/detail 同链路 img2img。
+						// 2026-08-26 用户反馈③:Q 版改基于 full 全身照 img2img(chibi 是全身形态,
+						// 半身主图重绘会残留构图;全身照先于本镜生成,缺失回退主图)。
+						// 换装成 chibi 需要高 denoise 彻底重绘构图,身份靠 身份锚+面容锚 双锁。
+						qInit := fullRef
+						if qInit == "" {
+							qInit = mainRef
+						}
+						src := "全身照"
+						if qInit == mainRef {
+							src = "主图"
+						}
+						// 2026-08-27 三修(女性精卫 Q 版袒胸,负面禁裸词前置后依然):引擎从 Z-Image
+						// 切 Krea-2——实测(ComfyUI 提交参数+读图双证)Z-Image 在 0.93 高重绘下同时
+						// 无视 正向 OUTFIT LOCK/前置禁裸负面/闭合 init 图,chibi 手办素体先验压倒一切
+						// 文本控制;Krea-2 强指令跟随(定妆引擎定案理由)+与主图同引擎画风统一。
+						lg.logf(fmt.Sprintf("🎨 角色 %s Q版形象(基于%s Krea-2 img2img %.2f,种族/性别/胡须/面容随角色) ...", cid, src, manjuQStrength))
+						wf := wfKrea2(ctx.portraitPromptFor(p, m, false), str(ctx.R["krea2_unet"]), str(ctx.R["krea2_clip"]), str(ctx.R["krea2_vae"]), charSeed(cid, "q"), manjuViewW, manjuViewH, "manju_asset", ctx.negPrompt(), qInit, manjuQStrength)
+						if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"(Q版)"); err != nil {
+							lg.logf("  ⚠️ Q版形象生成失败: " + err.Error())
+							continue
 						}
 					} else {
-						lg.logf(fmt.Sprintf("🎨 角色 %s 角色板(主图参考缺失,纯文生图:三视图+特写+服饰+表情+配色+人设) ...", cid))
-						wf := ctx.portraitWF(p, charSeed(cid, "board"), "manju_asset", m, "", 0)
-						if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"(角色板)"); err != nil {
-							lg.logf("  ⚠️ 角色板生成失败: " + err.Error())
+						st := 0.9
+						if s, ok := viewStrength[view]; ok {
+							st = s
+						}
+						// 视角硬锚前置 + 身份锚后置:换视角同时锁死同一人。
+						// 2026-08-26 用户反馈②(full/side/detail 全渲染成正面照):p 先过 manjuViewStrip
+						// 剥主定妆的 Front-facing portrait 前缀(正面半身构图把所有视图拉回正面特写),
+						// 视角由 viewAnchor 独家主导;portraitPromptFor 一律不带正面锚(full 正面由锚承担)。
+						anchored := manjuViewAnchors[view] + ", " + manjuViewStrip(p) + manjuIdentityAnchor
+						// 2026-08-27 用户反馈(视图出动漫形象):full/side/detail 引擎从 Z-Image 切回 Krea-2
+						// img2img——Z-Image 是照片向模型,大重绘(0.9+)按自身先验出图,3D 正向锚执行不到位
+						// 导致画风与主图(3D)割裂;Krea-2 与主图同引擎,画风天然统一(主图 3D 达标即证明)。
+						// 2026-08-24 旧结论「Krea-2 img2img 身份弱」系当时无 identityAnchor/appearance 锚,
+						// 现在双文本锚+主图 initImage 三重锁,实测说话;Q 版保持 Z-Image(chibi 手办先验恰好合适)。
+						lg.logf(fmt.Sprintf("🎨 角色 %s %s 视图(基于主图 Krea-2 img2img %.2f + 视角锚/身份锚保持同一人) ...", cid, view, st))
+						vw, vh := manjuPortraitW, manjuPortraitH
+						if view == "full" || view == "side" {
+							vw, vh = manjuViewW, manjuViewH
+						}
+						wf := wfKrea2(ctx.portraitPromptFor(anchored, m, false), str(ctx.R["krea2_unet"]), str(ctx.R["krea2_clip"]), str(ctx.R["krea2_vae"]), charSeed(cid, view), vw, vh, "manju_asset", ctx.negPrompt(), mainRef, st)
+						if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"("+view+")"); err != nil {
+							lg.logf("  ⚠️ " + view + " 视图生成失败(回退主图+正脸): " + err.Error())
+							continue
 						}
 					}
-				} else {
-					st := 0.9
-					if s, ok := viewStrength[view]; ok {
-						st = s
-					}
-					// 视角硬锚前置 + 身份锚后置:换视角同时锁死同一人
-					anchored := viewAnchor[view] + ", " + p + identityAnchor
-					lg.logf(fmt.Sprintf("🎨 角色 %s %s 视图(基于主图 img2img %.2f + 视角锚/身份锚保持同一人) ...", cid, view, st))
-					// 2026-08-24 用户反馈:多视图不是同一人/性别乱入——Krea-2 是纯文生图架构,
-					// img2img 身份保持弱(实测视图完全变人),不能用于视图重绘。
-					// 视图固定用 Z-Image img2img(已验证保身份:主图→视角重绘,身份/服装/发色保留),
-					// 主图仍用 Krea-2 定拟漫形象——主图拟漫 + 视图 Z-Image img2img 保身份换视角。
-					wf := wfZImage(manjuPortraitPromptFor(anchored, m), str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), charSeed(cid, view), manjuPortraitW, manjuPortraitH, "manju_asset", ctx.negPrompt(), mainRef, st)
-					if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"("+view+")"); err != nil {
-						lg.logf("  ⚠️ " + view + " 视图生成失败(回退主图+正脸): " + err.Error())
-						continue
-					}
 				}
+				cmap[cid+"_"+view] = "characters/" + cid + "_" + view + ".png"
 			}
-			cmap[cid+"_"+view] = "characters/" + cid + "_" + view + ".png"
 		}
-	}
-	scenes, _ := plan["scenes"].([]any)
+		}
+		scenes, _ := plan["scenes"].([]any)
 	for i, sc := range scenes {
 		m, ok := sc.(map[string]any)
 		if !ok {
@@ -2830,7 +3386,12 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 			lg.logf("🎨 场景图: " + sid + " ...")
 			// 2026-08-24 用户反馈:场景渲染出人物——场景图必须强制空场景无人
 			// (manjuSceneAnchor = "empty scene, no people";素材 image_prompt 可能不带,这里兜底强制)
+			// 2026-08-26 补:3D 档场景走 manju3DSceneAnchor(3D 渲染虚拟场景,与角色 3D 风格统一;
+			// 通用锚无风格措辞,Z-Image 按"真实摄影"先验出照片感)+ 演播厅类场景显式禁观众/空座位。
 			scenePrompt := manjuSceneAnchor + ", " + str(m["image_prompt"]) + ", no people, no humans, no characters, no figures, no silhouettes"
+			if manjuStyleIs3D(ctx.style) {
+				scenePrompt = manju3DSceneAnchor + ", " + str(m["image_prompt"]) + ", no people, no humans, no characters, no figures, no silhouettes, no audience, no crowd, empty seats"
+			}
 			// 2026-08-24 用户反馈:场景图上下两张拼接——Z-Image 对极端竖比例(768×1344≈0.57)会把画面
 			// 切成上下两段生成。场景图固定方形 1024×1024(与定妆照同策略,画幅无关),避免拼接感;
 			// H3 引用时按需裁切参考图(比例不符的参考图 H3 会自动缩放,方形最稳)。
@@ -2946,9 +3507,12 @@ func (ctx *manjuCtx) shotCondFingerprintAt(s manjuShot, w, h int) string {
 			}
 		}
 	}
+	// 提示词走最终化纯函数(2026-08-27 指纹对称修复):mark(渲染后)与 stale 检查(下次
+	// 运行)都必须基于同一份"含 guard 的最终化文本"算指纹,否则有角色镜恒 stale 反复重渲
+	finalPrompt := manjuFinalizePromptPure(s.H3Prompt, len(s.Characters) > 0)
 	fmt.Fprintf(hh, "w=%d|h=%d|len=%d|chars=%s|scene=%s|refs=%s|fl2va_end=%t|prompt=%s",
 		w, h, h3Length(s.Duration, ctx.fps),
-		strings.Join(s.Characters, ","), s.Scene, strings.Join(refs, ","), endFrame, s.H3Prompt)
+		strings.Join(s.Characters, ","), s.Scene, strings.Join(refs, ","), endFrame, finalPrompt)
 	sum := fmt.Sprintf("%x", hh.Sum(nil))
 	if len(sum) > 10 {
 		sum = sum[:10]
@@ -3052,7 +3616,7 @@ func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg
 		return fmt.Errorf("已停止")
 	}
 	wf := h3EncWorkflow(r2, s.H3Prompt, w, h, h3Length(s.Duration, ctx.fps),
-		ctx.charRefNames(s), ctx.sceneRefName(s), cacheName, len(s.Characters) > 0)
+		ctx.charRefNames(s), ctx.charVoiceNames(s), ctx.sceneRefName(s), cacheName, len(s.Characters) > 0)
 	pid, err := ctx.comfy.submit(wf)
 	if err != nil {
 		return err
@@ -3312,6 +3876,229 @@ func (ctx *manjuCtx) charRefNames(s manjuShot) []string {
 		}
 	}
 	return out
+}
+
+// charVoiceNames 该镜绑定配音音色的角色音频(ComfyUI input 相对路径),按登场顺序 ≤3,
+// 与 prompt 的 <Audio N> 编号一一对应(2026-08-26 音色锁定:见 voiceBindingsFor)。
+func (ctx *manjuCtx) charVoiceNames(s manjuShot) []string {
+	var out []string
+	for i, cid := range s.Characters {
+		if i >= 3 {
+			break
+		}
+		if rel := ctx.charVoiceRef(cid); rel != "" {
+			out = append(out, rel)
+		}
+	}
+	return out
+}
+
+// charVoiceRef 角色配音音色音频相对 ComfyUI input 的路径;未绑定/未匹配返回空。
+// 优先级(2026-08-27 自动选择):①用户显式绑定 voice_<项目>_<角色ID>.mp3;
+// ②按角色人设自动匹配预置风格音色库(autoVoiceFor → lib_<音色名>.mp3,缺失自动补齐)。
+// 确定性命名——voice/gen 生成、自动匹配、渲染端查找共用同一规则,plan 绑定仅存记录供回显。
+func (ctx *manjuCtx) charVoiceRef(cid string) string {
+	if cid == "" {
+		return ""
+	}
+	// ① 用户显式绑定
+	name := "voice_" + ctx.project + "_" + sanitizeFileName(cid) + ".mp3"
+	if fileExists(filepath.Join(ctx.comfyInput, "audio", name)) {
+		return filepath.ToSlash(filepath.Join("audio", name))
+	}
+	// ② 自动匹配(角色人设 → 风格音色库)
+	lib := ctx.autoVoiceFor(cid)
+	if lib == "" {
+		return ""
+	}
+	libName := "lib_" + lib + ".mp3"
+	if !fileExists(filepath.Join(ctx.comfyInput, "audio", libName)) {
+		if err := ctx.genVoiceLibAudio(lib); err != nil {
+			return "" // 生成失败(edge-tts 不可用/离线)跳过该角色音色,降级为无参考
+		}
+	}
+	return filepath.ToSlash(filepath.Join("audio", libName))
+}
+
+// charInfoFor 方案角色对象(id → 角色卡),懒加载 plan.characters;找不到返回 nil
+func (ctx *manjuCtx) charInfoFor(cid string) map[string]any {
+	if ctx.charInfo == nil {
+		ctx.charInfo = map[string]map[string]any{}
+		if plan, _, err := ctx.loadPlan(); err == nil {
+			if arr, ok := plan["characters"].([]any); ok {
+				for _, x := range arr {
+					if m, ok := x.(map[string]any); ok {
+						ctx.charInfo[str(m["id"])] = m
+					}
+				}
+			}
+		}
+	}
+	return ctx.charInfo[cid]
+}
+
+// autoVoiceFor 按角色人设自动匹配风格音色(2026-08-27 用户需求)。
+// 匹配优先级:兽类/灵宠→活泼萌系;反派→磁性/清冷;性别+年龄关键词;性别兜底;无信息返回空。
+func (ctx *manjuCtx) autoVoiceFor(cid string) string {
+	c := ctx.charInfoFor(cid)
+	if c == nil {
+		return ""
+	}
+	gender := str(c["gender"])
+	age := str(c["age"])
+	role := str(c["role"])
+	species := str(c["species"])
+	// 非人种族(灵宠/妖兽/神兽/精怪/鬼物/机械):萌系活泼声
+	if species != "" && species != "人" {
+		return "zh-CN-XiaoyiNeural"
+	}
+	// 反派:低沉磁性(男)/成熟御姐(女),强化辨识度
+	if role == "反派" {
+		if gender == "女" {
+			return "zh-HK-HiuMaanNeural"
+		}
+		return "zh-CN-YunjianNeural"
+	}
+	has := func(kws ...string) bool {
+		for _, k := range kws {
+			if k != "" && strings.Contains(age, k) {
+				return true
+			}
+		}
+		return false
+	}
+	switch gender {
+	case "女":
+		if has("儿童", "孩童", "幼", "稚") {
+			return "zh-CN-XiaoyiNeural"
+		}
+		if has("少女", "小女孩", "萝莉") {
+			return "zh-CN-XiaoyiNeural"
+		}
+		if has("老", "中年", "成熟", "沉稳", "御姐", "反派") {
+			return "zh-HK-HiuMaanNeural"
+		}
+		return "zh-CN-XiaoxiaoNeural"
+	case "男":
+		if has("儿童", "孩童", "幼", "稚") {
+			return "zh-CN-YunxiaNeural"
+		}
+		if has("少年", "小男孩") {
+			return "zh-CN-YunxiaNeural"
+		}
+		if has("老") {
+			return "zh-CN-YunyangNeural"
+		}
+		if has("中年", "成熟", "沉稳", "大叔") {
+			return "zh-CN-YunjianNeural"
+		}
+		return "zh-CN-YunxiNeural"
+	default:
+		return "zh-CN-XiaoxiaoNeural"
+	}
+}
+
+// genVoiceLibAudio 生成单个风格库音色参考音频(input/audio/lib_<name>.mp3);幂等(已存在跳过)
+func (ctx *manjuCtx) genVoiceLibAudio(voice string) error {
+	if voice == "" {
+		return fmt.Errorf("空音色名")
+	}
+	if ctx.voiceLibDone == nil {
+		ctx.voiceLibDone = map[string]bool{}
+	}
+	if ctx.voiceLibDone[voice] {
+		return nil // 本 run 已尝试过(成功或失败都记,防重复生成)
+	}
+	ctx.voiceLibDone[voice] = true
+	out := filepath.Join(ctx.comfyInput, "audio", "lib_"+voice+".mp3")
+	if fileExists(out) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(ctx.comfyInput, "audio"), 0755); err != nil {
+		return err
+	}
+	args := []string{"voice-gen", "--text", manjuVoiceGenText, "--voice", voice, "--out", out}
+	_, err := ctx.runMediaOut(args...)
+	if err != nil {
+		return fmt.Errorf("生成音色 %s 失败: %w", voice, err)
+	}
+	// 0 字节防护(2026-08-27 实测):不支持的音色 edge-tts 不报错但产出空文件,
+	// LoadAudio 读空 mp3 会 400——生成后校验大小,空文件删除并报错
+	if fi, serr := os.Stat(out); serr != nil || fi.Size() == 0 {
+		_ = os.Remove(out)
+		return fmt.Errorf("生成音色 %s 产出空文件(音色不可用?)", voice)
+	}
+	return nil
+}
+
+// ensureVoiceLib 预生成风格音色库中全部缺失的参考音频(voice/prepare 与渲染兜底共用);
+// 返回 (生成数, 失败数)
+func (ctx *manjuCtx) ensureVoiceLib() (int, int) {
+	done, failed := 0, 0
+	for _, v := range manjuVoiceLib {
+		if fileExists(filepath.Join(ctx.comfyInput, "audio", "lib_"+v.Name+".mp3")) {
+			continue
+		}
+		if err := ctx.genVoiceLibAudio(v.Name); err != nil {
+			failed++
+			continue
+		}
+		done++
+	}
+	return done, failed
+}
+
+// voiceBinding 单角色音色绑定(LLM 视角:角色 → <Audio N> 编号;ref_audios 挂载同序)
+type voiceBinding struct {
+	CharID string
+	Audio  string // "<Audio N>"
+}
+
+// voiceBindingsFor 该镜绑定音色角色的 <Audio N> 编号映射(按登场顺序,≤3;与 charVoiceNames 同序)。
+// 注入 genShotPromptRaw 的 data,LLM 据此在 subject_definitions 写音色定义、对白处引用。
+func (ctx *manjuCtx) voiceBindingsFor(s manjuShot) []voiceBinding {
+	var out []voiceBinding
+	for i, cid := range s.Characters {
+		if i >= 3 {
+			break
+		}
+		if ctx.charVoiceRef(cid) == "" {
+			continue
+		}
+		out = append(out, voiceBinding{CharID: cid, Audio: fmt.Sprintf("<Audio %d>", len(out)+1)})
+	}
+	return out
+}
+
+// ensureVoiceBindings 音色定义兜底(2026-08-26):LLM 生成 h3_prompt 时漏写 <Audio> 定义
+// 音色参考就进不了条件编码(实测 H3 音色跟随的前提是 prompt 有 <Audio> 引用)。
+// 只在完全没有 <Audio> 引用时补写 subject_definitions 定义(有引用则信任 LLM,避免双重定义)。
+func ensureVoiceBindings(hp string, bindings []voiceBinding) string {
+	if len(bindings) == 0 || strings.Contains(hp, "<Audio ") {
+		return hp
+	}
+	var lines []string
+	for _, b := range bindings {
+		lines = append(lines, fmt.Sprintf(
+			"<Audio %d> is the voice-timbre reference for the voice of %s (S%d), containing a spoken voiceover.",
+			audioNum(b.Audio), b.CharID, audioNum(b.Audio)))
+	}
+	// subject_definitions 段末尾追加(六段式第一段,以 summary: 为界)
+	idx := strings.Index(hp, "summary:")
+	if idx < 0 {
+		return hp
+	}
+	return hp[:idx] + strings.Join(lines, "\n") + "\n\n" + hp[idx:]
+}
+
+// audioNum 从 "<Audio N>" 提取 N
+func audioNum(tag string) int {
+	n := 0
+	_, err := fmt.Sscanf(tag, "<Audio %d>", &n)
+	if err != nil {
+		return 1
+	}
+	return n
 }
 
 // refRelFor 角色参考图相对路径:优先正脸特写(身份锁定强),缺省回退全身定妆照,都没有则空串
@@ -3681,6 +4468,15 @@ func stageQC(ctx *manjuCtx, lg *manjuLogger) error {
 		return nil
 	}
 	args := []string{"qc", "--dir", clipsEp}
+	// 2026-08-27 升级:传 plan 供静音分级(有台词镜静音=真丢台词才判失败,纯空镜静音
+	// 降软告警);段尾冻结自动截尾默认开(H3 固有特性,程序修优于换 seed 重渲烧 GPU),
+	// render.defreeze=false 可关。
+	if p := filepath.Join(ctx.analysisDir, ctx.episode+"_direct_plan.json"); fileExists(p) {
+		args = append(args, "--plan", p)
+	}
+	if b, _ := ctx.R["defreeze"].(bool); !b {
+		args = append(args, "--no-defreeze")
+	}
 	if ctx.only != "" {
 		// 定点质检:镜头框显式指定时只检选中镜头(与定点重渲语义一致);范围展开为单号
 		shots := expandShotList(ctx.only)
@@ -3711,6 +4507,9 @@ func stageQC(ctx *manjuCtx, lg *manjuLogger) error {
 			delete(failed, n)
 		}
 	}
+	// 2026-08-26 升级:视觉抽检——对通过镜头抽帧判画面崩坏,命中追加 QC 报告触发重渲
+	ctx.qcVisualCheck(lg, reportPath, failed)
+	failed = ctx.qcFailedShots()
 	if len(failed) > 0 {
 		ids := make([]string, 0, len(failed))
 		for n := range failed {
@@ -3718,6 +4517,13 @@ func stageQC(ctx *manjuCtx, lg *manjuLogger) error {
 		}
 		sort.Strings(ids)
 		lg.logf("  🔁 质检未过镜头 " + strings.Join(ids, ",") + " — 再点「一条龙/续跑」自动删旧重渲;或镜头框填编号(+集数)定点重渲")
+		// 静音丢台词镜:换 seed 重渲未必念出台词,render.voiceover=true 可走 edge-tts
+		// 后期补配音(只补静音镜,不会与 H3 原生音轨双声)——给用户一条明路
+		if data, err := os.ReadFile(reportPath); err == nil {
+			if strings.Contains(string(data), "静音丢台词") {
+				lg.logf("  💡 有镜头静音丢台词:换 seed 重渲未必解决,可在设置中开启「后期配音」(render.voiceover)自动给静音镜补 TTS 人声")
+			}
+		}
 		if ctx.qcAccept() {
 			// 逃生门:用户已明确「接受质检结果」(坏镜进成片由用户决策),打警告继续
 			lg.logf("  ✅ 已按用户决定「接受质检结果」,未过镜头将进成片 — 如需重渲请镜头框填编号")
@@ -3924,8 +4730,15 @@ func stageAssemble(ctx *manjuCtx, lg *manjuLogger) error {
 	if sub, ok := ctx.R["subtitle"].(bool); !ok || !sub {
 		args = append(args, "--no-subtitle")
 	}
+	// 2026-08-26 升级:默认导出对白/旁白 srt(成片同目录,不烧录),供上传平台/剪映用;
+	// render.srt_out=false 可关闭。
+	if so, ok := ctx.R["srt_out"].(bool); !ok || so {
+		args = append(args, "--srt", strings.TrimSuffix(out, filepath.Ext(out))+".srt")
+	}
 	// 转场 + BGM(数据驱动配置;seam 接缝镜清单传给脚本强制硬切,叠化重影防线)
-	trans := orDefault(str(ctx.R["transition"]), "cut")
+	// 2026-08-27 默认 cut→dissolve(用户反馈"镜头间不连贯像PPT"):非接缝边界默认轻叠化
+	// 增强连贯性,接缝镜自动硬切不受影响;显式配置 render.transition 仍优先。
+	trans := orDefault(str(ctx.R["transition"]), "dissolve")
 	if !manjuTransitions[trans] {
 		trans = "cut"
 	}
@@ -4096,7 +4909,7 @@ func manjuEnvCheck(configPath string) string {
 	if l := str(ctx.R["turbo_lora"]); l != "" {
 		b.WriteString(check("loras", l))
 	}
-	if b2, _ := ctx.R["sage_attention"].(bool); b2 {
+	if sageEnabled(ctx.R) {
 		b.WriteString("⚡ SageAttention 加速(已开启):\n")
 		sageNode := ""
 		for _, n := range []string{"PathchSageAttentionKJ", "PatchSageAttentionKJ"} {
@@ -4362,12 +5175,15 @@ func manjuDefaultConfig(name, novelFile, novelDir, apiKey string) map[string]any
 			"min_shot_seconds": 5, "max_shot_seconds": 7, "shots_per_take": 2,
 			"res_tier": "standard", "draft_judge": true, "draft_scale": 0.5,
 			"fl2va_end_frame": false, "sage_attention": true, "seed_policy": "increment",
+			// 2026-08-26 升级:官方 Context IR 空镜扩写默认开(有 MiniMax Key 才生效);
+			// 渲染空闲 10 分钟自动 /free 释放显存(0=关);QC 视觉抽检默认开(本地 Qwen3-VL,失败不阻塞)
+			"ir_expand": true, "idle_free_minutes": 10, "qc_vision": true,
 			"comfy_url":      "http://127.0.0.1:8190",
 			"neg_prompt":     "lowres, bad anatomy, bad hands, text, error, extra digit, no text, no watermark, no deformed hands, flickering frames, temporal discontinuity, inconsistent lighting",
 			"unet_fl2va":     "MiniMax_H3_fl2va_pruned_int8_convrot.safetensors",
 			"unet_ref2va":    "MiniMax_H3_ref2va_pruned_int8_convrot.safetensors",
 			"clip":           "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-			"vae_video":      "minimax_h3_video_vae_fp16.safetensors",
+			"vae_video":      "minimax_h3_video_vae_int8_convrot.safetensors",
 			"vae_audio":      "minimax_h3_audio_vae_fp32.safetensors",
 			"z_image_unet":   "z_image_turbo_bf16.safetensors",
 			"z_image_clip":   "qwen_3_4b.safetensors",
@@ -4380,7 +5196,11 @@ func manjuDefaultConfig(name, novelFile, novelDir, apiKey string) map[string]any
 			// 仅保留作场景图引擎(无人脸)。SDXL 全面禁用。
 			"char_engine":    "krea2",
 			"voiceover":      false, // 2026-08-23 用户规则:默认 H3 自带配音;仅角色内心活动(Q版)需后期 TTS 时手动开启
-			"turbo_lora":     "minimax_h3_turbo_4step_ema.safetensors",
+			// 2026-08-26 Turbo LoRA 默认对齐磁盘实际部署(larryvrh 4step EMA 旧文件已停分发,
+			// 此前新项目默认指旧名 → 体检「未找到」);fl2v v1.1 空镜/ref2v v0.1 角色镜,
+			// 与全局 settings 默认(config.Render)一致。
+			"turbo_lora":     "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors",
+			"turbo_lora_r2v": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
 			// 不再配置 SDXL checkpoint(char_models/animagine_ckpt 置空,渲染不用它们)。
 			"animagine_ckpt": "",
 			"char_models":    map[string]any{},
@@ -4451,14 +5271,22 @@ func manjuGachaDraw(configPath, episode, char, view string, count int) ([]map[st
 	}
 	// 完整角色卡(2026-08-25:种族/性别/年龄/胡须/面容/views 全量参与)
 	charInfo := ctx.gachaCharInfo(char)
-	// Q 版候选:若已有正面定妆照,则基于正面照 img2img 生成(用户规则:Q版参考正面,避免形象大变)
+	// Q 版候选:基于全身照 img2img(2026-08-26 用户规则:Q版由全身照派生才合理,chibi 是全身形态;
+	// 全身照缺失回退正面定妆照)
 	mainRef := ""
 	if view == "q" {
-		mainPath := filepath.Join(ctx.assetsDir, "characters", sanitizeFileName(char)+".png")
-		if fileExists(mainPath) {
-			refName := "dir_char_main_" + sanitizeFileName(char) + ".png"
-			if os.MkdirAll(ctx.comfyInput, 0755) == nil && copyFile(mainPath, filepath.Join(ctx.comfyInput, refName)) == nil {
+		for _, suffix := range []string{"_full", ""} {
+			p := filepath.Join(ctx.assetsDir, "characters", sanitizeFileName(char)+suffix+".png")
+			if !fileExists(p) {
+				continue
+			}
+			refName := "dir_char_" + strings.TrimPrefix(suffix, "_") + "_" + sanitizeFileName(char) + ".png"
+			if refName == "dir_char__"+sanitizeFileName(char)+".png" {
+				refName = "dir_char_main_" + sanitizeFileName(char) + ".png"
+			}
+			if os.MkdirAll(ctx.comfyInput, 0755) == nil && copyFile(p, filepath.Join(ctx.comfyInput, refName)) == nil {
 				mainRef = refName
+				break
 			}
 		}
 	}
@@ -4474,8 +5302,9 @@ func manjuGachaDraw(configPath, episode, char, view string, count int) ([]map[st
 		seed := randSeed()
 		var wf map[string]any
 		if view == "q" && mainRef != "" {
-			// Q 版参考正面照 img2img(Z-Image 高 denoise 重绘成 chibi,身份/胡须/种族保留)
-			wf = wfZImage(manjuPortraitPromptFor(prompt, charInfo), str(ctx.R["z_image_unet"]), str(ctx.R["z_image_clip"]), str(ctx.R["z_image_vae"]), seed, manjuPortraitW, manjuPortraitH, "manju_gacha", ctx.negPrompt(), mainRef, manjuQStrength)
+			// Q 版参考正面照 img2img(2026-08-27 三修切 Krea-2:Z-Image 高重绘下 chibi 手办
+			// 素体先验压倒一切文本控制,精卫 Q 版袒胸实锾示正向锁/负面禁裸/init 闭合三重全被无视)
+			wf = wfKrea2(ctx.portraitPromptFor(prompt, charInfo, false), str(ctx.R["krea2_unet"]), str(ctx.R["krea2_clip"]), str(ctx.R["krea2_vae"]), seed, manjuPortraitW, manjuPortraitH, "manju_gacha", ctx.negPrompt(), mainRef, manjuQStrength)
 		} else {
 			// 抽卡=换装探索,保持随机多样性(不基于主图 img2img;采纳后定妆照覆盖)
 			wf = ctx.portraitWF(prompt, seed, "manju_gacha", charInfo, "", 0)

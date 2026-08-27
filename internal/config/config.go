@@ -154,14 +154,14 @@ func Default() *Settings {
 			UnetFL2VA:      "MiniMax_H3_fl2va_pruned_int8_convrot.safetensors",
 			UnetRef2VA:     "MiniMax_H3_ref2va_pruned_int8_convrot.safetensors",
 			Clip:           "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-			VaeVideo:       "minimax_h3_video_vae_fp16.safetensors",
+			VaeVideo:       "minimax_h3_video_vae_int8_convrot.safetensors",
 			VaeAudio:       "minimax_h3_audio_vae_fp32.safetensors",
 			TurboLora:      "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors",
 			TurboLoraR2V:   "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
 			ZImageUnet:     "z_image_turbo_bf16.safetensors",
 			ZImageClip:     "qwen_3_4b.safetensors",
 			ZImageVae:      "ae.safetensors",
-			CharModels:     map[string]string{"女": "animagine-xl-3.1.safetensors", "男": "sd_xl_base_1.0.safetensors"},
+			CharModels:     map[string]string{}, // SDXL/animagine 已 2026-08-26 清理(渲染观感差,定妆照统一 Krea-2/Z-Image)
 		},
 		Paths: PathSettings{
 			// 输入/输出缺省跟随共享目录(自包含),不再内置 AppData 绝对路径——

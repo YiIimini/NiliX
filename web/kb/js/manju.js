@@ -438,8 +438,8 @@
       // 重渲染后恢复(否则每 2 秒 poll 重建 innerHTML 会把用户展开的历史阶段重置收起)
       const prevOpen = {};
       log.querySelectorAll("details.mj-tl2-sec").forEach((d) => {
-        const b = d.querySelector("summary b");
-        if (b) prevOpen[b.textContent] = d.open;
+        const k = d.dataset.key; // 阶段+集号组合 key:多集同阶段(渲染·EP01/渲染·EP02)展开状态互不干扰
+        if (k) prevOpen[k] = d.open;
       });
       // 2026-08-25 倒序:阅读位置=顶部(最新),只有用户停在顶部时才跟随滚动到顶
       const nearTop = log.scrollTop < 80;
@@ -451,12 +451,13 @@
       const sections = [];
       let cur = null;
       for (const raw of lines) {
-        const st = raw.match(/━━━ 阶段 (\w+) ━━━/);
-        if (st) {
-          cur = { name: st[1], cn: stageCN[st[1]] || st[1], rows: [], err: false, ok: false };
-          sections.push(cur);
-          continue;
-        }
+      // 2026-08-26 集号兼容:后端阶段横幅为「━━━ 阶段 X · EP03 ━━━」,(\w+) 后可选 ` · 集号`
+      const st = raw.match(/━━━ 阶段 (\w+)(?: · (\S+))? ━━━/);
+      if (st) {
+        cur = { name: st[1], cn: stageCN[st[1]] || st[1], ep: st[2] || "", rows: [], err: false, ok: false };
+        sections.push(cur);
+        continue;
+      }
         if (!raw.trim()) continue;
         if (!cur) { cur = { name: "", cn: "运行", rows: [], err: false, ok: false }; sections.push(cur); }
         cur.rows.push(raw);
@@ -479,11 +480,12 @@
           let body = r;
           const tm = r.match(/^(\[\d{2}:\d{2}:\d{2}\])\s*/);
           if (tm) { ts = tm[1]; body = r.slice(tm[0].length); }
-          // 阶段横幅(━━━ 阶段 xxx ━━━)
+          // 阶段横幅(━━━ 阶段 xxx ━━━ / 2026-08-26 起带集号 ━━━ 阶段 render · EP03 ━━━)
           if (/━━━\s*阶段/.test(body)) {
-            const stm = body.match(/阶段\s*(\w+)\s*━━━/);
+            const stm = body.match(/阶段\s*(\w+)(?:\s*·\s*(\S+))?\s*━━━/);
             const cn = stm ? (stageCN[stm[1]] || stm[1]) : "运行";
-            return `<div class="mj-stage-banner">📌 ${esc(cn)}</div>`;
+            const epTag = stm && stm[2] ? `<i>${esc(stm[2])}</i>` : "";
+            return `<div class="mj-stage-banner">📌 ${esc(cn)}${epTag}</div>`;
           }
           let cls = "";
           if (/❌|失败|错误|异常|已停止/.test(body)) cls = "err";
@@ -496,13 +498,14 @@
         // 2026-08-25 倒序:段内行最新在上
         const rowsTxt = [...sec.rows].reverse().map(rowHtml).join("");
         // 用户手动展开过的保持;从未见过的新段默认收起(除当前段)
-        const userOpen = prevOpen[sec.cn] !== undefined ? prevOpen[sec.cn] : false;
+        const secKey = sec.cn + (sec.ep ? "|" + sec.ep : "");
+        const userOpen = prevOpen[secKey] !== undefined ? prevOpen[secKey] : false;
         const open = isLast ? true : userOpen;
         const stateDot = sec.err ? '<span class="mj-dot mj-dot-err" title="本阶段有错误"></span>'
           : (isLast && sec.rows.length > 0 ? '<span class="mj-dot mj-dot-run" title="进行中"></span>'
             : (sec.ok ? '<span class="mj-dot mj-dot-ok" title="已完成"></span>' : ''));
-        html += `<details class="mj-tl2-sec ${sec.err ? "err" : ""}" ${open ? "open" : ""}>
-          <summary>${stateDot}${status ? status + " " : ""}<b>${esc(sec.cn)}</b>${sec.name ? " <i>(" + esc(sec.name) + ")</i>" : ""} <span class="mj-tl2-cnt">${sec.rows.length} 行</span>${isLast ? " <em>当前</em>" : ""}</summary>
+        html += `<details class="mj-tl2-sec ${sec.err ? "err" : ""}" data-key="${esc(secKey)}" ${open ? "open" : ""}>
+          <summary>${stateDot}${status ? status + " " : ""}<b>${esc(sec.cn)}</b>${sec.ep ? ` <i>${esc(sec.ep)}</i>` : ""}${sec.name ? " <i>(" + esc(sec.name) + ")</i>" : ""} <span class="mj-tl2-cnt">${sec.rows.length} 行</span>${isLast ? " <em>当前</em>" : ""}</summary>
           <div class="mj-tl2-body">${rowsTxt}</div>
         </details>`;
       });
@@ -776,7 +779,7 @@
             <ul class="cc-confirm-list">
               <li>ComfyUI input / output <b>全部产物</b>(含其他项目的图片/视频)</li>
               <li>成片 / 预告片 · 角色定妆照(characters 全部)</li>
-              <li>运行日志数据</li>
+              <li>运行日志数据 · 项目诊断文件(logs/diagnose)</li>
               <li>普通清理的全部内容(方案 / 镜头 / 缓存)</li>
             </ul>
             <p class="cc-confirm-warn">请确认 ComfyUI 未在运行关键任务</p>
@@ -1630,7 +1633,7 @@
         R.sage_attention && "⚡SageAttn",
         R.draft_judge && "📐草稿预审",
         R.fl2va_end_frame && "🖼️FL2VA",
-        R.transition && R.transition !== "cut" && "转场:" + ({ fade: "闪黑", dissolve: "叠化" }[R.transition] || R.transition),
+        R.transition && R.transition !== "dissolve" && "转场:" + ({ fade: "闪黑", dissolve: "叠化", cut: "硬切" }[R.transition] || R.transition),
         R.bgm && "🎵BGM",
         R.shots_per_take && R.shots_per_take > 1 && "🎥长镜×" + R.shots_per_take,
       ].filter(Boolean);
@@ -1756,7 +1759,7 @@
       $("manju-draft-judge").checked = false;
       $("manju-fl2va").checked = false;
       $("manju-seed-policy").value = "fixed";
-      $("manju-transition").value = "cut";
+      $("manju-transition").value = "dissolve";
       this.syncBoostButtons();
     },
 
@@ -1810,7 +1813,7 @@
       $("manju-draft-judge").checked = !!R.draft_judge;
       $("manju-fl2va").checked = !!R.fl2va_end_frame;
       num("manju-draft-scale", R.draft_scale != null && R.draft_scale !== "" ? R.draft_scale : 0.5);
-      set("manju-transition", R.transition || "cut");
+      set("manju-transition", R.transition || "dissolve");
       set("manju-bgm", R.bgm || "");
       num("manju-bgm-gain", R.bgm_gain != null && R.bgm_gain !== "" ? R.bgm_gain : 0.28);
       // 2026-08-23 新增:定妆引擎/字幕/配音/Krea2 回填(解析脚本后同步显示)
@@ -2012,7 +2015,7 @@
       body.fl2va_end_frame = $("manju-fl2va").checked;
       const ds = parseFloat($("manju-draft-scale").value);
       if (!isNaN(ds)) body.draft_scale = ds;
-      body.transition = this.strVal("manju-transition") || "cut";
+      body.transition = this.strVal("manju-transition") || "dissolve";
       body.bgm = this.strVal("manju-bgm");
       const bg = parseFloat($("manju-bgm-gain").value);
       if (!isNaN(bg)) body.bgm_gain = bg;
@@ -2059,7 +2062,7 @@
       $("manju-draft-judge").checked = !!R.draft_judge;
       $("manju-fl2va").checked = !!R.fl2va_end_frame;
       set("manju-draft-scale", R.draft_scale != null && R.draft_scale !== "" ? R.draft_scale : 0.5);
-      set("manju-transition", R.transition || "cut");
+      set("manju-transition", R.transition || "dissolve");
       set("manju-bgm", R.bgm || "");
       set("manju-bgm-gain", R.bgm_gain != null && R.bgm_gain !== "" ? R.bgm_gain : 0.28);
       set("manju-take", R.shots_per_take != null && R.shots_per_take !== "" ? R.shots_per_take : 1);
@@ -3008,11 +3011,19 @@
       // fresh=true=首次打开(压新层);内部刷新(视图/候选/抽卡完成)=原地替换,不压栈
       const p = this.plan || {};
       const fileUrl = (p2) => "/api/fs/file?path=" + encodeURIComponent(p2);
-      // 2026-08-25 即梦角色版:新增「角色板」视图(三视图+特写+服饰+表情+配色+人设整合图,控全剧一致性)
-      // 2026-08-26 用户要求展示顺序:角色板(权威整合展示,基于主图生成)置顶 → 正面/全身/侧面/细节/Q版
-      const VIEWS = [["board", "角色板", "🪪"], ["", "正面", "🎭"], ["full", "全身", "🧍"], ["side", "侧面", "↔️"], ["detail", "细节", "🔍"], ["q", "Q版", "🐣"]];
+      // 配音音色列表(2026-08-26 角色音色指定):首次拉取,弹窗期间返回则原地刷新
+      if (!this.voiceList) {
+        const gen = this._modalGen;
+        get("/api/manju/voice/list").then((r) => {
+          this.voiceList = (r && r.voices) || [];
+          if (gen === this._modalGen) this.renderGachaModal();
+        }).catch(() => { this.voiceList = []; });
+      }
+      // 2026-08-27 用户裁决:角色板删除(渲染参考不用/零消费,生成已停);展示顺序:正面/全身/侧面/细节/Q版
+      const VIEWS = [["", "正面", "🎭"], ["full", "全身", "🧍"], ["side", "侧面", "↔️"], ["detail", "细节", "🔍"], ["q", "Q版", "🐣"]];
       // 2026-08-26 用户要求:角色卡标注 年龄/性别/角色定位(正角/反派/配角/演员/灵宠/妖兽)
       const roleTag = (c) => {
+        if (c.minor) return "群演";                     // 群演轻量卡(台词说话人自动建卡)
         if (c.species) return c.species;          // 灵宠/妖兽/神兽/精怪…
         if (c.role === "反派") return "反派";
         if (c.role === "功能配角") return "配角";
@@ -3035,6 +3046,7 @@
               <span class="manju-meta">每次</span>
               <select id="mg-count">${[1, 2, 4, 6].map((n) => `<option value="${n}"${String(n) === cntSaved ? " selected" : ""}>${n} 张</option>`).join("")}</select>
               <button id="mg-draw-all" class="hrs-btn"${pending.length ? "" : " disabled"}>🎲 全员抽卡${pending.length ? `（${pending.length} 位未定妆）` : ""}</button>
+              <button id="mg-voice-prepare" class="hrs-btn" title="预生成全部风格音色参考音频(首次使用或音色库缺失时点一次;渲染时也会按需自动补齐)">🎙 预生成音色库</button>
               <span class="manju-meta" style="margin-left:auto">多视图独立抽卡 · 采纳当前选中</span>
             </div>
           <div class="manju-gacha-grid">` + chars.map((c) => {
@@ -3051,12 +3063,17 @@
               // 当前视图已采纳的正式图(主视图=定妆照;full/side/detail=对应视图文件)
               const official = this.charViewOfficial(c.id, curView);
               const img = (cur && cur.image) || official || "";
+              // 复制提示词按钮(2026-08-27):预览图右上角,复制该图生成时的最终提示词;
+              // 当前显示候选=抽卡口径,显示正式图=正式资产口径(视角/身份锚不同)
+              const copyBtn = img
+                ? `<button class="manju-copy-prompt" data-copyprompt="${esc(c.id)}" data-view="${esc(curView)}" data-kind="${cur ? "gacha" : "official"}" title="复制这张图的生成提示词(含视角/身份/风格锚)">⧉ 提示词</button>`
+                : "";
               // 预览区状态角标:已定 ✓ / 未抽卡提示(悬浮在图片上方)
               const badge = img
                 ? (vg.ready || official ? `<span class="manju-char-badge ok">✓ 已定</span>` : `<span class="manju-char-badge">候选</span>`)
                 : (vg.ready ? `<span class="manju-char-badge ok">✓ 已定</span>` : "");
               const preview = img
-                ? `<img class="manju-char-img" src="${fileUrl(img)}" alt="${esc(c.id)}" data-img="${esc(img)}" data-name="${esc(c.id)}" title="点击预览大图" onerror="this.classList.add('img-err');this.insertAdjacentHTML('afterend','<div class=&quot;img-err-ph&quot;>🖼 图片加载失败</div>');">${badge}`
+                ? `<img class="manju-char-img" src="${fileUrl(img)}" alt="${esc(c.id)}" data-img="${esc(img)}" data-name="${esc(c.id)}" title="点击预览大图" onerror="this.classList.add('img-err');this.insertAdjacentHTML('afterend','<div class=&quot;img-err-ph&quot;>🖼 图片加载失败</div>');">${badge}${copyBtn}`
                 : `<div class="manju-gacha-ph">${vg.ready ? "✓ 已定" : "未抽卡"}</div>${badge}`;
               const strip = vg.list.length
                 ? `<div class="manju-cand-strip">` + vg.list.map((it, i) =>
@@ -3076,6 +3093,14 @@
                   <button class="hrs-btn" data-upload="${esc(c.id)}" data-view="${esc(curView)}" title="上传本地角色图并采纳为正式定妆照">📤 上传</button>
                   <button class="hrs-btn hrs-btn-primary" data-adopt="${esc(c.id)}" data-view="${esc(curView)}" ${cur ? "" : "disabled"}>采纳</button>
                 </div>
+                <div class="manju-char-voice" title="H3 原生配音音色:自动=按角色人设(性别/年龄/定位)匹配预置风格音色库;也可手动选音色覆盖(需重渲染生效)">
+                  <span class="manju-meta">🎙</span>
+                  <select data-voice-sel="${esc(c.id)}">
+                    <option value="" ${c.voice_ref ? "" : "selected"}>🤖 自动(按人设)</option>${(this.voiceList || []).map((v) => `<option value="${esc(v.name)}"${c.voice_name === v.name ? " selected" : ""}>${esc(v.label)}</option>`).join("")}
+                  </select>
+                  <button class="hrs-btn" data-voice-gen="${esc(c.id)}" title="应用所选音色(自动=恢复人设匹配)">${c.voice_ref ? "🔁 换" : "🎙 绑定"}</button>
+                  <span class="manju-voice-ok">${c.voice_ref ? "✓ " + esc(this.voiceLabel(c.voice_name)) : "🤖 自动"}</span>
+                </div>
               </div>`;
             }).join("") + `</div>
           <div class="manju-meta" style="margin-top:8px">📤 上传：选择本地图片，保存为正式定妆照并自动生成正脸参考，后续渲染以此为准。多视图（正面/全身/侧面/细节）让 H3 参考更完整，人物更统一。</div>
@@ -3093,6 +3118,24 @@
       if (cnt) cnt.addEventListener("change", () => ls("gachaCount", cnt.value));
       const da = $("mg-draw-all");
       if (da) da.addEventListener("click", () => this.drawAllGacha());
+      // 预生成风格音色库(2026-08-27):缺失的音色参考音频一键补齐(edge-tts)
+      const vp = $("mg-voice-prepare");
+      if (vp) vp.addEventListener("click", () => {
+        if (this.denyNoProject()) return;
+        vp.disabled = true; vp.textContent = "预生成中…";
+        post("/api/manju/voice/prepare", { config: this.project }).then((r) => {
+          vp.disabled = false; vp.textContent = "🎙 预生成音色库";
+          if (r.ok) {
+            this.setErr("");
+            this.logNote(`(🎙 音色库已就绪: 新增 ${r.generated || 0} 个, 失败 ${r.failed || 0} 个)`);
+          } else {
+            this.setErr((r.error || "预生成失败").trim());
+          }
+        }).catch((e) => {
+          vp.disabled = false; vp.textContent = "🎙 预生成音色库";
+          this.setErr(e.message);
+        });
+      });
       const mgel = this._modalEl; // 多级弹窗:只绑定当前弹窗内的抽卡控件
       if (!mgel) return;
       mgel.querySelectorAll("[data-gacha]").forEach((b) =>
@@ -3105,6 +3148,10 @@
       if (upFile) upFile.addEventListener("change", (e) => this.uploadCharFile(e.target.files[0]));
       mgel.querySelectorAll("[data-adopt]").forEach((b) =>
         b.addEventListener("click", () => this.adoptGacha(b.dataset.adopt, b.dataset.view || ""))
+      );
+      // 配音音色(2026-08-26):下拉选择 + 生成按钮提交(选「未指定」点生成=解绑)
+      mgel.querySelectorAll("[data-voice-gen]").forEach((b) =>
+        b.addEventListener("click", () => this.genCharVoice(b.dataset.voiceGen, b))
       );
       // 视图 tab 切换
       mgel.querySelectorAll("[data-viewtab]").forEach((b) =>
@@ -3130,6 +3177,50 @@
       mgel.querySelectorAll(".manju-char-img").forEach((el) =>
         el.addEventListener("click", () => this.previewImage(el.dataset.img, el.dataset.name))
       );
+      // 复制形态图提示词(2026-08-27):右上角一键复制该图生成时的最终提示词
+      mgel.querySelectorAll("[data-copyprompt]").forEach((b) =>
+        b.addEventListener("click", () => this.copyCharPrompt(b.dataset.copyprompt, b.dataset.view || "", b.dataset.kind || "gacha", b))
+      );
+    },
+
+    /* 复制角色形态图提示词:后端按生成链同一套函数重建最终正向提示词,写入剪贴板;
+       按钮就地反馈(✓ 已复制),失败走 tip 气泡 */
+    copyCharPrompt(char, view, kind, btn) {
+      if (this.denyNoProject()) return;
+      const old = btn ? btn.innerHTML : "";
+      if (btn) { btn.disabled = true; btn.textContent = "复制中…"; }
+      post("/api/manju/char/prompt", { config: this.project, episode: this.episode, char, view, kind }).then((r) => {
+        if (!r.ok) {
+          if (btn) { btn.disabled = false; btn.innerHTML = old; }
+          this.showTip((r.error || "提示词获取失败").trim(), "error");
+          return;
+        }
+        const text = r.prompt || "";
+        const viewName = { "": "正面", full: "全身", side: "侧面", detail: "细节", q: "Q版" }[view] || view;
+        const done = () => {
+          if (btn) { btn.disabled = false; btn.textContent = "✓ 已复制"; setTimeout(() => { btn.innerHTML = old; }, 1500); }
+          this.showTip(`已复制${viewName}提示词${r.negative ? "(负向词见日志)" : ""}`, "success");
+          this.logNote(`(⧉ 已复制 ${char} ${viewName}提示词,负向词: ${r.negative || "无"})`);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, () => this.copyFallback(text, done));
+        } else {
+          this.copyFallback(text, done);
+        }
+      }).catch((e) => {
+        if (btn) { btn.disabled = false; btn.innerHTML = old; }
+        this.showTip(e.message, "error");
+      });
+    },
+
+    /* execCommand 剪贴板兜底(旧 WebView 无 clipboard API 时) */
+    copyFallback(text, done) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;left:-9999px;opacity:0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); if (done) done(); } finally { ta.remove(); }
     },
 
     /* 每次抽卡张数:取弹窗下拉当前值(localStorage 记忆) */
@@ -3146,6 +3237,31 @@
       const start = vg.list.length;
       imgs.forEach((im) => vg.list.push({ image: im.image, seed: im.seed }));
       vg.sel = start;
+    },
+
+    /* 音色名 → 展示文案(未在列表中的音色原样显示) */
+    voiceLabel(name) {
+      const v = (this.voiceList || []).find((x) => x.name === name);
+      return v ? v.label : (name || "未指定");
+    },
+
+    /* 角色配音音色生成/恢复自动(2026-08-27 音色库自动匹配):下拉选「自动」点绑定=清除显式
+       绑定回自动匹配;选具体音色=生成参考音频并绑定。成功重拉方案原地刷新。 */
+    genCharVoice(char, btn) {
+      if (!this.project) return;
+      const gen = this._modalGen;
+      const sel = this._modalEl ? this._modalEl.querySelector(`[data-voice-sel="${CSS.escape(char)}"]`) : null;
+      const voice = sel ? sel.value : "";
+      if (btn) { btn.textContent = voice ? "生成中…" : "恢复中…"; btn.disabled = true; }
+      post("/api/manju/voice/gen", { config: this.project, episode: this.episode, char, voice }).then((r) => {
+        if (btn) { btn.disabled = false; btn.textContent = r.bound ? "🔁 换" : "🎙 绑定"; }
+        if (gen !== this._modalGen) return;
+        if (r.ok) { this.setErr(""); this.loadPlan(() => this.renderGachaModal()); }
+        else this.setErr((r.error || "音色生成失败").trim());
+      }).catch((e) => {
+        if (btn) { btn.disabled = false; btn.textContent = "🎙 绑定"; }
+        if (gen === this._modalGen) this.setErr(e.message);
+      });
     },
 
     drawGacha(charId, btn, view) {
@@ -3632,19 +3748,25 @@
       overlay.querySelector(".manju-modal-title").textContent = title;
       overlay.querySelector(".manju-modal-body").innerHTML = bodyHtml;
       // 关闭:关闭按钮 / 点遮罩空白(Esc 由 bind 单例监听,一次只关顶层)
-      // 2026-08-26 用户要求:弹窗右上角关闭按钮前提供刷新按钮(refresh 回调存在才显示)
+      // 2026-08-26 用户要求:弹窗右上角关闭按钮前提供刷新按钮(refresh 回调存在才显示)。
+      // 关键:必须先捕获 closeBtn 引用——刷新按钮复用 .manju-modal-close 类名且插入在它前面,
+      // 若之后再 querySelector(".manju-modal-close") 会匹配到刷新按钮,closeModal 绑定错位
+      // (实测:点刷新=刷新+关弹窗,点 ✕=没反应)。
+      const closeBtn = overlay.querySelector(".manju-modal-close");
       if (typeof refresh === "function") {
         const rb = document.createElement("button");
         rb.className = "manju-modal-close manju-modal-refresh";
-        rb.title = "刷新本页内容"; rb.textContent = "🔄";
+        rb.title = "刷新本页内容";
+        // 2026-08-27 用户要求:图标换父级(nav-refresh/settings-btn)同款 SVG 刷新图标
+        rb.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/></svg>';
         rb.addEventListener("click", () => {
           rb.style.transition = "transform .5s ease"; rb.style.transform = "rotate(360deg)";
           setTimeout(() => { rb.style.transition = ""; rb.style.transform = ""; }, 520);
           refresh();
         });
-        overlay.querySelector(".manju-modal-head").insertBefore(rb, overlay.querySelector(".manju-modal-close"));
+        closeBtn.parentNode.insertBefore(rb, closeBtn); // 紧贴关闭按钮左侧(靠右挨着关闭)
       }
-      overlay.querySelector(".manju-modal-close").addEventListener("click", () => this.closeModal());
+      closeBtn.addEventListener("click", () => this.closeModal());
       overlay.addEventListener("click", (e) => { if (e.target === overlay) this.closeModal(); });
       this._modalEl = overlay;
       this._modalStack.push(overlay);

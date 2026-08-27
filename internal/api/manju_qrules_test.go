@@ -181,6 +181,9 @@ func TestManjuFinalizeShotPrompt(t *testing.T) {
 	if !strings.Contains(out, "no extra faces") {
 		t.Errorf("finalize 未加多余人脸硬约束: %s", out)
 	}
+	if !strings.Contains(out, "never show the same character twice") || !strings.Contains(out, "distinct individual") {
+		t.Errorf("finalize 未加人物不重复/独立形象约束(2026-08-27 分镜4重复人物反馈): %s", out)
+	}
 	out2 := ctx.finalizeShotPrompt(out, s, lg)
 	if strings.Count(out2, "FRAME DISCIPLINE") != 1 {
 		t.Errorf("finalize 非幂等(重复追加): %s", out2)

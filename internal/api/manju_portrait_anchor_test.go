@@ -52,7 +52,7 @@ func TestManjuStyleAssetNoBareAnime(t *testing.T) {
 // scriptImagePrompt 素材抽卡同样执行拟动漫规则(真人措辞替换+锚附加)。
 func TestScriptImagePromptNoRealNoAnime(t *testing.T) {
 	block := "Cinematic film still, photorealistic, a 22-year-old East Asian woman, long black hair, movie poster quality"
-	out := scriptImagePrompt(block, manjuAssetStyle("2.5d"))
+	out := scriptImagePrompt(block, manjuAssetStyle("2.5d"), false)
 	if strings.Contains(strings.ToLower(out), "photorealistic, ") {
 		t.Fatalf("脚本素材抽卡仍含真人措辞: %s", out)
 	}

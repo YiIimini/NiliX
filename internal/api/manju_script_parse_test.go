@@ -386,7 +386,7 @@ func TestSecondFormParse(t *testing.T) {
 - 辨识度三件套：通体雪白 / 蓝瞳 / 尾尖一点朱红
 - 生图提示词：Cinematic film still, a small white fox with blue eyes
 - 真身提示词：Cinematic film still, a giant divine white fox true form with lightning marks
-`, "real")
+`, "real", false)
 	if len(chars) == 0 {
 		t.Fatalf("应解析出角色卡")
 	}
@@ -413,7 +413,7 @@ Cinematic film still, a small white fox
 `+tplBacktick+`
 Cinematic film still, a giant divine fox true form with storm fur
 `+tplBacktick+`
-`, "real")
+`, "real", false)
 	if len(chars) == 0 || str(chars[0]["second_form"]) == "" {
 		t.Fatalf("双代码块真身应解析出 second_form, got %+v", chars)
 	}
@@ -421,9 +421,112 @@ Cinematic film still, a giant divine fox true form with storm fur
 	chars = parseCharCards(`# 人物
 ## 3. 阿拾（女主，19岁）
 - 生图提示词：Cinematic film still, a young woman
-`, "real")
+`, "real", false)
 	if len(chars) == 0 || str(chars[0]["second_form"]) != "" {
 		t.Fatalf("无真身标注不应有 second_form, got %+v", chars)
+	}
+}
+
+// TestParseCharCardsGlobalSection 回归测试(2026-08-26 用户实测):顶流遗产把
+// 「统一风格前缀/统一质量后缀/通用负向词」三个全局共用字段写成二级标题,reMdTitle
+// 匹配成角色卡 → 伪角色+伪视图资产。黑名单过滤后只出真角色,全局段不得进角色卡。
+func TestParseCharCardsGlobalSection(t *testing.T) {
+	text := `# 《顶流遗产》人物生成提示词（次世代3D渲染·BJD数字人风格）
+
+> 全书统一视觉（用户指定）：次世代 3D 渲染 + 半写实国漫 AI 漫剧 + BJD 人偶质感
+
+## 统一风格前缀（所有角色共用）
+` + tplBacktick + `
+Next-generation 3D render, semi-realistic Chinese anime CGI drama, virtual digital human, BJD doll aesthetic, cinematic film still
+` + tplBacktick + `
+
+## 统一质量后缀（所有角色共用）
+` + tplBacktick + `
+realistic skin texture with fine pores, soft facial lighting, cinematic lighting, 8K ultra detailed
+` + tplBacktick + `
+
+## 通用负向词（所有角色共用）
+` + tplBacktick + `
+hand-drawn, thick paint, japanese anime face, watermark, deformed, extra fingers
+` + tplBacktick + `
+
+---
+
+## 1. 沈曜（主角·正角男=帅/冷峻）
+**记忆点**：①右眼尾泪痣 ②黑曜石十二星芒戒指 ③黑金撞色穿搭
+
+` + tplBacktick + `
+Next-generation 3D render, a 23-year-old East Asian young man, teardrop mole at the corner of his right eye, black tactical jacket over white t-shirt
+` + tplBacktick + `
+**专属负向**：通用负向 + old face
+
+## 2. 江晚吟（女主·正角女=美/冷艳）
+**记忆点**：①发梢银灰挑染 ②左耳星形耳钉 ③黑白双面穿搭
+
+` + tplBacktick + `
+Next-generation 3D render, a 21-year-old East Asian young woman, phoenix eyes, long straight black hair with silver-grey dyed tips
+` + tplBacktick + `
+
+## 3. 顾承儒（主反派·伪善=磕碜阴鸷，禁帅美词）
+**记忆点**：①鹰钩鼻+金丝眼镜三白眼 ②背头僵笑 ③三件套西装
+
+` + tplBacktick + `
+Next-generation 3D render, a 45-year-old East Asian man, hawk nose and cold eyes behind gold-rimmed glasses
+` + tplBacktick + `
+`
+	chars := parseCharCards(text, "real", false)
+	if len(chars) != 3 {
+		t.Fatalf("应仅 3 个真角色(全局段不得当角色), got %d: %+v", len(chars), chars)
+	}
+	got := map[string]bool{}
+	for _, c := range chars {
+		id := str(c["id"])
+		got[id] = true
+		if reManjuGlobalSection.MatchString(id) {
+			t.Fatalf("全局段「%s」不得进入角色卡", id)
+		}
+	}
+	for _, want := range []string{"沈曜", "江晚吟", "顾承儒"} {
+		if !got[want] {
+			t.Fatalf("缺角色 %s, got %v", want, got)
+		}
+	}
+}
+
+// TestParseCharCardsQuoteGlobalNoNumber 回归测试:通用负向词写在 `>` 引用行(混沌灵根/
+// 我死于第七集写法)不得产生伪角色;无编号角色标题(我死于第七集「## 阮棠(女主)」)必须正常解析。
+func TestParseCharCardsQuoteGlobalNoNumber(t *testing.T) {
+	text := `# 《我死于第七集》人物生成提示词(写实电影级·人物微动漫写实)
+
+> 用途:漫剧定妆(NiliX 自动读取)。
+> 通用负向词(所有角色共用,拼在各自负面词后):
+
+` + tplBacktick + `
+japanese anime face, japanese manga face, anime eyes, watermark
+` + tplBacktick + `
+
+---
+
+## 阮棠(女主)
+**记忆点**：①右耳垂痣 ②旧木簪 ③青灰围裙
+
+` + tplBacktick + `
+Cinematic film still, a 20-year-old East Asian woman, tiny mole on right earlobe, grey-blue apron
+` + tplBacktick + `
+
+## 阿铁(灵宠·剑灵)
+**记忆点**：①通体雪白 ②蓝瞳 ③尾尖朱红
+
+` + tplBacktick + `
+Cinematic film still, a small white sword-spirit fox with blue eyes
+` + tplBacktick + `
+`
+	chars := parseCharCards(text, "real", false)
+	if len(chars) != 2 {
+		t.Fatalf("引用行全局段不得产生伪角色,应 2 个角色, got %d: %+v", len(chars), chars)
+	}
+	if str(chars[0]["id"]) != "阮棠" || str(chars[1]["id"]) != "阿铁" {
+		t.Fatalf("无编号角色标题应正常解析, got %v / %v", str(chars[0]["id"]), str(chars[1]["id"]))
 	}
 }
 

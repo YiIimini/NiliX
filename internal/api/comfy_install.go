@@ -71,9 +71,8 @@ var comfyDefaultResources = []comfyRes{
 		URL: "MiniMaxAI/MiniMax-H3/resolve/main/minimax_h3_audio_vae_fp32.safetensors"},
 	{Kind: "model", Name: "H3 CLIP(Qwen3VL-32B,约60GB)", Rel: "text_encoders/qwen3vl_32b_minimax_h3.safetensors",
 		URL: "MiniMaxAI/MiniMax-H3/resolve/main/qwen3vl_32b_minimax_h3.safetensors"},
-	{Kind: "model", Name: "SDXL Base(定妆照兜底)", Rel: "checkpoints/sd_xl_base_1.0.safetensors",
-		URL: "stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors"},
 }
+
 
 // installLog 追加日志(内存 + 文件)
 func (st *comfyInstallState) instNote(msg string) {

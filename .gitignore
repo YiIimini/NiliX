@@ -42,3 +42,6 @@ petwin.json
 
 # go test 误落在包目录的 analysis 运行产物(正常应在 t.TempDir)
 internal/api/analysis/
+
+# ZCode 会话临时文件(探针/词典/生成器脚本)
+.zcode/
