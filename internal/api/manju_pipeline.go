@@ -1544,6 +1544,63 @@ type manjuShot struct {
 	TakeGroup  []manjuShot // 多切点长镜组头携带整组(含自身;单镜为空)
 }
 
+// manjuSanitizePlanIDs 规范化方案内角色/场景 id,并同步改写镜头引用(shot.scene 与
+// shot.characters)。id 直接用作落盘文件名(characters/<id>.png、scenes/<id>.png),
+// LLM 直出或素材卡带来的 id 可能含 Windows 非法字符(如 王鹏飞"王胖" 的英文双引号),
+// 落盘时直接报「文件名语法不正确」。在 loadPlan 读盘后与 writePlan 落盘前统一清洗,
+// 存量方案与新方案走同一套名字;幂等可重复调用,清洗后撞名的 id 追加下划线保唯一。
+func manjuSanitizePlanIDs(plan map[string]any) {
+	if plan == nil {
+		return
+	}
+	renames := map[string]string{}
+	used := map[string]bool{}
+	assign := func(raw string) string {
+		if safe, ok := renames[raw]; ok {
+			return safe
+		}
+		safe := sanitizeFileName(raw)
+		if safe == "" {
+			safe = "_"
+		}
+		for used[safe] {
+			safe += "_"
+		}
+		used[safe] = true
+		renames[raw] = safe
+		return safe
+	}
+	for _, key := range []string{"characters", "scenes"} {
+		for _, x := range anyArr(plan[key]) {
+			if m, ok := x.(map[string]any); ok {
+				if raw := str(m["id"]); raw != "" {
+					m["id"] = assign(raw)
+				}
+			}
+		}
+	}
+	for _, x := range anyArr(plan["shots"]) {
+		m, ok := x.(map[string]any)
+		if !ok {
+			continue
+		}
+		if sid := str(m["scene"]); sid != "" {
+			if s2, moved := renames[sid]; moved {
+				m["scene"] = s2
+			}
+		}
+		if carr, ok2 := m["characters"].([]any); ok2 {
+			for i, c := range carr {
+				if cs, ok3 := c.(string); ok3 {
+					if c2, moved := renames[cs]; moved {
+						carr[i] = c2
+					}
+				}
+			}
+		}
+	}
+}
+
 // loadPlan 读取 analysis/<ep>_direct_plan.json,规范化镜头字段
 func (ctx *manjuCtx) loadPlan() (map[string]any, []manjuShot, error) {
 	p := manjuFindPlanDir(ctx.analysisDir, ctx.episode)
@@ -1558,6 +1615,7 @@ func (ctx *manjuCtx) loadPlan() (map[string]any, []manjuShot, error) {
 	if err := json.Unmarshal(data, &plan); err != nil {
 		return nil, nil, fmt.Errorf("方案解析失败: %w", err)
 	}
+	manjuSanitizePlanIDs(plan)
 	shots, err := planShots(plan)
 	if err != nil {
 		return nil, nil, err
@@ -2156,6 +2214,7 @@ func (ctx *manjuCtx) clearEpisodeArtifacts(lg *manjuLogger) {
 }
 
 func (ctx *manjuCtx) writePlan(plan map[string]any) error {
+	manjuSanitizePlanIDs(plan) // id 即文件名:落盘前清洗,防 Windows 非法字符(如英文双引号)
 	if err := os.MkdirAll(ctx.analysisDir, 0755); err != nil {
 		return err
 	}
@@ -2177,6 +2236,7 @@ func (ctx *manjuCtx) writePlan(plan map[string]any) error {
 
 // writeCharactersJSON 抽卡/主页角色列表(无 shots)
 func (ctx *manjuCtx) writeCharactersJSON(plan map[string]any) {
+	manjuSanitizePlanIDs(plan) // 与 writePlan 同规:抽卡/角色管理拿到的 id 已是可落盘名
 	_ = os.MkdirAll(ctx.analysisDir, 0755)
 	chars, _ := plan["characters"].([]any)
 	scenes, _ := plan["scenes"].([]any)
@@ -2567,7 +2627,9 @@ const manjuQStrength = 0.93
 //   存量 full/side 视图必须全部重出。
 // 8=兽类视图锚分流(2026-08-28 用户反馈:灵宠小貔 full/Q 渲染出人形)——兽类用兽形锚+
 //   manjuBeastStrip 剥 image_prompt 人互动子句,人形着装/未成年人护栏不参与。
-const manjuViewGen = 8
+// 10=兽形判定词表修复(2026-08-28 猫·二两:9 的兽形后缀/剥人锚对"漏判人形"的猫
+//   根本没生效——常见动物词补齐后兽形分支真正接管,全部视图按兽形重出)。
+const manjuViewGen = 10
 
 // manjuQGen Q 版生成逻辑代数(独立于 views_gen,只清 _q.png):2=发色锁(HAIR LOCK
 // 显式点名发色/毛色,高重绘下双色挑染不再被平均成单色;2026-08-27 用户反馈叶澜黑白发
@@ -2593,12 +2655,28 @@ const manjuViewGen = 8
 //   消除晨间「方图拉竖幅」形变根因);
 // 14=两段式生成·形态→身份(2026-08-28 终局:单次 img2img 死结=低重绘保构图(主图=半身
 //   写实残留)高重绘丢身份;①形态段纯文生图短提示词锁两头身3D手办+特征进构成,
-//   ②身份段以形态段产物为底 0.5 低重绘注入发色/服装/性别/面容)。
-const manjuQGen = 19
+//   ②身份段以形态段产物为底 0.5 低重绘注入发色/服装/性别/面容);
+// 20=提示词污染审计(2026-08-28 用户「全面审计,别老出问题」:①armor 材质词条件化
+//   manjuHasArmor——林小满Q版左肩凭空金属护甲;②eyeCls 精确化 manjuEyeClsFor——老纪
+//   挂脖老花镜被 "glasses/visor" 混写画成赛博护目镜,挂脖镜保持挂脖;③特征锁全列举
+//   (glasses/visors/scars)改中性 signature features;④无甲基底去 fur 兽毛词);
+// 21=兽形判定修复(2026-08-28 猫·二两Q版生成人:动物本体词补齐前纯英文动物卡
+//   漏判人形,Q版走了人形手办模板;判兽形后兽形分支(毛绒小兽+NOT a human/NOT
+//   wearing human clothes)真正接管);
+// 22=兽形毛色显式锁 manjuFurAnchor(2026-08-28 猫·二两:主图橘白 Q版黑灰狸花——
+//   0.93 高重绘身份靠文本,删 img 拼接后色词零出现、HAIR LOCK 只抓到无色名的
+//   dusty fur,毛色按猫类默认先验随机;色名显式点名与人形 HAIR LOCK 同级)。
+const manjuQGen = 22
 
 // manjuPortraitGen 主图代数(2026-08-27 六修):单人/纯白背景/服装严格锚上线时 bump,
 // stageAssets 检测到落后即清全部旧主图重出(视图/Q版联动)。
-const manjuPortraitGen = 2
+// 3=兽形判定修复(2026-08-28 猫·二两案:manjuBeastBody 补常见动物词(中文+英文词
+//   边界 manjuAnimalEnRe)——species 缺失的纯英文动物卡(an orange stray cat)此前
+//   漏判人形,主图无兽类锚/full 出人/Q版人形手办;另 facecrop YuNet 阈值 0.5→0.4);
+// 4=face裁切窗口定版(2026-08-28 标尺实测:单人白底方形主图头顶20%/下巴70%,旧窗
+//   口 8%-52% 切口鼻、8%-70% 贴下巴线切嘴;定版 8%-88% 对齐检测命中分支比例,
+//   主图重出联动 face/视图/Q版 全链重出重裁)。
+const manjuPortraitGen = 4
 
 // portraitWF 定妆照工作流按风格分流:含写实元素用 Z-Image(真人级),其余用 SDXL checkpoint。
 // 尺寸固定为标准 1024×1024(与项目画幅无关);正脸参考(ensureFaceCrop)再从该图按视频比例裁切。
@@ -2651,7 +2729,17 @@ var manjuBeastBody = []string{
 	"兽瞳", "兽耳", "獠牙", "利爪", "兽爪", "鳞甲", "鳞片", "蛇身", "鹿角", "龙鳞",
 	"凤羽", "翅膀", "尾巴", "鬃毛", "妖兽", "灵宠", "神兽", "灵兽", "魔兽", "凶兽",
 	"异兽", "精怪", "妖物", "坐骑",
+	// 2026-08-28(猫·二两 full/Q版画出人):常见动物中文本体词——species 缺失的卡面
+	// 一个中文古风词都命中不了会被当人形。人形否决(manjuHumanFigureRe)在前,
+	// 狐耳娘等"26岁女子+狐耳"不会误判。
+	"橘猫", "狸花", "奶牛猫", "狸猫", "家猫", "野猫", "小猫", "猫咪", "小狗", "家犬",
+	"中华田园犬", "柴犬", "柯基", "边牧", "金毛犬", "布偶猫", "英短", "鹦鹉", "仓鼠",
 }
+
+// manjuAnimalEnRe 常见动物英文本体词(词边界匹配,2026-08-28 猫·二两判定修复):
+// an orange and white chubby stray cat 类英文卡面;词边界防 category/catch/
+// dogma/fishery 等子串误伤。
+var manjuAnimalEnRe = regexp.MustCompile(`(?i)\b(cat|kitten|kitty|dog|puppy|panda|fox|wolf|tiger|lion|bear|rabbit|bunny|hamster|parrot|bird|fish|snake|horse|deer|squirrel|otter|ferret|hedgehog|turtle|frog|dragon|phoenix)\b`)
 
 // manjuIsMinorCast 群演轻量卡判定(2026-08-27 群演分级):脚本直出时有台词但无角色卡
 // 的说话人自动建卡(minor:true)——资产阶段只出 1 张定妆照+正脸(跳过视图/Q版/双形态)。
@@ -2696,6 +2784,10 @@ func manjuIsBeast(m map[string]any) bool {
 		if strings.Contains(hay, k) {
 			return true
 		}
+	}
+	// 2026-08-28 常见动物英文本体词(词边界):纯英文卡面的猫狗等不再漏判为人形
+	if manjuAnimalEnRe.MatchString(hay) {
+		return true
 	}
 	return false
 }
@@ -2872,7 +2964,13 @@ func (ctx *manjuCtx) portraitPromptFor(prompt string, m map[string]any, frontFac
 		// illustration style" 是动漫邀请词,标志特征角色 denoise 1.0(文本唯一画风源)
 		// 时必出 2D 赛璐璐动漫;统一 3D 手办锚(与历史定案「呆萌手办感」一致)。
 		if !strings.Contains(p, "NOT a realistic human") {
-			p = p + ", 3D rendered chibi collectible figure in complete outfit, cinematic movie-grade CGI rendering, dramatic studio lighting with soft rim light, physically based materials, realistic surface detail on armor and fabric, big glossy eyes"
+			// 2026-08-28 盔甲条件化(林小满Q版护甲实例,与 manjuQPrompt 基底同规):
+			// armor 材质词只给真有盔甲的角色,无甲角色纯织物材质。
+			mat := "realistic surface detail on fabric"
+			if manjuHasArmor(m) {
+				mat = "realistic surface detail on armor and fabric"
+			}
+			p = p + ", 3D rendered chibi collectible figure in complete outfit, cinematic movie-grade CGI rendering, dramatic studio lighting with soft rim light, physically based materials, " + mat + ", big glossy eyes"
 			p = p + ", NOT a photograph of a real person, not real human proportions — but movie-grade cinematic realism in materials, lighting and surface detail"
 		}
 		// 防日漫(2026-08-27 老龟 Q 版日漫脸;2026-08-28 强化:不止脸,整个 2D 平面
@@ -2975,6 +3073,13 @@ func manjuBeastStrip(s string) string {
 	out := strings.Join(keep, ", ")
 	out = regexp.MustCompile(`(?i)East Asian/Chinese character|East Asian character|Chinese character`).ReplaceAllString(out, "mythical creature")
 	out = regexp.MustCompile(`(?i)\bcharacter\b`).ReplaceAllString(out, "creature")
+	// 2026-08-28(猫·二两 full 全身照画出人/人偶化):素材卡按 style 统一拼的 3D 人形锚
+	// ——virtual digital human / BJD doll / porcelain-smooth skin——对兽形是拟人邀请,
+	// 剥净人形措辞、皮肤质感换毛发质感。
+	out = regexp.MustCompile(`(?i)next-generation 3D CGI render of a virtual digital human (?:creature|character)`).ReplaceAllString(out, "next-generation 3D CGI render")
+	out = regexp.MustCompile(`(?i)virtual digital human (?:creature|character)|digital human (?:creature|character)`).ReplaceAllString(out, "")
+	out = regexp.MustCompile(`(?i)fully dressed BJD doll aesthetic|BJD doll aesthetic,?`).ReplaceAllString(out, "")
+	out = regexp.MustCompile(`(?i)porcelain-smooth skin with fine subsurface scattering`).ReplaceAllString(out, "smooth detailed fur and skin texture")
 	return strings.TrimSpace(out)
 }
 
@@ -3110,7 +3215,42 @@ func manjuHairAnchor(m map[string]any) string {
 	return "HAIR LOCK: the chibi keeps EXACTLY this hair color as the reference portrait — " + strings.Join(phrases, "; ") + " — multi-tone or streaked hair (e.g. black-and-white two-tone) must stay multi-tone, never flatten into a single color"
 }
 
-// manjuLooseClean 敞开感词清洗(2026-08-27 二修:柳含烟/魏鹤年/魏琮 宽袍 Q 版敞胸):
+// manjuFurAnchor 兽形毛色显式锁(2026-08-28 猫·二两案:主图橘白,Q版被画成黑灰狸花——
+// img2img 0.93 高重绘身份靠文本,兽形Q版分支删 image_prompt 整段后橘白色词零出现,
+// HAIR LOCK 只抓到无色名的 "dusty fur" 子句,模型按猫的默认先验随机出狸花)。
+// 从主体子句(第一个逗号前,色词密集段)提取英文色名 + 中文记忆点色词映射,显式点名。
+func manjuFurAnchor(m map[string]any) string {
+	ip := str(m["image_prompt"])
+	head := ip
+	if i := strings.IndexAny(ip, ",;，；"); i > 0 {
+		head = ip[:i]
+	}
+	low := strings.ToLower(head + " " + ip)
+	// 英文色名(出现序无关,语义是「这些色的毛」)
+	enKw := []string{"orange", "ginger", "golden", "yellow", "cream", "white", "snow-white", "black", "gray", "grey", "brown", "silver", "calico", "tabby", "tortoiseshell", "tuxedo", "tricolor", "bicolor", "blue-gray"}
+	seen := map[string]bool{}
+	var cols []string
+	for _, k := range enKw {
+		if !seen[k] && strings.Contains(low, k) {
+			seen[k] = true
+			cols = append(cols, k)
+		}
+	}
+	// 中文记忆点色词映射(橘白猫/三花/奶牛猫等)
+	zhMap := [][2]string{{"雪白", "snow-white"}, {"橘白", "orange and white"}, {"橘", "orange"}, {"金黄", "golden"}, {"黄", "golden yellow"}, {"黑白", "black and white"}, {"奶牛", "black and white"}, {"三花", "calico"}, {"狸花", "brown tabby"}, {"白", "white"}, {"黑", "black"}, {"灰", "gray"}}
+	for _, z := range zhMap {
+		if !seen[z[1]] && strings.Contains(str(m["appearance"]), z[0]) {
+			seen[z[1]] = true
+			cols = append(cols, z[1])
+		}
+	}
+	if len(cols) == 0 {
+		return ""
+	}
+	return "FUR COLOR LOCK: " + strings.Join(cols, " and ") + " fur coloring, exactly the same coat colors and markings as the reference image, never recolored"
+}
+
+// manjuLooseClean 敞开感词清洗(2026-08-27 二修:柳含烟/魏鹤年/魏琰 宽袍 Q 版敞胸):
 // 宽松/敞开/未扣的服饰描述复述进 chibi prompt 会强化潮玩素体敞袍先验(Z-Image 高重绘下
 // "宽松官袍"= 敞袍),着装锁提取子句与 Q 版 img 残段一律剥除。
 var manjuLooseClean = regexp.MustCompile(`(?i)\b(?:loose|flowing|unbuttoned|unzipped|open|casually worn)\s*`)
@@ -3191,7 +3331,7 @@ func manjuFeatureAnchor(m map[string]any) string {
 	}
 	return "SIGNATURE FEATURE LOCK: the chibi keeps ALL of the character's signature facial and gear features exactly as in the reference portrait — " +
 		strings.Join(ps, "; ") +
-		" — these glasses, visors, scars, mechanical parts and glowing features must all be clearly visible on the chibi, never omitted, never simplified away"
+		" — every one of these signature features must be clearly visible on the chibi, never omitted, never simplified away"
 }
 
 // manjuIsNonPhysical 非实体角色(2026-08-28 用户实测:管理员=纯数据光生命,Q版被套上
@@ -3265,10 +3405,8 @@ func manjuQFormPrompt(m map[string]any) string {
 			strings.Contains(low, "for arms") {
 			handCls = "short stubby arms ending in the character's signature mechanical parts, short legs"
 		}
-		if strings.Contains(low, "glasses") || strings.Contains(low, "visor") || strings.Contains(low, "goggles") ||
-			strings.Contains(low, "eyepatch") || strings.Contains(low, "monocle") || strings.Contains(low, "scanner") {
-			eyeCls = "big sparkling eyes behind the character's signature eyewear"
-		}
+		// 2026-08-28 三修:与 manjuQPrompt 同款精确化(manjuEyeClsFor),不混写 glasses/visor
+		eyeCls = manjuEyeClsFor(low)
 	}
 	p := "3D rendered cute chibi collectible toy figure, exactly 2-head-tall super-deformed chibi proportions, the oversized round head takes up half of the total body height, " + eyeCls + ", " + handCls + ", soft round face with a small cute mouth, bright cheerful adorable expression with a happy smile and rosy cheeks, compact mini body, adorable huggable vinyl toy with soft matte finish"
 	if manjuIsFemale(m) {
@@ -3349,6 +3487,54 @@ func manjuQIdentityPrompt(m map[string]any) string {
 	return p + manjuMinorGuard(m) + manjuBeardEnforce(m)
 }
 
+// manjuEyeClsFor 按角色卡真实眼部特征精确构建 Q 版眼睛构成(2026-08-28 老纪赛博护目镜
+// 实例:旧措辞 "glasses/visor" 混写给模型两个选项,Krea-2 对 visor 的科幻先验更强,
+// 挂脖老花镜被画成金属护目镜)。检测到什么写什么,绝不混写;挂脖镜(hanging+cord/neck)
+// 保持挂脖形态、不架上眼睛。low = 特征短语小写拼接串。
+func manjuEyeClsFor(low string) string {
+	has := func(kws ...string) bool {
+		for _, k := range kws {
+			if strings.Contains(low, k) {
+				return true
+			}
+		}
+		return false
+	}
+	if has("glasses") && has("hanging") && (has("cord") || has("neck")) {
+		return "big sparkling eyes, the character's signature glasses hanging on a cord around the neck, not worn over the eyes"
+	}
+	switch {
+	case has("visor"):
+		return "big sparkling eyes behind the character's signature visor, exactly the same visor as the reference portrait"
+	case has("goggles"):
+		return "big sparkling eyes behind the character's signature goggles, exactly the same goggles as the reference portrait"
+	case has("eyepatch"):
+		return "big sparkling eye visible on the uncovered side, the character's signature eyepatch kept exactly as the reference portrait"
+	case has("monocle"):
+		return "big sparkling eyes with the character's signature monocle, exactly the same monocle as the reference portrait"
+	case has("scanner"):
+		return "big sparkling eyes with the character's signature eye scanner device kept exactly as the reference portrait"
+	case has("glasses"):
+		return "big sparkling eyes behind the character's eyeglasses, wearing exactly the same glasses as the reference portrait"
+	}
+	return "big sparkling glossy eyes"
+}
+
+// manjuHasArmor 角色卡是否真有盔甲元素(2026-08-28 林小满Q版左肩金属护甲实例):Q 版
+// 手办质感模板的 armor 材质词对无甲角色是污染——模型凭空给现代人画护甲;armor 材质
+// 描述只对卡面真带盔甲的角色注入。词表与着装词表正则(manjuClothKW)盔甲段对齐,
+// 不含 helmet(现代安全帽也是 helmet,误判会凭空画甲)。
+func manjuHasArmor(m map[string]any) bool {
+	vs, _ := m["views"].(map[string]any)
+	blob := strings.ToLower(str(m["image_prompt"]) + " " + str(m["appearance"]) + " " + str(vs["q"]))
+	for _, kw := range []string{"armor", "armour", "breastplate", "pauldron", "gauntlet", "chainmail", "铠甲", "盔甲", "甲胄"} {
+		if strings.Contains(blob, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 func manjuQPrompt(m map[string]any) string {
 	vs, _ := m["views"].(map[string]any)
 	base := str(vs["q"])
@@ -3386,6 +3572,11 @@ func manjuQPrompt(m map[string]any) string {
 		p := base + ", chibi cute version of the same beast creature as in the reference image, same species, same body color and markings, small adorable chibi beast form, cute rounded chibi proportions"
 		if anchor := manjuHairAnchor(m); anchor != "" {
 			p = p + ", " + anchor
+		}
+		// 2026-08-28 毛色显式锁(猫·二两:主图橘白,Q版随机出黑灰狸花):高重绘下
+		// "same body color" 引用式不够,色名必须显式进文本(与人形 HAIR LOCK 同级)。
+		if fur := manjuFurAnchor(m); fur != "" {
+			p = p + ", " + fur
 		}
 		if ap != "" {
 			p = p + ", distinct creature features: " + ap
@@ -3435,16 +3626,22 @@ func manjuQPrompt(m map[string]any) string {
 			// 2026-08-28 二修(韩天枢Q版三轮丢眼镜):base 的 "big sparkling glossy eyes" 大亮眼
 			// 构成与眼镜冲突,模型永远优先画无遮挡大眼——含眼镜/眼罩类特征时,构成直接改写为
 			// 「戴着该角色标志眼镜的大眼」,让特征成为构成的一部分而非附加锁。
-			if strings.Contains(low, "glasses") || strings.Contains(low, "visor") || strings.Contains(low, "goggles") ||
-				strings.Contains(low, "eyepatch") || strings.Contains(low, "monocle") || strings.Contains(low, "scanner") {
-				eyeCls = "big sparkling eyes behind the character's signature eyewear, wearing the exact same glasses/visor as the reference portrait"
-			}
+			// 2026-08-28 三修(老纪挂脖老花镜被画成赛博护目镜):改走 manjuEyeClsFor 精确
+			// 措辞——检测到什么写什么,不再 "glasses/visor" 混写给模型二选一。
+			eyeCls = manjuEyeClsFor(low)
 		}
 		// 2026-08-28 画风前置(用户反馈 Q 版变动漫):基底开头即声明 3D 手办形态——
 		// 开头位置对 Krea-2 权重最高,"chibi cute style" 裸开头是动漫邀请词
 		// (style=real 时 portraitPromptFor 走过插画分支,叠加标志特征角色 denoise 1.0
 		// 文本唯一画风源 → 2D 赛璐璐动漫)。
-		base = "3D rendered cute chibi collectible toy figure, about 3-head-tall chibi proportions, a large round head taking about one third of the total body height (leaving room on the body for outfit details), " + eyeCls + ", " + handCls + ", soft round face with a small cute mouth, adorable expression with rosy cheeks, compact mini body following the character's original body build, adorable huggable figure, premium high-detail movie-grade CGI quality, cinematic studio lighting, physically accurate materials with realistic metal reflections on armor, detailed fabric weave and fur textures, octane-render level of finish"
+		// 2026-08-28 盔甲条件化(林小满Q版左肩金属护甲实例):armor 材质词只给真有
+		// 盔甲的角色,无甲角色用纯织物材质——凭空画甲的污染源。fur 同步去除(兽形走
+		// 兽形分支不经过此基底,人形角色的 fur 是无毛可画的污染词)。
+		mat := "physically accurate materials, detailed fabric weave textures"
+		if manjuHasArmor(m) {
+			mat = "physically accurate materials with realistic metal reflections on armor, detailed fabric weave textures"
+		}
+		base = "3D rendered cute chibi collectible toy figure, about 3-head-tall chibi proportions, a large round head taking about one third of the total body height (leaving room on the body for outfit details), " + eyeCls + ", " + handCls + ", soft round face with a small cute mouth, adorable expression with rosy cheeks, compact mini body following the character's original body build, adorable huggable figure, premium high-detail movie-grade CGI quality, cinematic studio lighting, " + mat + ", octane-render level of finish"
 	}
 	p := base
 	// 2026-08-28 标志性特征锁前置(用户实测:韩天枢Q版丢眼镜/屠夫丢眼罩+液压钳——特征锁排
@@ -5798,10 +5995,22 @@ func charViewPromptFor(ctx *manjuCtx, char, view string) string {
 			// 身份特征优先:image_prompt 含具体发色/胡须/服装,视图提示词必须带上;
 			// 性别锚(2026-08-26):高 denoise 重绘下防性别漂移(墨姨 side 长胡须)
 			if p := str(m["image_prompt"]); p != "" {
+				// 2026-08-28(猫·二两 full 画出人):兽形视图先过 manjuBeastStrip 剥
+				// 人互动子句+卡面 3D 人形锚(virtual digital human/BJD doll),并用
+				// 兽形视图后缀(禁衣服禁人)——旧人形后缀 standing pose/complete
+				// outfit/hairstyle 对四脚动物是穿衣服+拟人邀请。
+				beast := manjuIsBeast(m)
+				if beast {
+					p = manjuBeastStrip(p)
+				}
 				if view == "" || view == "front" {
 					return p + manjuViewGenderAnchor(m) // 半身立绘即正面主视图
 				}
-				return p + manjuViewGenderAnchor(m) + ", " + manjuViewSuffix(view) + manjuColorAnchor(m)
+				suffix := manjuViewSuffix(view)
+				if beast {
+					suffix = manjuBeastViewSuffix(view)
+				}
+				return p + manjuViewGenderAnchor(m) + ", " + suffix + manjuColorAnchor(m)
 			}
 				// 兜底:LLM 的 views.<view>
 				if view != "" {
@@ -5818,6 +6027,21 @@ func charViewPromptFor(ctx *manjuCtx, char, view string) string {
 		}
 	}
 	return "portrait of " + char + ", " + manjuAssetStyle(ctx.style) + ", upper body, detailed face, clean background"
+}
+
+// manjuBeastViewSuffix 兽形视图后缀(2026-08-28 猫·二两 full 全身照画出人:人形后缀
+// "standing pose / complete outfit visible / hairstyle silhouette" 对四脚动物是
+// 穿衣服+拟人邀请)——兽形视图只描述动物本体,显式禁衣服禁人。
+func manjuBeastViewSuffix(view string) string {
+	switch view {
+	case "full":
+		return "the complete animal body visible from nose to tail, natural quadruped animal pose, no clothing, no accessories, no human"
+	case "side":
+		return "90 degree side view of the same animal, full body animal silhouette, no human"
+	case "detail":
+		return "extreme close-up on the same animal's signature features (fur pattern / ears / eyes), sharp focus, no human"
+	}
+	return ""
 }
 
 // manjuViewSuffix 旧方案(无 views 字段)派生视图提示词的英文修饰后缀

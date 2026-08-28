@@ -1077,7 +1077,7 @@ def _detect_face_rect(im):
         if not os.path.exists(onnx):
             return None
         w, h = im.size
-        det = cv2.FaceDetectorYN.create(onnx, "", (w, h), score_threshold=0.5)
+        det = cv2.FaceDetectorYN.create(onnx, "", (w, h), score_threshold=0.4)
         faces, _ = det.detect(cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR))
         if faces is None or len(faces) == 0:
             return None
@@ -1129,7 +1129,10 @@ def cmd_facecrop(args):
         left = int(min(max(cx - cw / 2.0, 0), w - cw))
         print("  ✂️ 人脸检测命中:脸框 %dx%d,以脸为中心裁切" % (fw, fh))
     else:
-        top, bot = int(h * 0.08), int(h * 0.52)  # 启发式:垂直 8%-52%,检测失败兜底
+        # 启发式:垂直 8%-88%(2026-08-28 标尺实测:单人白底方形主图头顶约20%、
+        # 下巴约70%——旧窗口 8%-52% 下沿切掉口鼻,8%-70% 下沿贴下巴线仍切嘴;
+        # 88% 下留约 0.35 脸高余量含下巴+脖颈,对齐检测命中分支的比例)
+        top, bot = int(h * 0.08), int(h * 0.88)
         ch = bot - top
         cw = int(ch * ratio)
         if cw > w:  # 目标窗口超宽(竖图定妆照):限宽后按比例缩高
@@ -1138,9 +1141,9 @@ def cmd_facecrop(args):
             bot = top + ch
         left = (w - cw) // 2
         if getattr(args, "beast", False):
-            print("  ✂️ 兽类角色:按启发式窗口(垂直 8%-52% 水平居中)裁切兽首参考")
+            print("  ✂️ 兽类角色:按启发式窗口(垂直 8%-88% 水平居中)裁切兽首参考")
         else:
-            print("  ✂️ 人脸检测未命中,按启发式窗口(垂直 8%-52% 水平居中)裁切")
+            print("  ✂️ 人脸检测未命中,按启发式窗口(垂直 8%-88% 水平居中)裁切")
     crop = im.crop((left, top, left + cw, bot))
     # 放大到目标分辨率(只放不放缩,放大后脸部占满参考帧)
     scale = min(th / crop.height, tw / crop.width)

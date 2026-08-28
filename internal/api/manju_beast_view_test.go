@@ -137,11 +137,11 @@ func TestQPromptToyStyleAnchor(t *testing.T) {
 
 // 视图/Q 代数:兽类锚与性别老态修正上线必须 bump(存量坏产物自愈重出)
 func TestViewQGenBumped(t *testing.T) {
-	if manjuViewGen < 8 {
-		t.Errorf("兽类视图锚上线后 views_gen 必须 ≥8,当前 %d", manjuViewGen)
+	if manjuViewGen < 9 {
+		t.Errorf("兽形视图修复(兽形后缀+剥人形锚)上线后 views_gen 必须 ≥9,当前 %d", manjuViewGen)
 	}
-	if manjuQGen < 19 {
-		t.Errorf("Q 版电影级渲染锚上线后 q_gen 必须 ≥19,当前 %d", manjuQGen)
+	if manjuQGen < 20 {
+		t.Errorf("Q 版提示词污染审计(armor条件化/eyeCls精确化)上线后 q_gen 必须 ≥20,当前 %d", manjuQGen)
 	}
 }
 
@@ -168,10 +168,10 @@ func TestQTwoPassPrompts(t *testing.T) {
 	if len(form) > 900 {
 		t.Errorf("形态段超长(%d>900): %s", len(form), form)
 	}
-	// 特征进形态段(眼镜类)
+	// 特征进形态段(眼镜类;2026-08-28 eyeCls 精确化:普通眼镜措辞含 glasses,不再混写 visor)
 	glasses := map[string]any{"gender": "男", "image_prompt": "a cyberpunk CEO with round glasses"}
-	if f2 := manjuQFormPrompt(glasses); !strings.Contains(f2, "eyewear") && !strings.Contains(f2, "GLASSES") {
-		t.Errorf("特征应进形态段构成: %s", f2)
+	if f2 := manjuQFormPrompt(glasses); !strings.Contains(f2, "glasses") || strings.Contains(f2, "visor") {
+		t.Errorf("特征应进形态段构成且不混写 visor: %s", f2)
 	}
 	// 兽类两段
 	beast := map[string]any{"species": "灵宠", "image_prompt": "a small golden spirit beast"}
