@@ -1414,6 +1414,25 @@ func scanStoryboardDir(dir, episode string) ([]sbItem, string) {
 	if sd := filepath.Join(dir, "素材", "分镜脚本"); dirExists(sd) {
 		scanDirs = append(scanDirs, sd)
 	}
+	// 2026-08-29 递归一层子目录(书父目录检测):用户选小说库根(如 D:\Ai\NiliX\novel,内含
+	// 多本书)时,各书分镜脚本在 <书>/素材/分镜脚本 下——只扫两层会报「未检测到」。
+	// 子目录各自再扫「本层 + 素材/分镜脚本」(书的结构),不无限递归(防全盘扫)。
+	entries0, rerr0 := os.ReadDir(dir)
+	if rerr0 == nil {
+		for _, e := range entries0 {
+			if !e.IsDir() {
+				continue
+			}
+			sub := filepath.Join(dir, e.Name())
+			if strings.EqualFold(e.Name(), "素材") {
+				continue // 已单独处理
+			}
+			scanDirs = append(scanDirs, sub)
+			if sd := filepath.Join(sub, "素材", "分镜脚本"); dirExists(sd) {
+				scanDirs = append(scanDirs, sd)
+			}
+		}
+	}
 	for _, sd := range scanDirs {
 		entries, rerr := os.ReadDir(sd)
 		if rerr != nil {

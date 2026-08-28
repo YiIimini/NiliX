@@ -4376,7 +4376,11 @@
     /* 文件选择 */
     openPicker(mode) {
       const cur = mode === "create" ? this.createNovel : (mode === "scan" || mode === "scan-create" ? this.scanDir : this.novel);
-      const start = cur ? dirOf(cur) : "C:/Mi/Ai/WorkBench/novel";
+      // 起始目录:上次选择 > 真实小说库根(后端注入,自包含部署不再硬编码 C 盘旧路径——
+      // 2026-08-29 用户实测:书已迁 D:\Ai\NiliX\novel,旧起始目录 C:/Mi/Ai/WorkBench/novel 不存在,
+      // 且无路径输入框、上级爬到 C:/ 无法跨盘 → 「检测不到又选不了」死锁)
+      const root = (window.NILIX_PATHS && window.NILIX_PATHS.novelRoot) || "C:/Mi/Ai/WorkBench/novel";
+      const start = cur ? dirOf(cur) : root;
       this.picker = { mode, dir: start, entries: [], error: "" };
       this.listDir(start, true); // 首次:压新层(父弹窗保留,多级弹窗)
     },
@@ -4407,13 +4411,18 @@
           ? `<button id="mp-adopt" class="hrs-btn hrs-btn-primary">检测此目录</button>`
           : "");
       const html = `<div class="manju-picker">
-          <div class="manju-row">
+          <div class="manju-row" style="flex-wrap:wrap;gap:6px">
             <span class="manju-meta manju-picker-path">${esc(p.dir)}</span>
             ${adoptDir}
             <button id="mp-up" class="hrs-btn">上级</button>
             <button id="mp-cancel" class="hrs-btn">取消</button>
           </div>
-          ${p.error ? `<div class="manju-err-text">${esc(p.error)}</div>` : ""}
+          <div class="manju-row" style="margin-top:6px">
+            <input id="mp-jump" style="flex:1;min-width:220px;padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:inherit;font-size:13px" placeholder="输入任意目录路径直达(如 D:/Ai/NiliX/novel/书名),回车或点前往"
+              value="${esc(p.dir)}" spellcheck="false">
+            <button id="mp-go" class="hrs-btn">前往</button>
+          </div>
+          ${p.error ? `<div class="manju-err-text">${esc(p.error)}<br>💡 目录需在允许范围内(小说库/漫剧/Comfy 目录);也可从上方列表逐级进入</div>` : ""}
           <div class="manju-filelist">${entries || '<div class="manju-empty">空目录</div>'}</div>
         </div>`;
       const title = p.mode === "create" ? "选择小说目录" : (p.mode === "scan" || p.mode === "scan-create" ? "选择目录检测分镜脚本" : "选择小说文件");
@@ -4425,6 +4434,13 @@
       );
       $("mp-up").addEventListener("click", () => this.listDir(dirOf(p.dir)));
       $("mp-cancel").addEventListener("click", () => this.closeModal());
+      // 路径直达:输入任意路径回车/点前往 → listDir(白名单外 fs/list 会拒并显示错误提示)
+      const jumpTo = () => {
+        const v = ($("mp-jump").value || "").trim().replace(/^["']|["']$/g, "");
+        if (v) this.listDir(v);
+      };
+      $("mp-go").addEventListener("click", jumpTo);
+      $("mp-jump").addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); jumpTo(); } });
       if (p.mode === "create") {
         $("mp-adopt").addEventListener("click", () => this.pickDir(p.dir));
       } else if (p.mode === "scan") {
