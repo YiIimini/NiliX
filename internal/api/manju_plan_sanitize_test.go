@@ -301,3 +301,27 @@ func TestManjuStripDanglingPictureRefs(t *testing.T) {
 		t.Errorf("超界道具引用应剥除, got: %s", out2)
 	}
 }
+
+// 回归(2026-08-28 过捞修复):h3 捞人第一版用「卡内特征词重叠≥3」,角色卡共享模板词
+// (cinematic/photorealistic/doll/aesthetic)让镜3 把 12 个角色全部捞进 chars(渲染挂图
+// 与人物纪律全乱)。收紧为卡间独有词(仅 1 卡有的词)重叠≥2 + 主体句限定 subject_
+// definitions 区:镜3 只捞回陈默(plaid/flannel/black-framed glasses 独有),赵德柱不捞。
+func TestManjuCharsFromH3UniqueWords(t *testing.T) {
+	cards := []map[string]any{
+		{"id": "陈默", "image_prompt": "Cinematic film still, photorealistic, virtual digital human, a lean 32-year-old software engineer with short messy black hair, dark circles, black-framed glasses, dark-gray plaid flannel shirt"},
+		{"id": "赵德柱", "image_prompt": "Cinematic film still, photorealistic, virtual digital human, a middle-aged manager with comb-over hair, navy polo shirt, gold watch on wrist"},
+		{"id": "林小满", "image_prompt": "Cinematic film still, photorealistic, virtual digital human, a young woman with long ponytail, bright orange hoodie, canvas sneakers"},
+	}
+	ids := []string{"陈默", "赵德柱", "林小满"}
+	h3 := "subject_definitions:\n<Subject 1> is the living form of Chen Mo in <Picture 1>, a lean engineer with short messy black hair, dark circles, black-framed glasses, plaid flannel shirt with sleeves rolled to the elbows.\n<Subject 2> is the dark reflective monitor face in <Picture 2>, glowing cold white.\n\nsummary:\n[reference generation] test.\n\ndetailed_description:\nThe navy polo manager walks in with his gold watch and comb-over."
+	got := manjuCharsFromH3(h3, cards, ids)
+	if len(got) != 1 || got[0] != "陈默" {
+		t.Fatalf("镜3 应只捞回陈默(独有词 plaid/flannel/glasses), got %v", got)
+	}
+	// detailed_description 提到赵德柱外观也不能捞(主体句限定 subject_definitions 区)
+	for _, c := range got {
+		if c == "赵德柱" {
+			t.Fatal("主体区外的描述词不得触发捞人")
+		}
+	}
+}

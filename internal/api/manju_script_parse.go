@@ -210,8 +210,11 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 // 8=场景匹配根治(2026-08-28 EP01 事故:办公室戏 18 镜全挂封面卡「城市夜景大远景」):
 //   ①matchSceneByAlias 重写为场景卡动态特征词滑窗匹配(旧硬编码别名表是美食书的规则,
 //   跨书污染);②封面备用卡不入匹配池与 scenes;③最高频兜底需 ≥2 票(1 票不当选);
-//   ④空镜向后继承(特写镜归前后场景);⑤全失效宁可留空不挂错图。
-const manjuScriptParseVer = 8
+//   ④空镜向后继承(特写镜归前后场景);⑤全失效宁可留空不挂错图;
+// 9=h3 捞人收紧(2026-08-28 过捞修复:卡间独有词重叠≥2 替代卡内词重叠≥3——共享模板词
+//   cinematic/photorealistic/doll 让镜3 把 12 角色全捞进 chars;主体句限定 subject_
+//   definitions 区,detailed_description 长句与任何卡都能凑够重叠)。
+const manjuScriptParseVer = 9
 
 // scriptParsePlan 脚本直出程序化解析入口。
 // 解析出 characters/scenes/shots/directing/episode_title/chapters=script。
@@ -1251,19 +1254,49 @@ func scriptDirectingFrom(text string) map[string]any {
 // 别名表是通用电影语法词 → 场景类型,命中后还需该场景卡描述含对应关键词才算(防错配)。
 // manjuCharsFromH3 从六段式主体句捞回漏判登场角色(2026-08-28 EP01 人物不一致根治)。
 // 脚本画面列常以「屏幕前的男人」代称不写角色名,但 h3 的 subject_definitions 会照角色卡
-// 写英文外观(short messy black hair, black-framed glasses…)——主体句与角色卡英文
-// image_prompt 的特征词重叠 ≥3 即认定该角色在场(镜3 "Chen Mo in <Picture 1>" 与陈默卡
-// 高重叠 → 捞回,渲染端挂上参考图,<Picture 1> 编号自然对齐)。
-// 返回按 charIDs 顺序的命中角色;人名直写(中文名出现在 h3)优先直接命中。
+// 写英文外观(short messy black hair, black-framed glasses…)——主体句与角色卡的
+// **独有外观词**重叠 ≥2 即认定在场。独有词=该卡有而其它卡没有(第一版用"卡内特征词
+// 重叠≥3"过捞:角色卡共享模板词 cinematic/photorealistic/doll/aesthetic,镜3 把 12 个
+// 角色全部捞进 chars,渲染挂图与人物纪律全乱——消共享词后 Chen Mo 的 plaid/flannel/
+// black-framed glasses 只在陈默卡出现,判据才成立)。
 func manjuCharsFromH3(h3 string, charCards []map[string]any, charIDs []string) []string {
-	// subject_definitions 区的 <Subject N> is … 行(人物主体句;六段式逐镜都有,行内引用 Picture)
+	// 主体句:subject_definitions 区内含 <Subject N> is 的行(第一版抓全文行,detailed_
+	// description 长句与任何卡都能凑够重叠——必须限定主体定义区)
 	subLines := []string{}
-	subLines = reH3SubjectLine.FindAllString(h3, -1)
-	for i := range subLines {
-		subLines[i] = strings.ToLower(subLines[i])
+	if i := strings.Index(strings.ToLower(h3), "subject_definitions"); i >= 0 {
+		section := h3[i:]
+		for _, stop := range []string{"summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"} {
+			if j := strings.Index(strings.ToLower(section), stop); j > 0 {
+				section = section[:j]
+			}
+		}
+		for _, line := range strings.Split(section, "\n") {
+			low := strings.ToLower(line)
+			if strings.Contains(low, "<subject") && strings.Contains(low, " is ") {
+				subLines = append(subLines, low)
+			}
+		}
 	}
 	if len(subLines) == 0 {
 		return nil
+	}
+	// 卡间独有词:word -> 拥有它的卡数;只留仅 1 卡有的词(共享模板词/通用美术词全消)
+	wordOwners := map[string]int{}
+	cardWords := map[string]map[string]bool{}
+	for _, sc := range charCards {
+		id, _ := sc["id"].(string)
+		prompt, _ := sc["image_prompt"].(string)
+		if id == "" || prompt == "" {
+			continue
+		}
+		words := map[string]bool{}
+		for _, w := range manjuEnFeatureWords(prompt) {
+			words[w] = true
+		}
+		cardWords[id] = words
+		for w := range words {
+			wordOwners[w]++
+		}
 	}
 	h3Low := strings.ToLower(h3)
 	var out []string
@@ -1271,43 +1304,30 @@ func manjuCharsFromH3(h3 string, charCards []map[string]any, charIDs []string) [
 		if cid == "" {
 			continue
 		}
-		// 中文名直写:h3 里出现角色中文名(脚本文风混杂时兜底)
+		// 中文名直写兜底(脚本文风混杂时)
 		if strings.Contains(h3Low, strings.ToLower(cid)) {
 			out = append(out, cid)
 			continue
 		}
-		for _, sc := range charCards {
-			if id, _ := sc["id"].(string); id != cid {
-				continue
-			}
-			prompt, _ := sc["image_prompt"].(string)
-			if prompt == "" {
-				continue
-			}
-			cardWords := manjuEnFeatureWords(prompt)
-			if len(cardWords) == 0 {
-				continue
-			}
-			for _, line := range subLines {
-				overlap := 0
-				for _, w := range cardWords {
-					if strings.Contains(line, w) {
-						overlap++
-					}
-				}
-				if overlap >= 3 {
-					out = append(out, cid)
-					break
+		words := cardWords[cid]
+		if len(words) == 0 {
+			continue
+		}
+		for _, line := range subLines {
+			overlap := 0
+			for w := range words {
+				if wordOwners[w] == 1 && strings.Contains(line, w) {
+					overlap++
 				}
 			}
-			break
+			if overlap >= 2 {
+				out = append(out, cid)
+				break
+			}
 		}
 	}
 	return out
 }
-
-// reH3SubjectLine 六段式主体定义行:<Subject N> is … (到行尾)
-var reH3SubjectLine = regexp.MustCompile(`(?im)^.*<Subject\s+\d+>\s+is\s+.+$`)
 
 // manjuEnFeatureWords 英文提示词特征词集(小写、去停用词,只留 ≥3 字母实词):
 // 用于主体句 ↔ 角色卡的重叠匹配
