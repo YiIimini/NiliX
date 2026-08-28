@@ -1549,6 +1549,9 @@ type manjuShot struct {
 // LLM 直出或素材卡带来的 id 可能含 Windows 非法字符(如 王鹏飞"王胖" 的英文双引号),
 // 落盘时直接报「文件名语法不正确」。在 loadPlan 读盘后与 writePlan 落盘前统一清洗,
 // 存量方案与新方案走同一套名字;幂等可重复调用,清洗后撞名的 id 追加下划线保唯一。
+// 2026-08-28 伪场景过滤:素材全局段(通用负向词/统一风格前缀/质量后缀等)被 LLM 当
+// 场景输出(实测 scenes[0]=通用负向词,白烧一张 GPU)——黑名单同 reManjuGlobalSection
+// 词源;裸「通用」不进黑名单(防误伤"通用仓库"类真场景名)。
 func manjuSanitizePlanIDs(plan map[string]any) {
 	if plan == nil {
 		return
@@ -1570,7 +1573,29 @@ func manjuSanitizePlanIDs(plan map[string]any) {
 		renames[raw] = safe
 		return safe
 	}
-	for _, key := range []string{"characters", "scenes"} {
+	// 伪场景过滤:素材全局配置段不是场景(id 命中黑名单的整条删除,并清镜头引用)
+	dropScene := func(id string) bool {
+		for _, k := range []string{"负向", "负面", "negative", "统一风格", "质量后缀", "统一前缀", "色锚", "记忆点", "全书"} {
+			if strings.Contains(strings.ToLower(id), strings.ToLower(k)) {
+				return true
+			}
+		}
+		return false
+	}
+	var keptScenes []any
+	for _, x := range anyArr(plan["scenes"]) {
+		if m, ok := x.(map[string]any); ok {
+			if id := str(m["id"]); id != "" {
+				if dropScene(id) {
+					continue
+				}
+				m["id"] = assign(id)
+			}
+		}
+		keptScenes = append(keptScenes, x)
+	}
+	plan["scenes"] = keptScenes
+	for _, key := range []string{"characters"} {
 		for _, x := range anyArr(plan[key]) {
 			if m, ok := x.(map[string]any); ok {
 				if raw := str(m["id"]); raw != "" {

@@ -120,3 +120,40 @@ func TestManjuWritePlanSanitizesIDsOnDisk(t *testing.T) {
 		t.Fatalf("落盘 JSON 应为清洗后 id: %s", b)
 	}
 }
+
+// 伪场景过滤回归(2026-08-28:素材全局段「通用负向词」被 LLM 当场景输出,
+// scenes[0]=通用负向词 白烧一张 GPU 生成无意义场景图)
+func TestManjuSanitizePlanIDsDropsPseudoScenes(t *testing.T) {
+	plan := map[string]any{
+		"scenes": []any{
+			map[string]any{"id": "通用负向词"},
+			map[string]any{"id": "开放工位区"},
+			map[string]any{"id": "统一风格前缀"},
+			map[string]any{"id": "通用仓库"}, // 真场景名含「通用」,不得误删
+		},
+		"characters": []any{map[string]any{"id": "陈默"}},
+	}
+	manjuSanitizePlanIDs(plan)
+	ids := []string{}
+	for _, x := range anyArr(plan["scenes"]) {
+		ids = append(ids, str(x.(map[string]any)["id"]))
+	}
+	for _, bad := range []string{"通用负向词", "统一风格前缀"} {
+		for _, id := range ids {
+			if id == bad {
+				t.Fatalf("伪场景 %q 应被过滤, got scenes: %v", bad, ids)
+			}
+		}
+	}
+	for _, want := range []string{"开放工位区", "通用仓库"} {
+		found := false
+		for _, id := range ids {
+			if id == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("真场景 %q 不得误删, got scenes: %v", want, ids)
+		}
+	}
+}
