@@ -521,6 +521,10 @@ func pollBot() Bot {
 // ZCodeRunning ZCode 桌面端是否在运行（启动前防重复）。
 func ZCodeRunning() bool { return probeZCode().Running }
 
+// ZCodePID 当前 ZCode 桌面端最小存活 pid(0=未运行),供停止用——
+// 审计 2026-08-28:按 PID 杀而非按镜像名杀,避免误杀用户手动开的第二个实例。
+func ZCodePID() int { return probeZCode().Pid }
+
 // BotPID 当前存活的 bot 运行时 pid（0=无），供停止/重启使用。
 func BotPID() int { return pollBot().Pid }
 

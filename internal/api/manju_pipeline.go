@@ -2562,15 +2562,39 @@ const manjuQStrength = 0.93
 //   ③Q版应基于全身照)——视图 prompt 剥 Front-facing portrait 前缀(主定妆特写构图污染视图)、
 //   full/side 重绘强度提高(full 0.88 真全身/side 0.90 真 90 度侧面)、Q版 initImage 改用
 //   full 全身照、角色板 3D 档措辞 3D 化+denoise 降 0.86(过度重绘丢主图形象→动漫设定卡先验)。
-const manjuViewGen = 6
+// 7=下半身着装锚(2026-08-27 用户反馈:小男孩全身图下半身裸露没穿裤子)——full/side 视图锚
+//   补完整下装硬约束+未成年人着装护栏(manjuMinorGuard)+负面词补腰部以下裸露词组,
+//   存量 full/side 视图必须全部重出。
+// 8=兽类视图锚分流(2026-08-28 用户反馈:灵宠小貔 full/Q 渲染出人形)——兽类用兽形锚+
+//   manjuBeastStrip 剥 image_prompt 人互动子句,人形着装/未成年人护栏不参与。
+const manjuViewGen = 8
 
 // manjuQGen Q 版生成逻辑代数(独立于 views_gen,只清 _q.png):2=发色锁(HAIR LOCK
 // 显式点名发色/毛色,高重绘下双色挑染不再被平均成单色;2026-08-27 用户反馈叶澜黑白发
 // Q 版变纯黑);3=着装锁(OUTFIT LOCK+禁敞开外套露胸+BJD 素体措辞修正,2026-08-27
 // 用户反馈男性 Q 版袒胸露乳);4=着装锁强化(袍服/儒袍/官袍敞胸全覆盖:宽袍交领闭合/
 // 覆盖锁骨与胸口/服装子句剥敞开感词,2026-08-27 用户反馈柳含烟·魏鹤年·魏琮 Q 版
-// 宽袍敞开露胸,旧 "zipped and buttoned" 措辞对无拉链的古风袍服无效)。
-const manjuQGen = 8
+// 宽袍敞开露胸,旧 "zipped and buttoned" 措辞对无拉链的古风袍服无效);
+// 9=兽类剥人+性别/老态修正(2026-08-28 用户反馈废根噬天三症状:①灵宠 Q 版出人形
+//   =image_prompt 人互动子句(cultivator's shoulder)未剥 ②顾清寒男 Q 版被画成女
+//   =阴柔美男词+chibi 幼态先验,masculine 单词压不住 ③80岁玄机老人 Q 版年轻化
+//   =无胡须词老者被 no beard 一刀切剃须+幼态);
+// 10=fullRef 快照时机修复(2026-08-28 用户实锤「Q版都没按全身照生成」:fullRef 循环前
+//   快照,全新项目 _full.png 尚未生成 → Q 恒「基于主图」方形脸图重绘=畸形+身份漂移,
+//   修复后 Q 分支生成时重新解析);
+// 11=Q 版画风与项目风格档解耦(2026-08-28 用户反馈「Q版变成动漫形象」:style=real 落
+//   "chibi illustration" 插画分支+标志特征角色 denoise 1.0 文本唯一画风源 → 2D 赛璐璐
+//   动漫;统一 3D 手办潮玩锚+基底前置+禁 2D 平面形态);
+// 12=Q 版提示词紧凑化(2026-08-28 用户反馈「同逻辑有的Q版有的手办有的动漫」:cfg=1.0 蒸馏
+//   无负面通道,提示词随角色卡厚薄 2000~4300 漂移→遵循度抽奖;统一紧凑骨架压回 ~2000
+//   定案量级,着装锁换 manjuQOutfitCompact,删重复特征锁/长覆盖行/长幼态行);
+// 13=Q 版底图改回正面主图+画布方形同幅(2026-08-28 用户裁决:全身照底图多轮不理想——
+//   7 头身立绘构图牵引+init 脸部像素小身份信号弱;主图大脸身份信号强,1024 方形同幅
+//   消除晨间「方图拉竖幅」形变根因);
+// 14=两段式生成·形态→身份(2026-08-28 终局:单次 img2img 死结=低重绘保构图(主图=半身
+//   写实残留)高重绘丢身份;①形态段纯文生图短提示词锁两头身3D手办+特征进构成,
+//   ②身份段以形态段产物为底 0.5 低重绘注入发色/服装/性别/面容)。
+const manjuQGen = 19
 
 // manjuPortraitGen 主图代数(2026-08-27 六修):单人/纯白背景/服装严格锚上线时 bump,
 // stageAssets 检测到落后即清全部旧主图重出(视图/Q版联动)。
@@ -2734,7 +2758,35 @@ func manjuBeardEnforce(m map[string]any) string {
 	if manjuHasBeard(m) && !manjuIsFemale(m) && !manjuIsYoungMale(m) {
 		return ", keeping the character's beard and mustache"
 	}
+	// 老者(2026-08-28 用户反馈「老的Q版形象那么年轻」):无胡须词的老年男被一刀切
+	// no beard 强制剃须——chibi 幼态先验+无胡须=年轻化。老者改为跟随主图胡须+显式
+	// 老态特征锚(皱纹/苍老皮肤/明确老年人),压制 chibi 幼态化。
+	if manjuIsOldMale(m) {
+		return ", facial hair exactly as shown in the reference portrait, elderly look with a wrinkled aged face, sagging aged skin, clearly an old elderly man, never a young face"
+	}
 	return ", no beard, no mustache, no facial hair"
+}
+
+// manjuIsOldMale 老年男性判定(age 老年词 或 数字年龄 ≥50 岁;仅男性)
+func manjuIsOldMale(m map[string]any) bool {
+	if m == nil || manjuIsFemale(m) {
+		return false
+	}
+	if str(m["gender"]) != "男" {
+		return false
+	}
+	age := str(m["age"]) + " " + str(m["appearance"]) + " " + str(m["image_prompt"])
+	for _, kw := range []string{"老年", "老者", "花甲", "暮年", "古稀"} {
+		if strings.Contains(age, kw) {
+			return true
+		}
+	}
+	for _, mm := range regexp.MustCompile(`(\d+)\s*(?:years?[- ]old|岁)`).FindAllStringSubmatch(age, -1) {
+		if n, err := strconv.Atoi(mm[1]); err == nil && n >= 50 {
+			return true
+		}
+	}
+	return false
 }
 
 // manjuSanitizeAppearance 胡须净化:女性/年轻男性的面容锚剥离胡须词(防 LLM 误给胡须被锚强制画出来)
@@ -2815,16 +2867,17 @@ func (ctx *manjuCtx) portraitPromptFor(prompt string, m map[string]any, frontFac
 		// Q 版:chibi 专用锚 + 显式禁写实人物(防写实形象混入 Q 版)。
 		// 2026-08-27 措辞修正:裸 "BJD doll chibi aesthetic" 会唤起 BJD 素体(无衣服
 		// 娃体)先验,男性潮玩先验更是敞开外套露胸——一律强调 fully dressed 完整着装。
+		// 2026-08-28 画风定案(用户反馈「Q版变成动漫形象」):Q 版=3D 手办/潮玩收藏品
+		// 形态,**不随项目风格档分流**——旧 else 分支(style=real 等)拼 "chibi
+		// illustration style" 是动漫邀请词,标志特征角色 denoise 1.0(文本唯一画风源)
+		// 时必出 2D 赛璐璐动漫;统一 3D 手办锚(与历史定案「呆萌手办感」一致)。
 		if !strings.Contains(p, "NOT a realistic human") {
-			if manjuStyleIs3D(ctx.style) {
-				p = p + ", 3D rendered chibi collectible figure style, fully dressed BJD doll in complete outfit, rounded toy-like shading, big glossy eyes"
-			} else {
-				p = p + ", cute stylized chibi illustration style"
-			}
-			p = p + ", NOT a realistic human, no realistic skin texture, no realistic proportions, no photorealism"
+			p = p + ", 3D rendered chibi collectible figure in complete outfit, cinematic movie-grade CGI rendering, dramatic studio lighting with soft rim light, physically based materials, realistic surface detail on armor and fabric, big glossy eyes"
+			p = p + ", NOT a photograph of a real person, not real human proportions — but movie-grade cinematic realism in materials, lighting and surface detail"
 		}
-		// 防日漫(2026-08-27 老龟 Q 版日漫脸):chibi 分支此前提前 return 没吃到拟漫锚
-		p = p + ", NOT a Japanese anime style, no japanese-style face, no japanese anime eyes, Chinese semi-realistic CG character style"
+		// 防日漫(2026-08-27 老龟 Q 版日漫脸;2026-08-28 强化:不止脸,整个 2D 平面
+		// 插画形态都要禁——赛璐璐上色/描边/平面感是 denoise 1.0 下的默认去向)
+		p = p + ", NOT a Japanese anime style, no japanese-style face, no japanese anime eyes, NOT a 2D flat anime illustration, not cel-shaded, no flat colors, no outlines around the figure, Chinese semi-realistic CG character style, a physical 3D collectible toy figure not a drawing"
 		if ap != "" && !strings.Contains(p, ap) {
 			p = p + ", distinct unique face with: " + ap
 		}
@@ -2878,14 +2931,105 @@ func manjuQStrip(s string) string {
 // 加 feet visible/standing on the ground 头到脚约束(用户反馈②:full 出半身照)。
 // 2026-08-27 提为包级:视图生成与「复制提示词」接口(charImagePrompt)共用同一事实源。
 var manjuViewAnchors = map[string]string{
-	"full":   "FULL BODY view, standing full figure from head to toe, entire body visible including feet and shoes, standing on the ground, full figure framing with margin above head and below feet, front view facing the camera",
-	"side":   "SIDE PROFILE view, face turned exactly 90 degrees to the side, strong profile silhouette, nose and chin clearly in profile, only one eye visible, head pointing sideways not toward the camera, full body seen from the side",
+	// 2026-08-27 用户反馈(小男孩全身图下半身裸露没穿裤子):全身视图锚此前只管
+	// 「全身可见+视角」,下半身着装零约束——image_prompt 常只写上衣(儿童角色尤甚),
+	// 下半身全靠模型自由发挥。full/side 补下半身硬锚:完整下装(裤/袍/裙随角色)、
+	// 腿脚全程着装到鞋,禁光腿/缺下装。
+	"full":   "FULL BODY view, standing full figure from head to toe, entire body visible including feet and shoes, standing on the ground, full figure framing with margin above head and below feet, front view facing the camera, wearing complete clothing on both upper and lower body, full lower-body garment (trousers, pants, robes or a skirt matching the character's outfit) fully covering the hips and legs down to the shoes, never bare legs, never missing trousers or skirt",
+	"side":   "SIDE PROFILE view, face turned exactly 90 degrees to the side, strong profile silhouette, nose and chin clearly in profile, only one eye visible, head pointing sideways not toward the camera, full body seen from the side, full lower-body garment (trousers, robes or skirt matching the character's outfit) fully covering the hips and legs, never bare legs",
 	"detail": "EXTREME CLOSE-UP detail shot, zoomed on the single most distinctive feature (ornament/pattern/hairstyle/scar), large detailed close-up composition, macro framing",
 }
 
 // manjuIdentityAnchor 身份锚:强约束多视图与主图同一个人——发色/发型/胡须/五官/服装逐项保留,
 // 防"白发老者侧面变黑发"(2026-08-24 用户反馈)
 const manjuIdentityAnchor = ", same character as the reference image (identical hair color and hairstyle, identical beard if present, identical facial features, identical costume colors and design)"
+
+// manjuBeastViewAnchors 兽类视图锚(2026-08-28 用户反馈:灵宠小貔 full/Q 渲染出人形人物):
+// 人形视图锚(FULL BODY standing figure/trousers/skirt 全是人衣语义)+image_prompt 里的
+// 人互动描述("sitting on a young cultivator's shoulder")叠加,禁词压不住矛盾(矛盾=并集)
+// → 兽类 full/side 必须用纯兽形锚:完整兽体占满画面、四足落地、无人无衣。
+var manjuBeastViewAnchors = map[string]string{
+	"full":   "FULL BODY view of the creature from head to tail, the complete beast body entirely filling the frame, front view facing the camera, purely animal creature form on four paws, absolutely no humans, no human body, no human figure, no human clothes",
+	"side":   "SIDE PROFILE view of the creature, the complete beast body seen from the side from head to tail, purely animal creature form on four paws, absolutely no humans, no human body, no human figure, no human clothes",
+	"detail": "EXTREME CLOSE-UP detail shot, zoomed on the creature's single most distinctive feature (markings/fur texture/eyes/horns), large detailed close-up composition, macro framing, no humans",
+}
+
+// manjuBeastIdentityAnchor 兽类身份锚:毛色/斑纹/物种跟随参考图(人形身份锚含 costume 服装词)
+const manjuBeastIdentityAnchor = ", the exact same creature as the reference image (identical species, identical fur or scale colors and markings, identical proportions)"
+
+// manjuBeastStrip 兽类 image_prompt 剥人元素(2026-08-28 实锤:小貔 image_prompt 含
+// "sitting on a young cultivator's shoulder"——正向人物描述入独照提示词,任何禁词都压不住,
+// 模型必然把那个人画出来;写实人像风格子句对兽形也是污染)。逗号切分剥含人互动/人形
+// 措辞的子句,再替换残余 character 措辞为 creature。
+func manjuBeastStrip(s string) string {
+	humanKw := regexp.MustCompile(`(?i)\b(?:shoulder|shoulders|in someone'?s? arms|held by|carried by|perched on|handler|owner|companion|cultivator|disciple|man|woman|boy|girl|person|people)\b|人肩|肩上|怀中|主人|弟子`)
+	parts := regexp.MustCompile(`[,.;，。；]`).Split(s, -1)
+	keep := []string{}
+	for _, part := range parts {
+		p := strings.TrimSpace(part)
+		if p == "" || humanKw.MatchString(p) {
+			continue
+		}
+		keep = append(keep, p)
+	}
+	out := strings.Join(keep, ", ")
+	out = regexp.MustCompile(`(?i)East Asian/Chinese character|East Asian character|Chinese character`).ReplaceAllString(out, "mythical creature")
+	out = regexp.MustCompile(`(?i)\bcharacter\b`).ReplaceAllString(out, "creature")
+	return strings.TrimSpace(out)
+}
+
+// manjuMinorGuard 未成年人着装护栏(2026-08-27 用户反馈:小男孩全身图下半身裸露没穿裤子):
+// 儿童角色是裸露风险最高的人群——image_prompt 常只写上衣(如 "7-year-old boy, striped
+// T-shirt"),下半身零描述时模型按儿童夏日先验自由发挥。age/appearance/image_prompt/
+// views 命中未成年人关键词即追加硬护栏:全身完整着装、仅露脸和手、家庭向设计。
+// 成年角色不加(避免"child"措辞污染成年人提示词);兽类不加(兽形无人类着装语义)。
+func manjuMinorGuard(m map[string]any) string {
+	if manjuIsBeast(m) {
+		return ""
+	}
+	vs, _ := m["views"].(map[string]any)
+	src := strings.Join([]string{str(m["age"]), str(m["appearance"]), str(m["image_prompt"]), str(vs["full"]), str(vs["q"])}, " ")
+	minor := regexp.MustCompile(`(?i)\b(?:boy|girl|child|kid|toddler)\b|童|孩|少年|少女|幼`).MatchString(src)
+	if !minor {
+		// 数字年龄仅 <18 算未成年("26-year-old woman"/"26岁" 不得误伤)
+		for _, mm := range regexp.MustCompile(`(?i)(\d+)\s*(?:years?[- ]old|岁)`).FindAllStringSubmatch(src, -1) {
+			if n, err := strconv.Atoi(mm[1]); err == nil && n > 0 && n < 18 {
+				minor = true
+				break
+			}
+		}
+	}
+	if !minor {
+		return ""
+	}
+	return ", CHILD DRESS CODE: this is an underage minor character, fully clothed in a complete age-appropriate outfit covering the torso, shoulders, arms, hips, legs and ankles, modest family-friendly design, absolutely no nudity anywhere on the body, no bare legs, no bare torso, no exposed skin except face and hands"
+}
+
+// charFullRef 全身照引用(拷贝到 ComfyUI input,返回 input 相对文件名;无全身照返回空)。
+// Q 版 img2img 的 init 用——chibi 是全身形态,主图是方形正脸特写,拿主图当 init 拉成
+// 竖版再 0.93 重绘=畸形/身份漂移双根源(2026-08-28 用户实测实锤)。
+func (ctx *manjuCtx) charFullRef(cid string) string {
+	fp := filepath.Join(ctx.assetsDir, "characters", sanitizeFileName(cid)+"_full.png")
+	if !fileExists(fp) {
+		return ""
+	}
+	refName := "dir_char_full_" + sanitizeFileName(cid) + ".png"
+	if copyFile(fp, filepath.Join(ctx.comfyInput, refName)) != nil {
+		return ""
+	}
+	return refName
+}
+
+// manjuViewPromptBuild 全身视图提示词统一构建(生成链与角色管理「复制提示词」共用同一函数,
+// 双侧口径恒一致):视角硬锚前置 + strip 清洗 + 身份锚后置 + 未成年人着装护栏。
+// 2026-08-28 兽类分流(用户反馈灵宠 full 出人形):兽类用兽形锚+兽类身份锚+剥人元素,
+// 人形着装/未成年人护栏不参与。
+func manjuViewPromptBuild(p string, view string, m map[string]any) string {
+	if manjuIsBeast(m) {
+		return manjuBeastViewAnchors[view] + ", " + manjuBeastStrip(manjuViewStrip(p)) + manjuBeastIdentityAnchor
+	}
+	return manjuViewAnchors[view] + ", " + manjuViewStrip(p) + manjuIdentityAnchor + manjuMinorGuard(m)
+}
 
 // manjuCharImagePrompt 角色<视图>形态图的最终生图提示词(2026-08-27 角色管理「复制提示词」用;
 // 与生成链同一套构建函数,复制到的即这张图生成时的真实口径):
@@ -2899,7 +3043,7 @@ func manjuCharImagePrompt(ctx *manjuCtx, m map[string]any, char, view, kind stri
 		p = manjuQPrompt(m)
 		frontFace = false
 	} else if kind != "gacha" && (view == "full" || view == "side" || view == "detail") {
-		p = manjuViewAnchors[view] + ", " + manjuViewStrip(charViewPromptFor(ctx, char, view)) + manjuIdentityAnchor
+		p = manjuViewPromptBuild(charViewPromptFor(ctx, char, view), view, m)
 		frontFace = false
 	} else {
 		p = charViewPromptFor(ctx, char, view)
@@ -2931,7 +3075,7 @@ func manjuViewStrip(s string) string {
 func manjuHairPhrases(m map[string]any) []string {
 	vs, _ := m["views"].(map[string]any)
 	sources := []string{str(m["image_prompt"]), str(m["appearance"]), str(vs["q"])}
-	kw := regexp.MustCompile(`(?i)hair|wolf-cut|ponytail|braids?|bangs|locks|mane|highlight|streak|发|鬃`)
+	kw := regexp.MustCompile(`(?i)hair|wolf-cut|ponytail|braids?|bangs|locks|mane|highlight|streak|fur|pelt|feathers?|发|毛|鬃`)
 	out := []string{}
 	seen := map[string]bool{}
 	for _, src := range sources {
@@ -2984,7 +3128,7 @@ var manjuLooseClean = regexp.MustCompile(`(?i)\b(?:loose|flowing|unbuttoned|unzi
 func manjuOutfitAnchor(m map[string]any) string {
 	vs, _ := m["views"].(map[string]any)
 	sources := []string{str(m["costume"]), str(m["image_prompt"]), str(vs["q"])}
-	kw := regexp.MustCompile(`(?i)wear|suit|jacket|coat|outfit|hoodie|dress|robe|gown|cloak|garment|clothing|clothes|shirt|uniform|sweater|vest|garb|服装|穿着|袍|衣|裙|衫|裳`)
+	kw := regexp.MustCompile(`(?i)wear|suit|jacket|coat|outfit|hoodie|dress|robe|gown|cloak|garment|clothing|clothes|shirt|uniform|sweater|vest|garb|armor|armour|breastplate|pauldron|gauntlet|helmet|chainmail|铠甲|盔甲|甲胄|服装|穿着|袍|衣|裙|衫|裳`)
 	out := []string{}
 	seen := map[string]bool{}
 	for _, src := range sources {
@@ -3013,6 +3157,52 @@ func manjuOutfitAnchor(m map[string]any) string {
 		" — torso and chest always fully covered by clothing, collar sits high and closed with overlapping lapels fully covering the collarbone and chest, robes gowns coats and jackets always fully closed at the chest, never an open robe, open coat or open jacket showing bare chest or cleavage"
 }
 
+// manjuFeatureKw 标志性视觉特征关键词(2026-08-28 用户实测:韩天枢Q版丢眼镜、屠夫Q版丢
+// 单眼扫描仪眼罩+猩红液压钳——Q版 denoise 0.93 高重绘下小配件最容易被模型"平均"掉,
+// 发色有 HAIR LOCK、服装有 OUTFIT LOCK,唯独面部/装备标志特征没有锁)。
+var manjuFeatureKw = regexp.MustCompile(`(?i)glasses|visor|eyepatch|monocle|goggles|scanner|scar\b|prosthetic|pincer|claw|hook|mask|tattoo|holographic|cybernetic|mechanical (?:eye|arm|leg)|tactical (?:eye|light)|glowing (?:red|blue|cyan|gold) (?:eye|lens|light)|headband|hairpin|ear ?rings?|halo|horns?|third eye|data-chain|data chain`)
+
+// manjuFeaturePhrases 提取角色卡里的标志性视觉特征子句(来源与 manjuHairPhrases 同法:
+// image_prompt 优先,按逗号/分号切分,命中 manjuFeatureKw 的子句全收,去重保序)。
+func manjuFeaturePhrases(m map[string]any) []string {
+	vs, _ := m["views"].(map[string]any)
+	sources := []string{str(m["image_prompt"]), str(m["appearance"]), str(vs["q"])}
+	out := []string{}
+	seen := map[string]bool{}
+	for _, src := range sources {
+		for _, part := range regexp.MustCompile(`[,.;，。；]`).Split(src, -1) {
+			p := strings.TrimSpace(part)
+			if p == "" || len(p) > 90 || seen[p] || !manjuFeatureKw.MatchString(p) {
+				continue
+			}
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// manjuFeatureAnchor Q版标志性特征锁(2026-08-28):把角色最具辨识度的面部/装备特征
+// 显式点名并禁止省略——Q 版"缩头身"不等于"缩特征",眼镜/眼罩/机械臂/发光眼必须保留。
+func manjuFeatureAnchor(m map[string]any) string {
+	ps := manjuFeaturePhrases(m)
+	if len(ps) == 0 {
+		return ""
+	}
+	return "SIGNATURE FEATURE LOCK: the chibi keeps ALL of the character's signature facial and gear features exactly as in the reference portrait — " +
+		strings.Join(ps, "; ") +
+		" — these glasses, visors, scars, mechanical parts and glowing features must all be clearly visible on the chibi, never omitted, never simplified away"
+}
+
+// manjuIsNonPhysical 非实体角色(2026-08-28 用户实测:管理员=纯数据光生命,Q版被套上
+// 实体衣服做成普通娃娃,与写实全息体差距巨大):image_prompt/appearance 声明无实体身体
+// (holographic entity / pure data-light / no solid body / ghost / spirit)的角色,
+// Q 版不套人类着装锁,走发光数据精灵形态。
+func manjuIsNonPhysical(m map[string]any) bool {
+	src := str(m["image_prompt"]) + " " + str(m["appearance"])
+	return regexp.MustCompile(`(?i)no solid body|holographic entity|pure data-light|data-light|data spirit|wisp|ghostly|immaterial|ethereal (?:being|entity|spirit)`).MatchString(src)
+}
+
 // manjuQPrompt 构建 Q 版提示词(2026-08-25 用户规则;2026-08-26 修正:Q版=定妆照同一
 // 角色的缩小版Q萌形象——手办/吉祥物感,不是小孩):
 // ①妖兽/灵宠/神兽 → Q版=该妖兽本体萌化小兽形,禁止人形/人类宝宝;
@@ -3020,6 +3210,145 @@ func manjuOutfitAnchor(m map[string]any) string {
 //   旧措辞 "a cute girl/boy" + chibi 上下文被模型画成小孩(用户反馈),改为
 //   「同一角色缩小版」+ 年龄感保留 + 显式禁小孩禁词;
 // ③Q版渲染基于正面定妆照 img2img(与 full/side/detail 一致,禁止形象大变)。
+// manjuQOutfitCompact Q 版紧凑着装锁(2026-08-28 紧凑化):与 manjuOutfitAnchor 同源提取,
+// 子句上限 3 + 短覆盖句——着装语义不减、字符减半(cfg=1.0 下提示词长度=遵循度,长=稀释)。
+func manjuQOutfitCompact(m map[string]any) string {
+	vs, _ := m["views"].(map[string]any)
+	sources := []string{str(m["costume"]), str(m["image_prompt"]), str(vs["q"])}
+	kw := regexp.MustCompile(`(?i)wear|suit|jacket|coat|outfit|hoodie|dress|robe|gown|cloak|garment|clothing|clothes|shirt|uniform|sweater|vest|garb|armor|armour|breastplate|pauldron|gauntlet|helmet|chainmail|铠甲|盔甲|甲胄|服装|穿着|袍|衣|裙|衫|裳`)
+	out := []string{}
+	seen := map[string]bool{}
+	for _, src := range sources {
+		for _, part := range regexp.MustCompile(`[,.;，。；]`).Split(src, -1) {
+			p := strings.TrimSpace(part)
+			if p == "" || len(p) > 90 || seen[p] || len(out) >= 5 {
+				continue
+			}
+			if kw.MatchString(p) {
+				p = strings.TrimSpace(manjuLooseClean.ReplaceAllString(p, ""))
+				if p == "" {
+					continue
+				}
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	s := "OUTFIT LOCK: the chibi wears exactly the same complete outfit as the reference portrait"
+	if len(out) > 0 {
+		s += " — " + strings.Join(out, "; ")
+	}
+	return s + " — chest and torso always fully covered by clothing, robes and coats closed with overlapping lapels covering the collarbone"
+}
+
+// manjuQFormPrompt Q 版形态段(2026-08-28 两段式第①段,纯文生图):只管形态+画风+标志
+// 特征(特征=构成的一部分,眼镜/机械钳直接进本体),不掺身份细节——短提示词=强遵循,
+// 锁定两头身 3D 手办形态。
+func manjuQFormPrompt(m map[string]any) string {
+	if manjuIsBeast(m) {
+		p := "3D rendered cute chibi collectible toy figure, small adorable round chibi animal, oversized head with big sparkling cute eyes, short stubby legs and tiny round paws, soft plush-like fluffy body, standing on a clean plain white background"
+		if low := strings.ToLower(str(m["image_prompt"]) + " " + str(m["appearance"])); strings.Contains(low, "robot") || strings.Contains(low, "机械") {
+			p = "3D rendered cute chibi collectible toy figure, small adorable round chibi robot animal with a smooth glossy rounded metallic body, oversized head with big sparkling cute lens eyes, short stubby legs and tiny round paws, clean seamless toy-like shell, standing on a clean plain white background"
+		}
+		if fa := manjuFeatureAnchor(m); fa != "" {
+			p += ", " + fa
+		}
+		return p + ", a physical 3D collectible toy figure not a drawing, NOT a 2D flat anime illustration, not cel-shaded, NOT a human, no human face"
+	}
+	// 标志特征改写构成(眼镜/机械臂类:特征优先于呆萌模板,与 manjuQPrompt 同款检测)
+	eyeCls, handCls := "big sparkling glossy eyes", "tiny stubby arms and legs, small round hands"
+	if ps := manjuFeaturePhrases(m); len(ps) > 0 {
+		low := strings.ToLower(strings.Join(ps, " "))
+		if strings.Contains(low, "pincer") || strings.Contains(low, "claw") || strings.Contains(low, "hook") ||
+			strings.Contains(low, "mechanical arm") || strings.Contains(low, "prosthetic arm") ||
+			strings.Contains(low, "cybernetic arm") || strings.Contains(low, "mechanical hands") ||
+			strings.Contains(low, "for arms") {
+			handCls = "short stubby arms ending in the character's signature mechanical parts, short legs"
+		}
+		if strings.Contains(low, "glasses") || strings.Contains(low, "visor") || strings.Contains(low, "goggles") ||
+			strings.Contains(low, "eyepatch") || strings.Contains(low, "monocle") || strings.Contains(low, "scanner") {
+			eyeCls = "big sparkling eyes behind the character's signature eyewear"
+		}
+	}
+	p := "3D rendered cute chibi collectible toy figure, exactly 2-head-tall super-deformed chibi proportions, the oversized round head takes up half of the total body height, " + eyeCls + ", " + handCls + ", soft round face with a small cute mouth, bright cheerful adorable expression with a happy smile and rosy cheeks, compact mini body, adorable huggable vinyl toy with soft matte finish"
+	if manjuIsFemale(m) {
+		p += ", clearly a cute chibi girl figure, flat chest, modest full outfit"
+	} else if str(m["gender"]) == "男" {
+		p += ", clearly a cute chibi boy figure"
+	}
+	if manjuIsOldMale(m) {
+		p += ", elderly wrinkled old man face"
+	}
+	if fa := manjuFeatureAnchor(m); fa != "" {
+		p += ", " + fa
+	}
+	return p + ", standing full figure from head to toe with margin, plain white background, NOT a realistic human, no realistic skin texture, no photorealism, a physical 3D collectible toy figure not a drawing, NOT a 2D flat anime illustration, not cel-shaded, no outlines"
+}
+
+// manjuStripCJK 剔除中文字符(图像模型不读中文,中文段=废 token 还挤占提示词权重;
+// appearance 等中文记忆点只在 LLM/面容锚链路消费,进图像提示词前必须过滤)
+func manjuStripCJK(s string) string {
+	out := regexp.MustCompile(`[\p{Han}\p{P}]+`).ReplaceAllString(s, " ")
+	out = regexp.MustCompile(`[，。；：、""''（）【】「」]+`).ReplaceAllString(out, " ")
+	return strings.Join(strings.Fields(out), " ")
+}
+
+// manjuQPropClauses Q 版标志道具子句提取(2026-08-28 用户反馈「Q版缺正面照里的角色特征」:
+// 佩剑/折扇/剑穗/玉佩等签名道具不含服装关键词,着装锁提取词表不收→道具从未进提示词;
+// 姜璃的腰间长剑/冰蓝剑穗实测丢失)。从 image_prompt 提取含道具词的英文子句,上限 2。
+func manjuQPropClauses(m map[string]any) []string {
+	kw := regexp.MustCompile(`(?i)sword|blade|saber|fan|tassel|pendant|jade |scarf|spear|staff|bow|guqin|abacus|beads|gourd|whip|dagger|halberd|parasol|lantern|brush|scroll`)
+	out := []string{}
+	seen := map[string]bool{}
+	for _, part := range regexp.MustCompile(`[,.;]`).Split(str(m["image_prompt"]), -1) {
+		q := strings.TrimSpace(part)
+		if q == "" || len(q) > 80 || seen[q] || len(out) >= 2 {
+			continue
+		}
+		if kw.MatchString(q) {
+			seen[q] = true
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+// manjuQIdentityPrompt Q 版身份段(2026-08-28 两段式第②段,img2img 0.5):保持输入图的
+// Q 版形态不变(低重绘=形态保真),只注入身份——发色/服装/性别/面容/同人锚,全走文本锁。
+func manjuQIdentityPrompt(m map[string]any) string {
+	p := "keep exactly the same 3D chibi collectible toy figure as the input image (same 2-head-tall proportions, same pose, same toy style, same cheerful adorable expression, same plain white background), only apply this character's identity"
+	if manjuIsBeast(m) {
+		p += ", the same creature species, fur colors and markings as this character"
+		if anchor := manjuHairAnchor(m); anchor != "" {
+			p += ", " + anchor
+		}
+		if ap := manjuStripCJK(str(m["appearance"])); ap != "" {
+			p += ", " + ap
+		}
+		return p + ", NOT a human"
+	}
+	if anchor := manjuHairAnchor(m); anchor != "" {
+		p += ", " + anchor
+	}
+	p += ", " + manjuQOutfitCompact(m)
+	if manjuIsFemale(m) {
+		p += ", a cute miniature chibi of the same female character, clearly feminine face, modest outfit fully covering the chest and collarbone"
+	} else if str(m["gender"]) == "男" {
+		p += ", a cute miniature chibi of the same male character, clearly masculine young man's face, NOT a girl"
+	}
+	if ap := manjuStripCJK(str(m["appearance"])); ap != "" {
+		p += ", " + ap
+	}
+	// 标志道具显式点名(佩剑/折扇/剑穗等;着装锁词表不收道具,不点名=丢失)
+	if props := manjuQPropClauses(m); len(props) > 0 {
+		p += ", carrying the character's signature items exactly as described: " + strings.Join(props, "; ")
+	}
+	p += ", same character as the reference portrait (identical hairstyle, hair color, outfit colors and design)"
+	p += ", keeping the character's original age, NOT aged down, no baby face, body build strictly follows the original character, NOT chubby"
+	p += ", fully clothed head to toe, no nudity, no exposed skin except face and hands"
+	return p + manjuMinorGuard(m) + manjuBeardEnforce(m)
+}
+
 func manjuQPrompt(m map[string]any) string {
 	vs, _ := m["views"].(map[string]any)
 	base := str(vs["q"])
@@ -3027,28 +3356,60 @@ func manjuQPrompt(m map[string]any) string {
 	// 旧版整段拼接把 "realistic skin texture/85mm lens/cinematic" 带进 chibi prompt,
 	// chibi 被稀释渲染成写实人物形象(用户反馈"Q版形象里还有写实人物")。
 	img := manjuQStrip(manjuStripFullBody(str(m["image_prompt"])))
+	// 兽类(2026-08-28 小貔 Q 版出人实锤):image_prompt 里的人互动子句
+	// ("sitting on a young cultivator's shoulder")必须剥掉,禁词压不住正向人物描述
+	if manjuIsBeast(m) {
+		img = manjuBeastStrip(img)
+	}
 	// 2026-08-27:主图 3D 锚的裸 "BJD doll aesthetic" 残词会唤起无衣素体先验,替换为着装版
 	img = strings.ReplaceAll(img, "BJD doll aesthetic", "fully dressed BJD doll aesthetic")
 	// 2026-08-27 二修:image_prompt 残段的宽松/敞开感词(loose minister robes 等)复述进
 	// chibi prompt 会强化敞袍先验,与着装锁提取子句同款清洗
 	img = manjuLooseClean.ReplaceAllString(img, "")
-	ap := str(m["appearance"])
+	ap := str(m["appearance"]); _ = ap
 	if manjuIsBeast(m) {
+		// 2026-08-28 修(用户实测老猫Q版"机械零件拼凑感/结构混乱"):①默认 plush 毛绒构成与
+		// 机械兽物种打架——特征含 robotic/mechanical/metallic 时构成换光滑金属版;
+		// ②删 img 整段拼接(image_prompt 科技感残段稀释萌宠指令,特征锁已覆盖,与人形
+		// 分支同款处理);③"same fur and scale color" 对机械兽改为通用 body color。
+		feat := manjuFeaturePhrases(m)
+		featLow := strings.ToLower(strings.Join(feat, " "))
+		isRobotic := strings.Contains(featLow, "robotic") || strings.Contains(featLow, "mechanical") ||
+			strings.Contains(featLow, "metallic") || strings.Contains(featLow, "cyber")
 		if base == "" {
 			// 2026-08-27 五修:兽形 chibi 同款呆萌构成点名(大头圆眼短腿小爪)
-			base = "chibi cute style, small adorable round chibi animal, oversized head with big sparkling cute eyes, short stubby legs and tiny round paws, soft plush-like fluffy body"
+			base = "3D rendered cute chibi collectible toy figure, small adorable round chibi animal, oversized head with big sparkling cute eyes, short stubby legs and tiny round paws, soft plush-like fluffy body"
+			if isRobotic {
+				base = "3D rendered cute chibi collectible toy figure, small adorable round chibi robot animal with a smooth glossy rounded metallic body, oversized head with big sparkling cute lens eyes, short stubby legs and tiny round paws, clean seamless toy-like shell, cute friendly creature design"
+			}
 		}
-		p := base + ", chibi cute version of the same beast creature as in the reference image, same species, same fur and scale color and markings, small fluffy adorable chibi beast form, cute rounded chibi proportions"
+		p := base + ", chibi cute version of the same beast creature as in the reference image, same species, same body color and markings, small adorable chibi beast form, cute rounded chibi proportions"
 		if anchor := manjuHairAnchor(m); anchor != "" {
 			p = p + ", " + anchor
-		}
-		if img != "" {
-			p = p + ", " + img
 		}
 		if ap != "" {
 			p = p + ", distinct creature features: " + ap
 		}
+		if fa := manjuFeatureAnchor(m); fa != "" {
+			p = p + ", " + fa
+		}
 		return p + ", NOT a human, NOT a human face, NOT a human body, NOT a humanoid, NOT a person, NOT wearing human clothes"
+	}
+	// 2026-08-28 非实体角色(用户实测:管理员=纯数据光生命,Q版被套实体衣服做成普通娃娃,
+	// 与写实全息体差距巨大):不套人类着装锁/chibi手办构成,走发光数据精灵形态。
+	if manjuIsNonPhysical(m) {
+		p := "3D rendered cute chibi collectible toy figure, a palm-size adorable glowing holographic data spirit, exactly 2-head-tall super-deformed chibi proportions, oversized round head takes up half of the body height, translucent luminous body made of flowing cyan and gold light streams with floating data particles, big sparkling light-point eyes, tiny stubby arms and legs made of soft glowing code ribbons, gentle ethereal majestic aura, semi-transparent non-solid appearance"
+		if base != "" {
+			p += ", " + base
+		}
+		p += ", same entity as the reference image (same cyan and gold light colors, same flowing data-stream body, same data-particle aura, same light-point eyes), NOT a solid human, NOT wearing fabric clothes, no solid body, no physical clothing"
+		if fa := manjuFeatureAnchor(m); fa != "" {
+			p += ", " + fa
+		}
+		if ap != "" && !strings.Contains(p, ap) {
+			p += ", " + ap
+		}
+		return p
 	}
 	if base == "" {
 		// 2026-08-27 用户规则:Q 版体型跟随原角色——原角色不胖就不许渲染胖(删 chubby/squishy/
@@ -3056,37 +3417,92 @@ func manjuQPrompt(m map[string]any) string {
 		// 2026-08-27 五修(切 Krea-2 后呆萌感不足):chibi 构成逐项点名——大头占半身/短手
 		// 短腿/小圆手/圆脸小嘴/大亮眼,把「Q版=呆萌」的形态学写成硬约束(Krea-2 强指令
 		// 跟随,锚越具体执行越到位)。
-		base = "chibi cute style, exactly 2-head-tall super-deformed chibi proportions, the oversized round head takes up half of the total body height, big sparkling glossy eyes, tiny stubby arms and legs, small round hands, soft round face with a small cute mouth, compact mini body following the character's original body build, adorable huggable toy-like figure"
+		// 2026-08-28 修正(用户实测屠夫Q版液压钳变普通小圆手):chibi 构成的 "small round
+		// hands" 与机械钳/义体手臂特征正面冲突,模型二选一永远选构成词——角色卡含机械
+		// 手臂类特征时,构成改写为「短臂末端是角色的标志性机械部件」,特征优先于呆萌模板。
+		handCls := "tiny stubby arms and legs, small round hands"
+		eyeCls := "big sparkling glossy eyes"
+		if ps := manjuFeaturePhrases(m); len(ps) > 0 {
+			low := strings.ToLower(strings.Join(ps, " "))
+			// 仅当特征明确是「手臂/钳」类(pincers/claws/hook/…for arms)才替换小圆手——
+			// 义体手/白手套(glove concealing a prosthetic)是手部配饰不是武器臂,不替换。
+			if strings.Contains(low, "pincer") || strings.Contains(low, "claw") || strings.Contains(low, "hook") ||
+				strings.Contains(low, "mechanical arm") || strings.Contains(low, "prosthetic arm") ||
+				strings.Contains(low, "cybernetic arm") || strings.Contains(low, "mechanical hands") ||
+				strings.Contains(low, "for arms") {
+				handCls = "short stubby arms ending in the character's signature mechanical parts (mechanical pincers / claws / cybernetic limbs kept exactly as the reference), short legs"
+			}
+			// 2026-08-28 二修(韩天枢Q版三轮丢眼镜):base 的 "big sparkling glossy eyes" 大亮眼
+			// 构成与眼镜冲突,模型永远优先画无遮挡大眼——含眼镜/眼罩类特征时,构成直接改写为
+			// 「戴着该角色标志眼镜的大眼」,让特征成为构成的一部分而非附加锁。
+			if strings.Contains(low, "glasses") || strings.Contains(low, "visor") || strings.Contains(low, "goggles") ||
+				strings.Contains(low, "eyepatch") || strings.Contains(low, "monocle") || strings.Contains(low, "scanner") {
+				eyeCls = "big sparkling eyes behind the character's signature eyewear, wearing the exact same glasses/visor as the reference portrait"
+			}
+		}
+		// 2026-08-28 画风前置(用户反馈 Q 版变动漫):基底开头即声明 3D 手办形态——
+		// 开头位置对 Krea-2 权重最高,"chibi cute style" 裸开头是动漫邀请词
+		// (style=real 时 portraitPromptFor 走过插画分支,叠加标志特征角色 denoise 1.0
+		// 文本唯一画风源 → 2D 赛璐璐动漫)。
+		base = "3D rendered cute chibi collectible toy figure, about 3-head-tall chibi proportions, a large round head taking about one third of the total body height (leaving room on the body for outfit details), " + eyeCls + ", " + handCls + ", soft round face with a small cute mouth, adorable expression with rosy cheeks, compact mini body following the character's original body build, adorable huggable figure, premium high-detail movie-grade CGI quality, cinematic studio lighting, physically accurate materials with realistic metal reflections on armor, detailed fabric weave and fur textures, octane-render level of finish"
 	}
 	p := base
+	// 2026-08-28 标志性特征锁前置(用户实测:韩天枢Q版丢眼镜/屠夫丢眼罩+液压钳——特征锁排
+	// 在 identity 锚前仍不够,Krea-2 0.93 高重绘下后置文本权重被 chibi 构成+着装锁稀释;
+	// 前置到 base 之后第一时间点名,与 HAIR LOCK 同级)。
+	if fa := manjuFeatureAnchor(m); fa != "" {
+		p += ", " + fa
+	}
 	if anchor := manjuHairAnchor(m); anchor != "" {
 		p += ", " + anchor
 	}
 	// 着装锁(2026-08-27 用户反馈男性 Q 版袒胸露乳):前置强锚+显式禁「敞开外套露胸」
 	// (旧防裸词 no shirtless 盖不住这种形态,且原位置在 prompt 末尾遵循弱)
-	p += ", " + manjuOutfitAnchor(m)
-	p += ", torso and chest always fully covered by clothing, NOT bare-chested, no exposed torso, no exposed chest, no exposed collarbone, no cleavage, no nudity, no open robe, no open coat, no open jacket, no underwear as outerwear"
+	// 2026-08-28 紧凑化(用户反馈「同逻辑有的Q版有的手办有的动漫」):cfg=1.0 蒸馏模型
+	// 无负面通道全靠正向,角色卡厚薄→提示词长度 2000~4300 漂移→遵循度抽奖。统一紧凑
+	// 骨架:人人同结构等量、只有身份数据不同,全线压回呆萌手办定案版量级(~2000)。
+	p += ", " + manjuQOutfitCompact(m)
 	if manjuIsFemale(m) {
-		// 2026-08-27 三修(女性精卫 Q 版袒胸):feminine+手办语义组合唤起性感素体先验,
-		// 显式声明端庄高领+全年龄向玩具设计(负面通道同步前置禁裸词,双路夹击)
-		p += ", a cute miniature chibi version of the same female character, feminine face, same slim build as the character, wearing the character's outfit, modest high-neckline outfit fully covering the chest and collarbone, family-friendly cute toy design"
+		// 女性端庄(2026-08-27 精卫袒胸三修精简版):feminine+手办语义唤起性感素体先验
+		p += ", a cute miniature chibi of the same female character, clearly feminine face, modest outfit fully covering the chest and collarbone"
 	} else if str(m["gender"]) == "男" {
-		p += ", a cute miniature chibi version of the same male character, masculine face, same body build as the character, wearing the character's outfit"
+		// 2026-08-28 强化(顾清寒男 Q 版被画成女):阴柔美男词+chibi 幼态先验滑向女娃,
+		// masculine 单词压不住——面部结构/平胸/not a girl 三重加固(精简措辞)
+		p += ", a cute miniature chibi of the same male character, clearly masculine young man's face, flat chest, NOT a girl"
 	}
-	// 面容随角色本人:面容锚 + 身份锚(与正面照同一人,脸型/发型/胡须/年龄感保留)
-	if ap != "" && !strings.Contains(p, ap) {
-		p = p + ", " + ap
+	// appearance 剔中文(图像模型不读中文,中文记忆点=废 token 挤占权重),补道具点名
+	if apx := manjuStripCJK(ap); apx != "" && !strings.Contains(p, apx) {
+		p = p + ", " + apx
 	}
-	p = p + ", same character as the reference image (identical facial features, face shape, hairstyle, hair color, eye color, beard if present, costume colors and design)"
-	// 2026-08-26 用户规则:Q版=定妆照的缩小版 Q 萌(手办/挂件感),禁止儿童化——
-	// 显式声明「同一角色缩小、原年龄感保留」+ 禁小孩禁词,双保险压制模型幼态化。
-	p = p + ", a palm-size shrink-down of the reference portrait like a cute collectible figure, keeping the character's original age and facial maturity, NOT a child, NOT a kid, NOT a baby, NOT a toddler, NOT aged down, no childish baby face"
-	p = p + ", NOT chubby, NOT overweight, NOT fat, no bloated body, no puffy cheeks, body build strictly follows the original character"
-	if img != "" && !strings.Contains(p, img) {
-		p = p + ", " + img
+	if props := manjuQPropClauses(m); len(props) > 0 {
+		p = p + ", carrying the character's signature items exactly as described: " + strings.Join(props, "; ")
 	}
-	p = p + ", fully clothed, wearing the character's full costume from head to toe, no nudity, no shirtless, no topless, no underwear, no exposed skin except face and hands"
-	return p + manjuBeardEnforce(m)
+	p = p + ", same character as the reference image (identical hairstyle, hair color, outfit colors and design)"
+	// 年龄锚对全员成立:成年人防幼态化,未成年防被画成更小的宝宝(保持各自原年龄)
+	p = p + ", keeping the character's original age, NOT aged down, no baby face"
+	p = p + ", body build strictly follows the original character, NOT chubby"
+	p = p + ", fully clothed head to toe, no nudity, no exposed skin except face and hands"
+	// 尾部特征大写收尾(双锚夹击补权重):"GLASSES KEPT. PINCERS KEPT."
+	if ps := manjuFeaturePhrases(m); len(ps) > 0 {
+		short := []string{}
+		for _, ph := range ps {
+			for _, k := range []string{"glasses", "visor", "eyepatch", "monocle", "goggles", "scanner", "scar", "prosthetic", "pincers", "claw", "hook", "mask", "tattoo", "holographic", "cybernetic", "mechanical eye", "tactical eye", "data-chain"} {
+				if strings.Contains(strings.ToLower(ph), k) {
+					up := strings.ToUpper(k)
+					if !strings.Contains(strings.Join(short, " "), up) {
+						short = append(short, up+" KEPT")
+					}
+					break
+				}
+			}
+		}
+		if len(short) > 0 {
+			p = p + ", SIGNATURE FEATURES ALWAYS VISIBLE: " + strings.Join(short, ". ") + "."
+		}
+	}
+	// 未成年人护栏(2026-08-27 小男孩全身图下半身裸露同源风险:手办/chibi 素体自带光腿
+	// 娃体先验,儿童角色 Q 版同样必须全身完整着装)
+	return p + manjuMinorGuard(m) + manjuBeardEnforce(m)
 }
 
 func (ctx *manjuCtx) portraitWF(prompt string, seed int, prefix string, char map[string]any, initImage string, initStrength float64) map[string]any {
@@ -3263,15 +3679,9 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 				mainRef = refName
 			}
 		}
-		// 全身照引用(2026-08-26 用户反馈③:Q 版应基于全身照渲染才合理——chibi 是全身形态,
-		// 从半身主图重绘会出构图残留;循环顺序 full 先于 q,full 文件已落盘即可用)。
-		fullRef := ""
-		if fp := filepath.Join(ctx.assetsDir, "characters", sanitizeFileName(cid)+"_full.png"); fileExists(fp) {
-			refName := "dir_char_full_" + sanitizeFileName(cid) + ".png"
-			if copyFile(fp, filepath.Join(ctx.comfyInput, refName)) == nil {
-				fullRef = refName
-			}
-		}
+		// 全身照引用:仅作展示/参考;Q 版底图已改回主图(2026-08-28 用户裁决,见 Q 分支注释)
+		fullRef := ctx.charFullRef(cid)
+		_ = fullRef
 		// 视图换视角的 denoise 强度:img2img 换视角需要高 denoise 让模型彻底重绘构图——
 		// 但过高(0.92)会把主图身份(发色/胡须/服装)全重绘掉(用户反馈:白发老者侧面变黑发)。
 		// 2026-08-24 平衡:降 denoise 保留主图身份 + 提示词追加身份锚,两路夹击保统一。
@@ -3318,24 +3728,13 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 			}
 				if needGen {
 					if view == "q" {
-						// 2026-08-25 用户规则:Q 版与 full/side/detail 同链路 img2img。
-						// 2026-08-26 用户反馈③:Q 版改基于 full 全身照 img2img(chibi 是全身形态,
-						// 半身主图重绘会残留构图;全身照先于本镜生成,缺失回退主图)。
-						// 换装成 chibi 需要高 denoise 彻底重绘构图,身份靠 身份锚+面容锚 双锁。
-						qInit := fullRef
-						if qInit == "" {
-							qInit = mainRef
-						}
-						src := "全身照"
-						if qInit == mainRef {
-							src = "主图"
-						}
-						// 2026-08-27 三修(女性精卫 Q 版袒胸,负面禁裸词前置后依然):引擎从 Z-Image
-						// 切 Krea-2——实测(ComfyUI 提交参数+读图双证)Z-Image 在 0.93 高重绘下同时
-						// 无视 正向 OUTFIT LOCK/前置禁裸负面/闭合 init 图,chibi 手办素体先验压倒一切
-						// 文本控制;Krea-2 强指令跟随(定妆引擎定案理由)+与主图同引擎画风统一。
-						lg.logf(fmt.Sprintf("🎨 角色 %s Q版形象(基于%s Krea-2 img2img %.2f,种族/性别/胡须/面容随角色) ...", cid, src, manjuQStrength))
-						wf := wfKrea2(ctx.portraitPromptFor(p, m, false), str(ctx.R["krea2_unet"]), str(ctx.R["krea2_clip"]), str(ctx.R["krea2_vae"]), charSeed(cid, "q"), manjuViewW, manjuViewH, "manju_asset", ctx.negPrompt(), qInit, manjuQStrength)
+						// 2026-08-28 定案(用户裁决+全天实证):正面主图 img2img 单段生成。
+						// 12:40 批(主图底+方幅+紧凑提示词)是全天最优——身份(发色/服装/配色)
+						// 靠 init 自动携带,不依赖文本提取(两段式的词表漏洞:armor 不在着装词表→
+						// 谢照盔甲变休闲服;发型提取失灵)。形态由紧凑提示词+方形同幅保证。
+						// 特征通道 1.0 取消,统一 0.93(1.0 实测反而出半身写实)。
+						lg.logf(fmt.Sprintf("🎨 角色 %s Q版形象(正面主图·方形同幅 img2img 0.93,身份随底图) ...", cid))
+						wf := wfKrea2(ctx.portraitPromptFor(manjuQPrompt(m), m, false), str(ctx.R["krea2_unet"]), str(ctx.R["krea2_clip"]), str(ctx.R["krea2_vae"]), charSeed(cid, "q"), manjuPortraitW, manjuPortraitH, "manju_asset", ctx.negPrompt(), mainRef, 0.93)
 						if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"(Q版)"); err != nil {
 							lg.logf("  ⚠️ Q版形象生成失败: " + err.Error())
 							continue
@@ -3349,7 +3748,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 						// 2026-08-26 用户反馈②(full/side/detail 全渲染成正面照):p 先过 manjuViewStrip
 						// 剥主定妆的 Front-facing portrait 前缀(正面半身构图把所有视图拉回正面特写),
 						// 视角由 viewAnchor 独家主导;portraitPromptFor 一律不带正面锚(full 正面由锚承担)。
-						anchored := manjuViewAnchors[view] + ", " + manjuViewStrip(p) + manjuIdentityAnchor
+						anchored := manjuViewPromptBuild(p, view, m)
 						// 2026-08-27 用户反馈(视图出动漫形象):full/side/detail 引擎从 Z-Image 切回 Krea-2
 						// img2img——Z-Image 是照片向模型,大重绘(0.9+)按自身先验出图,3D 正向锚执行不到位
 						// 导致画风与主图(3D)割裂;Krea-2 与主图同引擎,画风天然统一(主图 3D 达标即证明)。
@@ -3937,8 +4336,11 @@ func (ctx *manjuCtx) charInfoFor(cid string) map[string]any {
 	return ctx.charInfo[cid]
 }
 
-// autoVoiceFor 按角色人设自动匹配风格音色(2026-08-27 用户需求)。
-// 匹配优先级:兽类/灵宠→活泼萌系;反派→磁性/清冷;性别+年龄关键词;性别兜底;无信息返回空。
+// autoVoiceFor 按角色人设自动匹配风格音色(2026-08-27 用户需求;同日矩阵化升级:
+// 用户反馈须按年龄×性别细分且音色不太友好——旧版儿童共用少年声、女性中年/老年误用
+// 粤语音色、反派女也是粤语,全是「不友好」来源)。
+// 返回音色库 Key(lib_<Key>.mp3 与绑定下拉同标识)。
+// 匹配优先级:兽类/灵宠→萌系;反派→低沉冷冽(强化辨识);性别×年龄矩阵;性别兜底;无信息→温柔女声。
 func (ctx *manjuCtx) autoVoiceFor(cid string) string {
 	c := ctx.charInfoFor(cid)
 	if c == nil {
@@ -3950,83 +4352,90 @@ func (ctx *manjuCtx) autoVoiceFor(cid string) string {
 	species := str(c["species"])
 	// 非人种族(灵宠/妖兽/神兽/精怪/鬼物/机械):萌系活泼声
 	if species != "" && species != "人" {
-		return "zh-CN-XiaoyiNeural"
+		return "beast_cute"
 	}
-	// 反派:低沉磁性(男)/成熟御姐(女),强化辨识度
+	// 反派:低沉磁性(男)/冷冽(女),强化辨识度
 	if role == "反派" {
 		if gender == "女" {
-			return "zh-HK-HiuMaanNeural"
+			return "female_deep"
 		}
-		return "zh-CN-YunjianNeural"
+		return "male_deep"
 	}
-	has := func(kws ...string) bool {
-		for _, k := range kws {
-			if k != "" && strings.Contains(age, k) {
-				return true
-			}
+	// 年龄分档:儿童/少年(少女)/青年/中年/老年,关键词从宽命中
+	child := strings.Contains(age, "儿童") || strings.Contains(age, "孩童") || strings.Contains(age, "幼") || strings.Contains(age, "稚") || strings.Contains(age, "小男") || strings.Contains(age, "小女")
+	teen := strings.Contains(age, "少年") || strings.Contains(age, "少女") || strings.Contains(age, "小男孩") || strings.Contains(age, "小女孩") || strings.Contains(age, "萝莉") || strings.Contains(age, "正太")
+	elder := strings.Contains(age, "老年") || strings.Contains(age, "老者") || strings.Contains(age, "暮年") || strings.Contains(age, "花甲")
+	mature := strings.Contains(age, "中年") || strings.Contains(age, "成熟") || strings.Contains(age, "沉稳") || strings.Contains(age, "大叔") || strings.Contains(age, "御姐") || strings.Contains(age, "妇")
+	if gender == "女" {
+		switch {
+		case child:
+			return "child_girl"
+		case teen:
+			return "girl_lively"
+		case elder:
+			return "female_elder"
+		case mature:
+			return "female_mature"
+		default:
+			return "female_warm"
 		}
-		return false
 	}
-	switch gender {
-	case "女":
-		if has("儿童", "孩童", "幼", "稚") {
-			return "zh-CN-XiaoyiNeural"
+	if gender == "男" {
+		switch {
+		case child:
+			return "child_boy"
+		case teen:
+			return "boy_teen"
+		case elder:
+			return "male_elder"
+		case mature:
+			return "male_mag"
+		default:
+			return "male_sun"
 		}
-		if has("少女", "小女孩", "萝莉") {
-			return "zh-CN-XiaoyiNeural"
-		}
-		if has("老", "中年", "成熟", "沉稳", "御姐", "反派") {
-			return "zh-HK-HiuMaanNeural"
-		}
-		return "zh-CN-XiaoxiaoNeural"
-	case "男":
-		if has("儿童", "孩童", "幼", "稚") {
-			return "zh-CN-YunxiaNeural"
-		}
-		if has("少年", "小男孩") {
-			return "zh-CN-YunxiaNeural"
-		}
-		if has("老") {
-			return "zh-CN-YunyangNeural"
-		}
-		if has("中年", "成熟", "沉稳", "大叔") {
-			return "zh-CN-YunjianNeural"
-		}
-		return "zh-CN-YunxiNeural"
-	default:
-		return "zh-CN-XiaoxiaoNeural"
 	}
+	// 性别未知但有角色卡 → 温柔女声兜底(有音色比没有强,与旧版一致)
+	return "female_warm"
 }
 
-// genVoiceLibAudio 生成单个风格库音色参考音频(input/audio/lib_<name>.mp3);幂等(已存在跳过)
-func (ctx *manjuCtx) genVoiceLibAudio(voice string) error {
-	if voice == "" {
-		return fmt.Errorf("空音色名")
+// genVoiceLibAudio 生成单个风格库音色参考音频(input/audio/lib_<Key>.mp3);幂等(已存在跳过)。
+// key=音色库 Key(旧版传 edge 音色名的调用经 manjuVoiceLibFor 兼容解析);派生变体的
+// Pitch/Rate(童声拔高/老年放缓)随条目带出。
+func (ctx *manjuCtx) genVoiceLibAudio(key string) error {
+	item := manjuVoiceLibFor(key)
+	if item == nil {
+		return fmt.Errorf("未知音色: %s", key)
 	}
 	if ctx.voiceLibDone == nil {
 		ctx.voiceLibDone = map[string]bool{}
 	}
-	if ctx.voiceLibDone[voice] {
+	if ctx.voiceLibDone[item.Key] {
 		return nil // 本 run 已尝试过(成功或失败都记,防重复生成)
 	}
-	ctx.voiceLibDone[voice] = true
-	out := filepath.Join(ctx.comfyInput, "audio", "lib_"+voice+".mp3")
+	ctx.voiceLibDone[item.Key] = true
+	out := filepath.Join(ctx.comfyInput, "audio", "lib_"+item.Key+".mp3")
 	if fileExists(out) {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Join(ctx.comfyInput, "audio"), 0755); err != nil {
 		return err
 	}
-	args := []string{"voice-gen", "--text", manjuVoiceGenText, "--voice", voice, "--out", out}
-	_, err := ctx.runMediaOut(args...)
-	if err != nil {
-		return fmt.Errorf("生成音色 %s 失败: %w", voice, err)
+	args := []string{"voice-gen", "--text", manjuVoiceGenText, "--voice", item.Name, "--out", out}
+	if item.Pitch != "" {
+		// 等号形式:负值(-15Hz)会被 argparse 误判为选项开关,--pitch=-15Hz 稳(实测坑)
+		args = append(args, "--pitch="+item.Pitch)
+	}
+	if item.Rate != "" {
+		args = append(args, "--rate="+item.Rate)
+	}
+	if _, err := ctx.runMediaOut(args...); err != nil {
+		return fmt.Errorf("生成音色 %s 失败: %w", item.Key, err)
 	}
 	// 0 字节防护(2026-08-27 实测):不支持的音色 edge-tts 不报错但产出空文件,
 	// LoadAudio 读空 mp3 会 400——生成后校验大小,空文件删除并报错
 	if fi, serr := os.Stat(out); serr != nil || fi.Size() == 0 {
 		_ = os.Remove(out)
-		return fmt.Errorf("生成音色 %s 产出空文件(音色不可用?)", voice)
+		return fmt.Errorf("生成音色 %s 产出空文件(音色不可用?)", item.Key)
 	}
 	return nil
 }
@@ -4036,10 +4445,10 @@ func (ctx *manjuCtx) genVoiceLibAudio(voice string) error {
 func (ctx *manjuCtx) ensureVoiceLib() (int, int) {
 	done, failed := 0, 0
 	for _, v := range manjuVoiceLib {
-		if fileExists(filepath.Join(ctx.comfyInput, "audio", "lib_"+v.Name+".mp3")) {
+		if fileExists(filepath.Join(ctx.comfyInput, "audio", "lib_"+v.Key+".mp3")) {
 			continue
 		}
-		if err := ctx.genVoiceLibAudio(v.Name); err != nil {
+		if err := ctx.genVoiceLibAudio(v.Key); err != nil {
 			failed++
 			continue
 		}

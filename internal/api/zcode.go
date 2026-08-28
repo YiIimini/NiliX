@@ -30,12 +30,15 @@ func ZCodeStart() error {
 	return cmd.Start()
 }
 
-// ZCodeStop 停止 ZCode 桌面端(结束全部 ZCode.exe 进程树)。
+// ZCodeStop 停止 ZCode 桌面端。
+// 审计 2026-08-28:按 PID 杀(含进程树)而非 taskkill /IM 杀全部同名实例——
+// 后者会误杀用户手动开的第二个 ZCode。
 func ZCodeStop() error {
-	if !sysmon.ZCodeRunning() {
+	pid := sysmon.ZCodePID()
+	if pid == 0 {
 		return errors.New("ZCode 未运行")
 	}
-	cmd := exec.Command("taskkill", "/IM", "ZCode.exe", "/T", "/F")
+	cmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return cmd.Run()
 }

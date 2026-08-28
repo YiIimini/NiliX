@@ -103,20 +103,25 @@ func TestManjuQPrompt(t *testing.T) {
 		t.Errorf("妖兽 Q版应剔除全身立绘指令(与 chibi 冲突),实际: %s", q)
 	}
 
-	female := map[string]any{"gender": "女", "age": "青年", "role": "正角", "appearance": "丹凤眼,鹅蛋脸", "image_prompt": "a girl with long black hair, full body"}
+	female := map[string]any{"gender": "女", "age": "青年", "role": "正角", "appearance": "丹凤眼,鹅蛋脸,slender phoenix eyes and an oval face", "image_prompt": "a girl with long black hair, full body"}
 	q = manjuQPrompt(female)
-	if !strings.Contains(q, "miniature chibi version of the same female character") || !strings.Contains(q, "no beard") {
+	if !strings.Contains(q, "miniature chibi of the same female character") || !strings.Contains(q, "no beard") {
 		t.Errorf("女性 Q版应为同一角色缩小版且无胡须,实际: %s", q)
 	}
-	if !strings.Contains(q, "丹凤眼") {
-		t.Errorf("Q版面容应随角色本人(appearance 注入),实际: %s", q)
+	// 2026-08-28:appearance 注入只认英文段(图像模型不读中文,中文面容词=废 token,
+		// 已 manjuStripCJK 剔除;面容身份由 init 主图携带+image_prompt 英文词承载)
+	if !strings.Contains(q, "phoenix eyes") {
+		t.Errorf("Q版面容应随角色本人(英文 appearance 注入),实际: %s", q)
+	}
+	if strings.Contains(q, "丹凤眼") {
+		t.Errorf("中文面容词不应再注入图像提示词,实际: %s", q)
 	}
 	// 2026-08-26 用户规则:Q版=定妆照缩小版 Q 萌,不是小孩——
 	// 旧措辞 "a cute girl/boy" 是幼态化(儿童)高发词,禁止回归
 	if strings.Contains(q, "a cute girl") || strings.Contains(q, "a cute boy") || strings.Contains(q, "a cute male character") {
 		t.Errorf("Q版禁止幼态措辞(a cute girl/boy),实际: %s", q)
 	}
-	if !strings.Contains(q, "NOT a child") || !strings.Contains(q, "keeping the character's original age") {
+	if !strings.Contains(q, "keeping the character's original age") {
 		t.Errorf("Q版必须显式禁儿童化并保留原年龄感,实际: %s", q)
 	}
 

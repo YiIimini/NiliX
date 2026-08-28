@@ -4,11 +4,14 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -121,7 +124,22 @@ func (s *Server) Routes() http.Handler {
 		// 所有写请求带错误 token 被 auth 拦成 401「会话失效」
 		mux.Handle("/", noCacheHTML(s.tokenInject(http.FileServer(http.FS(s.kbFS)))))
 	}
-	return s.localHostOnly(limitRequestBody(s.auth(mux)))
+	// recoverPanic HTTP 层统一 panic 兜底(审计 2026-08-28):管线 goroutine 已有 safeGo/recover,
+	// HTTP handler 反而裸奔——handler panic 时 net/http 默认断连,前端只看到连接重置且无 crash 日志。
+	return s.localHostOnly(limitRequestBody(s.auth(s.recoverPanic(mux))))
+}
+
+// recoverPanic 拦截 handler panic:写 500 JSON 而非断连,并落 crash 日志(便于定位)。
+func (s *Server) recoverPanic(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[crash] panic in %s %s: %v\n%s", r.Method, r.URL.Path, rec, debug.Stack())
+				writeErr(w, http.StatusInternalServerError, "服务内部错误,详情见服务端日志")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // limitRequestBody 请求体大小上限(审计:JSON 请求体普遍无限制,恶意大 body 占满内存;
@@ -221,13 +239,22 @@ func (s *Server) tokenInject(next http.Handler) http.Handler {
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && sessionToken != "" {
-			if r.Header.Get("X-NiliX-Token") != sessionToken {
+			// 审计 2026-08-28:恒定时间比较,防时序侧信道探测 token
+			if !constantTimeEqual(r.Header.Get("X-NiliX-Token"), sessionToken) {
 				http.Error(w, `{"error":"会话失效,请刷新页面"}`, http.StatusUnauthorized)
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// constantTimeEqual 恒定时间字符串比较(长度不一致先短路,长度相同走 subtle 比较)
+func constantTimeEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // noCacheHTML 全部本地静态资源 no-cache(回源校验,ETag 未变走 304):
@@ -321,6 +348,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	// ComfyUI 启动参数单一数据源同步:改 comfy_url / input / output 立即生效
 	// (否则 start 用新参数、stop/probe 用旧参数,自相矛盾)
 	SetComfyParams(in.Render.ComfyURL, in.Paths.ComfyInput, in.Paths.ComfyOutput)
+	SetComfyLanAccess(in.Render.LanAccess) // 局域网开关同步(下次启动 ComfyUI 生效)
 	s.renderMgr.SetComfyURL(in.Render.ComfyURL)
 	// 全局智能体默认同步(settings 表单不带 agent 字段时保留旧值,指针+omitempty 已保证)
 	SetGlobalAgentCfg(&in)

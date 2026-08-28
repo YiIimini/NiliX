@@ -1353,7 +1353,8 @@ def manju_voiceover(args):
 
 
 def manju_voice_gen(args):
-    """生成一段 edge-tts 语音作为 H3 音色参考音频(H3 只引用 timbre,文本内容不限)"""
+    """生成一段 edge-tts 语音作为 H3 音色参考音频(H3 只引用 timbre,文本内容不限)。
+    --pitch/--rate 为相对调节(童声=拔高加速/老年=压低放缓的派生变体,格式如 +20Hz/+8%)"""
     try:
         import edge_tts
     except Exception as e:
@@ -1362,8 +1363,13 @@ def manju_voice_gen(args):
     import asyncio
     out = os.path.abspath(args.out)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-    asyncio.run(edge_tts.Communicate(args.text, args.voice).save(out))
-    print("✅ 音色参考已生成: %s (%s)" % (out, args.voice))
+    kw = {}
+    if getattr(args, "pitch", None):
+        kw["pitch"] = args.pitch
+    if getattr(args, "rate", None):
+        kw["rate"] = args.rate
+    asyncio.run(edge_tts.Communicate(args.text, args.voice, **kw).save(out))
+    print("✅ 音色参考已生成: %s (%s %s)" % (out, args.voice, kw or ""))
 
 
 def _audio_rms(path):
@@ -1873,6 +1879,8 @@ def main():
     vg.add_argument("--text", required=True, help="参考文本(生成音色参考音频,内容不限)")
     vg.add_argument("--voice", required=True, help="edge-tts 音色名,如 zh-CN-YunxiNeural")
     vg.add_argument("--out", required=True, help="输出文件路径(.mp3)")
+    vg.add_argument("--pitch", default="", help="相对音调(派生童声/老年声),如 +20Hz/-15Hz")
+    vg.add_argument("--rate", default="", help="相对语速(派生童声/老年声),如 +8%/-10%")
     f = sub.add_parser("facecrop")
     f.add_argument("--src", required=True)
     f.add_argument("--dst", required=True)

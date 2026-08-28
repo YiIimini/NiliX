@@ -2,6 +2,7 @@
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -618,6 +619,7 @@ func main() {
 	}
 	// ComfyUI 启动参数单一数据�?settings.json �?HUD 卡片 / Comfy 页面 / 实际启动命令共用�?
 	api.SetComfyParams(cfg.Render.ComfyURL, comfyIn, comfyOut)
+	api.SetComfyLanAccess(cfg.Render.LanAccess) // 审计 2026-08-28:默认仅本机,设置项开启局域网
 	// 自包含自愈(2026-08-26):整个 NiliX 目录拷到新电脑后,开机自启注册表里的旧
 	// 绝对路径自动更新到当前 exe;每日 00:00 清空共享 input/output(内置,接替旧计划任务)
 	if exe, err := os.Executable(); err == nil {
@@ -664,6 +666,7 @@ func main() {
 			IdleTimeout:       60 * time.Second,
 			MaxHeaderBytes:    1 << 20,
 		}
+		httpServer = srv
 		if err := srv.ListenAndServe(); err != nil {
 			log.Printf("HTTP 服务退出: %v", err)
 			if gApp != nil {
@@ -735,6 +738,9 @@ func main() {
 
 // gApp 全局应用引用(HTTP 服务异常退出时调用 Quit)
 var gApp *application.App
+
+// httpServer 主 HTTP 服务引用(onExit 优雅关闭用,审计 2026-08-28)
+var httpServer *http.Server
 
 // 虚拟屏幕尺寸(胶囊/主窗口定位用,�?island 包同�?
 var (
@@ -1121,7 +1127,14 @@ func startControlServers(app *application.App, url string) {
 		dy, _ := strconv.Atoi(q.Get("dy"))
 		if (dx != 0 || dy != 0) && getMainWin() != nil {
 			cx, cy := getMainWin().Position()
-			go getMainWin().SetPosition(cx+dx, cy+dy)
+			nx, ny := cx+dx, cy+dy
+			// 审计 2026-08-28:clamp 到虚拟屏幕内(留 60px 标题栏可视余量,能拖回),防页面把窗口移到屏幕外无法找回
+			vx, _, _ := procGetSystemMetrics.Call(uintptr(smXVirtual))
+			vw, _, _ := procGetSystemMetrics.Call(uintptr(smCXVirtual))
+			vh, _, _ := procGetSystemMetrics.Call(uintptr(smCYVirtual))
+			nx = max(int(int32(vx))-60, min(nx, int(int32(vx))+int(int32(vw))-60))
+			ny = max(int(int32(vx))-10, min(ny, int(int32(vx))+int(int32(vh))-40))
+			go getMainWin().SetPosition(nx, ny)
 		}
 		w.WriteHeader(200)
 	})
@@ -1539,6 +1552,13 @@ func onExit() {
 	// 崩溃/被强杀不会�?onExit,无标�?�?看门狗自动重�?
 	_ = os.MkdirAll("logs", 0755)
 	_ = os.WriteFile(filepath.Join("logs", "graceful_exit"), []byte(time.Now().Format(time.RFC3339)), 0644)
+	// 审计 2026-08-28:HTTP 优雅关闭——先停新连接并等 3s 在飞请求排空(LLM/渲染写回),
+	// 再杀 ComfyUI 全家桶,避免退出时状态文件写一半(此前在飞请求被硬杀)
+	if httpServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = httpServer.Shutdown(ctx)
+		cancel()
+	}
 	closeMainWindow() // 全退(灵动岛 X / 托盘结束应用):一并关闭管理主窗口
 	// 全家桶清理(2026-08-26 用户反馈「退出后残留进程」):
 	// ①提权硬件助手(管理员进程外部杀不动→文件通道 exit 命令自退);

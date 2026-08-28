@@ -121,22 +121,22 @@ func TestManjuQPromptOutfitLock(t *testing.T) {
 	if strings.Contains(p, "loose black stage outfit") {
 		t.Fatalf("着装锁必须剥除敞开感词(宽松描述会强化敞袍先验): %s", p)
 	}
-	if !strings.Contains(p, "always fully closed at the chest") {
-		t.Fatalf("着装锁必须显式要求衣袍交领闭合覆盖胸口: %s", p)
+	if !strings.Contains(p, "robes and coats closed") {
+		t.Fatalf("着装锁必须显式要求衣袍交领闭合: %s", p)
 	}
 	if !strings.Contains(p, "overlapping lapels") {
 		t.Fatalf("着装锁必须要求交领重叠遮胸: %s", p)
 	}
-	if !strings.Contains(p, "no exposed torso") || !strings.Contains(p, "NOT bare-chested") {
+	if !strings.Contains(p, "chest and torso always fully covered by clothing") {
 		t.Fatalf("着装锁必须显式禁袒胸: %s", p)
 	}
 	// BJD 素体残词必须替换为着装版
 	if strings.Contains(p, "BJD doll aesthetic") && !strings.Contains(p, "fully dressed BJD doll aesthetic") {
 		t.Fatalf("裸 BJD 素体措辞必须替换为着装版: %s", p)
 	}
-	// 防裸措辞应在强位置(OUTFIT LOCK 之后、末尾通用句之前)
-	if strings.Index(p, "OUTFIT LOCK") > strings.Index(p, "NOT bare-chested") {
-		t.Fatalf("着装锁应前置于防裸句: %s", p)
+	// 防裸覆盖句应在强位置(紧随 OUTFIT LOCK 提取子句,先于性别/末尾通用句)
+	if strings.Index(p, "OUTFIT LOCK") > strings.Index(p, "chest and torso always fully covered by clothing") {
+		t.Fatalf("着装覆盖句应随 OUTFIT LOCK 前置: %s", p)
 	}
 }
 
@@ -151,7 +151,7 @@ func TestManjuQPromptRobeChestCovered(t *testing.T) {
 	if strings.Contains(p, "loose minister robes") {
 		t.Fatalf("宽松袍描述必须剥敞开感词: %s", p)
 	}
-	if !strings.Contains(p, "never an open robe") || !strings.Contains(p, "open coat or open jacket") {
+	if !strings.Contains(p, "robes and coats closed with overlapping lapels") {
 		t.Fatalf("Q版提示词必须禁敞袍/敞外套形态: %s", p)
 	}
 	// 女性(柳含烟:素净丝袍)——必须禁露胸/乳沟,且保留丝袍服装词
@@ -163,7 +163,7 @@ func TestManjuQPromptRobeChestCovered(t *testing.T) {
 	if !strings.Contains(pf, "silk robes") {
 		t.Fatalf("女性着装锁应保留具体服装词: %s", pf)
 	}
-	if !strings.Contains(pf, "no cleavage") || !strings.Contains(pf, "no exposed chest") {
+	if !strings.Contains(pf, "modest outfit fully covering the chest and collarbone") {
 		t.Fatalf("女性Q版必须禁乳沟/露胸: %s", pf)
 	}
 	// 性别空(魏琮:绀青儒袍)——通用强防裸句必须兜底生效
@@ -171,7 +171,7 @@ func TestManjuQPromptRobeChestCovered(t *testing.T) {
 		"image_prompt": "a young scholar-official in showy azure scholar robe with jade pendant",
 	}
 	pg := manjuQPrompt(g)
-	if !strings.Contains(pg, "overlapping lapels") || !strings.Contains(pg, "no open robe") {
+	if !strings.Contains(pg, "overlapping lapels") || !strings.Contains(pg, "robes and coats closed") {
 		t.Fatalf("性别空角色也必须交领闭合/禁敞袍: %s", pg)
 	}
 }

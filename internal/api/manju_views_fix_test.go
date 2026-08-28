@@ -130,11 +130,12 @@ func TestViewGenderAnchor(t *testing.T) {
 	}
 }
 
-// TestQPromptChibiProportion Q 版两头身(2026-08-26:非Q版形象修复——显式比例词)
+// TestQPromptChibiProportion Q 版比例(2026-08-28 用户好标准校准:3头身——2头身身体太小
+// 容纳不了铠甲/纹样细节,服装还原度是用户第一优先级)
 func TestQPromptChibiProportion(t *testing.T) {
 	q := manjuQPrompt(map[string]any{"gender": "男", "age": "中年", "role": "正角", "appearance": "剑眉"})
-	if !strings.Contains(q, "2-head-tall") {
-		t.Fatalf("Q 版默认 base 应含 2-head-tall chibi proportions, got: %s", q)
+	if !strings.Contains(q, "3-head-tall chibi proportions") {
+		t.Fatalf("Q 版默认 base 应含 3-head-tall chibi proportions(2026-08-28 用户好标准实拍校准:3头身才有服装细节空间), got: %s", q)
 	}
 }
 

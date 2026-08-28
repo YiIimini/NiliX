@@ -59,6 +59,8 @@
     width: 100%; background: var(--panel-2); border: 1px solid var(--border);
     color: var(--text); border-radius: 8px; padding: 9px 12px; font-size: 14px; outline: none;
   }
+  /* 全局纪律:select 文本居中(text-align + text-align-last) */
+  select { text-align: center; text-align-last: center; }
   textarea { resize: vertical; font-family: inherit; line-height: 1.6; }
   input:focus, select:focus, textarea:focus { border-color: var(--accent-2); }
   input::placeholder, textarea::placeholder { color: #565e70; }
@@ -170,6 +172,13 @@
         <label class="field"><span class="lbl">最短镜头（秒）</span><input type="number" data-field="render.min_shot_seconds" data-type="int"></label>
         <label class="field"><span class="lbl">最长镜头（秒）</span><input type="number" data-field="render.max_shot_seconds" data-type="int"></label>
         <label class="field"><span class="lbl">种子 Seed</span><input type="number" data-field="render.seed" data-type="int"></label>
+        <label class="field full" title="ComfyUI 默认无鉴权:仅本机访问时保持关闭;开启后局域网任意设备可访问(烧 GPU/读产物)">
+          <span class="lbl">局域网访问 ComfyUI</span>
+          <select data-field="render.lan_access" data-type="bool">
+            <option value="false">关闭(仅本机,推荐)</option>
+            <option value="true">开启(局域网可访问)</option>
+          </select>
+        </label>
       </div>
       <details>
         <summary>高级模型配置</summary>
@@ -240,6 +249,7 @@ function collect() {
     let v = el.value;
     if (el.dataset.type === 'int') v = parseInt(v, 10) || 0;
     else if (el.dataset.type === 'float') v = parseFloat(v) || 0;
+    else if (el.dataset.type === 'bool') v = el.value === 'true';
     setField(obj, el.dataset.field, v);
   });
   return obj;
@@ -380,7 +390,7 @@ async function pollRender(id) {
       const qcHtml = job.qc ? `<div class="test-row">${job.qc.checks.map(c => `<div class="test-chip ${c.passed ? 'ok' : 'err'}"><span class="tag">${c.passed ? '✓' : '✗'} ${esc(c.name)}</span><span class="msg">${esc(c.message)}</span></div>`).join('')}</div>` : '';
       if (st) st.innerHTML = `
         <div class="banner show ok">渲染完成：${job.done}/${job.total} 镜头，已合成成片</div>
-        ${fname ? `<video controls style="width:100%;border-radius:10px;margin-top:12px" src="/clips/${fname}"></video>` : ''}
+        ${fname ? `<video controls style="width:100%;border-radius:10px;margin-top:12px" src="/clips/${encodeURIComponent(fname)}"></video>` : ''}
         ${qcHtml}`;
       banner('渲染完成', 'ok');
       const btn = document.getElementById('btnRender');
@@ -388,7 +398,7 @@ async function pollRender(id) {
       return;
     }
     if (job.status === 'failed') {
-      if (st) st.innerHTML = `<div class="banner show err">渲染失败：${job.error}</div>`;
+      if (st) st.innerHTML = `<div class="banner show err">渲染失败：${esc(job.error)}</div>`;
       banner('渲染失败', 'err');
       const btn = document.getElementById('btnRender');
       if (btn) btn.disabled = false;

@@ -2,11 +2,13 @@
 package assemble
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // hideWindow windowsgui 父进程 spawn 子进程若不隐藏会弹黑窗,统一加 HideWindow
@@ -31,8 +33,24 @@ func ffmpegPath() (string, error) {
 	return "", fmt.Errorf("未找到 ffmpeg，请先安装或配置")
 }
 
-// Assemble 把镜头片段按顺序拼接成成片（重编码 + 响度归一 + faststart）。
+// AssembleTimeout 单次合成超时上限(审计 2026-08-28:此前无超时,编码器挂死会永久阻塞任务)。
+// 30 分钟对 1 小时级成片重编码+响度归一绰绰有余,超时即判失败,不再无限等待。
+const AssembleTimeout = 30 * time.Minute
+
+// AssembleCtx 带超时的合成版本:ctx 取消/超时即终止 ffmpeg 并报错(停止链路可感知)。
+func AssembleCtx(ctx context.Context, clips []string, output string) error {
+	cctx, cancel := context.WithTimeout(ctx, AssembleTimeout)
+	defer cancel()
+	return assembleWith(cctx, clips, output)
+}
+
+// Assemble 把镜头片段按顺序拼接成成片(重编码 + 响度归一 + faststart)。
+// 审计 2026-08-28:改为 30 分钟超时版本,ffmpeg 挂死不再永久阻塞。
 func Assemble(clips []string, output string) error {
+	return AssembleCtx(context.Background(), clips, output)
+}
+
+func assembleWith(ctx context.Context, clips []string, output string) error {
 	if len(clips) == 0 {
 		return fmt.Errorf("无镜头可合成")
 	}
@@ -75,7 +93,7 @@ func Assemble(clips []string, output string) error {
 		args = append(args, output)
 	}
 
-	out, err := hideWindow(exec.Command(ff, args...)).CombinedOutput()
+	out, err := hideWindow(exec.CommandContext(ctx, ff, args...)).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("ffmpeg 合成失败: %w（%s）", err, truncate(string(out), 300))
 	}

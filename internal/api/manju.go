@@ -535,14 +535,25 @@ func writeManjuSettings(s map[string]any) error {
 
 func atomicWrite(path string, data []byte) error {
 	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	// 审计 2026-08-28:调用方误传目录(如 "..")时 base 落成 "..",临时文件以 "...tmp*" 泄漏
+	// 到调用方目录(实测 409 个残留)——此处拒绝非文件名路径,从源头掐断。
+	if base == "" || base == "." || base == ".." {
+		return fmt.Errorf("atomicWrite: 非法路径 %q", path)
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	tmp := filepath.Join(dir, fmt.Sprintf(".%s.tmp%d", filepath.Base(path), time.Now().UnixNano()))
+	tmp := filepath.Join(dir, fmt.Sprintf(".%s.tmp%d", base, time.Now().UnixNano()))
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		// Rename 失败(目标被占用/跨设备等)必须回收临时文件,否则 .tmp 泄漏堆积
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func atomicWriteJSON(path string, v any) error {
@@ -973,8 +984,14 @@ func manjuSettingsGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// 附带当前项目的 key/服务状态(设置弹窗展示,提示是否会导致 LLM 401)
+	// 审计 2026-08-28:config 参数此前不过 guard,可探测任意路径 JSON——补归属校验
 	if cfgPath := r.URL.Query().Get("config"); cfgPath != "" {
-		if cfg, err := readManjuConfig(cfgPath); err == nil {
+		guarded, gerr := manjuGuardConfig(cfgPath)
+		if gerr != nil {
+			writeErr(w, http.StatusBadRequest, gerr.Error())
+			return
+		}
+		if cfg, err := readManjuConfig(guarded); err == nil {
 			if L, ok := cfg["llm"].(map[string]any); ok {
 				res["projectBaseUrl"] = str(L["base_url"])
 				res["projectModel"] = str(L["model"])
@@ -1181,7 +1198,9 @@ func manjuScriptSave(w http.ResponseWriter, r *http.Request) {
 		Episode string `json:"episode"`
 		Text    string `json:"text"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
 	text := strings.TrimSpace(body.Text)
 	if text == "" {
 		http.Error(w, `{"error":"脚本内容为空"}`, http.StatusBadRequest)
@@ -1200,6 +1219,10 @@ func manjuScriptSave(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 审计 2026-08-28:config 读-改-写统一走 per-config 锁(与 manjuSaveRender 一致,防并发丢更新)
+	cfgLock := manjuConfigLock(configPath)
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
 	cfg, err := readManjuConfig(configPath)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -1235,11 +1258,23 @@ func manjuScriptClear(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 审计 2026-08-28:读-改-写同加 per-config 锁
+	cfgLock := manjuConfigLock(configPath)
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
 	P, _ := cfg["paths"].(map[string]any)
 	removed := ""
 	if P != nil {
 		if sp := strings.TrimSpace(str(P["script"])); sp != "" {
-			_ = os.RemoveAll(filepath.Dir(sp)) // 删 script/ 目录(含各集脚本)
+			// 审计 2026-08-28:sp 来自 config.json 可被手工编辑,删除前必须确认目标在项目
+			// workdir 内(与 manju_delete.go 同款护栏),防 RemoveAll 递归删到项目外
+			projDir := filepath.Join(ManjuRootDir, project)
+			scriptDir := filepath.Clean(filepath.Dir(sp))
+			if scriptDir != projDir && !strings.HasPrefix(scriptDir, projDir+string(filepath.Separator)) {
+				writeErr(w, http.StatusBadRequest, "脚本目录不在项目内,拒绝清除")
+				return
+			}
+			_ = os.RemoveAll(scriptDir) // 删 script/ 目录(含各集脚本)
 			removed = sp
 		}
 		delete(P, "script")
@@ -1261,7 +1296,9 @@ func manjuScriptImportFromNovel(w http.ResponseWriter, r *http.Request) {
 		Project string `json:"project"`
 		Episode string `json:"episode"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
 	configPath, scriptPath, _, err := manjuScriptTarget(body.Project, body.Episode)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -1444,7 +1481,9 @@ func manjuScriptScanDir(w http.ResponseWriter, r *http.Request) {
 		Dir     string `json:"dir"`
 		Episode string `json:"episode"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
 	dir := strings.TrimSpace(body.Dir)
 	if dir == "" {
 		writeErr(w, http.StatusBadRequest, "缺少目录")
@@ -2960,39 +2999,107 @@ func manjuGachaPlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// manjuVoiceLib 预置风格音色库(2026-08-27 用户需求:预置多风格参考音频,按角色人设自动选择)。
-// 库音频确定性命名 lib_<name>.mp3 存 ComfyUI input/audio/,由 voice/prepare 预生成或渲染前自动补齐;
-// H3 只引用 timbre,渲染时按角色匹配结果挂 ref_audios 锁定对白音色(已实测生效)。
-// ⚠️ 音色名经过 edge-tts 实机验证(2026-08-27):Xiaochen/Xiaomo/Xiaoshuang/Xiaoyou/Xiaohan 等
-// 已不支持(NoAudioReceived),勿加回;新增音色必须先实测可用。
-// Age/Vibe 是自动匹配标签(gender+age 关键词为主,role/species 特殊处理见 autoVoiceFor)。
+// manjuVoiceLibItem 预置风格音色库条目(2026-08-27 用户需求:预置多风格参考音频,按角色人设自动选择;
+// 同日矩阵化升级:用户反馈音色不太友好,须按年龄×性别细分)。
+// Key=稳定标识(参考音频文件名 stem,lib_<Key>.mp3,绑定/回显/生成共用);
+// Name=edge-tts 音色名(实际发音引擎);Pitch/Rate=edge-tts 相对调节(童声=拔高加速,
+// 老年=压低放缓——edge-tts 无真童声/老年声,用基音偏移派生,H3 只取 timbre 故有效)。
+// ⚠️ 音色名经过 edge-tts 实机验证:2026-08-27 实测存活=Xiaoxiao/Xiaoyi/Yunjian/Yunxi/
+// Yunxia/Yunyang+方言区域组;Xiaochen/Xiaomo/Xiaoshuang/Xiaoyou/Xiaohan/Xiaoxuan 已下线
+// (NoAudioReceived/列表除名),勿加回;新增音色必须先实测可用。
+// Gender/Age 是自动匹配标签(autoVoiceFor 矩阵),Vibe 仅供 UI 展示。
 type manjuVoiceLibItem struct {
-	Name   string // edge-tts 音色名
-	Label  string
-	Gender string // 男/女/童
-	Age    string // 少年/青年/中年/老年/儿童(匹配关键词)
+	Key   string // 稳定标识(文件名/绑定值,勿改——改了存量绑定断链)
+	Name  string // edge-tts 音色名
+	Label string
+	Gender string // 男/女/童/通用
+	Age    string // 儿童/少年/青年/中年/老年/方言…
 	Vibe   string // 风格描述
+	Pitch  string // edge-tts 相对音调,如 "+20Hz"/"-15Hz"(空=原生)
+	Rate   string // edge-tts 相对语速,如 "+8%"/"-10%"(空=原生)
 }
 
+// manjuVoiceLib 内置风格音色库(2026-08-27 矩阵化):年龄×性别全覆盖 + 反派/兽类特化 +
+// 方言/区域手动组。基音偏移派生童声/老年声(edge-tts 无原生童声老年声)。
 var manjuVoiceLib = []manjuVoiceLibItem{
-	{"zh-CN-YunxiaNeural", "云夏 · 少年男声", "男", "少年", "青春"},
-	{"zh-CN-YunxiNeural", "云希 · 阳光男声", "男", "青年", "阳光"},
-	{"zh-CN-YunjianNeural", "云健 · 磁性男声", "男", "青年", "磁性"},
-	{"zh-CN-YunyangNeural", "云扬 · 沉稳男声", "男", "中年", "沉稳"},
-	{"zh-CN-XiaoyiNeural", "晓伊 · 活泼女声", "女", "少女", "活泼"},
-	{"zh-CN-XiaoxiaoNeural", "晓晓 · 温柔女声", "女", "青年", "温柔"},
-	{"zh-CN-XiaoxuanNeural", "晓萱 · 清亮女声", "女", "青年", "清亮"},
-	{"zh-HK-HiuMaanNeural", "晓曼 · 港风女声", "女", "中年", "御姐"},
-	{"zh-CN-liaoning-XiaobeiNeural", "小北 · 东北女声", "女", "中年", "方言"},
-	{"zh-CN-shaanxi-XiaoniNeural", "小妮 · 陕西女声", "女", "青年", "方言"},
+	// ---- 自动匹配矩阵(性别×年龄) ----
+	{"child_boy", "zh-CN-YunxiaNeural", "童声 · 小男孩", "童", "儿童", "清脆", "+20Hz", "+6%"},
+	{"child_girl", "zh-CN-XiaoyiNeural", "童声 · 小女孩", "童", "儿童", "娇萌", "+25Hz", "+8%"},
+	{"boy_teen", "zh-CN-YunxiaNeural", "少年 · 元气男声", "男", "少年", "元气", "", ""},
+	{"girl_lively", "zh-CN-XiaoyiNeural", "少女 · 活泼女声", "女", "少女", "活泼", "", ""},
+	{"male_sun", "zh-CN-YunxiNeural", "青年 · 阳光男声", "男", "青年", "阳光", "", ""},
+	{"female_warm", "zh-CN-XiaoxiaoNeural", "青年 · 温柔女声", "女", "青年", "温柔", "", ""},
+	{"male_mag", "zh-CN-YunjianNeural", "中年 · 磁性男声", "男", "中年", "磁性", "", ""},
+	{"female_mature", "zh-CN-XiaoxiaoNeural", "中年 · 知性女声", "女", "中年", "知性", "-4Hz", "-5%"},
+	{"male_elder", "zh-CN-YunjianNeural", "老年 · 沧桑男声", "男", "老年", "沧桑", "-15Hz", "-12%"},
+	{"female_elder", "zh-CN-XiaoxiaoNeural", "老年 · 沉稳女声", "女", "老年", "沉稳", "-10Hz", "-15%"},
+	// ---- 特化(反派/兽类,autoVoiceFor 优先于年龄矩阵) ----
+	{"male_deep", "zh-CN-YunjianNeural", "反派 · 低沉男声", "男", "通用", "威压", "-8Hz", "-8%"},
+	{"female_deep", "zh-CN-XiaoxiaoNeural", "反派 · 冷冽女声", "女", "通用", "冷冽", "-6Hz", "-8%"},
+	{"beast_cute", "zh-CN-XiaoyiNeural", "萌系 · 灵宠兽类", "通用", "通用", "呆萌", "+12Hz", "+8%"},
+	// ---- 方言/区域(手动选择,不参与自动匹配) ----
+	{"cn_dongbei", "zh-CN-liaoning-XiaobeiNeural", "方言 · 东北女声", "女", "方言", "幽默", "", ""},
+	{"cn_shaanxi", "zh-CN-shaanxi-XiaoniNeural", "方言 · 陕西女声", "女", "方言", "亮堂", "", ""},
+	{"hk_female", "zh-HK-HiuMaanNeural", "区域 · 粤语女声", "女", "区域", "港风", "", ""},
+	{"hk_male", "zh-HK-WanLungNeural", "区域 · 粤语男声", "男", "区域", "港风", "", ""},
+	{"tw_female", "zh-TW-HsiaoChenNeural", "区域 · 台湾女声", "女", "区域", "台普", "", ""},
+	{"tw_male", "zh-TW-YunJheNeural", "区域 · 台湾男声", "男", "区域", "台普", "", ""},
 }
 
-// manjuEdgeVoices 兼容视图(前端音色下拉数据源,2026-08-26 起)
+// manjuVoiceLibFor 按 Key(优先)或旧版 edge 音色名(存量绑定兼容)查库条目;未命中返回 nil
+func manjuVoiceLibFor(id string) *manjuVoiceLibItem {
+	for i := range manjuVoiceLib {
+		if manjuVoiceLib[i].Key == id {
+			return &manjuVoiceLib[i]
+		}
+	}
+	for i := range manjuVoiceLib {
+		if manjuVoiceLib[i].Name == id {
+			return &manjuVoiceLib[i]
+		}
+	}
+	return nil
+}
+
+// manjuVoicePackPrefix 音色包绑定值前缀:voice=<prefix><文件名> 表示直接复制自备音频(不走 TTS)
+const manjuVoicePackPrefix = "pack:"
+
+// manjuVoicePacksDir 自备音色包目录(ComfyUI input/audio/voicepacks):用户把取得授权的
+// 参考音频(mp3/wav)放进来即可在角色管理下拉选用——「全网热门音色」的合规入口。
+func manjuVoicePacksDir() string {
+	in := comfyParams().in
+	if in == "" {
+		in = filepath.Join(ComfySharedDir, "input")
+	}
+	return filepath.Join(in, "audio", "voicepacks")
+}
+
+// manjuVoicePacks 扫描自备音色包(按名排序,前端下拉稳定)
+func manjuVoicePacks() []string {
+	entries, err := os.ReadDir(manjuVoicePacksDir())
+	if err != nil {
+		return nil
+	}
+	out := []string{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(e.Name()))
+		if ext == ".mp3" || ext == ".wav" {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// manjuVoiceLibList 兼容视图(前端音色下拉数据源,2026-08-26 起)
 func manjuVoiceLibList() []map[string]any {
 	out := make([]map[string]any, 0, len(manjuVoiceLib))
 	for _, v := range manjuVoiceLib {
 		out = append(out, map[string]any{
-			"name": v.Name, "label": v.Label, "gender": v.Gender, "age": v.Age, "vibe": v.Vibe,
+			"key": v.Key, "name": v.Name, "label": v.Label, "gender": v.Gender, "age": v.Age, "vibe": v.Vibe,
 		})
 	}
 	return out
@@ -3001,9 +3108,9 @@ func manjuVoiceLibList() []map[string]any {
 // manjuVoiceGenText 音色参考音频的固定参考文本(H3 只引用 timbre,内容不限,取一句中性台词)
 const manjuVoiceGenText = "今天天气不错,我们一起去公园走走吧。"
 
-// manjuVoiceList 可用配音音色列表(前端音色下拉数据源)
+// manjuVoiceList 可用配音音色列表(前端音色下拉数据源;2026-08-27 增自备音色包)
 func manjuVoiceList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"voices": manjuVoiceLibList()})
+	writeJSON(w, http.StatusOK, map[string]any{"voices": manjuVoiceLibList(), "packs": manjuVoicePacks()})
 }
 
 // manjuVoicePrepare 预生成风格音色库中缺失的参考音频(edge-tts → input/audio/lib_<name>.mp3)。
@@ -3088,30 +3195,63 @@ func manjuVoiceGen(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "bound": false})
 		return
 	}
-	// 校验音色名在允许列表(库音色名)
-	okName := false
-	for _, v := range manjuVoiceLib {
-		if v.Name == voice {
-			okName = true
-			break
+	// 音色包绑定(2026-08-27):voice="pack:<文件名>" → 直接复制自备音频为角色音色参考,
+	// 不走 TTS(用户取得授权的参考音频入口);文件名校验防路径穿越
+	if strings.HasPrefix(voice, manjuVoicePackPrefix) {
+		pf := filepath.Base(strings.TrimPrefix(voice, manjuVoicePackPrefix))
+		ext := strings.ToLower(filepath.Ext(pf))
+		if ext != ".mp3" && ext != ".wav" || strings.ContainsAny(pf, `/\`) {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "音色包文件仅支持 mp3/wav: " + pf})
+			return
 		}
+		src := filepath.Join(manjuVoicePacksDir(), pf)
+		if !fileExists(src) {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "音色包不存在(放入 input/audio/voicepacks/ 后刷新): " + pf})
+			return
+		}
+		if err := copyFile(src, out); err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "音色包复制失败: " + err.Error()})
+			return
+		}
+		setVoiceBinding(plan, char, filepath.ToSlash(rel), voice)
+		if err := ctx.writePlan(plan); err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "保存方案失败: " + err.Error()})
+			return
+		}
+		ctx.writeCharactersJSON(plan)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "bound": true, "voice_ref": filepath.ToSlash(rel), "voice_name": voice})
+		return
 	}
-	if !okName {
+	// 库音色绑定:Key(新版)/旧 edge 音色名(存量兼容)→ 查表生成(带基音偏移派生参数)
+	item := manjuVoiceLibFor(voice)
+	if item == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "未知音色: " + voice})
 		return
 	}
-	args := []string{"voice-gen", "--text", manjuVoiceGenText, "--voice", voice, "--out", out}
+	args := []string{"voice-gen", "--text", manjuVoiceGenText, "--voice", item.Name, "--out", out}
+	if item.Pitch != "" {
+		args = append(args, "--pitch="+item.Pitch) // 等号形式:负值防 argparse 误判为选项
+	}
+	if item.Rate != "" {
+		args = append(args, "--rate="+item.Rate)
+	}
 	if _, err := ctx.runMediaOut(args...); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "音色生成失败: " + err.Error()})
 		return
 	}
-	setVoiceBinding(plan, char, filepath.ToSlash(rel), voice)
+	// 0 字节防护(不支持的音色 edge-tts 不报错但产出空文件,LoadAudio 会 400)
+	if fi, serr := os.Stat(out); serr != nil || fi.Size() == 0 {
+		_ = os.Remove(out)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "音色生成产出空文件(音色不可用?): " + item.Name})
+		return
+	}
+	setVoiceBinding(plan, char, filepath.ToSlash(rel), item.Key)
 	if err := ctx.writePlan(plan); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "保存方案失败: " + err.Error()})
 		return
 	}
 	ctx.writeCharactersJSON(plan)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "bound": true, "voice_ref": filepath.ToSlash(rel), "voice_name": voice})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "bound": true, "voice_ref": filepath.ToSlash(rel), "voice_name": item.Key})
 }
 
 // setVoiceBinding 写角色音色绑定到方案 characters(voice 为空清绑定)
@@ -3173,13 +3313,33 @@ func registerManjuRoutes(mux *http.ServeMux) {
 		writeJSON(w, http.StatusOK, res)
 	})
 	// 清空运行日志(2026-08-26 用户反馈:清空日志按钮只在前端覆盖一条「(就绪)」,
-	// 后端 manjuState.log 未清,2 秒后轮询又把旧日志拉回来)。只清内存展示,run.log
-	// 落盘文件保留(排障证据);运行中允许清(后续日志继续追加)。
+	// 后端 manjuState.log 未清,2 秒后轮询又把旧日志拉回来)。
+	// 2026-08-28 二修(用户再反馈「清空日志按钮无效」):只清内存仍无效——空闲时轮询的
+	// logTail 来源是磁盘(run_state.json 的 logTail 字段 + run.log 文件),必须三清:
+	// ①内存 manjuState.log ②run.log 截断 ③run_state.json 的 logTail 置空。
+	// 运行中允许清(后续日志继续追加);排障证据由 logs/ 级别文件保留,run.log 属展示层。
 	mux.HandleFunc("POST /api/manju/log/clear", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		manjuState.mu.Lock()
 		manjuState.log = ""
 		manjuState.mu.Unlock()
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		out := map[string]any{"ok": true}
+		if configPath := strings.TrimSpace(str(body["config"])); configPath != "" {
+			if cp, gerr := manjuGuardConfig(configPath); gerr == nil {
+				project := filepath.Base(filepath.Dir(cp))
+				if p := manjuRunLogPath(project); fileExists(p) {
+					_ = os.Truncate(p, 0)
+					out["runLog"] = true
+				}
+				if ds := loadManjuDiskState(project); ds != nil && ds.LogTail != "" {
+					ds.LogTail = ""
+					writeManjuDiskState(project, ds)
+					out["runState"] = true
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
 	})
 	mux.HandleFunc("GET /api/manju/flow", manjuFlowCheck)
 	mux.HandleFunc("POST /api/manju/kill", manjuKill)

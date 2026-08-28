@@ -54,7 +54,9 @@ func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request) {
 // handleClipFile 提供渲染产物（镜头/成片）的下载与预览。
 func (s *Server) handleClipFile(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("file")
-	if name == "" || strings.Contains(name, "..") || strings.ContainsAny(name, "/\\") {
+	// 审计 2026-08-28:原 strings.Contains(name, "..") 一刀切误伤合法名(如 final_1..v2.mp4);
+	// 路由 {file} 单段天然不含分隔符,这里只需拒绝纯 ".." 与一切分隔符(Base 不等即含分隔符)
+	if name == "" || name == ".." || filepath.Base(name) != name {
 		http.Error(w, "非法路径", http.StatusBadRequest)
 		return
 	}

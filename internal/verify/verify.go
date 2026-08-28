@@ -3,11 +3,13 @@ package verify
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 // hideWindow windowsgui 父进程 spawn 子进程若不隐藏会弹黑窗(用户反馈"黑窗反复闪"),
@@ -55,12 +57,15 @@ type probeResult struct {
 }
 
 // Verify 对成片做基本质检（时长、音视频流、faststart）。
+// 审计 2026-08-28:ffprobe 加 30s 超时,读损坏/挂死文件不再永久阻塞。
 func Verify(path string) (*Report, error) {
 	ff, err := ffprobePath()
 	if err != nil {
 		return nil, err
 	}
-	out, err := hideWindow(exec.Command(ff, "-v", "error",
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := hideWindow(exec.CommandContext(ctx, ff, "-v", "error",
 		"-show_entries", "stream=codec_type,codec_name",
 		"-show_entries", "format=duration",
 		"-of", "json", path)).Output()

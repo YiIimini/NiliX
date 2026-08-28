@@ -140,6 +140,38 @@ func TestAtomicWrite(t *testing.T) {
 	}
 }
 
+// 审计 2026-08-28 回归:atomicWrite 拒绝 base 为 ".." 的路径(泄漏根因——曾实测
+// 409 个 "...tmp*" 文件污染调用方目录),且 Rename 失败时清理临时文件不残留。
+func TestAtomicWriteRejectsDirPath(t *testing.T) {
+	if err := atomicWrite("..", []byte("x")); err == nil {
+		t.Fatal("传目录路径应报错")
+	}
+	if err := atomicWrite("", []byte("x")); err == nil {
+		t.Fatal("空路径应报错")
+	}
+	if err := atomicWrite(".", []byte("x")); err == nil {
+		t.Fatal("点路径应报错")
+	}
+}
+
+func TestAtomicWriteCleansTmpOnRenameFail(t *testing.T) {
+	dir := t.TempDir()
+	// 目标位置放一个同名目录,os.Rename(文件→已存在目录) 必失败
+	target := filepath.Join(dir, "state.json")
+	if err := os.MkdirAll(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(target, []byte("x")); err == nil {
+		t.Fatal("目标为目录时应报错")
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".state.json.tmp") {
+			t.Fatalf("Rename 失败后临时文件未清理: %s", e.Name())
+		}
+	}
+}
+
 // TestManjuUpscaleEstimate 2K 费用预估:有方案按方案时长×单价;无方案按目录镜头粗估
 func TestManjuUpscaleEstimate(t *testing.T) {
 	proj := "zz_estimate_test"

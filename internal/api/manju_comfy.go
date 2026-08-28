@@ -436,7 +436,10 @@ func wfKrea2(prompt, unet, clipName, vae string, seed, w, h int, prefix, neg, in
 // 2026-08-23 用户规则:动漫风格也禁止日本人物形象——禁日本式脸型/日漫大眼,不禁 anime/cartoon 风格词本身
 // 2026-08-24 用户规则升级:加防真人(photorealistic/real person/actual photo)——定妆照必须「写实拟动漫」,
 // 既不是日漫脸也不是真人照片(真人=侵权风险)。与正向 manjuPortraitAnchor 双路夹击。
-const manjuNegPrompt = "nsfw, nudity, nude, naked, bare chest, bare torso, exposed chest, exposed torso, exposed breasts, cleavage, deep neckline, low-cut top, open jacket showing skin, open coat showing skin, open robe showing skin, unbuttoned shirt, lingerie, underwear as outerwear, shirtless, topless, lowres, bad anatomy, bad hands, text, error, extra digit, no text, no watermark, no deformed hands, flickering frames, temporal discontinuity, inconsistent lighting, japanese anime face, japanese manga face, japanese-style face, japanese cartoon character, anime eyes, manga eyes, big sparkly anime eyes, sharp anime chin, photorealistic, real person, real human, actual photo, photograph, realistic photo, lifelike human, portrait photo"
+// 2026-08-27 用户反馈(小男孩全身图下半身裸露没穿裤子):负面词此前全是躯干裸露词
+// (bare chest/torso/...),腰部以下零覆盖——补下半身裸露词组(措辞精确到「腰部以下裸/
+// 无下装/露下体」,不用 bare legs 字样以免误伤裙装角色的正常露小腿)。
+const manjuNegPrompt = "nsfw, nudity, nude, naked, bare chest, bare torso, exposed chest, exposed torso, exposed breasts, cleavage, deep neckline, low-cut top, open jacket showing skin, open coat showing skin, open robe showing skin, unbuttoned shirt, lingerie, underwear as outerwear, shirtless, topless, naked from the waist down, no pants, missing trousers, missing skirt, no lower clothing, bottomless, bare hips, bare bottom, exposed crotch, exposed genitals, lowres, bad anatomy, bad hands, text, error, extra digit, no text, no watermark, no deformed hands, flickering frames, temporal discontinuity, inconsistent lighting, japanese anime face, japanese manga face, japanese-style face, japanese cartoon character, anime eyes, manga eyes, big sparkly anime eyes, sharp anime chin, photorealistic, real person, real human, actual photo, photograph, realistic photo, lifelike human, portrait photo"
 
 // manjuModelRefs 载入 H3 三件套(clip / vae_video / vae_audio),返回 [clip, vae, audioVae]
 func h3Loaders(workflow map[string]any, R map[string]any) (clip, vae, audioVae string) {

@@ -40,6 +40,21 @@ type comfyParamsT struct{ url, in, out string }
 
 var comfyParamsVal atomic.Pointer[comfyParamsT]
 
+// comfyLanAccess 是否允许局域网访问 ComfyUI(审计 2026-08-28:默认 false=仅本机)。
+var comfyLanAccess atomic.Bool
+
+// SetComfyLanAccess 由 main 注入 settings.render.lan_access(改动随下次启动 ComfyUI 生效)。
+func SetComfyLanAccess(on bool) { comfyLanAccess.Store(on) }
+
+// comfyListenAddr --listen 参数:仅本机访问时绑 127.0.0.1(ComfyUI 默认无鉴权,
+// 0.0.0.0 会暴露给局域网任意设备——可提交任务烧 GPU/读产物)。
+func comfyListenAddr() string {
+	if comfyLanAccess.Load() {
+		return "0.0.0.0"
+	}
+	return "127.0.0.1"
+}
+
 // comfyParams 读取当前生效参数快照
 func comfyParams() comfyParamsT {
 	if p := comfyParamsVal.Load(); p != nil {
@@ -223,7 +238,7 @@ func startComfy() error {
 	}
 	args := []string{
 		filepath.Join(ComfyRootDir, "main.py"),
-		"--listen", "0.0.0.0", // 局域网设备可经 http://<本机IP>:8190 访问
+		"--listen", comfyListenAddr(), // 默认仅本机(审计 2026-08-28);settings 开启 lan_access 后局域网可访问
 		"--port", port,
 		"--disable-auto-launch",
 		"--output-directory", out,

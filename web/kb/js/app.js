@@ -957,7 +957,7 @@ const App = {
     // 路由切换时关闭管理页遗留弹窗(宽阅读器/单视频弹窗)
     if (typeof NovelView !== "undefined") NovelView.closeReader();
     if (typeof ManjuView !== "undefined") ManjuView.closeFilmModal();
-    if (route === "comfy") ComfyView.enter();
+    if (route === "comfy" && typeof ComfyView !== "undefined") ComfyView.enter();
     else if (route === "novel") NovelView.enter();
     else {
       ManjuView.enter();
@@ -965,6 +965,8 @@ const App = {
     }
     // 离开视频管理页时停止其轮询(iframe/状态常驻仅在本页需要)
     if (route !== "manju" && typeof ManjuWorkbench !== "undefined") ManjuWorkbench.leave();
+    // 审计 2026-08-28:离开 Comfy 页对称停表(comfy.js leave 清两个定时器)
+    if (route !== "comfy" && typeof ComfyView !== "undefined" && typeof ComfyView.leave === "function") ComfyView.leave();
     this.mascotOnRoute(route);
   },
 

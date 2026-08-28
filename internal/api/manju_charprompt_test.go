@@ -79,8 +79,8 @@ func TestManjuCharImagePrompt(t *testing.T) {
 	if !strings.Contains(posQ, "chibi") {
 		t.Errorf("Q版提示词缺 chibi: %s", posQ)
 	}
-	if !strings.Contains(posQ, "NOT a realistic human") {
-		t.Errorf("Q版提示词缺禁写实: %s", posQ)
+	if !strings.Contains(posQ, "NOT a photograph of a real person") {
+		t.Errorf("Q版提示词缺禁真人(允许电影级渲染写实): %s", posQ)
 	}
 	if strings.Contains(posQ, "front-facing portrait") {
 		t.Errorf("Q版不应带正面人脸锚: %s", posQ)

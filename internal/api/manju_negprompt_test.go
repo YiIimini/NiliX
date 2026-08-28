@@ -36,7 +36,7 @@ func TestNegPromptAppendNotReplace(t *testing.T) {
 func TestQPromptFemaleModestAnchor(t *testing.T) {
 	m := map[string]any{"gender": "女", "appearance": "圆脸黑发", "image_prompt": "a 24-year-old Chinese office girl with a small yellow flower, wearing a practical office uniform and a canvas shoulder bag, walking briskly"}
 	p := manjuQPrompt(m)
-	if !strings.Contains(p, "modest high-neckline outfit fully covering the chest") {
+	if !strings.Contains(p, "modest outfit fully covering the chest and collarbone") {
 		t.Errorf("女性 Q 版缺端庄高领锚: %s", p)
 	}
 	// 动作残词剥除
@@ -74,7 +74,7 @@ func TestManjuIsBeastHumanFigureVeto(t *testing.T) {
 func TestQPromptChibiCuteAnchors(t *testing.T) {
 	m := map[string]any{"gender": "女", "appearance": "圆脸", "image_prompt": "a 26-year-old Chinese woman, long silver hair"}
 	p := manjuQPrompt(m)
-	for _, want := range []string{"2-head-tall super-deformed", "takes up half of the total body height", "tiny stubby arms and legs", "small round hands", "small cute mouth"} {
+	for _, want := range []string{"3-head-tall chibi proportions", "one third of the total body height", "tiny stubby arms and legs", "small round hands", "small cute mouth"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("人形 Q 版缺呆萌构成锚 %q: %s", want, p)
 		}

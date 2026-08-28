@@ -119,16 +119,13 @@ func (m *Manager) run(job *Job, script *storyboard.Script, seed int, cfg config.
 		job.Done = i + 1
 		m.mu.Unlock()
 	}
-	m.mu.Lock()
-	job.Status = "completed"
-	job.Current = ""
-	m.mu.Unlock()
-
-	// 渲染完成后自动合成成片。
+	// 渲染完成后自动合成成片(审计 2026-08-28:合成须在置 completed 之前执行——
+	// 原顺序先标 completed 再合成,合成失败只写 Error 状态矛盾,前端显示"已完成但带错误")
 	if len(job.Outputs) > 0 {
 		final := filepath.Join(outDir, "final_"+job.ID+".mp4")
 		if err := assemble.Assemble(job.Outputs, final); err != nil {
 			m.mu.Lock()
+			job.Status = "failed"
 			job.Error = "合成失败: " + err.Error()
 			m.mu.Unlock()
 			return
@@ -144,6 +141,10 @@ func (m *Manager) run(job *Job, script *storyboard.Script, seed int, cfg config.
 			m.mu.Unlock()
 		}
 	}
+	m.mu.Lock()
+	job.Status = "completed"
+	job.Current = ""
+	m.mu.Unlock()
 }
 
 // stylePrompt 把中文风格名映射成文生图提示词锚。

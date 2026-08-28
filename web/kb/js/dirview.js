@@ -396,7 +396,7 @@ class DirView {
           ${coverHtml}
           <button class="bk-more" title="${I18N.t("book.more")}" aria-label="${I18N.t("book.more")}">⋮</button>
           <div class="bk-scrim">
-            <div class="bk-cname">${p.name}</div>
+            <div class="bk-cname">${this.escapeHtml(p.name)}</div>
             <div class="bk-cmeta">${meta}</div>
           </div>
           <div class="bk-bottom-bar"></div>
@@ -457,7 +457,7 @@ class DirView {
       html += toc.chapters
         .map(
           (c, i) =>
-            `<div class="rt-item" data-kind="ch" data-i="${i}" title="${c.path}"><span class="rt-no">${c.no && c.no < 1e9 ? String(c.no).padStart(3, "0") : String(i + 1).padStart(3, "0")}</span><span class="rt-name">${name(c)}</span></div>`
+            `<div class="rt-item" data-kind="ch" data-i="${i}" title="${this.escapeHtml(c.path)}"><span class="rt-no">${c.no && c.no < 1e9 ? String(c.no).padStart(3, "0") : String(i + 1).padStart(3, "0")}</span><span class="rt-name">${name(c)}</span></div>`
         )
         .join("");
       html += `</div>`;
@@ -892,7 +892,7 @@ class DirView {
         const tip = done
           ? (rv ? `第${n}章 · 审稿 ${Math.round(rv.score)} 分${rv.issues && rv.issues[0] ? " · " + rv.issues[0] : ""}(点此重审)` : `第${n}章 · 点击 AI 审稿(8 维评分)`)
           : `第 ${n} 章(未写)`;
-        html += `<span class="nv-ch ${done ? "done" : ""} ${rv ? "rev" : ""} ${act ? "act" : ""}" data-rev="${done ? n : ""}" title="${tip}">${done ? (rv ? Math.round(rv.score) : "✓") : n}</span>`;
+        html += `<span class="nv-ch ${done ? "done" : ""} ${rv ? "rev" : ""} ${act ? "act" : ""}" data-rev="${done ? n : ""}" title="${this.escapeHtml(tip)}">${done ? (rv ? Math.round(rv.score) : "✓") : n}</span>`;
       }
       box.innerHTML = html;
       box.querySelectorAll("[data-rev]").forEach((c) =>
@@ -1322,7 +1322,7 @@ class DirView {
           <button class="fm-more" title="${I18N.t("book.more")}" aria-label="${I18N.t("book.more")}">⋮</button>
           <span class="fm-play">▶</span>
           <div class="fm-scrim">
-            <div class="fm-cname">${p.name}</div>
+            <div class="fm-cname">${this.escapeHtml(p.name)}</div>
             <div class="fm-cmeta">${meta}</div>
           </div>
         </div>
@@ -1412,7 +1412,7 @@ class DirView {
   }
 
   escapeHtml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 }
 

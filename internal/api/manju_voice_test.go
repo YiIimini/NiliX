@@ -116,35 +116,40 @@ func TestAudioNum(t *testing.T) {
 	}
 }
 
-// autoVoiceFor 按角色人设自动匹配风格音色库(2026-08-27 用户需求:预置音色库自动选择)
+// autoVoiceFor 按角色人设自动匹配风格音色库(2026-08-27 矩阵化:年龄×性别全覆盖,
+// 儿童男女分声、老年女不再误用粤语音色)
 func TestAutoVoiceFor(t *testing.T) {
 	ctx := &manjuCtx{charInfo: map[string]map[string]any{
-		"男少年": {"gender": "男", "age": "少年"},
-		"男青年": {"gender": "男", "age": "青年"},
-		"男中年": {"gender": "男", "age": "中年"},
-		"男老年": {"gender": "男", "age": "老年"},
-		"女少女": {"gender": "女", "age": "少女"},
-		"女青年": {"gender": "女", "age": "青年"},
-		"女中年": {"gender": "女", "age": "中年"},
-		"女老年": {"gender": "女", "age": "老年"},
-		"男反派": {"gender": "男", "age": "青年", "role": "反派"},
-		"女反派": {"gender": "女", "age": "青年", "role": "反派"},
-		"灵宠": {"gender": "女", "age": "幼年", "species": "灵宠"},
-		"无信息": {},
+		"男童":   {"gender": "男", "age": "儿童"},
+		"女童":   {"gender": "女", "age": "孩童"},
+		"男少年":  {"gender": "男", "age": "少年"},
+		"男青年":  {"gender": "男", "age": "青年"},
+		"男中年":  {"gender": "男", "age": "中年"},
+		"男老年":  {"gender": "男", "age": "老年"},
+		"女少女":  {"gender": "女", "age": "少女"},
+		"女青年":  {"gender": "女", "age": "青年"},
+		"女中年":  {"gender": "女", "age": "中年"},
+		"女老年":  {"gender": "女", "age": "老年"},
+		"男反派":  {"gender": "男", "age": "青年", "role": "反派"},
+		"女反派":  {"gender": "女", "age": "青年", "role": "反派"},
+		"灵宠":   {"gender": "女", "age": "幼年", "species": "灵宠"},
+		"无信息":  {},
 	}}
 	cases := []struct{ cid, want string }{
-		{"男少年", "zh-CN-YunxiaNeural"},
-		{"男青年", "zh-CN-YunxiNeural"},
-		{"男中年", "zh-CN-YunjianNeural"},
-		{"男老年", "zh-CN-YunyangNeural"},
-		{"女少女", "zh-CN-XiaoyiNeural"},
-		{"女青年", "zh-CN-XiaoxiaoNeural"},
-		{"女中年", "zh-HK-HiuMaanNeural"},
-		{"女老年", "zh-HK-HiuMaanNeural"},
-		{"男反派", "zh-CN-YunjianNeural"},
-		{"女反派", "zh-HK-HiuMaanNeural"},
-		{"灵宠", "zh-CN-XiaoyiNeural"},
-		{"无信息", "zh-CN-XiaoxiaoNeural"}, // 有角色卡但字段空 → 兜底温柔女声(有音色比没有强)
+		{"男童", "child_boy"},
+		{"女童", "child_girl"},
+		{"男少年", "boy_teen"},
+		{"男青年", "male_sun"},
+		{"男中年", "male_mag"},
+		{"男老年", "male_elder"},
+		{"女少女", "girl_lively"},
+		{"女青年", "female_warm"},
+		{"女中年", "female_mature"},
+		{"女老年", "female_elder"},
+		{"男反派", "male_deep"},
+		{"女反派", "female_deep"},
+		{"灵宠", "beast_cute"},
+		{"无信息", "female_warm"}, // 有角色卡但字段空 → 兜底温柔女声(有音色比没有强)
 	}
 	for _, c := range cases {
 		if got := ctx.autoVoiceFor(c.cid); got != c.want {
@@ -154,6 +159,69 @@ func TestAutoVoiceFor(t *testing.T) {
 	// 角色不存在(charInfo 无此 id)→ 空(不匹配)
 	if got := ctx.autoVoiceFor("不存在"); got != "" {
 		t.Fatalf("autoVoiceFor(不存在) = %s, want 空", got)
+	}
+	// 全部返回值必须是库内合法 Key(渲染端 lib_<Key>.mp3 依赖)
+	for _, c := range cases {
+		if manjuVoiceLibFor(ctx.autoVoiceFor(c.cid)) == nil {
+			t.Fatalf("autoVoiceFor(%s) 返回值不在音色库: %s", c.cid, ctx.autoVoiceFor(c.cid))
+		}
+	}
+}
+
+// 音色库健康:Key 全局唯一(文件名/绑定标识);已下线音色不得回流;
+// 矩阵必备档位齐全(儿童男女/少年少女/青年男女/中年男女/老年男女)
+func TestManjuVoiceLibHealth(t *testing.T) {
+	seen := map[string]bool{}
+	for _, v := range manjuVoiceLib {
+		if v.Key == "" {
+			t.Fatalf("音色库存在空 Key: %+v", v)
+		}
+		if seen[v.Key] {
+			t.Fatalf("音色库 Key 重复: %s", v.Key)
+		}
+		seen[v.Key] = true
+	}
+	// 已实测下线的 edge 音色(NoAudioReceived/列表除名,2026-08-27 复核)
+	for _, dead := range []string{"Xiaochen", "Xiaomo", "Xiaoshuang", "Xiaoyou", "Xiaohan", "Xiaoxuan"} {
+		for _, v := range manjuVoiceLib {
+			if strings.Contains(v.Name, dead) {
+				t.Fatalf("音色库含已下线音色 %s(%s)", dead, v.Key)
+			}
+		}
+	}
+	for _, must := range []string{
+		"child_boy", "child_girl", "boy_teen", "girl_lively",
+		"male_sun", "female_warm", "male_mag", "female_mature", "male_elder", "female_elder",
+	} {
+		if manjuVoiceLibFor(must) == nil {
+			t.Fatalf("音色库缺年龄×性别必备档位: %s", must)
+		}
+	}
+	// 旧版 edge 音色名(存量 plan 绑定)仍可解析(Key 优先/Name 兼容)
+	if manjuVoiceLibFor("zh-CN-XiaoxiaoNeural") == nil || manjuVoiceLibFor("zh-CN-YunxiNeural") == nil {
+		t.Fatalf("旧版 edge 音色名兼容解析失效")
+	}
+}
+
+// 自备音色包:目录扫描只认 mp3/wav,pack: 前缀绑定值由后端复制不走 TTS
+func TestManjuVoicePacksScan(t *testing.T) {
+	dir := manjuVoicePacksDir()
+	_ = os.MkdirAll(dir, 0755)
+	defer os.RemoveAll(filepath.Join(dir, "_test_pack.mp3"))
+	defer os.RemoveAll(filepath.Join(dir, "_test_pack.txt"))
+	_ = os.WriteFile(filepath.Join(dir, "_test_pack.mp3"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "_test_pack.txt"), []byte("x"), 0644)
+	found := false
+	for _, f := range manjuVoicePacks() {
+		if f == "_test_pack.mp3" {
+			found = true
+		}
+		if strings.HasSuffix(f, ".txt") {
+			t.Fatalf("音色包扫描误收非音频: %s", f)
+		}
+	}
+	if !found {
+		t.Fatalf("音色包扫描未发现 _test_pack.mp3(目录: %s)", dir)
 	}
 }
 

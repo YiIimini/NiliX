@@ -11,10 +11,23 @@ import (
 	"strings"
 )
 
+// decodeJSONBody 统一解析 JSON 请求体:空 body 合法(EOF),坏 JSON 明确 400 报错。
+// 审计 2026-08-28:此前各 handler 大面积忽略 decode 错误,坏 JSON 静默当空 body 处理,
+// 报「missing config」类误导消息且无法区分客户端错误与服务端缺陷。
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil && err.Error() != "EOF" {
+		writeErr(w, http.StatusBadRequest, "请求体不是合法 JSON: "+err.Error())
+		return false
+	}
+	return true
+}
+
 // manjuCleanupRun 清理指定产物类别,返回每类删除文件数与释放字节
 func manjuCleanupRun(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
 	configPath := str(body["config"])
 	if configPath == "" {
 		writeErr(w, http.StatusBadRequest, "missing config")
@@ -66,9 +79,10 @@ func manjuCleanupRun(w http.ResponseWriter, r *http.Request) {
 // removeTree 递归删除目录内容,返回 (成功文件数, 释放字节);目录本身保留。
 // 2026-08-26:删除失败(ComfyUI/播放器占用句柄)不再静默——失败清单经 removeTreeEx 透出,
 // 前端明示「X 个文件被占用」,否则用户以为清干净了实际残留(「扫帚清不干净」根因)。
+// 2026-08-28:字节数此前被截断为恒 0,前端「释放空间」显示失真——透传 removeTreeEx 实测值。
 func removeTree(dir string) (int, int64) {
-	n, _, _ := removeTreeEx(dir, nil)
-	return n, int64(0)
+	n, bytes, _ := removeTreeEx(dir, nil)
+	return n, bytes
 }
 
 // removeTreeEx 带失败清单版本:failed 收集删除失败的文件名(上限 8 条,防刷屏)。
@@ -116,7 +130,9 @@ func manjuCacheClear(w http.ResponseWriter, r *http.Request) {
 	configPath := strings.TrimSpace(r.URL.Query().Get("config"))
 	if configPath == "" {
 		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !decodeJSONBody(w, r, &body) {
+			return
+		}
 		configPath = strings.TrimSpace(str(body["config"]))
 		if b, ok := body["advanced"].(bool); ok {
 			advanced = b

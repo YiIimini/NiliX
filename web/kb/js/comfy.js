@@ -14,6 +14,13 @@ const ComfyView = {
     this.startPolling();
   },
 
+  leave() {
+    // 审计 2026-08-28:离开 Comfy 页停表——此前定时器常驻仅靠 is-active 短路,
+    // 与 manju 页 enter/leave 对称清理不一致,长会话下两个定时器空转
+    if (this._timer) { clearInterval(this._timer); this._timer = null; }
+    if (this._logTimer) { clearInterval(this._logTimer); this._logTimer = null; }
+  },
+
   bindControls() {
     if (this._bound) return;
     this._bound = true;

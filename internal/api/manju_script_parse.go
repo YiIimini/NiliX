@@ -762,7 +762,7 @@ func parseCharCards(text, assetStyle string, is3D bool) []map[string]any {
 
 // reTrueFormInline 行内第二形态标注:「真身提示词:Cinematic...」(兼容 化形/原形/兽形/第二形态
 // 变体、括号后缀、可加粗;与素材「生图提示词」行内格式同风格,供技能文档约定)
-var reTrueFormInline = regexp.MustCompile(`(?:真身|化形|原形|兽形|第二形态)(?:（[^）]*）)?(?:生图)?提示词\s*\*{0,2}\s*[：:]\s*(Cinematic[^\n]*)`)
+var reTrueFormInline = regexp.MustCompile(`(?:真身|化形|原形|兽形|第二形态)(?:（[^）]*）)?(?:生图)?提示词(?:（[^）]*）)?\s*\*{0,2}\s*[：:]\s*((?:Cinematic|Next-gen)[^\n]*)`)
 
 // scriptSecondForm 提取角色素材节的第二形态(真身/化形)提示词:
 // ①行内标注「真身提示词:Cinematic...」(推荐格式,技能文档已约定);
@@ -1015,6 +1015,19 @@ func scriptRoleSpecies(head string) (role, species string) {
 // 用单词边界匹配英文性别词(避免 "woman" 里的 "man"、"hunter's" 里的 "her" 误判)。
 func scriptGenderOf(head, desc, block string) string {
 	low := strings.ToLower(head + " " + desc + " " + block)
+	// 2026-08-28 修复(用户实测:苏砚「女主之父」被命中「女主」判成女):亲缘/配偶称谓
+	// 比身份词优先——「女主之父」「男主之母」说的是这个角色本人的性别关系,身份词
+	// (女主/男主)说的是关联角色,本末不能倒置。先判 之父/母亲 这类硬称谓。
+	for _, k := range []string{"之父", "父亲", "爸爸", "爹", "夫君", "相公", "丈夫", "继父", "养父"} {
+		if strings.Contains(low, k) {
+			return "男"
+		}
+	}
+	for _, k := range []string{"之母", "母亲", "妈妈", "娘亲", "妻子", "遗孀", "继母", "养母"} {
+		if strings.Contains(low, k) {
+			return "女"
+		}
+	}
 	if strings.Contains(low, "女主") || strings.Contains(low, "女配") || strings.Contains(low, "女主角") || strings.Contains(low, "女神") {
 		return "女"
 	}

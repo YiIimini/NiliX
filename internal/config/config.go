@@ -104,6 +104,10 @@ type RenderSettings struct {
 	ZImageClip     string            `json:"z_image_clip"`
 	ZImageVae      string            `json:"z_image_vae"`
 	CharModels     map[string]string `json:"char_models"`
+	// LanAccess 是否允许局域网设备访问 ComfyUI(默认 false=仅本机 127.0.0.1)。
+	// 审计 2026-08-28:ComfyUI 默认无鉴权,监听 0.0.0.0 时局域网任意设备可提交任务烧 GPU/
+	// 读产物——安全默认收紧为仅本机,确需手机/平板访问时再在设置里开启。
+	LanAccess bool `json:"lan_access,omitempty"`
 }
 
 // PathSettings 与 ComfyUI 共享的输入/输出目录 + 自包含部署目录。
@@ -129,6 +133,17 @@ type Store struct {
 // NewStore 以 settings.json 的路径构造 Store。
 func NewStore(path string) *Store {
 	return &Store{Path: path, keyPath: filepath.Join(filepath.Dir(path), ".secret.key")}
+}
+
+// cleanupOldBackups 删除 30 天前的 .corrupt / .bad 备份(供排查的窗口期足够,之后纯占位)。
+// 审计 2026-08-28:recoverKey/损坏自愈每次触发都留一份备份,长时间运行会累积。
+func (s *Store) cleanupOldBackups() {
+	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+	for _, suffix := range []string{".corrupt", ".bad"} {
+		if st, err := os.Stat(s.Path + suffix); err == nil && st.ModTime().Before(cutoff) {
+			_ = os.Remove(s.Path + suffix)
+		}
+	}
 }
 
 // Default 返回带合理默认值的设置。
@@ -173,6 +188,7 @@ func Default() *Settings {
 
 // Load 读取并解密设置；文件不存在时返回默认值。
 func (s *Store) Load() (*Settings, error) {
+	s.cleanupOldBackups() // 审计 2026-08-28:顺带清 30 天前的损坏备份,防 .corrupt/.bad 无限累积
 	key, err := s.loadOrCreateKey()
 	if err != nil {
 		return nil, err
@@ -225,9 +241,23 @@ func (s *Store) recoverKey(cfg *Settings, cause error) error {
 	}
 	if rb, rerr := os.ReadFile(s.Path); rerr == nil {
 		_ = os.WriteFile(s.Path+".corrupt", rb, 0600)
+		// 审计 2026-08-28:settings.json 本体不再删除——非密文设置(路径/模型/渲染参数)
+		// 全是明文 JSON,此前整文件删除把用户全部配置清零;改为仅清掉损坏的密文 key 字段,
+		// 其余配置原样保留(sealStr 对 enc: 前缀跳过,坏密文不主动清会永久残留、每次启动重复恢复)
+		var doc map[string]any
+		if json.Unmarshal(rb, &doc) == nil {
+			if llm, ok := doc["llm"].(map[string]any); ok {
+				llm["api_key"] = ""
+			}
+			if ag, ok := doc["agent"].(map[string]any); ok {
+				ag["vision_api_key"] = ""
+			}
+			if nb, merr := json.MarshalIndent(doc, "", "  "); merr == nil {
+				_ = os.WriteFile(s.Path, nb, 0600)
+			}
+		}
 	}
 	_ = os.Remove(s.keyPath)
-	_ = os.Remove(s.Path)
 	k, kerr := s.loadOrCreateKey()
 	if kerr != nil {
 		return fmt.Errorf("重建加密密钥失败: %w", kerr)

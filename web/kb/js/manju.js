@@ -252,6 +252,28 @@
     const o = Object.assign({ cache: "no-store" }, opts || {});
     const tok = nilixTok();
     if (tok) { o.headers = Object.assign({}, o.headers || {}); o.headers["X-NiliX-Token"] = tok; }
+    // 审计 2026-08-28:fetch 此前无超时,后端挂起时请求无限堆积——默认 30s 超时,
+    // 长任务接口传 { timeout: ms } 覆盖,0 表示不设超时
+    const timeoutMs = o.timeout == null ? 30000 : o.timeout;
+    if (timeoutMs > 0 && !o.signal) {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), timeoutMs);
+      o.signal = ac.signal;
+      try {
+        const r = await fetch(path, o);
+        clearTimeout(timer);
+        if (!r.ok) {
+          let msg = "HTTP " + r.status;
+          try { const b = await r.json(); if (b && b.error) msg = b.error; } catch (e) {}
+          throw new Error(msg);
+        }
+        return r.json();
+      } catch (e) {
+        clearTimeout(timer);
+        if (e.name === "AbortError") throw new Error("请求超时(" + Math.round(timeoutMs / 1000) + "s): " + path);
+        throw e;
+      }
+    }
     const r = await fetch(path, o);
     if (!r.ok) {
       let msg = "HTTP " + r.status;
@@ -692,9 +714,10 @@
       $("manju-env").addEventListener("click", () => this.openHealth());
       $("manju-stop").addEventListener("click", () => this.stop());
       // 清空日志(2026-08-26 修复:此前只在前端盖一条「(就绪)」,后端 logTail 未清,
-      // 2 秒轮询把旧日志又拉回来)——调后端清 manjuState.log,本地同步置空即时反馈
+      // 2 秒轮询把旧日志又拉回来)——调后端清内存+run.log+run_state(2026-08-28 二修:
+      // 只清内存空闲轮询仍从磁盘读回=按钮无效,三清才是真清)
       $("manju-clear-log").addEventListener("click", () => {
-        post("/api/manju/log/clear", {})
+        post("/api/manju/log/clear", { config: this.project })
           .then(() => { if (this.status) this.status.logTail = ""; this.logNote("(已清空)"); })
           .catch(() => this.logNote("(清空失败: 后端未响应)"));
       });
@@ -2601,6 +2624,10 @@
         this.renderStatus();
         return;
       }
+      // 审计 2026-08-28:在途去重——上一轮 status 请求未返回时跳过本轮,
+      // 后端慢/挂起时 2s 轮询不再无限堆叠请求
+      if (this._polling) return;
+      this._polling = true;
       const q = "?config=" + encodeURIComponent(this.project);
       const reqProject = this.project; // 代次守卫:切项目后旧响应直接丢弃,防串项目
       get("/api/manju/status" + q).then((s) => {
@@ -2611,13 +2638,15 @@
         if (!s.running && s.done) this.refreshOutputs();
         else if (s.running) this.refreshOutputs(); // 运行中也刷新产物(镜头/定稿实时出现),完成后 badge 即时显示成片
         this.reportMascot(s);
-      }).catch(() => {});
+      }).catch(() => {}).finally(() => { this._polling = false; });
     },
 
     /* 本机系统状态(CPU/内存/GPU 占用+温度):每轮轮询顺带刷新(2s),不单独起计时器 */
     pollSysmon() {
       const wrap = $("manju-sysmon");
       if (!wrap) return;
+      if (this._pollingSysmon) return; // 审计 2026-08-28:与 status 同款在途去重
+      this._pollingSysmon = true;
       get("/api/stats").then((r) => {
         const c = r.cpu || {}, m = r.mem || {}, g = r.gpu || {};
         const set = (k, v, cls) => {
@@ -2680,7 +2709,7 @@
         const cTxt = $("manju-cfy-txt");
         if (cDot) cDot.className = "hrs-dot " + (cfy.online ? "on" : "off");
         if (cTxt) cTxt.textContent = "ComfyUI · " + (cfy.online ? "运行中" : "已停止");
-      }).catch(() => {});
+      }).catch(() => {}).finally(() => { this._pollingSysmon = false; });
     },
 
     /* 阶段英文 key → 中文名(运行状态/气泡共用;日志时间轴另有局部表) */
@@ -3011,13 +3040,14 @@
       // fresh=true=首次打开(压新层);内部刷新(视图/候选/抽卡完成)=原地替换,不压栈
       const p = this.plan || {};
       const fileUrl = (p2) => "/api/fs/file?path=" + encodeURIComponent(p2);
-      // 配音音色列表(2026-08-26 角色音色指定):首次拉取,弹窗期间返回则原地刷新
+      // 配音音色列表(2026-08-26 角色音色指定;2026-08-27 矩阵库+自备音色包):首次拉取,弹窗期间返回则原地刷新
       if (!this.voiceList) {
         const gen = this._modalGen;
         get("/api/manju/voice/list").then((r) => {
           this.voiceList = (r && r.voices) || [];
+          this.voicePacks = (r && r.packs) || [];
           if (gen === this._modalGen) this.renderGachaModal();
-        }).catch(() => { this.voiceList = []; });
+        }).catch(() => { this.voiceList = []; this.voicePacks = []; });
       }
       // 2026-08-27 用户裁决:角色板删除(渲染参考不用/零消费,生成已停);展示顺序:正面/全身/侧面/细节/Q版
       const VIEWS = [["", "正面", "🎭"], ["full", "全身", "🧍"], ["side", "侧面", "↔️"], ["detail", "细节", "🔍"], ["q", "Q版", "🐣"]];
@@ -3093,10 +3123,12 @@
                   <button class="hrs-btn" data-upload="${esc(c.id)}" data-view="${esc(curView)}" title="上传本地角色图并采纳为正式定妆照">📤 上传</button>
                   <button class="hrs-btn hrs-btn-primary" data-adopt="${esc(c.id)}" data-view="${esc(curView)}" ${cur ? "" : "disabled"}>采纳</button>
                 </div>
-                <div class="manju-char-voice" title="H3 原生配音音色:自动=按角色人设(性别/年龄/定位)匹配预置风格音色库;也可手动选音色覆盖(需重渲染生效)">
+                <div class="manju-char-voice" title="H3 原生配音音色:自动=按角色人设(性别/年龄/定位)匹配预置风格音色库;也可手动选音色覆盖(需重渲染生效);自备音色包放入 ComfyUI input/audio/voicepacks/ 后在此选用">
                   <span class="manju-meta">🎙</span>
                   <select data-voice-sel="${esc(c.id)}">
-                    <option value="" ${c.voice_ref ? "" : "selected"}>🤖 自动(按人设)</option>${(this.voiceList || []).map((v) => `<option value="${esc(v.name)}"${c.voice_name === v.name ? " selected" : ""}>${esc(v.label)}</option>`).join("")}
+                    <option value="" ${c.voice_ref ? "" : "selected"}>🤖 自动(按人设)</option>
+                    <optgroup label="内置音色库(年龄×性别)">${(this.voiceList || []).map((v) => `<option value="${esc(v.key)}"${c.voice_name === v.key || c.voice_name === v.name ? " selected" : ""}>${esc(v.label)}</option>`).join("")}</optgroup>
+                    ${(this.voicePacks || []).length ? `<optgroup label="自备音色包">${this.voicePacks.map((f) => `<option value="pack:${esc(f)}"${c.voice_name === "pack:" + f ? " selected" : ""}>${esc(f.replace(/\.(mp3|wav)$/i, ""))} · 自备</option>`).join("")}</optgroup>` : ""}
                   </select>
                   <button class="hrs-btn" data-voice-gen="${esc(c.id)}" title="应用所选音色(自动=恢复人设匹配)">${c.voice_ref ? "🔁 换" : "🎙 绑定"}</button>
                   <span class="manju-voice-ok">${c.voice_ref ? "✓ " + esc(this.voiceLabel(c.voice_name)) : "🤖 自动"}</span>
@@ -3239,10 +3271,12 @@
       vg.sel = start;
     },
 
-    /* 音色名 → 展示文案(未在列表中的音色原样显示) */
+    /* 音色名 → 展示文案(Key 优先,旧 edge 音色名/音色包兼容;未在列表中的音色原样显示) */
     voiceLabel(name) {
-      const v = (this.voiceList || []).find((x) => x.name === name);
-      return v ? v.label : (name || "未指定");
+      if (!name) return "未指定";
+      if (name.startsWith("pack:")) return name.slice(5).replace(/\.(mp3|wav)$/i, "") + "(自备)";
+      const v = (this.voiceList || []).find((x) => x.key === name || x.name === name);
+      return v ? v.label : name;
     },
 
     /* 角色配音音色生成/恢复自动(2026-08-27 音色库自动匹配):下拉选「自动」点绑定=清除显式
@@ -3573,7 +3607,9 @@
       });
     },
 
-    /* 产物清理:展示三类可再生成产物占用,勾选后一键清理(定妆照/定稿/成片不动) */
+    /* 产物清理:展示三类可再生成产物占用,勾选后一键清理(定妆照/定稿/成片不动)。
+       2026-08-28 失败醒目化(用户反馈「清理按钮无效」:项目已删/渲染中 409 时
+       setErr 小字看不见=像没反应)——错误一律醒目弹窗,给出处置指引 */
     openCleanup() {
       if (this.denyNoProject()) return;
       get("/api/manju/cleanup/sizes?config=" + encodeURIComponent(this.project)).then((sizes) => {
@@ -3604,9 +3640,28 @@
               this.setErr("🧹 已清理: " + (parts.join("、") || "无"));
               setTimeout(() => this.setErr(""), 5000);
               this.refreshOutputs();
-            }).catch((e) => this.setErr(e.message));
+            }).catch((e) => {
+              // 失败醒目化(2026-08-28):静默 setErr 小字用户看不见=「按钮无效」观感
+              this.closeModal();
+              this.openCleanupErr(e.message, "项目正在渲染中(先点「停止」再清理)");
+            });
         });
-      }).catch((e) => this.setErr(e.message));
+      }).catch((e) => {
+        // 拉占用失败同样醒目弹窗(此前 setErr 小字):项目已删/后端异常时用户能看到真实原因
+        this.openCleanupErr(e.message, "项目可能已被删除或配置不可读,请刷新项目列表(左上角 ↻)后重试");
+      });
+    },
+
+    /* 清理失败醒目弹窗(2026-08-28 静默拦截模态体系:错误绝不 setErr 小字) */
+    openCleanupErr(msg, hint) {
+      this.openModal("⚠️ 清理失败",
+        `<div class="manju-confirm">
+          <p class="mc-q">${esc(msg)}</p>
+          <p class="mc-d">常见原因:①${esc(hint)} ②后端未响应(重启应用)。</p>
+          <div class="manju-row" style="justify-content:center;margin-top:16px"><button id="cl-err-ok" class="hrs-btn hrs-btn-primary">知道了</button></div>
+        </div>`);
+      const ok = $("cl-err-ok");
+      if (ok) ok.addEventListener("click", () => this.closeModal());
     },
 
     /* 图片预览(灯箱,上一张/下一张 分列图片左右两侧,参考侧栏收起按钮风格) */
@@ -3955,14 +4010,31 @@
       });
     },
     doScriptClear() {
-      if (!confirm("清除视频脚本并回到小说解析模式？本集已生成的方案不会自动删除(下次运行按小说重新生成)。")) return;
-      post("/api/manju/script/clear?project=" + encodeURIComponent(this.projName()), {}).then((r) => {
-        this.refreshScriptStatus();
-        // 2026-08-24 合并「内容来源」卡片:清除脚本=回小说 → 自动切回小说区块
-        const sr = $("mc-content-script");
-        if (sr && sr.checked) { sr.checked = false; this.applyContentMode(); }
-        this.setNote((r && r.ok) ? "已清除脚本,回到小说解析模式" : "清除失败: " + ((r && r.error) || ""));
-      }).catch((e) => this.setErr("清除失败: " + e.message));
+      // 2026-08-28:弃原生 confirm(项目弹窗体系已统一,原生白框与主题割裂)
+      this.openModal("⚠️ 清除视频脚本?",
+        `<div class="cc-confirm">
+          <div class="cc-confirm-ic">🗑️</div>
+          <p class="cc-confirm-q">将清除视频脚本并回到<b>小说解析模式</b>:</p>
+          <ul class="cc-confirm-list">
+            <li>删除 script/ 目录(各集脚本文件)</li>
+            <li>本集已生成的方案不会自动删除,下次运行按小说重新生成</li>
+          </ul>
+          <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+            <button id="sc-cancel" class="hrs-btn">取消</button>
+            <button id="sc-go" class="hrs-btn cc-btn-danger">确认清除</button>
+          </div>
+        </div>`);
+      $("sc-cancel").addEventListener("click", () => this.closeModal());
+      $("sc-go").addEventListener("click", () => {
+        this.closeModal();
+        post("/api/manju/script/clear?project=" + encodeURIComponent(this.projName()), {}).then((r) => {
+          this.refreshScriptStatus();
+          // 2026-08-24 合并「内容来源」卡片:清除脚本=回小说 → 自动切回小说区块
+          const sr = $("mc-content-script");
+          if (sr && sr.checked) { sr.checked = false; this.applyContentMode(); }
+          this.setNote((r && r.ok) ? "已清除脚本,回到小说解析模式" : "清除失败: " + ((r && r.error) || ""));
+        }).catch((e) => this.setErr("清除失败: " + e.message));
+      });
     },
     /* 从小说项目 素材/分镜脚本/(爽文技能阶段6 产物)导入本集分镜脚本,启用脚本直出模式 */
     importScriptFromNovel() {
