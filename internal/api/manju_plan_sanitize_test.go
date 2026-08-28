@@ -157,3 +157,147 @@ func TestManjuSanitizePlanIDsDropsPseudoScenes(t *testing.T) {
 		}
 	}
 }
+
+// 回归(2026-08-28 EP01 事故):场景卡「城市夜景大远景」desc 写「封面备用·开篇/终章」,
+// id 干净但实为封面卡——混进正片场景池后被别名匹配+最高频兜底传染全片(办公室戏 18 镜
+// 全挂城市大远景参考图)。封面卡必须整条删,且引用它的镜头 scene 置空(不挂错图)。
+func TestManjuSanitizePlanIDsDropsCoverScene(t *testing.T) {
+	plan := map[string]any{
+		"scenes": []any{
+			map[string]any{"id": "城市夜景大远景", "description": "封面备用·开篇/终章;说明:凌晨的城市,一栋写字楼里唯一亮着的窗"},
+			map[string]any{"id": "深夜工位", "description": "说明:深夜亮着显示器的工位"},
+		},
+		"shots": []any{
+			map[string]any{"shot_id": 1, "scene": "城市夜景大远景"},
+			map[string]any{"shot_id": 2, "scene": "深夜工位"},
+		},
+		"characters": []any{map[string]any{"id": "陈默"}},
+	}
+	manjuSanitizePlanIDs(plan)
+	for _, x := range anyArr(plan["scenes"]) {
+		if str(x.(map[string]any)["id"]) == "城市夜景大远景" {
+			t.Fatal("封面备用卡(desc 含「封面」)应被过滤")
+		}
+	}
+	for _, x := range anyArr(plan["shots"]) {
+		m := x.(map[string]any)
+		if m["shot_id"] == 1 && str(m["scene"]) != "" {
+			t.Fatalf("引用被删封面卡的镜头 scene 应置空, got %q", str(m["scene"]))
+		}
+		if m["shot_id"] == 2 && str(m["scene"]) != "深夜工位" {
+			t.Fatalf("正常场景引用不得误清, got %q", str(m["scene"]))
+		}
+	}
+}
+
+// 回归(2026-08-28 EP01 事故):旧 matchSceneByAlias 是美食书硬编码别名表,跨书污染——
+// 本书镜12 pool 含「门口」→ 旧规则 need「夜景」命中封面卡「城市夜景大远景」→ 1 票最高频
+// 兜底传染全片。重写为场景卡动态特征词滑窗匹配后:工位词命中工位卡,「门口」不再命中
+// 封面卡(封面卡已不入匹配池),多卡平局取 id 短者(更专一)。
+func TestManjuMatchSceneByAliasDynamic(t *testing.T) {
+	cards := []map[string]any{
+		{"id": "开放工位区", "description": "说明:整层开放的工位隔断区"},
+		{"id": "深夜工位", "description": "说明:深夜唯一亮着的工位"},
+		{"id": "城市夜景大远景", "description": "封面备用·开篇/终章;说明:凌晨的城市,一栋写字楼里唯一亮着的窗"},
+		{"id": "数据机房", "description": "说明:服务器机柜走廊"},
+	}
+	cases := []struct {
+		name    string
+		pool    string
+		want    string
+		wantAny []string
+	}{
+		{"工位隔断叙述命中工位卡", "门禁读卡器亮起绿点,皮鞋声拐过工位隔断,赵德柱停在亮屏前", "",
+			[]string{"深夜工位", "开放工位区"}},
+		{"旧污染词「门口」不再命中封面卡", "他站在门口迟疑了一下,推开玻璃门走进来", "", nil},
+		{"服务器机柜命中机房", "两人穿过成排的服务器机柜,蓝灯连成一线", "数据机房", nil},
+		{"城市/夜景泛词+封面卡词不构成场景身份", "俯瞰城市,夜景璀璨,写字楼林立", "", nil},
+	}
+	for _, c := range cases {
+		got := matchSceneByAlias(c.pool, cards)
+		if c.wantAny != nil {
+			ok := false
+			for _, w := range c.wantAny {
+				if got == w {
+					ok = true
+				}
+			}
+			if !ok {
+				t.Errorf("%s: pool=%q got %q, want one of %v", c.name, c.pool, got, c.wantAny)
+			}
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: pool=%q got %q, want %q", c.name, c.pool, got, c.want)
+		}
+	}
+}
+
+// 特征词滑窗:长 id 无分词也能拆出实体词(「深夜工位」→「工位」),泛词表滤除镜头语言词
+func TestManjuSceneFeatureWords(t *testing.T) {
+	ws := manjuSceneFeatureWords("城市夜景大远景 封面备用·开篇/终章;说明:凌晨的城市,一栋写字楼里唯一亮着的窗")
+	has := func(w string) bool {
+		for _, x := range ws {
+			if x == w {
+				return true
+			}
+		}
+		return false
+	}
+	for _, generic := range []string{"城市", "夜景", "大远景", "凌晨", "封面", "备用", "开篇", "终章", "说明"} {
+		if has(generic) {
+			t.Errorf("泛词 %q 应被滤除", generic)
+		}
+	}
+	if !has("写字楼") {
+		t.Errorf("实体词「写字楼」应保留为特征词, got %v", ws)
+	}
+}
+
+// 回归(2026-08-28 EP01 配音事故):爽文技能规范示例「台词 <d>[中文]原文</d>」被 LLM 字面
+// 抄袭,EP01 六段式台词段直出 <d>[中文]陈默？</d>——H3 把「中文」二字当台词念/对白驱动
+// 失效,有台词的镜全部近静默。最终化汇点必须剥掉 d 标签内的 [中文]/[chinese] 占位前缀。
+func TestManjuFinalizePromptStripsDialogueTagNoise(t *testing.T) {
+	in := "The engineer (S1) says: <d>[中文]陈默？</d> while typing.\nThe narrator says: <d>[Chinese] 凌晨两点,写字楼还亮着一盏灯。</d>"
+	out := manjuFinalizePromptPure(in, true, 3)
+	if strings.Contains(out, "[中文]") || strings.Contains(out, "[Chinese]") {
+		t.Fatalf("d 标签占位前缀应被剥除, got: %s", out)
+	}
+	if !strings.Contains(out, "<d>陈默？</d>") {
+		t.Errorf("台词本体应保留, want <d>陈默？</d>, got: %s", out)
+	}
+	if !strings.Contains(out, "<d>凌晨两点,写字楼还亮着一盏灯。</d>") {
+		t.Errorf("旁白本体应保留, got: %s", out)
+	}
+}
+
+// 回归(2026-08-28 EP01 人物不一致):脚本直出 h3 的 <Picture N> 编号按叙述假设,与渲染端
+// 实际提交(人物图前+场景图后)错位——镜3 chars=[] 却写 <Picture 1> is Chen Mo,唯一挂的
+// 城市夜景图被 H3 当陈默长相参考。最终化必须:①超界引用剥除;②无人物图镜的人物主体句
+// 引用剥除(场景句保留);③残留连接词清理成通顺英文。
+func TestManjuStripDanglingPictureRefs(t *testing.T) {
+	// 镜3 真实形态:无人物图(picSlots=1 场景图),人物句引用 Picture 1/2 全剥,环境句保留
+	in := "subject_definitions:\n<Subject 1> is the living form of Chen Mo in <Picture 1>, a lean engineer with black-framed glasses.\n<Subject 2> is the dark reflective monitor face in <Picture 2>, glowing cold white.\n<Subject 3> is the office floor environment in <Picture 1>, rows of cubicles.\n"
+	out := manjuFinalizePromptPure(in, false, 1)
+	if strings.Contains(out, "Chen Mo in <Picture") {
+		t.Errorf("无人物图镜的人物句 Picture 引用应剥除, got: %s", out)
+	}
+	if strings.Contains(out, "monitor face in <Picture") {
+		t.Errorf("超界引用(Picture 2 > 1 槽)应剥除, got: %s", out)
+	}
+	if !strings.Contains(out, "environment in <Picture 1>") {
+		t.Errorf("环境句的场景槽引用应保留, got: %s", out)
+	}
+	if !strings.Contains(out, "black-framed glasses") {
+		t.Errorf("剥引用不得丢人物描述本体, got: %s", out)
+	}
+	// 有人物图镜:槽内引用保留,仅超界剥除
+	in2 := "<Subject 1> is Zhao Dezhu in <Picture 1> with gold watch.\n<Subject 2> is a prop badge in <Picture 4>, worn lanyard.\n"
+	out2 := manjuFinalizePromptPure(in2, true, 2)
+	if !strings.Contains(out2, "Zhao Dezhu in <Picture 1>") {
+		t.Errorf("槽内人物引用应保留, got: %s", out2)
+	}
+	if strings.Contains(out2, "<Picture 4>") {
+		t.Errorf("超界道具引用应剥除, got: %s", out2)
+	}
+}

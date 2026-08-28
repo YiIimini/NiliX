@@ -891,7 +891,7 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
 // 自动跳过已有提示词的镜,即「脚本 md → 完整方案」零中间步骤)。
 // 官方格式规定(2026-08 本地副本:manju-production 技能 references/官方提示词_官方指南原文/
 // base-en.txt + ref-en.txt)逐条内嵌:对齐指令/三核心字段/[Shot N] 时间码/运镜三要素/
-// 说话者 (Sx)/<d>[中文]原文</d>/画外音措辞/<scenetrans>/可见文字双引号。
+// 说话者 (Sx)/<d>…</d> 中文台词/画外音措辞/<scenetrans>/可见文字双引号。
 func manjuScriptSystem(cfg map[string]any, style string) string {
 	assetStyle := manjuAssetStyle(style)
 	s := `你是 MiniMax H3 视频生成模型的导演兼提示词专家。基于给定的【视频渲染脚本 md】(符合 H3 官方分镜规范),直接输出完整漫剧渲染方案——一步直出,每个镜头同时给出完整 H3 提示词(h3_prompt)。
@@ -939,8 +939,8 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 - 有角色的镜用 Ref2VA 六段式(subject_definitions/summary/retention_analysis/detailed_description/overall_soundscape/non_diegetic_music),无角色的空镜用 FL2VA 三段式(首行对齐指令 + integrated_multimodal_description/overall_soundscape/non_diegetic_music)——模板见下方
 - [Shot 1] 无时间戳;后续镜 [Shot N] At MM:SS.mmm 严格递增切点
 - 运镜三要素(类型+幅度+速度)写成句内自然英语(Push In/Pull Out/Pan/Truck/Tilt/Pedestal/Arc/Tracking/Static/POV/Roll/Shake;with small/large amplitude;at slow/fast speed)
-- 说话者稳定 ID (S1)(S2),首次出现给身份描述,发声者写 <Subject N> (Sx);台词 <d>[中文]原文</d> 逐字保留(原词原标点,句末 。？！);画外音写 says in an off-screen voiceover ... while his/her lips remain completely closed
-- 【画外音/旁白措辞·硬禁中文】(2026-08-23 实测:直出的 h3_prompt 用中文「画外音/旁白/嘴唇完全闭合」H3 无法识别对白驱动→该镜静音 rms≈0.005):detailed_description 里画外音/旁白一律用英文指令句——旁白写 The narrator (Sx) says in an off-screen voiceover: <d>[中文]旁白</d> while the on-screen characters' lips remain completely closed;画外音台词写 (Sx) says in an off-screen voiceover: <d>[中文]台词</d> while his/her lips remain completely closed;禁止出现中文「画外音」「旁白」「嘴唇闭合」字样
+- 说话者稳定 ID (S1)(S2),首次出现给身份描述,发声者写 <Subject N> (Sx);台词写 <d>…</d>——d 标签内是分镜台词的中文原文逐字保留(原词原标点,句末 。？！;禁止把「中文」「原文」等占位说明字样写进 d 标签,如 <d>[中文]陈默？</d> 是错误示范,正确是 <d>陈默？</d>);画外音写 says in an off-screen voiceover ... while his/her lips remain completely closed
+- 【画外音/旁白措辞·硬禁中文】(2026-08-23 实测:直出的 h3_prompt 用中文「画外音/旁白/嘴唇完全闭合」H3 无法识别对白驱动→该镜静音 rms≈0.005;d 标签内同样禁止写「中文」「旁白」等占位字样——2026-08-28 实测 <d>[中文]…</d> 被逐字抄进台词破坏配音):detailed_description 里画外音/旁白一律用英文指令句——旁白写 The narrator (Sx) says in an off-screen voiceover: <d>…</d>(d 标签内=分镜 narration 的中文原文)while the on-screen characters' lips remain completely closed;画外音台词写 (Sx) says in an off-screen voiceover: <d>…</d>(d 标签内=台词中文原文)while his/her lips remain completely closed;禁止出现中文「画外音」「旁白」「嘴唇闭合」字样
 - 台词跨切点写 <scenetrans>,被结尾截断写 <cutoff>
 - 画面可见文字(招牌/字幕/霓虹)用英文双引号原文
 - overall_soundscape 1-4 句英文连续段落(环境/动作/非语言人声,不重复台词);non_diegetic_music 1-3 句(乐器+速度+节奏+动态,禁抽象情绪词,无配乐写 N/A)
@@ -1033,7 +1033,7 @@ const manjuFl2vaTpl = `【FL2VA 三段式（空镜/转场，无主角），严�
 第一行对齐指令（两位小数）：How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video.（尾帧锚定时补 Picture 2 (from Shot N) aligns with the S.SS-second mark，S.SS=镜头时长两位小数）
 空一行后：
 integrated_multimodal_description:
-{style} + 画面延续首帧（首帧锚定→动作展开→收尾）+ 动作/运镜/光影 + 台词/旁白 <d>[中文]原文</d>（H3 原生配音；时长严格=镜头秒数）+【亮度护栏】Subjects must remain clearly visible and adequately lit - keep readable exposure with visible faces and actions; avoid rendering the frame nearly black
+{style} + 画面延续首帧（首帧锚定→动作展开→收尾）+ 动作/运镜/光影 + 台词/旁白 <d>…</d>（d 标签内=中文原文,H3 原生配音;时长严格=镜头秒数）+【亮度护栏】Subjects must remain clearly visible and adequately lit - keep readable exposure with visible faces and actions; avoid rendering the frame nearly black
 
 overall_soundscape:
 non_diegetic_music:【BGM 定向文案·强制】(2026-08-24 知识库「官方风格技能与漫剧优化」整合)配乐写乐器+速度+节奏+动态,并按题材文化贴合选乐器:古风/仙侠/武侠→古筝、竹笛、琵琶、箫;热血/战斗→鼓组+弦乐齐奏;都市/现代→钢琴、合成器、电吉他;悬疑/惊悚→低音提琴拨弦、钟琴、不安的脉冲;治愈/温馨→木琴、竖琴、轻快的拨弦;祭典/节庆→锣鼓、唢呐、民族打击乐。对白下配乐自动 ducking(压到对白之下),无配乐写 N/A,禁写"欢快/悲伤/激昂"等抽象情绪词——只写乐器与节奏(如 guzheng plucking at 90 BPM, sparse and delicate)`
@@ -1043,8 +1043,8 @@ const manjuShotWritingRules = `
 【写作规范（官方强制，两种模式都遵守）】：
 1. 首镜 [Shot 1] 无时间戳；多切点长镜后续镜 [Shot N] At MM:SS.mmm 严格递增切点时间（官方格式）
 2. 说话者 (S1)(S2) 按实际发声顺序分配一次、跨镜复用同一 ID；首次出现给身份描述（年龄/性别/音色/语速/是否画内）；发声者写 <Subject N> (Sx)；【复合说话者】多人齐声/合唱写复合 ID 如 (S1,S2)（官方规范）；从不发声的角色不分配 ID；retention_analysis 中禁写 (Sx)
-3. 台词 <d>[中文]原文</d> 逐字保留（原词原标点，句末以 。？！结束，不译不改写，H3 原生对白配音；听不清的片段写 [unclear] 不许猜写）。【说话人硬约束】分镜 dialogue 的每句台词必须由标注的对应角色开口说出：写该角色 <Subject N> (Sx) says: <d>…</d>——谁说的就是谁，禁止把台词安到别的角色头上、禁止把角色台词改写成旁白/画外音
-4. 【旁白 = H3 原生画外音，不是 TTS，更不是角色台词】：只有分镜 narration 字段的内容才写 The narrator (S1) says in an off-screen voiceover: <d>[中文]旁白</d> while the on-screen characters' lips remain completely closed（旁白计入 (S1) 说话顺序；旁白与台词不同时出现；【硬约束】分镜 dialogue 里的角色台词禁止写成旁白——必须由对应角色开口，画面中该角色嘴唇在动）
+3. 台词 <d>…</d> 逐字保留（d 标签内=分镜台词中文原文,原词原标点，句末以 。？！结束，不译不改写,H3 原生对白配音;禁止在 d 标签内写「中文」「原文」等占位字样——<d>[中文]陈默？</d> 是错误示范,正确是 <d>陈默？</d>;听不清的片段写 [unclear] 不许猜写）。【说话人硬约束】分镜 dialogue 的每句台词必须由标注的对应角色开口说出：写该角色 <Subject N> (Sx) says: <d>…</d>——谁说的就是谁，禁止把台词安到别的角色头上、禁止把角色台词改写成旁白/画外音
+4. 【旁白 = H3 原生画外音，不是 TTS，更不是角色台词】：只有分镜 narration 字段的内容才写 The narrator (S1) says in an off-screen voiceover: <d>…</d>（d 标签内=narration 中文原文,禁止写「中文」「旁白」等占位字样）while the on-screen characters' lips remain completely closed（旁白计入 (S1) 说话顺序；旁白与台词不同时出现；【硬约束】分镜 dialogue 里的角色台词禁止写成旁白——必须由对应角色开口，画面中该角色嘴唇在动）
 5. 画外音台词也写 says in an off-screen voiceover ... while his/her lips remain completely closed
 6. 【跨镜台词连续性（官方标签）】同一句台词跨越镜头切点时，两段接续处各写 <scenetrans> 并声明音频跨切点连续（continues seamlessly across the cut / carries over from the previous shot）；台词被视频结尾截断写 <cutoff>
 7. 运镜三要素（类型+幅度+速度）写成句内自然英语（Push In/Pull Out/Pan Left/Pan Right/Truck/Tilt/Pedestal/Arc/Tracking/Static/POV/Roll/Shake；幅度 with small/large amplitude、速度 at slow/fast speed，中等默认省略——官方词表）

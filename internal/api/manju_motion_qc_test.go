@@ -58,20 +58,20 @@ func TestManjuQPromptHairLock(t *testing.T) {
 func TestManjuFinalizePromptPureIdempotent(t *testing.T) {
 	hp := "subject_definitions:\n<Subject 1> is a man.\n\ndetailed_description:\nThe camera pushes in."
 	for _, hasChars := range []bool{true, false} {
-		once := manjuFinalizePromptPure(hp, hasChars)
-		twice := manjuFinalizePromptPure(once, hasChars)
+		once := manjuFinalizePromptPure(hp, hasChars, 0)
+		twice := manjuFinalizePromptPure(once, hasChars, 0)
 		if once != twice {
 			t.Fatalf("finalize 必须幂等(hasChars=%v):\nonce: %q\ntwice: %q", hasChars, once, twice)
 		}
 	}
-	full := manjuFinalizePromptPure(hp, true)
+	full := manjuFinalizePromptPure(hp, true, 3)
 	if !strings.Contains(full, "FRAME DISCIPLINE") || !strings.Contains(full, "MOTION DISCIPLINE") {
 		t.Fatalf("有角色镜应同时含人脸纪律与运动纪律: %q", full)
 	}
 	if !strings.Contains(full, "CHAIN DISCIPLINE") {
 		t.Fatalf("所有镜头应含链式衔接纪律(恒定注入保指纹稳定): %q", full)
 	}
-	noChar := manjuFinalizePromptPure(hp, false)
+	noChar := manjuFinalizePromptPure(hp, false, 0)
 	// 2026-08-27 语义更新:人物纪律按"提示词有无 subject_definitions"判定,不再只看
 	// characters——群像无卡镜(群演无角色卡)同样必须有人脸纪律+无参考图纪律
 	// (用户反馈 04/05 镜周管事渲染两次的根因)。
@@ -86,14 +86,14 @@ func TestManjuFinalizePromptPureIdempotent(t *testing.T) {
 	}
 	// 真空镜(无 subject_definitions)不注入人物纪律,但运动/链式/台词纪律恒定
 	scenery := "detailed_description:\nA wide shot of the empty corridor."
-	noSub := manjuFinalizePromptPure(scenery, false)
+	noSub := manjuFinalizePromptPure(scenery, false, 3)
 	if strings.Contains(noSub, "FRAME DISCIPLINE") || strings.Contains(noSub, "no reference picture is attached") {
 		t.Fatalf("空镜不应注入人物纪律: %q", noSub)
 	}
 	if !strings.Contains(noSub, "MOTION DISCIPLINE") || !strings.Contains(noSub, "CHAIN DISCIPLINE") || !strings.Contains(noSub, "AUDIO DISCIPLINE") {
 		t.Fatalf("空镜也应注入运动/链式/台词纪律: %q", noSub)
 	}
-	if manjuFinalizePromptPure("", true) != "" {
+	if manjuFinalizePromptPure("", true, 0) != "" {
 		t.Fatal("空提示词应原样返回")
 	}
 }

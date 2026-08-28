@@ -638,13 +638,31 @@ const manjuNoRefGuard = "REFERENCE NOTE: no reference picture is attached to thi
 // 旧版 guard 只在 renderShotTo 的值拷贝里注入,manifestMark 记的是"含 guard"指纹,
 // 而下次运行的 stale 检查用原始 prompt 算指纹——有角色镜恒 stale 反复重渲。现在指纹
 // 计算与渲染共用本函数,两侧永远一致(幂等:已含关键短语不重复追加)。
-func manjuFinalizePromptPure(hp string, hasChars bool) string {
+// reDialogueTagNoise 规范示例占位符被 LLM 字面抄袭的清洗(2026-08-28 EP01 实锤:
+// 爽文技能规范写「台词 <d>[中文]原文</d>」,LLM 把「[中文]」原样抄进台词——
+// H3 直出 <d>[中文]陈默？</d>,配音把「中文」二字念出来/对白驱动失效)。
+// 渲染最终化是 plan 三条加载路径(脚本解析/LLM 直出/落盘读回)的共用汇点,在这里剥
+// 一层,同时指纹基于最终化文本,清洗生效即缓存自动失效,无需动代数。
+var reDialogueTagNoise = regexp.MustCompile(`(?i)(<d>)\s*\[(?:中文|chinese)\]\s*`)
+
+// manjuFinalizePromptPure 渲染提示词最终化纯函数(指纹/编码/渲染三处一致)。
+// picSlots:本镜实际提交的参考图槽位数(人物视图数+场景图 0/1)——2026-08-28 Picture
+// 引用对齐:h3(脚本直出)按叙述写 <Picture N>,与渲染端实际提交顺序(人物图前+场景图
+// 后)不保证一致;超界引用(道具句 Picture N>槽位数)会错位指到别的图,必须剥除。
+// 无人物图镜(picSlots<=1 且 hasChars=false)的人物主体句 Picture 引用同样剥除——
+// 唯一槽位是场景图,人物句引用它=拿场景图当人脸参考(EP01 镜3 实锤:城市夜景图被当
+// 陈默长相,<Picture 1> is Chen Mo 完全错位)。
+func manjuFinalizePromptPure(hp string, hasChars bool, picSlots int) string {
 	if hp == "" {
 		return hp
 	}
 	if out, _ := manjuSanitizeRenderWords(hp); out != "" {
 		hp = out
 	}
+	if cleaned := reDialogueTagNoise.ReplaceAllString(hp, "$1"); cleaned != hp {
+		hp = cleaned
+	}
+	hp = manjuStripDanglingPictureRefs(hp, hasChars, picSlots)
 	// 人物纪律覆盖面(2026-08-27 修复):frameGuard 旧条件是 hasChars(登场角色非空),
 	// 群像无卡镜(subject_definitions 定义了牢头/牢卒等群演,但 characters 为空)整段漏掉
 	// ——无参考图+无纪律,链上白发形象被复制给每个主体 = 周管事入画多次。有主体即约束。
@@ -652,9 +670,15 @@ func manjuFinalizePromptPure(hp string, hasChars bool) string {
 	if (hasChars || hasSubjects) && !strings.Contains(hp, "no extra faces") {
 		hp = strings.TrimRight(hp, " \n") + "\n" + manjuFrameGuard
 	}
-	// 无参考图的人物镜:<Picture N> 悬空,显式声明按文字各自成型、禁止形象互抄
-	if !hasChars && hasSubjects && !strings.Contains(hp, "no reference picture is attached") {
-		hp = strings.TrimRight(hp, " \n") + "\n" + manjuNoRefGuard
+	// 无人物参考图的人物镜:声明按文字各自成型、禁止形象互抄。有场景图时(picSlots>=1)
+	// 明示唯一挂图是环境参考而非人脸参考(EP01 镜3:城市夜景图被 <Picture 1> is Chen Mo
+	// 错位引用,H3 拿场景图当人物长相)。幂等锚=REFERENCE NOTE 开头串,两种变体共用。
+	if !hasChars && hasSubjects && !strings.Contains(hp, "REFERENCE NOTE:") {
+		guard := manjuNoRefGuard
+		if picSlots >= 1 {
+			guard = "REFERENCE NOTE: the only attached picture is a scene/environment reference, NOT a person; ignore any <Picture N> mention on human subjects and render every person strictly as described in subject_definitions, with each person clearly distinct from the others (different age, build, hairstyle and clothing as described); never copy any face, hairstyle or clothing from the attached scene picture onto any person"
+		}
+		hp = strings.TrimRight(hp, " \n") + "\n" + guard
 	}
 	if !strings.Contains(hp, "AUDIO DISCIPLINE") {
 		hp = strings.TrimRight(hp, " \n") + "\n" + manjuAudioGuard
@@ -676,7 +700,7 @@ func (ctx *manjuCtx) finalizeShotPrompt(hp string, s manjuShot, lg *manjuLogger)
 		return hp
 	}
 	before := hp
-	hp = manjuFinalizePromptPure(hp, len(s.Characters) > 0)
+	hp = manjuFinalizePromptPure(hp, len(s.Characters) > 0, ctx.shotPicSlots(s))
 	// ①违规词替换(同义/谐音)——日志提示
 	if _, repl := manjuSanitizeRenderWords(before); len(repl) > 0 {
 		var parts []string
@@ -685,6 +709,90 @@ func (ctx *manjuCtx) finalizeShotPrompt(hp string, s manjuShot, lg *manjuLogger)
 		}
 		sort.Strings(parts)
 		lg.logf(fmt.Sprintf("  ⚠️ 镜头 %d 检测到违规词,已同义/谐音替换: %s", s.ID, strings.Join(parts, "、")))
+	}
+	return hp
+}
+
+// shotPicSlots 该镜实际提交给 H3 的参考图槽位数(= charRefNames 数 + 场景图 0/1,
+// 不含 FL2VA 尾帧):与 charRefNames/sceneRefName 的提交顺序同源,指纹与渲染共用。
+func (ctx *manjuCtx) shotPicSlots(s manjuShot) int {
+	n := len(s.Characters)
+	if n > 3 {
+		n = 3
+	}
+	slots := 0
+	for i, cid := range s.Characters {
+		if i >= 3 {
+			break
+		}
+		slots += len(ctx.charViewRels(cid, i, n))
+	}
+	if s.Scene != "" && fileExists(filepath.Join(ctx.assetsDir, "scenes", s.Scene+".png")) {
+		slots++
+	}
+	return slots
+}
+
+// rePicRef <Picture N> 引用(含可选的 in/and/as 前缀连接词由上下文处理,这里只抓标签)
+var rePicRef = regexp.MustCompile(`<Picture\s*(\d+)\s*>`)
+
+// manjuStripDanglingPictureRefs 剥除错位的 <Picture N> 引用(2026-08-28 EP01 人物不一致
+// 根治层):h3 的 Picture 编号是脚本作者按叙述假设的,渲染端实际提交顺序=人物视图图+
+// 场景图——两张清单不保证一致,错位引用会让 H3 拿错图当参考:
+//   ①超界引用(N>picSlots):道具/多视图句错位指到别人的图 → 剥除标签(句子保留纯文字描述);
+//   ②无人物图镜(hasChars=false)的人物主体句:唯一槽位是场景图,人物句引用它=拿场景图
+//     当人脸(EP01 镜3 <Picture 1> is Chen Mo 错位)→ 人物句的 Picture 引用全剥。
+func manjuStripDanglingPictureRefs(hp string, hasChars bool, picSlots int) string {
+	if picSlots < 0 {
+		picSlots = 0
+	}
+	if !strings.Contains(hp, "<Picture") {
+		return hp
+	}
+	// 场景环境词:主体句含这些词=环境/场景句(可引用场景槽),否则视为人物/道具句
+	envWords := []string{"environment", "scene", "office", "room", "floor", "landscape",
+		"sky", "street", "background", "corridor", "hallway", "building", "city", "interior"}
+	isEnvLine := func(line string) bool {
+		low := strings.ToLower(line)
+		for _, w := range envWords {
+			if strings.Contains(low, w) {
+				return true
+			}
+		}
+		return false
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(hp, "\n") {
+		if !strings.Contains(line, "<Picture") {
+			b.WriteString(line)
+			b.WriteString("\n")
+			continue
+		}
+		stripWhole := !hasChars && !isEnvLine(line) && strings.Contains(line, "<Subject")
+		newLine := line
+		for _, m := range rePicRef.FindAllStringSubmatch(line, -1) {
+			n, err := strconv.Atoi(m[1])
+			if err != nil {
+				continue
+			}
+			if n > picSlots || stripWhole {
+				newLine = strings.Replace(newLine, m[0], "", 1)
+			}
+		}
+		if newLine != line {
+			// 剥标签后残留的连接词清理(" in " 悬空 / 双空格),保持英文句子通顺
+			newLine = regexp.MustCompile(`\s+(in|and|as)\s+(\s*,|[,;])`).ReplaceAllString(newLine, ",")
+			newLine = regexp.MustCompile(`\bin\s{2,}`).ReplaceAllString(newLine, " ")
+			newLine = regexp.MustCompile(`\s{2,}`).ReplaceAllString(newLine, " ")
+			newLine = regexp.MustCompile(`\s+([,.;])`).ReplaceAllString(newLine, "$1")
+		}
+		b.WriteString(newLine)
+		b.WriteString("\n")
+	}
+	out := strings.TrimRight(b.String(), "\n")
+	if len(out) != len(hp) {
+		// 保留原文结尾换行语义(末尾空行损失无碍,内容完整即可)
+		return out
 	}
 	return hp
 }
@@ -1573,20 +1681,18 @@ func manjuSanitizePlanIDs(plan map[string]any) {
 		renames[raw] = safe
 		return safe
 	}
-	// 伪场景过滤:素材全局配置段不是场景(id 命中黑名单的整条删除,并清镜头引用)
-	dropScene := func(id string) bool {
-		for _, k := range []string{"负向", "负面", "negative", "统一风格", "质量后缀", "统一前缀", "色锚", "记忆点", "全书"} {
-			if strings.Contains(strings.ToLower(id), strings.ToLower(k)) {
-				return true
-			}
-		}
-		return false
-	}
+	// 伪场景过滤:素材全局配置段不是场景(id 命中黑名单的整条删除,并清镜头引用)。
+	// 2026-08-28 补「封面」且扫 description:EP01 实锤——场景卡「城市夜景大远景」id 干净,
+	// desc 写「封面备用·开篇/终章」,封面备用卡混进正片场景池,经别名匹配+最高频兜底
+	// 传染全片(办公室戏全挂城市大远景参考图)。封面/备用卡不属于任何正片镜头,整条删。
+	dropScene := func(id string, desc string) bool { return manjuSceneDropped(id, desc) }
 	var keptScenes []any
+	dropped := map[string]bool{}
 	for _, x := range anyArr(plan["scenes"]) {
 		if m, ok := x.(map[string]any); ok {
 			if id := str(m["id"]); id != "" {
-				if dropScene(id) {
+				if dropScene(id, str(m["description"])) {
+					dropped[id] = true
 					continue
 				}
 				m["id"] = assign(id)
@@ -1610,7 +1716,11 @@ func manjuSanitizePlanIDs(plan map[string]any) {
 			continue
 		}
 		if sid := str(m["scene"]); sid != "" {
-			if s2, moved := renames[sid]; moved {
+			if dropped[sid] {
+				// 引用被删伪场景/封面卡的镜头:置空(渲染端空 scene 不挂场景图,h3 文本
+				// 自述场景),绝不残留指向已删卡的引用继续挂错图
+				m["scene"] = ""
+			} else if s2, moved := renames[sid]; moved {
 				m["scene"] = s2
 			}
 		}
@@ -4130,7 +4240,7 @@ func (ctx *manjuCtx) shotCondFingerprintAt(s manjuShot, w, h int) string {
 	}
 	// 提示词走最终化纯函数(2026-08-27 指纹对称修复):mark(渲染后)与 stale 检查(下次
 	// 运行)都必须基于同一份"含 guard 的最终化文本"算指纹,否则有角色镜恒 stale 反复重渲
-	finalPrompt := manjuFinalizePromptPure(s.H3Prompt, len(s.Characters) > 0)
+	finalPrompt := manjuFinalizePromptPure(s.H3Prompt, len(s.Characters) > 0, ctx.shotPicSlots(s))
 	fmt.Fprintf(hh, "w=%d|h=%d|len=%d|chars=%s|scene=%s|refs=%s|fl2va_end=%t|prompt=%s",
 		w, h, h3Length(s.Duration, ctx.fps),
 		strings.Join(s.Characters, ","), s.Scene, strings.Join(refs, ","), endFrame, finalPrompt)

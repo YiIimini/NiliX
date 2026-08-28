@@ -15,7 +15,8 @@ func TestFinalizePromptGuards(t *testing.T) {
 	sceneryShot := "detailed_description:\nA wide shot of the empty dungeon corridor, dripping water."
 
 	// ① 群像无卡镜:characters 空,但有主体 → frameGuard + NoRef + Audio 全到位
-	out := manjuFinalizePromptPure(subjectShot, false)
+	// (0 槽=纯无图;1 槽=只挂场景图 → scene-only 变体,人物禁抄场景图脸)
+	out := manjuFinalizePromptPure(subjectShot, false, 0)
 	if !strings.Contains(out, "never show the same character twice") {
 		t.Error("群像无卡镜缺 frameGuard(同一人物不得出现两次)")
 	}
@@ -25,9 +26,13 @@ func TestFinalizePromptGuards(t *testing.T) {
 	if !strings.Contains(out, "AUDIO DISCIPLINE") {
 		t.Error("群像无卡镜缺台词纪律")
 	}
+	outSceneOnly := manjuFinalizePromptPure(subjectShot, false, 1)
+	if !strings.Contains(outSceneOnly, "scene/environment reference") {
+		t.Error("只挂场景图的群像镜缺 scene-only 纪律(人物禁抄场景图)")
+	}
 
 	// ② 角色镜:frameGuard 在,但不需要 NoRef(有参考图)
-	out = manjuFinalizePromptPure(charShot, true)
+	out = manjuFinalizePromptPure(charShot, true, 3)
 	if !strings.Contains(out, "never show the same character twice") {
 		t.Error("角色镜缺 frameGuard")
 	}
@@ -39,7 +44,7 @@ func TestFinalizePromptGuards(t *testing.T) {
 	}
 
 	// ③ 空镜:无人物纪律,但台词纪律仍加(旁白也在 <d>,不误伤)
-	out = manjuFinalizePromptPure(sceneryShot, false)
+	out = manjuFinalizePromptPure(sceneryShot, false, 3)
 	if strings.Contains(out, "never show the same character twice") {
 		t.Error("空镜不应有人物纪律")
 	}
@@ -51,7 +56,7 @@ func TestFinalizePromptGuards(t *testing.T) {
 	}
 
 	// ④ 幂等:重复 finalize 不重复追加
-	out2 := manjuFinalizePromptPure(out, false)
+	out2 := manjuFinalizePromptPure(out, false, 3)
 	if strings.Count(out2, "AUDIO DISCIPLINE") != 1 || strings.Count(out2, "MOTION DISCIPLINE") != 1 {
 		t.Error("纪律重复追加")
 	}

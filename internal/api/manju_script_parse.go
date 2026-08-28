@@ -206,8 +206,12 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 // 6=群演轻量卡(有台词无角色卡的说话人自动建卡 minor:true,characters 纳入说话人——
 //   挂参考图锁形象,资产阶段只出 1 张定妆照,氛围群演仍走渲染纪律);
 // 7=素材四硬规范回写(人物生成提示词存量卡补性别词 male/female+剥背景词/场景叙事句
-//   ——plan.characters 缓存的是旧素材内容,须重解析吸收)。
-const manjuScriptParseVer = 7
+//   ——plan.characters 缓存的是旧素材内容,须重解析吸收);
+// 8=场景匹配根治(2026-08-28 EP01 事故:办公室戏 18 镜全挂封面卡「城市夜景大远景」):
+//   ①matchSceneByAlias 重写为场景卡动态特征词滑窗匹配(旧硬编码别名表是美食书的规则,
+//   跨书污染);②封面备用卡不入匹配池与 scenes;③最高频兜底需 ≥2 票(1 票不当选);
+//   ④空镜向后继承(特写镜归前后场景);⑤全失效宁可留空不挂错图。
+const manjuScriptParseVer = 8
 
 // scriptParsePlan 脚本直出程序化解析入口。
 // 解析出 characters/scenes/shots/directing/episode_title/chapters=script。
@@ -366,6 +370,22 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 
 	// 3) 角色/场景卡:素材(workdir/素材/ 优先,其次 novel 素材目录)
 	charCards, sceneCards := ctx.parseScriptAssetCards(lg)
+	// 2026-08-28 封面备用卡不入正片场景池(EP01 实锤:「城市夜景大远景」desc 写「封面备用·
+	// 开篇/终章」,混进场景池后被兜底逻辑传染全片)。它不属于任何正片镜头,匹配池和
+	// scenes 列表都不进;loadPlan 的 manjuSanitizePlanIDs 同步 drop(双保险)。
+	usableScenes := make([]map[string]any, 0, len(sceneCards))
+	for _, sc := range sceneCards {
+		id, _ := sc["id"].(string)
+		desc, _ := sc["description"].(string)
+		if manjuSceneDropped(id, desc) {
+			continue
+		}
+		usableScenes = append(usableScenes, sc)
+	}
+	if len(usableScenes) < len(sceneCards) {
+		lg.logf(fmt.Sprintf("  🚫 场景卡过滤:%d 张封面备用/伪配置卡不参与正片匹配", len(sceneCards)-len(usableScenes)))
+	}
+	sceneCards = usableScenes
 	// 4) 组装 plan
 	charsArr := []any{}
 	for _, c := range charCards {
@@ -439,6 +459,16 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 				charSet[cid] = true
 			}
 		}
+		// 2026-08-28 EP01 人物不一致根治:脚本画面叙述常用「男人/屏幕前的男人」代称(镜3
+		// h3 写 "Chen Mo in <Picture 1>",画面列只写「屏幕前的男人」),名字匹配判空 →
+		// 渲染端不挂人物参考图,h3 的 <Picture 1> 错位指到场景图 → H3 拿城市夜景图当
+		// 陈默的长相参考,人物与定妆照完全脱钩。这里用 h3 主体句与角色卡英文提示词的
+		// 特征词重叠把漏判人物捞回(有参考图,Picture 编号自然对齐)。
+		if raw.H3Prompt != "" {
+			for _, cid := range manjuCharsFromH3(raw.H3Prompt, charCards, charIDs) {
+				charSet[cid] = true
+			}
+		}
 		// 台词说话人强制入画(谁说的就是谁);画外群杂豁免(2026-08-27:画外·前缀
 		// =画外群众议论,不入画不占角色名额——叙述群众议论化的解析契约)
 		for _, dm := range reDialogue.FindAllStringSubmatch(raw.Dialogue+" "+raw.Narration, -1) {
@@ -505,7 +535,26 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 		}
 		shotsArr = append(shotsArr, shot)
 	}
-	// 2026-08-25 全集最高频场景兜底:首镜无场景可继承时,把剩余空场景镜头统一到出现次数最多的场景卡。
+	// 2026-08-28 场景收尾三件套(EP01 事故根治:办公室戏 18 镜全挂「城市夜景大远景」封面卡):
+	// ①向后继承:精确/特征匹配都未命中且前面没有可继承场景的镜(如桌面特写),从最近的后
+	//   续命中镜回填——电影语法特写镜属于前后所在场景,「镜2 桌面特写」归入「镜9 深夜工位」;
+	// ②最高频兜底:首镜仍空时用全集最高频场景统一,但需 ≥2 票——1 票当选没有统计意义
+	//   (旧逻辑里唯一命中的封面卡 1 票就把 17 个空镜全部传染);
+	// ③宁可空不乱挂:全部失效后 scene 留空,渲染端空 scene 不挂场景参考图(h3 文本自述
+	//   场景),绝不挂错图撕裂图文。
+	for i := len(shotsArr) - 1; i >= 0; i-- {
+		m, _ := shotsArr[i].(map[string]any)
+		if m == nil || str(m["scene"]) != "" {
+			continue
+		}
+		for j := i + 1; j < len(shotsArr); j++ {
+			m2, _ := shotsArr[j].(map[string]any)
+			if m2 != nil && str(m2["scene"]) != "" {
+				m["scene"] = str(m2["scene"])
+				break
+			}
+		}
+	}
 	if len(shotsArr) > 0 {
 		if s0, _ := shotsArr[0].(map[string]any); s0 != nil && str(s0["scene"]) == "" {
 			freq := map[string]int{}
@@ -520,7 +569,7 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 					}
 				}
 			}
-			if top != "" {
+			if topN >= 2 {
 				for _, sh := range shotsArr {
 					if m, _ := sh.(map[string]any); m != nil && str(m["scene"]) == "" {
 						m["scene"] = top
@@ -1200,37 +1249,186 @@ func scriptDirectingFrom(text string) map[string]any {
 
 // matchSceneByAlias 场景卡别名匹配:画面描述词(小馆/店堂/门口/灶台/老街…) → 场景卡 id。
 // 别名表是通用电影语法词 → 场景类型,命中后还需该场景卡描述含对应关键词才算(防错配)。
-func matchSceneByAlias(pool string, sceneCards []map[string]any) string {
-	type aliasRule struct{ words []string; need []string }
-	rules := []aliasRule{
-		{[]string{"小馆", "店堂", "面馆", "灶台", "厨房", "馆内"}, []string{"小馆", "面馆", "灶", "厨"}},
-		{[]string{"老街", "街道", "街景", "门口", "夜景", "轿车"}, []string{"老街", "街", "门口", "夜景"}},
-		{[]string{"大堂", "酒楼", "餐厅", "饭店"}, []string{"大堂", "酒楼", "餐厅"}},
-		{[]string{"考核", "考场", "大殿", "殿"}, []string{"考核", "大殿", "殿"}},
-		{[]string{"赛场", "争霸", "擂台"}, []string{"赛场", "争霸", "灶台"}},
+// manjuCharsFromH3 从六段式主体句捞回漏判登场角色(2026-08-28 EP01 人物不一致根治)。
+// 脚本画面列常以「屏幕前的男人」代称不写角色名,但 h3 的 subject_definitions 会照角色卡
+// 写英文外观(short messy black hair, black-framed glasses…)——主体句与角色卡英文
+// image_prompt 的特征词重叠 ≥3 即认定该角色在场(镜3 "Chen Mo in <Picture 1>" 与陈默卡
+// 高重叠 → 捞回,渲染端挂上参考图,<Picture 1> 编号自然对齐)。
+// 返回按 charIDs 顺序的命中角色;人名直写(中文名出现在 h3)优先直接命中。
+func manjuCharsFromH3(h3 string, charCards []map[string]any, charIDs []string) []string {
+	// subject_definitions 区的 <Subject N> is … 行(人物主体句;六段式逐镜都有,行内引用 Picture)
+	subLines := []string{}
+	subLines = reH3SubjectLine.FindAllString(h3, -1)
+	for i := range subLines {
+		subLines[i] = strings.ToLower(subLines[i])
 	}
-	for _, rule := range rules {
-		hit := false
-		for _, w := range rule.words {
-			if strings.Contains(pool, w) {
-				hit = true
-				break
-			}
-		}
-		if !hit {
+	if len(subLines) == 0 {
+		return nil
+	}
+	h3Low := strings.ToLower(h3)
+	var out []string
+	for _, cid := range charIDs {
+		if cid == "" {
 			continue
 		}
-		for _, sc := range sceneCards {
-			id, _ := sc["id"].(string)
-			desc, _ := sc["description"].(string)
-			for _, nd := range rule.need {
-				if strings.Contains(desc+id, nd) {
-					return id
+		// 中文名直写:h3 里出现角色中文名(脚本文风混杂时兜底)
+		if strings.Contains(h3Low, strings.ToLower(cid)) {
+			out = append(out, cid)
+			continue
+		}
+		for _, sc := range charCards {
+			if id, _ := sc["id"].(string); id != cid {
+				continue
+			}
+			prompt, _ := sc["image_prompt"].(string)
+			if prompt == "" {
+				continue
+			}
+			cardWords := manjuEnFeatureWords(prompt)
+			if len(cardWords) == 0 {
+				continue
+			}
+			for _, line := range subLines {
+				overlap := 0
+				for _, w := range cardWords {
+					if strings.Contains(line, w) {
+						overlap++
+					}
 				}
+				if overlap >= 3 {
+					out = append(out, cid)
+					break
+				}
+			}
+			break
+		}
+	}
+	return out
+}
+
+// reH3SubjectLine 六段式主体定义行:<Subject N> is … (到行尾)
+var reH3SubjectLine = regexp.MustCompile(`(?im)^.*<Subject\s+\d+>\s+is\s+.+$`)
+
+// manjuEnFeatureWords 英文提示词特征词集(小写、去停用词,只留 ≥3 字母实词):
+// 用于主体句 ↔ 角色卡的重叠匹配
+func manjuEnFeatureWords(s string) []string {
+	stop := map[string]bool{
+		"the": true, "and": true, "with": true, "his": true, "her": true, "she": true,
+		"has": true, "have": true, "are": true, "was": true, "for": true, "from": true,
+		"this": true, "that": true, "into": true, "over": true, "under": true, "near": true,
+		"who": true, "which": true, "while": true, "wearing": true, "wears": true, "man": true,
+		"woman": true, "old": true, "young": true, "year": true, "years": true, "age": true,
+		"character": true, "form": true, "living": true, "picture": true, "subject": true,
+	}
+	words := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z')
+	})
+	seen := map[string]bool{}
+	var out []string
+	for _, w := range words {
+		if len(w) < 3 || stop[w] || seen[w] {
+			continue
+		}
+		seen[w] = true
+		out = append(out, w)
+	}
+	return out
+}
+
+// manjuSceneDropped 伪场景判定(id+description 双扫,解析期与 loadPlan sanitize 双处共用,
+// 保证两处黑名单永远一致):素材全局配置段(通用负向词/统一风格…)与封面备用卡不是场景。
+func manjuSceneDropped(id string, desc string) bool {
+	for _, k := range []string{"负向", "负面", "negative", "统一风格", "质量后缀", "统一前缀", "色锚", "记忆点", "全书", "封面"} {
+		if strings.Contains(strings.ToLower(id), strings.ToLower(k)) ||
+			strings.Contains(strings.ToLower(desc), strings.ToLower(k)) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchSceneByAlias 场景特征词匹配(2026-08-28 重写:旧硬编码别名表是美食书的规则,
+// 跨书污染——本书镜12 pool 含「门口」→ 旧规则 need「夜景」命中 id 含「夜景」的封面
+// 备用卡「城市夜景大远景」,再被最高频兜底传染全片,办公室戏全挂城市大远景参考图)。
+// 改为从场景卡自身动态提取实体特征词匹配,任何书通用:
+//   特征词 = id/description 的所有 ≥2 字连续中文子串(滑窗),剔除镜头语言泛词;
+//   pool 命中特征词数最多者胜,平局取 id 短者(更专一,如「深夜工位」vs「开放工位区」
+//   同中「工位」,取前者)。封面/备用卡已在上游 manjuSanitizePlanIDs drop,不进匹配池。
+func matchSceneByAlias(pool string, sceneCards []map[string]any) string {
+	best, bestHits, bestLen := "", 0, 0
+	for _, sc := range sceneCards {
+		id, _ := sc["id"].(string)
+		if id == "" {
+			continue
+		}
+		desc, _ := sc["description"].(string)
+		if manjuSceneDropped(id, desc) {
+			continue // 纯函数自洽:封面/伪配置卡即使混进列表也不参与匹配(上游已滤,双保险)
+		}
+		hits := 0
+		for _, w := range manjuSceneFeatureWords(id + " " + desc) {
+			if strings.Contains(pool, w) {
+				hits++
+			}
+		}
+		if hits == 0 {
+			continue
+		}
+		idLen := len([]rune(id))
+		if hits > bestHits || (hits == bestHits && (best == "" || idLen < bestLen)) {
+			best, bestHits, bestLen = id, hits, idLen
+		}
+	}
+	return best
+}
+
+// manjuSceneFeatureWords 场景卡实体特征词:文本里所有 ≥2 字连续中文子串(滑窗),
+// 剔除镜头语言/时间氛围泛词(城市/夜景/远景/深夜…任何场景都可能沾边,不构成场景身份)。
+// 滑窗而非分词:中文无分词依赖,「深夜工位」能拆出「工位」给 pool 含「工位隔断」的镜头命中。
+func manjuSceneFeatureWords(s string) []string {
+	var out []string
+	seen := map[string]bool{}
+	runes := []rune(s)
+	// 先取连续中文段,段内滑窗产 2..4 字子串(再长子串由精确匹配层覆盖,无需特征层)
+	segs := [][]rune{}
+	cur := []rune{}
+	for _, r := range runes {
+		if r >= 0x4e00 && r <= 0x9fff {
+			cur = append(cur, r)
+		} else {
+			if len(cur) > 0 {
+				segs = append(segs, cur)
+				cur = nil
 			}
 		}
 	}
-	return ""
+	if len(cur) > 0 {
+		segs = append(segs, cur)
+	}
+	for _, seg := range segs {
+		for n := 2; n <= 4; n++ {
+			for i := 0; i+n <= len(seg); i++ {
+				w := string(seg[i : i+n])
+				if manjuSceneGenericWord(w) || seen[w] {
+					continue
+				}
+				seen[w] = true
+				out = append(out, w)
+			}
+		}
+	}
+	return out
+}
+
+// manjuSceneGenericWord 镜头语言/时间氛围/素材元词——不构成场景身份的泛词
+func manjuSceneGenericWord(w string) bool {
+	switch w {
+	case "城市", "夜景", "远景", "大远景", "全景", "特写", "近景", "中景", "外景", "内景",
+		"白天", "深夜", "凌晨", "夜晚", "晚上", "清晨", "黄昏", "室内", "室外", "封面", "备用",
+		"开篇", "终章", "说明", "场景", "画面", "风格", "统一", "全局", "通用", "备用场景":
+		return true
+	}
+	return false
 }
 
 // firstN 取字符串前 n 个字符(日志告警用,防长文本刷屏)。

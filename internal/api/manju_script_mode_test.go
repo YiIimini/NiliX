@@ -75,7 +75,7 @@ func TestManjuScriptSystemOfficialFormat(t *testing.T) {
 		"non_diegetic_music",
 		"[Shot 1]",            // 镜头时间码语法
 		"At MM:SS.mmm",        // 切点时间
-		"<d>[中文]原文</d>",     // 台词逐字保留
+		"<d>…</d>",     // 台词逐字保留(2026-08-28 改省略号占位,防[中文]被抄)
 		"off-screen voiceover", // 画外音措辞
 		"lips remain completely closed",
 		"Ref2VA 六段式",   // 六段式模板
