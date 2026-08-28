@@ -325,3 +325,24 @@ func TestManjuCharsFromH3UniqueWords(t *testing.T) {
 		}
 	}
 }
+
+// 回归(2026-08-28 误杀修复):「深夜工位」是主场景,素材标题括号写「（主场景·夜·全书
+// 视觉锚）」并入 desc 后被伪卡词「全书」整卡误杀——EP01 整本书丢主场景。伪配置组
+// 只查 id;封面组仍查 id+desc(封面备用卡的标记在 desc 里)。
+func TestManjuSceneDroppedGrouping(t *testing.T) {
+	if manjuSceneDropped("深夜工位", "主场景·夜·全书视觉锚;说明:唯一亮着的工位,暖台灯孤岛×冷蓝夜色对比") {
+		t.Fatal("主场景 desc 含合法标注「全书视觉锚」不得误杀(伪卡词只查 id)")
+	}
+	if !manjuSceneDropped("城市夜景大远景", "封面备用·开篇/终章;说明:凌晨的城市,一栋写字楼里唯一亮着的窗") {
+		t.Fatal("封面备用卡(desc 含「封面」)必须 drop")
+	}
+	if !manjuSceneDropped("通用负向词", "") {
+		t.Fatal("伪配置卡(id 含「负向」)必须 drop")
+	}
+	if !manjuSceneDropped("统一风格前缀", "") {
+		t.Fatal("伪配置卡(id 含「统一风格」)必须 drop")
+	}
+	if manjuSceneDropped("劳动仲裁庭", "说明:庄重的仲裁庭") {
+		t.Fatal("正常场景卡不得误杀")
+	}
+}

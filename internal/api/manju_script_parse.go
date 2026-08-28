@@ -213,8 +213,11 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 //   ④空镜向后继承(特写镜归前后场景);⑤全失效宁可留空不挂错图;
 // 9=h3 捞人收紧(2026-08-28 过捞修复:卡间独有词重叠≥2 替代卡内词重叠≥3——共享模板词
 //   cinematic/photorealistic/doll 让镜3 把 12 角色全捞进 chars;主体句限定 subject_
-//   definitions 区,detailed_description 长句与任何卡都能凑够重叠)。
-const manjuScriptParseVer = 9
+//   definitions 区,detailed_description 长句与任何卡都能凑够重叠);
+// 10=伪场景判定分组(2026-08-28 误杀修复:「深夜工位」desc 含合法标注「全书视觉锚」
+//   被「全书」整卡误杀,EP01 丢主场景——伪配置组[负向/统一风格/全书]只查 id,封面组
+//   [封面/备用/开篇/终章]查 id+desc)。
+const manjuScriptParseVer = 10
 
 // scriptParsePlan 脚本直出程序化解析入口。
 // 解析出 characters/scenes/shots/directing/episode_title/chapters=script。
@@ -1355,12 +1358,22 @@ func manjuEnFeatureWords(s string) []string {
 	return out
 }
 
-// manjuSceneDropped 伪场景判定(id+description 双扫,解析期与 loadPlan sanitize 双处共用,
-// 保证两处黑名单永远一致):素材全局配置段(通用负向词/统一风格…)与封面备用卡不是场景。
+// manjuSceneDropped 伪场景判定(解析期与 loadPlan sanitize 双处共用,保证黑名单永远一致)。
+// 判定分组(2026-08-28 实测修正):
+//   封面组[封面/备用/开篇/终章]查 id+desc——「城市夜景大远景」的 desc 写「封面备用·
+//   开篇/终章」(素材解析时标题括号并入 desc),封面卡不属于任何正片镜头;
+//   伪配置组[负向/统一风格/全书…]只查 id——素材全局配置段(通用负向词/统一风格前缀/
+//   质量后缀/色锚系统)的名字本身命中;desc 里的「全书视觉锚」是合法主场景标注
+//   (「深夜工位（主场景·夜·全书视觉锚）」曾被「全书」误杀,EP01 整本书丢了主场景)。
 func manjuSceneDropped(id string, desc string) bool {
-	for _, k := range []string{"负向", "负面", "negative", "统一风格", "质量后缀", "统一前缀", "色锚", "记忆点", "全书", "封面"} {
+	for _, k := range []string{"封面", "备用", "开篇", "终章"} {
 		if strings.Contains(strings.ToLower(id), strings.ToLower(k)) ||
 			strings.Contains(strings.ToLower(desc), strings.ToLower(k)) {
+			return true
+		}
+	}
+	for _, k := range []string{"负向", "负面", "negative", "统一风格", "质量后缀", "统一前缀", "色锚", "记忆点", "全书"} {
+		if strings.Contains(strings.ToLower(id), strings.ToLower(k)) {
 			return true
 		}
 	}
