@@ -324,6 +324,16 @@ func TestManjuCharsFromH3UniqueWords(t *testing.T) {
 			t.Fatal("主体区外的描述词不得触发捞人")
 		}
 	}
+	// 镜9 反例(2026-08-29 误捞):主体区只有赵德柱人物句+dark office aisle 环境句——
+	// 短词 dark(陈默卡 dark circles 拆出的"独有"词)+环境句曾把陈默/林小满/猫全捞出,
+	// 4 人超 H3 参考图上限。收紧后:环境句无人物外观信号词不参与,独有词 ≥5 字母。
+	h3m9 := "subject_definitions:\n<Subject 1> is Zhao Dezhu in <Picture 1>, a middle manager with combed-over hair, navy polo shirt and gold watch.\n<Subject 2> is the dark office aisle in <Picture 2>, with cubicle partitions and the lit workstation.\n\nsummary:\n[reference generation] test."
+	got9 := manjuCharsFromH3(h3m9, cards, ids)
+	for _, c := range got9 {
+		if c != "赵德柱" {
+			t.Fatalf("镜9 环境句/短词不得捞人, want only 赵德柱(名字匹配层), got %v", got9)
+		}
+	}
 }
 
 // 回归(2026-08-28 误杀修复):「深夜工位」是主场景,素材标题括号写「（主场景·夜·全书

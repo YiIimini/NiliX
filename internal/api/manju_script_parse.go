@@ -216,8 +216,11 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 //   definitions 区,detailed_description 长句与任何卡都能凑够重叠);
 // 10=伪场景判定分组(2026-08-28 误杀修复:「深夜工位」desc 含合法标注「全书视觉锚」
 //   被「全书」整卡误杀,EP01 丢主场景——伪配置组[负向/统一风格/全书]只查 id,封面组
-//   [封面/备用/开篇/终章]查 id+desc)。
-const manjuScriptParseVer = 10
+//   [封面/备用/开篇/终章]查 id+desc);
+// 11=h3 捞人三层收紧(2026-08-29 镜9 误捞:短词 dark 恰为陈默卡独有,环境句「dark
+//   office aisle」触发捞人,镜9 4 角色超 H3 参考图上限告警)——独有词≥5字母+主体句
+//   须含人物外观信号词(hair/glasses/shirt/…),环境/道具句不参与捞人。
+const manjuScriptParseVer = 11
 
 // scriptParsePlan 脚本直出程序化解析入口。
 // 解析出 characters/scenes/shots/directing/episode_title/chapters=script。
@@ -1257,14 +1260,21 @@ func scriptDirectingFrom(text string) map[string]any {
 // 别名表是通用电影语法词 → 场景类型,命中后还需该场景卡描述含对应关键词才算(防错配)。
 // manjuCharsFromH3 从六段式主体句捞回漏判登场角色(2026-08-28 EP01 人物不一致根治)。
 // 脚本画面列常以「屏幕前的男人」代称不写角色名,但 h3 的 subject_definitions 会照角色卡
-// 写英文外观(short messy black hair, black-framed glasses…)——主体句与角色卡的
-// **独有外观词**重叠 ≥2 即认定在场。独有词=该卡有而其它卡没有(第一版用"卡内特征词
-// 重叠≥3"过捞:角色卡共享模板词 cinematic/photorealistic/doll/aesthetic,镜3 把 12 个
-// 角色全部捞进 chars,渲染挂图与人物纪律全乱——消共享词后 Chen Mo 的 plaid/flannel/
-// black-framed glasses 只在陈默卡出现,判据才成立)。
+// 写英文外观(short messy black hair, black-framed glasses…)——人物主体句与角色卡的
+// **独有外观词**重叠 ≥2 才认定在场。三层收紧(2026-08-29 镜9 误捞实测):
+//   ①独有词=该卡有而其它卡没有(消共享模板词 cinematic/photorealistic/doll/aesthetic
+//     ——第一版"卡内词重叠≥3"曾把 12 角色全捞进 chars);
+//   ②独有词长度 ≥5 字母:dark/black 这类短常见词可能在全书恰好独有(陈默卡 dark circles
+//     的 dark),环境句「dark office aisle」就会被当成陈默在场——镜9 曾因此捞出 4 人
+//     超参考图上限;glasses/flannel/ponytail 才有外观专属性;
+//   ③主体句必须含人物外观信号词(hair/glasses/shirt/collar/watch/skin/…):环境/道具
+//     主体句(office aisle/monitor face)不参与捞人。
 func manjuCharsFromH3(h3 string, charCards []map[string]any, charIDs []string) []string {
-	// 主体句:subject_definitions 区内含 <Subject N> is 的行(第一版抓全文行,detailed_
-	// description 长句与任何卡都能凑够重叠——必须限定主体定义区)
+	// 人物外观信号词:句含其一才算"人物主体句"(环境/道具句跳过)
+	personSignals := []string{"hair", "glasses", "shirt", "face", "eyes", "collar",
+		"watch", "skin", "jacket", "dress", "beard", "ponytail", "blouse", "suit",
+		"mustache", "bangs", "braid", "waistcoat", "sweater", "hoodie"}
+	// 主体句:subject_definitions 区内含 <Subject N> is 且带人物外观信号词的行
 	subLines := []string{}
 	if i := strings.Index(strings.ToLower(h3), "subject_definitions"); i >= 0 {
 		section := h3[i:]
@@ -1275,7 +1285,17 @@ func manjuCharsFromH3(h3 string, charCards []map[string]any, charIDs []string) [
 		}
 		for _, line := range strings.Split(section, "\n") {
 			low := strings.ToLower(line)
-			if strings.Contains(low, "<subject") && strings.Contains(low, " is ") {
+			if !strings.Contains(low, "<subject") || !strings.Contains(low, " is ") {
+				continue
+			}
+			isPerson := false
+			for _, sig := range personSignals {
+				if strings.Contains(low, sig) {
+					isPerson = true
+					break
+				}
+			}
+			if isPerson {
 				subLines = append(subLines, low)
 			}
 		}
@@ -1283,7 +1303,7 @@ func manjuCharsFromH3(h3 string, charCards []map[string]any, charIDs []string) [
 	if len(subLines) == 0 {
 		return nil
 	}
-	// 卡间独有词:word -> 拥有它的卡数;只留仅 1 卡有的词(共享模板词/通用美术词全消)
+	// 卡间独有词(≥5 字母,word -> 拥有它的卡数;只留仅 1 卡有的词)
 	wordOwners := map[string]int{}
 	cardWords := map[string]map[string]bool{}
 	for _, sc := range charCards {
@@ -1294,7 +1314,9 @@ func manjuCharsFromH3(h3 string, charCards []map[string]any, charIDs []string) [
 		}
 		words := map[string]bool{}
 		for _, w := range manjuEnFeatureWords(prompt) {
-			words[w] = true
+			if len(w) >= 5 {
+				words[w] = true
+			}
 		}
 		cardWords[id] = words
 		for w := range words {
