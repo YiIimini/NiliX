@@ -1211,16 +1211,41 @@ class DirView {
     });
     document.getElementById("mm-cancel").addEventListener("click", () => ManjuWorkbench.closeModal());
   }
-  /* 项目不存在:自动新建项目(封面/配置一并生成),交给用户在漫剧管理中配置参数后再启动 */
+  /* 项目不存在:先自动解析目录(2026-08-30 统一流程,与漫剧「新建项目」同链),
+     未满足条件显示具体错误;满足则按解析结果创建(全本为源,分镜脚本自动按章导入) */
   async createManju(novelDir) {
-    const name = novelDir.split(/[\\/]+/).filter(Boolean).pop() || "";
+    const name = novelDir.split(/[\/]+/).filter(Boolean).pop() || "";
     if (!name) return;
-    ManjuWorkbench.openModal("漫剧制作", `<div class="dir-loading">正在创建漫剧项目《${this.escapeHtml(name)}》…</div>`);
+    if (!this.ensureManju()) return;
+    ManjuWorkbench.openModal("漫剧制作", `<div class="dir-loading">正在解析小说目录《${this.escapeHtml(name)}》…</div>`);
+    let probe;
     try {
-      const r = await fetch("/api/manju/create", {
+      probe = await fetch("/api/manju/probe-dir", {
         method: "POST", headers: tokHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ name, novel: novelDir, apiKey: "" }),
+        body: JSON.stringify({ dir: novelDir }),
       }).then((r) => r.json());
+    } catch (e) {
+      ManjuWorkbench.closeModal();
+      this.alertManju("目录解析失败: " + this.escapeHtml(String((e && e.message) || e)));
+      return;
+    }
+    if (!probe || !probe.ok) {
+      ManjuWorkbench.closeModal();
+      const errs = (probe && probe.errors && probe.errors.length)
+        ? probe.errors.map((x) => "⛔ " + this.escapeHtml(x)).join("<br>")
+        : "⛔ 未找到小说全本与分镜脚本";
+      const books = (probe && probe.books && probe.books.length)
+        ? `<br>📚 该目录是书库根,检测到书: ${probe.books.map((b) => this.escapeHtml(b)).join("、")}` : "";
+      this.alertManju(`小说目录《${this.escapeHtml(name)}》未满足漫剧创建条件:<br>${errs}${books}`);
+      return;
+    }
+    const found = [];
+    if (probe.novelFile) found.push("📖 小说全本");
+    if (probe.storyN > 0) found.push(`🎬 分镜脚本 ${probe.storyN} 个(创建后自动按章导入)`);
+    if (probe.prompts && probe.prompts.length) found.push("📝 " + probe.prompts.join("、"));
+    ManjuWorkbench.rerenderModal("漫剧制作", `<div class="dir-loading">解析到 ${found.join(" · ")}<br>正在创建漫剧项目《${this.escapeHtml(name)}》…</div>`);
+    try {
+      const r = await ManjuWorkbench.createProjectFromProbe(probe, name, "");
       ManjuWorkbench.closeModal();
       if (!r.ok || !r.configPath) {
         this.alertManju("创建项目失败: " + this.escapeHtml(String((r.output || r.error || "未知错误")).trim()));
@@ -1231,7 +1256,9 @@ class DirView {
       this.closeReader();
       location.hash = "#/manju";
       const msg = document.getElementById("manju-render-msg");
-      if (msg) msg.textContent = "✅ 项目已创建：请在「渲染配置」设置风格/画幅等参数后点「一条龙」";
+      if (msg) msg.textContent = probe.storyN > 0
+        ? `✅ 项目已创建:已导入 ${r.imported || 0}/${r.total || 0} 个分镜脚本(每章一集),在「渲染配置」设置参数后点「一条龙」`
+        : "✅ 项目已创建:请在「渲染配置」设置风格/画幅等参数后点「一条龙」";
     } catch (e) {
       ManjuWorkbench.closeModal();
       this.alertManju("创建项目失败: " + this.escapeHtml(String((e && e.message) || e)));

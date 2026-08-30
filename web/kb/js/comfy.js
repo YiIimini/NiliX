@@ -29,6 +29,7 @@ const ComfyView = {
     $("cfy-start").addEventListener("click", () => this.startService());
     $("cfy-start-big").addEventListener("click", () => this.startService());
     $("cfy-stop").addEventListener("click", () => this.stopService());
+    $("cfy-versions").addEventListener("click", () => this.openVersions());
     $("cfy-open").addEventListener("click", () => {
       if (this.online) window.open(this.comfyUrl(), "_blank");
     });
@@ -255,5 +256,174 @@ const ComfyView = {
       this.renderLog();
     }, 2000);
     this.renderLog(); // 进入页面立即刷一次日志行
+  },
+
+  /* ---- 版本管理弹窗(2026-08-29):版本/模型/插件/工作流 检测展示,仅检测不更新 ---- */
+  _vmEsc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  },
+
+  // 非 GET 请求需会话 token(后端 auth);token 由页面注入(localStorage 兜底)
+  _vmToken() {
+    return window.NILIX_TOKEN || localStorage.getItem("nilix_token") || "";
+  },
+
+  _vmSize(mb) {
+    return mb >= 1024 ? (mb / 1024).toFixed(2) + " GB" : mb.toFixed(0) + " MB";
+  },
+
+  openVersions() {
+    if (this._vmOverlay) this._vmOverlay.remove();
+    const overlay = document.createElement("div");
+    overlay.className = "vm-modal";
+    overlay.innerHTML = `
+      <div class="vm-panel">
+        <div class="vm-head"><span class="vm-title">🛠 版本管理</span>
+          <span class="vm-head-btns">
+            <button class="vm-refresh" title="刷新(重新加载版本数据)" aria-label="刷新">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11A8 8 0 1 0 18.4 16"/><path d="M20 5v6h-6"/></svg>
+            </button>
+            <button class="vm-close" title="关闭" aria-label="关闭">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </span>
+        </div>
+        <div class="vm-body"><div class="vm-loading">加载中…</div></div>
+      </div>`;
+    overlay.querySelector(".vm-close").addEventListener("click", () => overlay.remove());
+    overlay.querySelector(".vm-refresh").addEventListener("click", () => this._vmLoad());
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+    this._vmOverlay = overlay;
+    this._vmLoad();
+  },
+
+  async _vmLoad() {
+    const bodyEl = this._vmOverlay.querySelector(".vm-body");
+    try {
+      const info = await (await fetch("/api/comfy/versions", { cache: "no-store" })).json();
+
+      const comfy = info.comfy || {};
+      const comfyLatest = info.comfy_latest || "";
+      const comfyCur = comfy.online ? (comfy.version || "—") : "服务未运行";
+      // 版本对比:相同→两绿;不同→当前红+最新绿(未检查时最新显示 —)。
+      // 比较前剥离前导 v/v(本地 0.34.0 vs tag v0.34.0 视为相同)
+      const verEq = (a, b) => String(a || "").replace(/^v/i, "") === String(b || "").replace(/^v/i, "");
+      const verCell = (cur, latest) => {
+        if (!latest) return `<span class="vm-cur">${this._vmEsc(cur)}</span><span class="vm-lat">—</span>`;
+        if (verEq(cur, latest)) return `<span class="vm-cur vm-ok">${this._vmEsc(cur)}</span><span class="vm-lat vm-ok">${this._vmEsc(latest)}</span>`;
+        return `<span class="vm-cur vm-bad" title="当前版本落后">${this._vmEsc(cur)}</span><span class="vm-lat vm-ok">${this._vmEsc(latest)}</span>`;
+      };
+      const pdd = info.pdd || {};
+      const pddBadge = pdd.available
+        ? `<span class="vm-badge vm-badge-ok" title="已安装 PDD Acc 8 步加速 LoRA(turbo_lora 指向该文件即启用)">PDD 加速可用</span>`
+        : `<span class="vm-badge" title="官方 8 步 PDD 加速 LoRA 未安装">PDD 加速未装</span>`;
+
+      const modelGroups = Object.entries(info.models || {}).filter(([, v]) => v && v.length);
+      let modelHtml = modelGroups.map(([label, items], gi) => {
+        const rows = items.slice(0, 30).map((m) => `
+          <div class="vm-row">
+            <span class="vm-mname" title="${this._vmEsc(m.name)}">${this._vmEsc(m.name)}</span>
+            <span class="vm-msize">${this._vmSize(m.size_mb)}</span>
+            <span class="vm-mmtime">${this._vmEsc(m.mtime)}</span>
+          </div>`).join("");
+        const more = items.length > 30 ? `<div class="vm-more">…共 ${items.length} 个</div>` : "";
+        return `
+          <div class="vm-group">
+            <div class="vm-group-head" data-target="vmg-${gi}">
+              <span class="vm-arrow">▾</span>${this._vmEsc(label)}<span class="vm-count">${items.length}</span>
+            </div>
+            <div class="vm-group-body" id="vmg-${gi}">${rows}${more}</div>
+          </div>`;
+      }).join("") || `<div class="vm-empty">暂无模型</div>`;
+
+      const plugins = info.plugins || [];
+      let pluginHtml = plugins.map((p) => {
+        if (!p.git) {
+          return `<div class="vm-row"><span class="vm-pname">${this._vmEsc(p.name)}</span>
+            <span class="vm-pmeta">非 git 安装</span><span class="vm-ver">${verCell(p.commit || "?", "")}</span></div>`;
+        }
+        const dirty = p.dirty ? `<span class="vm-badge vm-badge-warn" title="本地有未提交改动">改动</span>` : "";
+        const remote = (p.remote || "").replace(/^https:\/\/github.com\//, "").replace(/\.git$/, "");
+        return `<div class="vm-row"><span class="vm-pname" title="${this._vmEsc(p.remote || "")}">${this._vmEsc(p.name)}</span>
+          <span class="vm-pmeta">${this._vmEsc(remote)} ${dirty}</span>
+          <span class="vm-ver" data-plugin="${this._vmEsc(p.name)}">${verCell(p.commit || "?", p.latest || "")}</span></div>`;
+      }).join("") || `<div class="vm-empty">无插件</div>`;
+
+      const wfs = info.workflows || [];
+      let wfHtml = wfs.map((f) => `
+        <div class="vm-row"><span class="vm-mname" title="${this._vmEsc(f.name)}">${this._vmEsc(f.name)}</span>
+          <span class="vm-pmeta">${this._vmEsc(f.dir)} · ${this._vmSize((f.size || 0) / 1048576)} · ${this._vmEsc(f.mtime)}</span></div>`).join("")
+        || `<div class="vm-empty">暂无工作流</div>`;
+
+      const modelTotal = Object.values(info.models || {}).reduce((n, a) => n + (a || []).length, 0);
+      bodyEl.innerHTML = `
+        <div class="vm-section">
+          <div class="vm-sec-title">ComfyUI 版本<span class="vm-sec-hint">当前 / 最新</span></div>
+          <div class="vm-row"><span class="vm-pname">comfyui</span>
+            <span class="vm-ver">${verCell(comfyCur, comfyLatest)}</span>${pddBadge}</div>
+        </div>
+        <div class="vm-section">
+          <div class="vm-sec-title">模型(${modelTotal})</div>
+          <div class="vm-scroll">${modelHtml}</div>
+        </div>
+        <div class="vm-section">
+          <div class="vm-sec-title">插件(${plugins.length})<button class="vm-btn vm-btn-primary" id="vm-check-btn">🔄 检查更新</button></div>
+          <div class="vm-scroll">${pluginHtml}</div>
+        </div>
+        <div class="vm-section">
+          <div class="vm-sec-title">工作流(${wfs.length})</div>
+          <div class="vm-scroll vm-scroll-wf">${wfHtml}</div>
+        </div>`;
+
+      bodyEl.querySelectorAll(".vm-group-head").forEach((h) => {
+        h.addEventListener("click", () => {
+          const b = document.getElementById(h.dataset.target);
+          if (!b) return;
+          const collapsed = b.style.display === "none";
+          b.style.display = collapsed ? "" : "none";
+          h.querySelector(".vm-arrow").textContent = collapsed ? "▾" : "▸";
+        });
+      });
+
+      // 检查更新(仅检测:git fetch + 落后提交数,不更新文件)
+      const checkBtn = bodyEl.querySelector("#vm-check-btn");
+      checkBtn.addEventListener("click", async (ev) => {
+        const btn = ev.target;
+        btn.disabled = true; btn.textContent = "检查中…(网络)";
+        try {
+          const r = await (await fetch("/api/comfy/plugins/check", {
+            method: "POST",
+            headers: { "X-NiliX-Token": this._vmToken() },
+          })).json();
+          const res = (r && r.plugins) || {};
+          // 插件版本对比刷新(当前=本地 commit,最新=origin HEAD)
+          bodyEl.querySelectorAll(".vm-ver[data-plugin]").forEach((el) => {
+            const p = res[el.dataset.plugin];
+            if (!p) return;
+            if (p.error) { el.innerHTML = `<span class="vm-cur">?</span><span class="vm-lat">❓</span>`; el.title = p.error; }
+            else {
+              el.innerHTML = verCell(p.current || "?", p.latest || "");
+              el.title = p.behind > 0
+                ? "有更新:落后 " + p.behind + " 个提交(更新后需重启 ComfyUI)"
+                : "已是最新";
+            }
+          });
+          // ComfyUI 官方最新版本刷新(检查更新响应带回)
+          if (r.comfy_latest) {
+            const cvRow = bodyEl.querySelector(".vm-section .vm-row");
+            if (cvRow && cvRow.querySelector(".vm-ver")) {
+              const cur = cvRow.querySelector(".vm-cur") ? cvRow.querySelector(".vm-cur").textContent : "";
+              cvRow.querySelector(".vm-ver").innerHTML = verCell(cur, r.comfy_latest);
+            }
+          }
+        } catch (e) { btn.textContent = "检查失败"; }
+        setTimeout(() => { btn.disabled = false; btn.textContent = "🔄 检查更新"; }, 2000);
+      });
+    } catch (e) {
+      bodyEl.innerHTML = `<div class="vm-empty">加载失败:${this._vmEsc(e.message)}</div>`;
+    }
   },
 };

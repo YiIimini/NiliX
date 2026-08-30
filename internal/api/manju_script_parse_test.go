@@ -573,3 +573,92 @@ func TestScriptValidateAutoPatch(t *testing.T) {
 		t.Fatalf("不应重复补写: %s", raws[0].H3Prompt)
 	}
 }
+
+// 2026-08-30 ver14:内心·独白识别——「内心·角色名:内容」进 narration 保留「内心·」
+// 前缀(渲染端 Q 版挂载/画外音音色差异化依赖该前缀),不再被当说话人建幽灵群演卡;
+// 裸写(无 S 号)不再整句丢弃;光影/音效/风格列保留(此前解析后丢弃)。
+func TestScriptParseInnerMonologueAndCols(t *testing.T) {
+	script := `# 《测试》分镜脚本 · 第001章（第1集）
+
+## 一、分镜表（正文→镜头）
+
+| 镜号 | 景别 | 运镜 | 画面内容（可渲染） | 台词/旁白（带 ID） | 光影 | 音效 | 风格（可选） | 时长 |
+|---|---|---|---|---|---|---|---|---|
+| 01 | 特写 | 固定 | 【安步堂】化妆笔蘸粉,林九手腕悬空扫过嘴角 | 内心·林九:躺了一辈子,最后一次体面。 | 暖灯侧光 | 粉扑轻响 | real+magical | 4s |
+| 02 | 近景 | 固定 | 【安步堂】林九低头补色 | (S1)林九:"大娘,您别动。" | 暖灯,镜面反光 | 调色刀当啷落盘 | real | 5s |
+
+## 二、每镜 H3 提示词（六段式 Ref2VA）
+
+### Shot 01 —— 特写
+` + tplBacktick + `
+subject_definitions: <Subject 1> is Lin Jiu in <Picture 1>.
+summary: [reference generation] test.
+detailed_description: [Shot 1] test.
+overall_soundscape: test.
+non_diegetic_music: N/A.
+` + tplBacktick + `
+
+### Shot 02 —— 近景
+` + tplBacktick + `
+subject_definitions: <Subject 1> is Lin Jiu in <Picture 1>.
+summary: [reference generation] test.
+detailed_description: [Shot 1] test.
+overall_soundscape: test.
+non_diegetic_music: N/A.
+` + tplBacktick + `
+`
+	dir := t.TempDir()
+	scriptDir := filepath.Join(dir, "script")
+	_ = os.MkdirAll(scriptDir, 0o755)
+	sp := filepath.Join(scriptDir, "EP01.md")
+	_ = os.WriteFile(sp, []byte(script), 0o644)
+	cfgPath := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(cfgPath, []byte(`{"style":"real","paths":{"workdir":"`+filepath.ToSlash(dir)+`","script":"`+filepath.ToSlash(sp)+`"},"render":{}}`), 0o644)
+
+	ctx, err := newManjuCtx(cfgPath, "EP01", "", "", "")
+	if err != nil {
+		t.Fatalf("newManjuCtx: %v", err)
+	}
+	lg := &manjuLogger{state: manjuState}
+	plan, err := ctx.scriptParsePlan(lg)
+	if err != nil {
+		t.Fatalf("scriptParsePlan: %v", err)
+	}
+	shots, _ := planShots(plan)
+	if len(shots) < 2 {
+		t.Fatalf("镜头数不足: %d", len(shots))
+	}
+	// 内心·→ narration 保留前缀(渲染端 Q 版切换条件),不进 dialogue
+	if !strings.Contains(shots[0].Narration, "内心·林九:躺了一辈子,最后一次体面") {
+		t.Fatalf("内心·应进 narration 且保留前缀: %q", shots[0].Narration)
+	}
+	if strings.Contains(shots[0].Narration, "旁白") {
+		t.Fatalf("内心不应被当旁白: %q", shots[0].Narration)
+	}
+	if shots[0].Dialogue != "" {
+		t.Fatalf("内心不应进 dialogue: %q", shots[0].Dialogue)
+	}
+	// 镜2 对白正常解析
+	if !strings.Contains(shots[1].Dialogue, "林九:大娘,您别动") {
+		t.Fatalf("镜2 对白解析失败: %q", shots[1].Dialogue)
+	}
+	// 不建幽灵群演卡(「内心·林九」不得进 characters)
+	planChars, _ := plan["characters"].([]any)
+	for _, c := range planChars {
+		if m, ok := c.(map[string]any); ok {
+			if strings.Contains(str(m["id"]), "内心·") {
+				t.Fatalf("内心·不应建幽灵群演卡: %s", str(m["id"]))
+			}
+		}
+	}
+	// 光影/音效/风格三列保留(ver14,此前正则捕获后丢弃)
+	if shots[0].Light != "暖灯侧光" || shots[0].Sound != "粉扑轻响" {
+		t.Fatalf("光影/音效列未保留: light=%q sound=%q", shots[0].Light, shots[0].Sound)
+	}
+	if shots[0].Style != "real+magical" {
+		t.Fatalf("9 列风格列未保留: %q", shots[0].Style)
+	}
+	if shots[1].Style != "real" {
+		t.Fatalf("镜2 风格列未保留: %q", shots[1].Style)
+	}
+}

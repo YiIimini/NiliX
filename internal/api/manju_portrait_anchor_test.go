@@ -52,11 +52,23 @@ func TestManjuStyleAssetNoBareAnime(t *testing.T) {
 // scriptImagePrompt 素材抽卡同样执行拟动漫规则(真人措辞替换+锚附加)。
 func TestScriptImagePromptNoRealNoAnime(t *testing.T) {
 	block := "Cinematic film still, photorealistic, a 22-year-old East Asian woman, long black hair, movie poster quality"
-	out := scriptImagePrompt(block, manjuAssetStyle("2.5d"), false)
+	out := scriptImagePrompt(block, manjuAssetStyle("2.5d"), false, false)
 	if strings.Contains(strings.ToLower(out), "photorealistic, ") {
 		t.Fatalf("脚本素材抽卡仍含真人措辞: %s", out)
 	}
 	if !strings.Contains(out, "not a Japanese anime") || !strings.Contains(out, "semi-realistic stylized illustration") {
 		t.Fatalf("脚本素材抽卡缺拟动漫锚: %s", out)
+	}
+}
+
+// scriptImagePrompt 物种路由(2026-08-29 审计 V3):物品卡不烤人形锚,
+// 画物品本体+物品锚;人形锚(East Asian/Chinese character)不得出现在物品 image_prompt。
+func TestScriptImagePromptItemRouting(t *testing.T) {
+	out := scriptImagePrompt("a potted pothos vine plant with glossy heart-shaped green leaves", manjuAssetStyle("2.5d"), false, true)
+	if strings.Contains(out, "East Asian/Chinese") || strings.Contains(out, "front-facing") {
+		t.Fatalf("物品 image_prompt 被烤人形锚: %s", out)
+	}
+	if !strings.Contains(out, "NOT a person") {
+		t.Fatalf("物品 image_prompt 缺物品锚: %s", out)
 	}
 }

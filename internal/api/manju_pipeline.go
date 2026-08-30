@@ -78,11 +78,15 @@ type manjuCtx struct {
 	sageChecked  bool    // SageAttn 节点探测已完成(每 run 一次,避免逐镜 HTTP 探测)
 	sageOK       bool    // PatchSageAttentionKJ 节点存在
 	sageNodeName string  // 实际存在的 SageAttn 节点名(Pathch/Patch 拼写兼容;审计 3.3 从 R 移出)
+	pddChecked   bool    // PDD Acc 节点探测已完成(2026-08-29,每 run 一次)
+	pddOK        bool    // MiniMaxH3PDDAccApply 节点存在(缺失时 PDD LoRA 回退普通模式)
 	qcRerender   map[int]int // 质检自愈重渲轮数(镜头号 → 已重渲次数;换 seed 重渲,上限后提示逃生门)
 	visionOnce   sync.Once
 	vision       *agent.VisionClient // 每 run 共享(粘性降级状态跨镜头保留)
 	charInfo     map[string]map[string]any // 方案角色 id → 角色对象(懒加载,自动音色匹配用)
 	voiceLibDone map[string]bool           // 库音色自动补齐去重(每 run 一次,防重复生成)
+	speakerReg   map[string]string         // 全局说话人注册表(角色→全局 (Sx),2026-08-30 ver14,ensurePlanAndPrompts 构建)
+	voiceAssign  map[string]string         // 角色→最终音色 key(2026-08-30 ver15 同档位差异化变体分配,懒构建)
 }
 
 // sageAttnGuard 检查 SageAttention 节点可用性:ComfyUI 未装对应节点时
@@ -123,11 +127,31 @@ func (ctx *manjuCtx) applySageToR(R map[string]any) {
 	if !ctx.sageChecked {
 		return
 	}
-	if ctx.sageOK && ctx.sageNodeName != "" {
-		R["sage_node_name"] = ctx.sageNodeName
+	if ctx.sageOK && ctx.sageNodeName != "" {		R["sage_node_name"] = ctx.sageNodeName
 	} else {
 		R["sage_attention"] = false
 	}
+}
+
+// pddGuard PDD Acc 节点探测(2026-08-29):MiniMaxH3PDDAccApply 存在性。
+// 探测一次缓存;渲染提交前由 renderShotTo 调用并把结果注入 R 副本。
+func (ctx *manjuCtx) pddGuard(lg *manjuLogger) {
+	if ctx.pddChecked {
+		return
+	}
+	ctx.pddChecked = true
+	ctx.pddOK = ctx.comfy.hasNode("MiniMaxH3PDDAccApply")
+	if !ctx.pddOK && strings.Contains(strings.ToLower(str(ctx.R["turbo_lora"])), "pdd_acc") {
+		lg.logf("  ⚠️ 检测到 PDD Acc LoRA 但 ComfyUI 缺少 MiniMaxH3PDDAccApply 节点(未装 ComfyUI-MiniMax-H3-PDD-Acc 或未重启),已回退普通 LoRA 模式;装好节点后恢复")
+	}
+}
+
+// applyPddToR 把 PDD 节点探测结果写入 R 副本(h3RenderWorkflow 读取)
+func (ctx *manjuCtx) applyPddToR(R map[string]any) {
+	if !ctx.pddChecked {
+		return
+	}
+	R["_pdd_ok"] = ctx.pddOK
 }
 
 // ensureComfyReady 渲染/资产/编码等需 Comfy 的阶段前,确保 ComfyUI 在线:
@@ -559,6 +583,23 @@ const manjuMotionGuard = "MOTION DISCIPLINE: maintain continuous visible motion 
 // 因此对所有镜头恒定注入——指纹与链式状态解耦,不会因 latent 文件有无漂移。
 const manjuChainGuard = "CHAIN DISCIPLINE: if this clip opens on pinned continuation frames from the previous clip, hold that exact closing composition for about one second with no new subjects and no dialogue, then develop into this clip's own content; the arrangement of people at the clip opening must match the pinned frames - a contradicting arrangement renders as a union and puts extra people and faces into the frame; otherwise open directly with this clip's own establishing framing. During any held beat keep small visible motion alive (a breath, a weight shift, an eyeline change, fabric or hair movement)"
 
+// manjuExecutionGuard 执行纪律(2026-08-29 用户反馈「视频内容与小说差距大/看不懂」):
+// ASR 实证台词逐字念出、提交 prompt 与脚本一致,但画面不执行脚本动作——该回头的镜
+// 人物一直走、该咧嘴的没咧嘴、旁白时段画面静止,且会脑补脚本外同行角色(Shot4 实锤:
+// 脚本只有阿凯独行,画面出现另一持剑角色)。纯文本纪律对 H3 的「静止偏好」约束有限,
+// 这里是正向指令:动作必须完整演出且幅度可感知;说话者说话时必须有可见反应;
+// 画外音必须引发画面主体反应;画面只允许出现 subject_definitions 列出的主体。
+// 2026-08-29 二修:删除「lip movements must be performed」与「说话者 mouth movement」
+// 措辞——H3 会把「说话」动作默认派给画面主体,画外音/旁白镜里主角全程动嘴
+// (用户实测镜4「都是主角一个人在动嘴说」),唇动约束改由 LIP DISCIPLINE 独立承载。
+const manjuExecutionGuard = "EXECUTION DISCIPLINE: act out every scripted action in detailed_description visibly and completely - stomps, head turns, grins, shrugs and gestures must be performed with clearly perceivable amplitude, never reduced to a static standing pose; the on-screen character who is visibly delivering a line must show a matching expression change at the moment of the line; an off-screen voice must provoke a visible response from the on-screen character it addresses (head turn, halt, glance, expression) while keeping that character's lips closed; the frame contains ONLY the subjects listed in subject_definitions - never add a companion, passer-by or extra person that the description does not explicitly mention"
+
+// manjuLipGuard 唇动纪律(2026-08-29 用户反馈「镜头4 都是主角一个人在动嘴说」):
+// 画外音(off-screen voiceover)/旁白/内心独白镜,画面角色嘴唇必须完全闭合——
+// H3 默认把台词「表演」给画面主体,画外喊话时主角张嘴对口型,音画错乱。
+// 显式禁止:画外音期间任何人不得动嘴(可以转头/停步/表情反应,嘴必须闭)。
+const manjuLipGuard = "LIP DISCIPLINE: speech is performed ONLY by the on-screen character who is visibly speaking the line with their own voice; when a line comes from an off-screen voice, a narrator, or a character's inner monologue, EVERY on-screen character's lips remain completely closed for the whole line - they may turn their head, halt, glance, frown or react with body language, but never open their mouth, never mouth the words, never move their lips in speech"
+
 // ---- 2026-08-25 角色板(角色资料卡)资产:即梦「角色版控制一致性」方法落地 ----
 // 知识库「创作管理/AI漫剧/制作链路/角色板控制一致性教程_即梦角色版.md」:
 // 用角色板(多视图+细节特写+服饰分层+表情神态+配色HEX+人设文字整合图)替代三视图控一致性,
@@ -576,7 +617,7 @@ const manjuBeastBoardLayout = ", creature reference board (beast info sheet): a 
 // manjuViewGenderAnchor 视图性别锚(2026-08-26 用户实测「墨姨_side」女性被画成有胡须的男人):
 // Z-Image 高 denoise 重绘下阴性约束(no beard)权重弱,必须正向强化性别;gender 空不加
 func manjuViewGenderAnchor(m map[string]any) string {
-	if manjuIsBeast(m) {
+	if manjuIsBeast(m) || manjuIsItem(m) {
 		return ""
 	}
 	if manjuIsFemale(m) {
@@ -600,7 +641,8 @@ func manjuColorAnchor(m map[string]any) string {
 // manjuBoardPromptFor 角色板提示词:优先 LLM 直出 board_prompt;兜底 image_prompt+角色板布局+配色。
 // 兽类(2026-08-26):LLM board_prompt 模板是人形措辞,兽类一律忽略,直接用兽形板布局。
 func (ctx *manjuCtx) manjuBoardPromptFor(char string, m map[string]any) string {
-	if !manjuIsBeast(m) {
+	// 兽类与物品都忽略 LLM board_prompt(模板是人形措辞,2026-08-29 审计补物品豁免)
+	if !manjuIsBeast(m) && !manjuIsItem(m) {
 		if p := str(m["board_prompt"]); p != "" {
 			return p
 		}
@@ -614,9 +656,14 @@ func (ctx *manjuCtx) manjuBoardPromptFor(char string, m map[string]any) string {
 	if base == "" {
 		base = "portrait of " + char
 	}
+	if manjuIsItem(m) {
+		base = manjuItemStrip(base)
+	}
 	layout := manjuBoardLayout
 	if manjuIsBeast(m) {
 		layout = manjuBeastBoardLayout
+	} else if manjuIsItem(m) {
+		layout = manjuItemBoardLayout
 	}
 	return base + layout + manjuColorAnchor(m)
 }
@@ -638,12 +685,11 @@ const manjuNoRefGuard = "REFERENCE NOTE: no reference picture is attached to thi
 // 旧版 guard 只在 renderShotTo 的值拷贝里注入,manifestMark 记的是"含 guard"指纹,
 // 而下次运行的 stale 检查用原始 prompt 算指纹——有角色镜恒 stale 反复重渲。现在指纹
 // 计算与渲染共用本函数,两侧永远一致(幂等:已含关键短语不重复追加)。
-// reDialogueTagNoise 规范示例占位符被 LLM 字面抄袭的清洗(2026-08-28 EP01 实锤:
-// 爽文技能规范写「台词 <d>[中文]原文</d>」,LLM 把「[中文]」原样抄进台词——
-// H3 直出 <d>[中文]陈默？</d>,配音把「中文」二字念出来/对白驱动失效)。
-// 渲染最终化是 plan 三条加载路径(脚本解析/LLM 直出/落盘读回)的共用汇点,在这里剥
-// 一层,同时指纹基于最终化文本,清洗生效即缓存自动失效,无需动代数。
-var reDialogueTagNoise = regexp.MustCompile(`(?i)(<d>)\s*\[(?:中文|chinese)\]\s*`)
+// reDialogueTagNoise 已废止(2026-08-30):官方 base-en §4.4/ref-en §5.4 要求 <d> 内
+// 必须带语言标签,正确形态是 <d>[Chinese]原文</d>;旧剥除把语言标签整个去掉,模型只能
+// 猜配音语言。规范化职责移交 manju_prompt_align.go alignDialogueLangTags——
+// [中文]/[chinese] 统一改写为官方英文写法 [Chinese],裸中文开标签自动补标,
+// 指纹走同一条对齐链,改词即缓存失效。
 
 // manjuFinalizePromptPure 渲染提示词最终化纯函数(指纹/编码/渲染三处一致)。
 // picSlots:本镜实际提交的参考图槽位数(人物视图数+场景图 0/1)——2026-08-28 Picture
@@ -659,14 +705,13 @@ func manjuFinalizePromptPure(hp string, hasChars bool, picSlots int) string {
 	if out, _ := manjuSanitizeRenderWords(hp); out != "" {
 		hp = out
 	}
-	if cleaned := reDialogueTagNoise.ReplaceAllString(hp, "$1"); cleaned != hp {
-		hp = cleaned
-	}
 	hp = manjuStripDanglingPictureRefs(hp, hasChars, picSlots)
 	// 人物纪律覆盖面(2026-08-27 修复):frameGuard 旧条件是 hasChars(登场角色非空),
 	// 群像无卡镜(subject_definitions 定义了牢头/牢卒等群演,但 characters 为空)整段漏掉
 	// ——无参考图+无纪律,链上白发形象被复制给每个主体 = 周管事入画多次。有主体即约束。
-	hasSubjects := strings.Contains(hp, "subject_definitions")
+	// 判定用带冒号的段首标记:纪律文本会引用 "subject_definitions" 一词(EXECUTION/
+	// FRAME guard),无冒号判定会被自身注入的纪律文本二次触发,破坏幂等(2026-08-29)。
+	hasSubjects := strings.Contains(hp, "subject_definitions:")
 	if (hasChars || hasSubjects) && !strings.Contains(hp, "no extra faces") {
 		hp = strings.TrimRight(hp, " \n") + "\n" + manjuFrameGuard
 	}
@@ -686,6 +731,12 @@ func manjuFinalizePromptPure(hp string, hasChars bool, picSlots int) string {
 	if !strings.Contains(hp, "MOTION DISCIPLINE") {
 		hp = strings.TrimRight(hp, " \n") + "\n" + manjuMotionGuard
 	}
+	if !strings.Contains(hp, "EXECUTION DISCIPLINE") {
+		hp = strings.TrimRight(hp, " \n") + "\n" + manjuExecutionGuard
+	}
+	if !strings.Contains(hp, "LIP DISCIPLINE") {
+		hp = strings.TrimRight(hp, " \n") + "\n" + manjuLipGuard
+	}
 	if !strings.Contains(hp, "CHAIN DISCIPLINE") {
 		hp = strings.TrimRight(hp, " \n") + "\n" + manjuChainGuard
 	}
@@ -696,11 +747,56 @@ func manjuFinalizePromptPure(hp string, hasChars bool, picSlots int) string {
 // + 运动纪律(2026-08-27)。renderShotTo 入口调用一次——缓存指纹(shotCondFingerprintAt)
 // 与预编码(ensureEncodedAt)都用同一份最终化文本,保证指纹/编码/渲染三处一致。
 func (ctx *manjuCtx) finalizeShotPrompt(hp string, s manjuShot, lg *manjuLogger) string {
+	return ctx.finalizeShotPromptSlots(hp, s, ctx.shotPicSlots(s), lg)
+}
+
+// finalizeShotPromptSlots 带显式槽位参数的最终化变体:renderShotTo/指纹走实测槽位
+// (shotPicSlots 探测资产文件);plan 汇点(ensurePlanAndPrompts,资产未生成)走预期槽位
+// (manjuExpectPicSlots)——2026-08-29 绿萝实锤:汇点在定妆照生成之前按实测 0 槽剥光
+// 全部 <Picture N> 引用并回写固化进 plan,渲染时资产已在也救不回,EP01 25 镜人物参考
+// 图整集失效(人物长相/服装与角色卡无关的根因)。
+func (ctx *manjuCtx) finalizeShotPromptSlots(hp string, s manjuShot, picSlots int, lg *manjuLogger) string {
 	if hp == "" {
 		return hp
 	}
 	before := hp
-	hp = manjuFinalizePromptPure(hp, len(s.Characters) > 0, ctx.shotPicSlots(s))
+	// 音色绑定兜底(2026-08-29):脚本直出路径的 h3_prompt 是脚本原文逐字保留,不含
+	// <Audio N> 定义——ref_audios 挂载同序但 prompt 无引用,H3 音色跟随不生效
+	// (音色锁定前提是 prompt 有 <Audio> 引用,见 ensureVoiceBindings 注释)。
+	// LLM 生成路径在 genShotPromptRaw 已注入,这里只补脚本直出/落盘读回的缺失镜。
+	// 登场角色绑定之后接续注入画外说话者(路人/群众喊话)差异化音色——用户反馈
+	// 「路人配音和主角配音都是主角在说话」:画外音无 <Audio> 引用时 H3 用默认/主角
+	// 音色念所有画外音;按声线描述(性别/年龄/语气)分配独立音色并挂 ref_audios。
+	vbs := ctx.voiceBindingsFor(s)
+	hp = ensureVoiceBindings(hp, vbs)
+	innerCid, innerKey := ctx.innerVoiceFor(s) // 内心戏角色音色(2026-08-30 ver14,问题⑥)
+	obs := ctx.manjuOffscreenBindings(hp, innerCid, innerKey)
+	hp = injectOffscreenVoiceBindings(hp, obs, len(vbs))
+	// 画外音唇动任务句注入 summary(2026-08-29 二修):LIP DISCIPLINE 在 prompt 队尾,
+	// H3 对尾部约束注意力弱(实测镜4 画外音时主角仍对口型)。summary 是模型的任务定义
+	// 段,服从度最高——存在 off-screen voiceover 时在 summary 追加「画外音期间所有
+	// 画面角色嘴唇闭合」的任务句。幂等(已含锚词跳过)。
+	// 先移除旧任务句(位置错误自愈,2026-08-29):早期版本把 TASK 插到 prompt 末尾
+	// (Windows \r\n 换行导致 "\n\n" 定位失败),幂等锚「已含 OFF-SCREEN LINES」会跳过
+	// 重新注入——必须「先删后插」,存量 plan 才能自愈到正确位置。
+	reTask := regexp.MustCompile(`(?m)^\s*OFF-SCREEN LINES TASK:[^\r\n]*\r?\n?`)
+	hp = reTask.ReplaceAllString(hp, "")
+	if len(obs) > 0 && !strings.Contains(hp, "OFF-SCREEN LINES") {
+		// 插到 detailed_description: 段标题之前(任务句紧邻画面描述,H3 注意力最强;
+		// summary 段定位曾被注入的混合换行 \n\r\n 破坏,2026-08-29 弃用)。
+		di := strings.Index(hp, "detailed_description:")
+		if di < 0 {
+			di = len(hp)
+		}
+		task := "OFF-SCREEN LINES TASK: all spoken lines marked as off-screen voiceover are delivered by unseen speakers NOT present in the frame; during every off-screen line, every on-screen character's lips remain completely closed - they listen and react with head turns, glances and expressions only, never mouthing the words\n\n"
+		hp = hp[:di] + task + hp[di:]
+	}
+	// 契约对齐(2026-08-30 H3 官方源码核验:Picture/Audio 编号=挂载顺序、Sx 全局
+	// 稳定、<d>[Chinese] 标签、时码 clip-local)在 guard 注入之前执行——注入的
+	// Audio 定义行同样被规范化;与指纹侧(shotCondFingerprintAt→finalizeAlignedPrompt)
+	// 走同一函数链,指纹与渲染输入恒一致。2026-08-30 ver14:统一走
+	// finalizeAlignedPrompt(全局说话人注册表 + Audio 定义行音色指纹短语)。
+	hp = ctx.finalizeAlignedPrompt(hp, s, picSlots)
 	// ①违规词替换(同义/谐音)——日志提示
 	if _, repl := manjuSanitizeRenderWords(before); len(repl) > 0 {
 		var parts []string
@@ -711,6 +807,117 @@ func (ctx *manjuCtx) finalizeShotPrompt(hp string, s manjuShot, lg *manjuLogger)
 		lg.logf(fmt.Sprintf("  ⚠️ 镜头 %d 检测到违规词,已同义/谐音替换: %s", s.ID, strings.Join(parts, "、")))
 	}
 	return hp
+}
+
+// finalizeAlignedPrompt 渲染/指纹统一汇点(2026-08-30 ver14):契约对齐(带全局说话人
+// 注册表,跨镜 Sx 稳定)+ 纪律注入 + Audio 定义行音色指纹短语注入。指纹侧与渲染侧
+// 必须走同一函数链(否则对齐改词不触发重渲或恒 stale);speakerReg 为空时退化为
+// 既有 manjuFinalizeAligned 行为。
+func (ctx *manjuCtx) finalizeAlignedPrompt(hp string, s manjuShot, picSlots int) string {
+	c := ctx.refContractFor(s)
+	out := manjuFinalizeAlignedReg(hp, c, s.Duration, s.Dialogue, len(s.Characters) > 0, picSlots, ctx.speakerReg)
+	return ctx.injectAudioTimbrePhrases(out, c)
+}
+
+// reAudioDefPhrase 规范化后的 Audio 定义行(alignAudioDefs 输出格式,稳定可匹配;
+// 注入音色短语后再跑不命中=幂等)
+var reAudioDefPhrase = regexp.MustCompile(`(?m)^<Audio (\d+)> is the voice-timbre reference for <Subject (\d+)> \(S(\d+)\), containing a spoken voiceover\.?\r?$`)
+
+// injectAudioTimbrePhrases Audio 定义行注入角色音色指纹短语(2026-08-30 ver14,问题②
+// 音色年龄/一致性根治的执行层一环):H3 官方 base-en §4.4 要求说话者首次出现给足
+// 身份信息(年龄/性别/音高/音色/语速),模型按身份短语分配声线——此前 <Audio N> 行
+// 只写 "containing a spoken voiceover" 无任何年龄/音色信息,角色卡 age 字段(24/74 岁)
+// 从不进入渲染提示词。短语由 autoVoiceFor 音色档位编译(单一事实源)。
+func (ctx *manjuCtx) injectAudioTimbrePhrases(hp string, c manjuRefContract) string {
+	if !strings.Contains(hp, "containing a spoken voiceover") || len(c.Chars) == 0 {
+		return hp
+	}
+	return reAudioDefPhrase.ReplaceAllStringFunc(hp, func(m string) string {
+		sm := reAudioDefPhrase.FindStringSubmatch(m)
+		no := mustAtoi(sm[2])
+		if no < 1 || no > len(c.Chars) {
+			return m
+		}
+		phr := ctx.voiceTimbrePhrase(c.Chars[no-1].ID)
+		if phr == "" {
+			return m
+		}
+		return fmt.Sprintf("<Audio %s> is the voice-timbre reference for <Subject %s> (S%s), with %s, containing a spoken voiceover.",
+			sm[1], sm[2], sm[3], phr)
+	})
+}
+
+// manjuVoicePhraseFor 音色库 key → H3 官方身份短语(官方示例 "the middle-aged baker
+// with a calm, slightly raspy voice (S1)"):年龄/性别/音高/音色/语速一体,模型按此
+// 分配声线。key 与 autoVoiceFor 输出同源,单一事实源。
+func manjuVoicePhraseFor(key string) string {
+	phrases := map[string]string{
+		"beast_cute":    "a cute, playful creature voice, bright and bubbly",
+		"child_boy":     "a little boy's voice, high and clear with childlike energy",
+		"child_girl":    "a little girl's voice, high and bright with childlike energy",
+		"boy_teen":      "a teenage boy's voice, bright and youthful",
+		"girl_lively":   "a young girl's voice, lively and clear",
+		"male_sun":      "a young man's voice, clear and steady",
+		"female_warm":   "a young woman's voice, warm and gentle",
+		"male_mag":      "a middle-aged man's voice, calm and deep",
+		"female_mature": "a mature woman's voice, smooth and composed",
+		"male_elder":    "an old man's voice, low and weathered",
+		"female_elder":  "an elderly woman's voice, warm and crackly",
+		"male_deep":     "a man's voice, low and magnetic",
+		"female_deep":   "a woman's voice, cold and sharp",
+		// 方言/区域(2026-08-30 ver15):口音描述注入 Audio 定义行——H3 按描述
+		// 带口音生成(edge-tts 无四川/河南/广西/湖南方言声源,参考音频只锁音色基底)
+		"cn_dongbei":  "a woman speaking Mandarin with a cheerful Northeastern accent",
+		"cn_shaanxi":  "a woman speaking Mandarin with a bright Shaanxi accent",
+		"cn_sichuan":  "a man speaking Mandarin with a lively Sichuan accent",
+		"cn_henan":    "a man speaking Mandarin with an earthy Henan accent",
+		"cn_guangxi":  "a man speaking Mandarin with a soft Guangxi accent",
+		"cn_hunan":    "a man speaking Mandarin with a spirited Hunan accent",
+		"hk_male":     "a man speaking Cantonese with a Hong Kong accent",
+		"hk_female":   "a woman speaking Cantonese with a Hong Kong accent",
+		"tw_male":     "a man speaking Mandarin with a gentle Taiwanese accent",
+		"tw_female":   "a woman speaking Mandarin with a gentle Taiwanese accent",
+		"male_narrator":   "a calm neutral storytelling voice",
+		"female_narrator": "a calm neutral storytelling voice",
+	}
+	return phrases[key]
+}
+
+// voiceTimbrePhrase 角色音色指纹短语(2026-08-30 ver14):按 autoVoiceFor 档位编译,
+// 注入 <Audio N> 定义行——H3 的年龄感/音色来自短语而非随机。
+func (ctx *manjuCtx) voiceTimbrePhrase(cid string) string {
+	key := ctx.autoVoiceFor(cid)
+	if key == "" {
+		return ""
+	}
+	return manjuVoicePhraseFor(key)
+}
+
+// buildSpeakerRegistry 全局说话人注册表(2026-08-30 ver14,H3 官方契约
+// "A speaker keeps the same ID across shots"):按全集首次发声顺序为每个有音色绑定
+// (VoiceRoster)的角色分配全局 (Sx),跨镜稳定——修复此前 alignSpeakerIDs 逐镜重排
+// (S1..Sk)导致的同角色声线逐镜漂移。确定性来源=dialogue 说话人序(与 alignAudioDefs
+// 同源);无音色绑定角色不注册,逐镜镜内序兜底(无权威绑定可依)。
+func (ctx *manjuCtx) buildSpeakerRegistry(shots []manjuShot) map[string]string {
+	reg := map[string]string{}
+	order := 0
+	for _, s := range shots {
+		c := ctx.refContractFor(s)
+		roster := map[string]bool{}
+		for _, cid := range c.VoiceRoster {
+			roster[cid] = true
+		}
+		for cid := range dialogueSpeakerIDs(s.Dialogue, c) {
+			if !roster[cid] {
+				continue
+			}
+			if _, ok := reg[cid]; !ok {
+				order++
+				reg[cid] = "S" + strconv.Itoa(order)
+			}
+		}
+	}
+	return reg
 }
 
 // shotPicSlots 该镜实际提交给 H3 的参考图槽位数(= charRefNames 数 + 场景图 0/1,
@@ -728,6 +935,39 @@ func (ctx *manjuCtx) shotPicSlots(s manjuShot) int {
 		slots += len(ctx.charViewRels(cid, i, n))
 	}
 	if s.Scene != "" && fileExists(filepath.Join(ctx.assetsDir, "scenes", s.Scene+".png")) {
+		slots++
+	}
+	return slots
+}
+
+// manjuExpectPicSlots 计划期预期参考图槽位(纯函数,不探测文件)。ensurePlanAndPrompts
+// 汇点在 assets 阶段之前 finalize,shotPicSlots 探测文件恒 0——若按 0 剥 <Picture N>,
+// 引用被剥后回写固化,渲染时人物参考图失效(2026-08-29 绿萝 EP01 25 镜实锤)。渲染管线
+// 保证 characters 非空角色的定妆照必然生成,预期槽位=charViewRels 的 picks 规则上限;
+// 场景槽=s.Scene 非空(场景图必生成)。预期≥实测恒成立(front 缺失回退主图必有,full/
+// detail/场景图缺失只会让实测更小),plan 汇点永不引入「再剥」震荡;实测与预期不一致
+// (资产生成失败)时 renderShotTo 用实测重 finalize,指纹自然变化触发重渲,不产错片。
+func manjuExpectPicSlots(s manjuShot) int {
+	n := len(s.Characters)
+	if n > 3 {
+		n = 3
+	}
+	slots := 0
+	for i := 0; i < n; i++ {
+		switch {
+		case n <= 1:
+			slots += 3 // front/full/detail
+		case n == 2:
+			slots += 2 // front/full
+		default: // 3 角色:主角 front+full,其余 front
+			if i == 0 {
+				slots += 2
+			} else {
+				slots++
+			}
+		}
+	}
+	if s.Scene != "" {
 		slots++
 	}
 	return slots
@@ -1206,9 +1446,16 @@ func cnNumToInt(s string) int {
 	return total + cur
 }
 
-// novelRootDir 小说项目根目录:优先 config 的 novel_dir;缺省时小说文件位于 全本/正文 子目录则向上取一级
+// novelRootDir 小说项目根目录:优先 config 的 novel_dir;缺省时小说文件位于 全本/正文 子目录则向上取一级。
+// 2026-08-30 存量自愈:novel_dir 被历史链路写成布局子目录(…/全本,其下无 素材/)时上提书根
+// ——否则素材卡/分镜脚本查找落空,「资产 0 角色/0 场景直接编码」复发。
 func (ctx *manjuCtx) novelRootDir() string {
 	if d := strings.TrimSpace(str(ctx.P["novel_dir"])); d != "" {
+		base := strings.ToLower(filepath.Base(d))
+		if (base == "全本" || strings.Contains(base, "正文") || base == "素材") &&
+			!dirExists(filepath.Join(d, "素材")) {
+			return filepath.Dir(d)
+		}
 		return d
 	}
 	d := filepath.Dir(ctx.novel)
@@ -1647,6 +1894,8 @@ type manjuShot struct {
 	Narration  string
 	Duration   int
 	Style      string   // 镜级渲染风格(2026-08-23 多风格并用:缺省继承全局 style;按镜差异化如 real+magical/ink 回忆)
+	Light      string   // 分镜表光影列(2026-08-30 ver14 保留,LLM 逐镜重写路径注入 detailed_description)
+	Sound      string   // 分镜表音效列(同上,注入 overall_soundscape)
 	H3Prompt   string
 	TakeTail   bool        // 多切点长镜的内镜:不独立渲染,由组头一次生成覆盖
 	TakeGroup  []manjuShot // 多切点长镜组头携带整组(含自身;单镜为空)
@@ -1774,6 +2023,8 @@ func planShots(plan map[string]any) ([]manjuShot, error) {
 			Dialogue:  str(m["dialogue"]),
 			Narration: str(m["narration"]),
 			Style:     str(m["style"]),
+			Light:     str(m["light"]), // 2026-08-30 ver14:分镜表光影/音效列保留(LLM 重写路径注入)
+			Sound:     str(m["sound"]),
 			H3Prompt:  str(m["h3_prompt"]),
 		}
 		s.ID, _ = manjuToInt(m["shot_id"])
@@ -2420,14 +2671,19 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 		}
 	}
 	// 逐镜提示词生成彼此无依赖(纯文本 LLM,无 429 风暴):并发上限 4 的 worker pool,
-	// 15 镜 × 10-30s 串行 → 并发后墙钟时间约 1/4;提示词按镜 ID 落 map,顺序无关
+	// 15 镜 × 10-30s 串行 → 并发后墙钟时间约 1/4;提示词按镜 ID 落 map,顺序无关。
+	// prev_shot(上一镜收尾)来自分镜数据而非 LLM 输出,并发安全。
 	var todo []manjuShot
-	for _, s := range shots {
-		if s.TakeTail {
+	prevOf := map[int]*manjuShot{}
+	last := (*manjuShot)(nil)
+	for i := range shots {
+		if shots[i].TakeTail {
 			continue
 		}
-		if s.H3Prompt == "" && prompts[strconv.Itoa(s.ID)] == "" {
-			todo = append(todo, s)
+		prevOf[shots[i].ID] = last
+		last = &shots[i]
+		if shots[i].H3Prompt == "" && prompts[strconv.Itoa(shots[i].ID)] == "" {
+			todo = append(todo, shots[i])
 		}
 	}
 	if len(todo) > 0 {
@@ -2451,7 +2707,7 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				hp, err := ctx.genShotPrompt(s, charMap, sceneMap)
+				hp, err := ctx.genShotPrompt(s, charMap, sceneMap, prevOf[s.ID])
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil {
@@ -2487,7 +2743,7 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 		if len(repair) > 0 {
 			for _, s := range repair {
 				fix := "【提示词结构校验未过,逐条修正后重新输出】\n" + strings.Join(ctx.validateShotPrompt(s, prompts[strconv.Itoa(s.ID)]), "\n")
-				hp2, err2 := ctx.genShotPromptWithFix(s, charMap, sceneMap, fix)
+				hp2, err2 := ctx.genShotPromptWithFix(s, charMap, sceneMap, fix, prevOf[s.ID])
 				if err2 == nil && len(ctx.validateShotPrompt(s, hp2)) == 0 {
 					prompts[strconv.Itoa(s.ID)] = hp2
 					if m := objOf[s.ID]; m != nil {
@@ -2565,20 +2821,25 @@ func (ctx *manjuCtx) validateShotPrompt(s manjuShot, hp string) []string {
 			break // 抽查首句防整体遗漏
 		}
 	}
+	// 契约校验(2026-08-30 H3 官方源码核验转化):Picture 槽位/说话者编号/时码/语言
+	// 标签四项与官方输入流机制的硬契约——LLM 直出违反时携带问题清单重写(源头自修),
+	// 渲染端 manjuAlignShotPrompt 机器兜底,两层各司其职。
+	problems = append(problems, validatePromptContract(hp, s, manjuExpectPicSlots(s))...)
 	return problems
 }
 
-// genShotPromptWithFix 带修复意见重新生成单镜提示词(校验未过修复重试用)
-func (ctx *manjuCtx) genShotPromptWithFix(s manjuShot, charMap, sceneMap map[string]map[string]any, fix string) (string, error) {
-	return ctx.genShotPromptRaw(s, charMap, sceneMap, fix)
+// genShotPromptWithFix 带修复意见重新生成单镜提示词(校验未过修复重试用);
+// prev 为上一镜收尾(链式衔接输入,2026-08-30 ver14,可为 nil)。
+func (ctx *manjuCtx) genShotPromptWithFix(s manjuShot, charMap, sceneMap map[string]map[string]any, fix string, prev *manjuShot) (string, error) {
+	return ctx.genShotPromptRaw(s, charMap, sceneMap, fix, prev)
 }
 
-func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map[string]any) (string, error) {
-	return ctx.genShotPromptRaw(s, charMap, sceneMap, "")
+func (ctx *manjuCtx) genShotPrompt(s manjuShot, charMap, sceneMap map[string]map[string]any, prev *manjuShot) (string, error) {
+	return ctx.genShotPromptRaw(s, charMap, sceneMap, "", prev)
 }
 
 // genShotPromptRaw 生成单镜 H3 提示词;fix 非空时追加修复意见(校验未过修复重试用)
-func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]map[string]any, fix string) (string, error) {
+func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]map[string]any, fix string, prev *manjuShot) (string, error) {
 	hasChar := len(s.Characters) > 0
 	// 镜级风格(2026-08-23 多风格并用):shots[].style 优先,缺省继承全局 ctx.style
 	shotStyle := strings.TrimSpace(s.Style)
@@ -2593,6 +2854,19 @@ func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]
 		"shot_id": s.ID, "shot_size": s.ShotSize, "camera": s.Camera, "action": s.Action,
 		"dialogue": s.Dialogue, "narration": s.Narration, "duration": s.Duration,
 		"scene": s.Scene, "characters": s.Characters,
+		// 2026-08-30 ver14:分镜表光影/音效列保留——LLM 逐镜重写时必须把脚本列信息
+		// 翻译进 detailed_description(光线)与 overall_soundscape(音效),防止内容丢列
+		"light": s.Light, "sound": s.Sound,
+	}
+	// 上一镜收尾注入(2026-08-30 ver14,问题③多镜连贯):H3 MotionContext 接缝把上一镜
+	// 尾帧/尾音钉入本镜头部——提示词必须承接其收尾构图(矛盾会被渲染成 union=多出人脸),
+	// 规则 35 依据 prev_shot 写官方延续句式/气闸/微动作。prev 来自分镜数据,并发安全。
+	if prev != nil {
+		shotObj["prev_shot"] = map[string]any{
+			"shot_id": prev.ID, "shot_size": prev.ShotSize, "camera": prev.Camera,
+			"action": prev.Action, "dialogue": prev.Dialogue, "narration": prev.Narration,
+			"characters": prev.Characters,
+		}
 	}
 	chars := map[string]any{}
 	for _, cid := range s.Characters {
@@ -2801,7 +3075,11 @@ const manjuViewGen = 10
 // 22=兽形毛色显式锁 manjuFurAnchor(2026-08-28 猫·二两:主图橘白 Q版黑灰狸花——
 //   0.93 高重绘身份靠文本,删 img 拼接后色词零出现、HAIR LOCK 只抓到无色名的
 //   dusty fur,毛色按猫类默认先验随机;色名显式点名与人形 HAIR LOCK 同级)。
-const manjuQGen = 22
+// manjuQGen Q 版生成逻辑代数(独立于 views_gen,只清 _q.png):2=发色锁(HAIR LOCK
+// 显式点名发色);…;23=年龄分档锚(2026-08-30 用户实锤:老年人生成的全是年轻 Q 版
+// ——chibi 基底是年轻萌模板+男性分支硬编码 young man's face;manjuAgeBand/
+// manjuQAgeAnchor 按角色卡机械分档注入老年皱纹/中年成熟/少年儿童特征,存量必须重出)
+const manjuQGen = 23
 
 // manjuPortraitGen 主图代数(2026-08-27 六修):单人/纯白背景/服装严格锚上线时 bump,
 // stageAssets 检测到落后即清全部旧主图重出(视图/Q版联动)。
@@ -2811,7 +3089,7 @@ const manjuQGen = 22
 // 4=face裁切窗口定版(2026-08-28 标尺实测:单人白底方形主图头顶20%/下巴70%,旧窗
 //   口 8%-52% 切口鼻、8%-70% 贴下巴线切嘴;定版 8%-88% 对齐检测命中分支比例,
 //   主图重出联动 face/视图/Q版 全链重出重裁)。
-const manjuPortraitGen = 4
+const manjuPortraitGen = 5
 
 // portraitWF 定妆照工作流按风格分流:含写实元素用 Z-Image(真人级),其余用 SDXL checkpoint。
 // 尺寸固定为标准 1024×1024(与项目画幅无关);正脸参考(ensureFaceCrop)再从该图按视频比例裁切。
@@ -2886,10 +3164,59 @@ func manjuIsMinorCast(m map[string]any) bool {
 	return b
 }
 
+// manjuIsItem 角色是否物品类(有意识/可说话的器物与植物:神器/法宝/武器/道具/灵器/
+// 灵植/花精/树精等,2026-08-29 用户硬性规则:物品必须按物品渲染,禁止人形/人脸/人衣;
+// Q 版为物品萌化不受影响)。判定:①species 权威含物品词;②role/id 含 神器/法宝/器物/
+// 武器/兵器/道具/法器/灵器/秘宝/剑灵/灵植/花精 等。
+func manjuIsItem(m map[string]any) bool {
+	if m == nil {
+		return false
+	}
+	if s := str(m["species"]); s != "" {
+		// 2026-08-29 词表对齐(审计 V4):scriptRoleSpecies 会返回 藤精/花精/树精 等
+		// 植物精 species——species 层词表不含 X精 类时误判兽形管线;器灵类同理补齐
+		for _, k := range []string{"物品", "神器", "法宝", "器物", "法器", "武器", "兵器", "道具", "灵器", "秘宝", "圣物", "容器", "饰品", "灵植", "植物", "盆栽", "藤蔓", "灵草", "仙草", "树精", "花精", "草精", "藤精", "竹精", "菇精", "剑灵", "塔灵", "灯灵", "镜灵", "器灵", "壶灵", "书灵"} {
+			if strings.Contains(s, k) {
+				return true
+			}
+		}
+	}
+	for _, f := range []string{"role", "id"} {
+		t := str(m[f])
+		if t == "" {
+			continue
+		}
+		for _, k := range []string{"神器", "法宝", "器物", "法器", "武器", "兵器", "道具", "灵器", "秘宝", "圣物", "剑灵", "塔灵", "灯灵", "镜灵", "器灵", "树精", "花精", "草精", "藤精", "灵植", "盆栽"} {
+			if strings.Contains(t, k) {
+				return true
+			}
+		}
+	}
+	// ③ 兜底(2026-08-29 阿碧实锤:LLM 生成角色卡漏 species 时,image_prompt 植物本体
+	// 措辞本身可判定——pothos/wisteria/藤蔓/盆栽 等专属植物词 + 无人形主体词 → 植物类物品)
+	if ip := str(m["image_prompt"]); ip != "" && !manjuHumanFigureRe.MatchString(ip) {
+		low := strings.ToLower(ip)
+		for _, k := range []string{"pothos", "wisteria", "vine plant", "potted plant", "plant itself", "植物本体", "藤蔓", "盆栽"} {
+			if strings.Contains(low, k) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// manjuItemAnchor 物品本体锚(2026-08-29 用户硬性规则:物品按物品渲染):
+// 主体=物品本身(材质/形制/纹路/光泽),显式禁人形/人脸/四肢/人衣。
+const manjuItemAnchor = ", the item itself (its material, shape, engravings, glow and craftsmanship), NOT a person, NOT a humanoid, no human body, no human face, no limbs, no human clothes"
+
+// manjuItemBoardLayout 物品角色板布局(三视图=多角度器物图 + 细节特写,禁人形)
+const manjuItemBoardLayout = ", item reference board (object info sheet): a clean vertical grid sheet combining: 1) multiple views of the same item side by side (front / side profile / top-down); 2) close-up detail panels (material texture, engravings, ornaments, glow); 3) a 5-color HEX palette swatch row; 4) one line of Chinese item bio text. light plain background, neat grid layout, all panels showing the same item with identical shape, material and markings, NOT a person, NOT a humanoid, no human body, no human face"
+
 // manjuIsBeast 角色是否非人形兽类/生灵:①species 字段权威(非空且非人 → 非人形);
 // ②role/id 含 灵宠/宠物/坐骑/妖兽/神兽;③appearance/image_prompt 命中兽形身体强特征兜底。
+// 物品类(manjuIsItem)不判兽形——走物品本体渲染链(2026-08-29 用户硬性规则)。
 func manjuIsBeast(m map[string]any) bool {
-	if m == nil {
+	if m == nil || manjuIsItem(m) {
 		return false
 	}
 	if s := str(m["species"]); s != "" {
@@ -3043,10 +3370,12 @@ func manjuStripFullBody(s string) string {
 	return strings.Trim(s, " ,")
 }
 
-// manjuPortraitPromptFor 角色卡级拟动漫包装(2026-08-25):
+// manjuPortraitPromptFor 人形/兽形角色卡级拟动漫包装(2026-08-25;
+// 2026-08-29 架构重构:物品角色已在 portraitPromptFor 分流到独立物品管线
+// manju_char_species.go,不再进入本函数——物品与人形措辞彻底解耦,互不污染):
 // 按种族选锚(人=东方人像锚;妖兽/灵宠=兽类锚,防兽被画成人脸)、
 // 面容锚取角色卡 appearance 并做胡须净化、末尾强加胡须纪律。
-// 所有角色图(主图/视图/Q版/抽卡)统一走它——最后防线,不依赖 LLM 自觉。
+// 人形/兽形角色图(主图/视图/Q版/抽卡)统一走它——最后防线,不依赖 LLM 自觉。
 func manjuPortraitPromptFor(prompt string, m map[string]any) string {
 	beast := manjuIsBeast(m)
 	ap := manjuSanitizeAppearance(m, str(m["appearance"]))
@@ -3115,6 +3444,15 @@ func (ctx *manjuCtx) portraitPromptFor(prompt string, m map[string]any, frontFac
 			p = p + ", distinct unique face with: " + ap
 		}
 		return p + ", " + manjuPortraitSoloBgAnchor + manjuBeardEnforce(m)
+	}
+	// 物品管线(2026-08-29 架构重构·阿碧拟人实锤):物品角色在此分流到独立收尾
+	// (manju_char_species.go),**不再进入下方人形链**——人形链的正面人脸锚
+	// (front-facing portrait/symmetrical frontal face)与单人白底(solo portrait…
+	// character…wearing exactly the outfit)对物品是强拟人邀请,正是
+	// 「绿萝盆栽→女人脸+花盆头+藤蔓头发」的污染源。frontFace 参数对物品无效
+	// (物品无正脸概念)。
+	if manjuIsItem(m) {
+		return manjuItemFinal(p, m)
 	}
 	if manjuStyleIs3D(ctx.style) {
 		if !strings.Contains(p, "virtual digital human") {
@@ -3268,6 +3606,12 @@ func manjuViewPromptBuild(p string, view string, m map[string]any) string {
 	if manjuIsBeast(m) {
 		return manjuBeastViewAnchors[view] + ", " + manjuBeastStrip(manjuViewStrip(p)) + manjuBeastIdentityAnchor
 	}
+	// 物品视图锚(2026-08-29 架构重构):人形视图锚(FULL BODY standing figure/
+	// trousers/skirt 穿衣站立语义)+人形身份锚(identical hair/beard/facial features)
+	// 对物品全是拟人邀请——物品用物品视角锚+物品身份锚(同一件物品的形态/容器/标记)
+	if manjuIsItem(m) {
+		return manjuItemViewAnchors[view] + ", " + manjuViewStrip(p) + manjuItemIdentityAnchor
+	}
 	return manjuViewAnchors[view] + ", " + manjuViewStrip(p) + manjuIdentityAnchor + manjuMinorGuard(m)
 }
 
@@ -3288,7 +3632,7 @@ func manjuCharImagePrompt(ctx *manjuCtx, m map[string]any, char, view, kind stri
 	} else {
 		p = charViewPromptFor(ctx, char, view)
 	}
-	return ctx.portraitPromptFor(p, m, frontFace), ctx.negPrompt()
+	return ctx.portraitPromptFor(p, m, frontFace), ctx.charNegPrompt(m)
 }
 
 // manjuViewStrip 视图派生前清洗 image_prompt(2026-08-26 用户反馈②:full/side/detail 全渲染成正面照)——
@@ -3361,14 +3705,27 @@ func manjuFurAnchor(m map[string]any) string {
 		head = ip[:i]
 	}
 	low := strings.ToLower(head + " " + ip)
-	// 英文色名(出现序无关,语义是「这些色的毛」)
+	// 英文色名(2026-08-29 阿影实锤:固定词表序 white 恒排 black 前,Q版「black blob+
+	// white moon-crescent」被锁成「white and black fur」=白主色黑白反转串色;
+	// 改按提示词中首次出现位置排序,主体色(前段)永远排在小色块(后段)之前)
 	enKw := []string{"orange", "ginger", "golden", "yellow", "cream", "white", "snow-white", "black", "gray", "grey", "brown", "silver", "calico", "tabby", "tortoiseshell", "tuxedo", "tricolor", "bicolor", "blue-gray"}
+	type colorHit struct {
+		k   string
+		pos int
+	}
+	var hits []colorHit
+	for _, k := range enKw {
+		if p := strings.Index(low, k); p >= 0 {
+			hits = append(hits, colorHit{k, p})
+		}
+	}
+	sort.Slice(hits, func(i, j int) bool { return hits[i].pos < hits[j].pos })
 	seen := map[string]bool{}
 	var cols []string
-	for _, k := range enKw {
-		if !seen[k] && strings.Contains(low, k) {
-			seen[k] = true
-			cols = append(cols, k)
+	for _, h := range hits {
+		if !seen[h.k] {
+			seen[h.k] = true
+			cols = append(cols, h.k)
 		}
 	}
 	// 中文记忆点色词映射(橘白猫/三花/奶牛猫等)
@@ -3673,6 +4030,12 @@ func manjuHasArmor(m map[string]any) bool {
 func manjuQPrompt(m map[string]any) string {
 	vs, _ := m["views"].(map[string]any)
 	base := str(vs["q"])
+	// 2026-08-29 阿影实锤:角色卡的【Q版·内心戏专用提示词】独立段(解析为 q_form)
+	// 是 Q 版形象的权威定义,优先于兽形 chibi 模板拼接(黑团子主色/蓝点眼/月牙毛
+	// 的作者措辞,模板拼接的毛色锁会把手白月牙的 white 提到主体色位=黑白反转串色)。
+	if base == "" {
+		base = str(m["q_form"])
+	}
 	// 2026-08-26:Q 版拼入 image_prompt 前先 manjuQStrip 剥写实皮肤/镜头词——
 	// 旧版整段拼接把 "realistic skin texture/85mm lens/cinematic" 带进 chibi prompt,
 	// chibi 被稀释渲染成写实人物形象(用户反馈"Q版形象里还有写实人物")。
@@ -3680,6 +4043,10 @@ func manjuQPrompt(m map[string]any) string {
 	// 兽类(2026-08-28 小貔 Q 版出人实锤):image_prompt 里的人互动子句
 	// ("sitting on a young cultivator's shoulder")必须剥掉,禁词压不住正向人物描述
 	if manjuIsBeast(m) {
+		img = manjuBeastStrip(img)
+	}
+	// 物品类(2026-08-29 用户硬性规则):Q 版=物品本体萌化(可带呆萌表情,禁人形全身)
+	if manjuIsItem(m) {
 		img = manjuBeastStrip(img)
 	}
 	// 2026-08-27:主图 3D 锚的裸 "BJD doll aesthetic" 残词会唤起无衣素体先验,替换为着装版
@@ -3713,6 +4080,11 @@ func manjuQPrompt(m map[string]any) string {
 		if fur := manjuFurAnchor(m); fur != "" {
 			p = p + ", " + fur
 		}
+		// 2026-08-30 兽龄锚(三物种分流:人形皱纹措辞禁入兽脸):老年兽=口鼻/眼周
+		// 毛色渐灰+老兽气质,不用人类皱纹词(兽脸上画人类皱纹=面部畸形)
+		if ageAnchor := manjuQBeastAgeAnchor(m); ageAnchor != "" {
+			p = p + ageAnchor
+		}
 		if ap != "" {
 			p = p + ", distinct creature features: " + ap
 		}
@@ -3720,6 +4092,21 @@ func manjuQPrompt(m map[string]any) string {
 			p = p + ", " + fa
 		}
 		return p + ", NOT a human, NOT a human face, NOT a human body, NOT a humanoid, NOT a person, NOT wearing human clothes"
+	}
+	// 物品类 Q 版(2026-08-29 用户硬性规则:物品按物品渲染,Q 版=物品本体萌化——
+	// 可带呆萌表情/小短手,主体仍是物品,禁人形全身/人脸/人衣)
+	if manjuIsItem(m) {
+		p := "3D rendered cute chibi collectible toy version of an item, small adorable rounded chibi object with big sparkling cute eyes on its surface and tiny stubby arms, cute friendly collectible design, same shape, same material, same engravings and same color markings as the reference item, glossy toy-like finish"
+		if base != "" {
+			p += ", " + base
+		}
+		if fa := manjuFeatureAnchor(m); fa != "" {
+			p += ", " + fa
+		}
+		if ap != "" && !strings.Contains(p, ap) {
+			p += ", distinct item features: " + ap
+		}
+		return p + ", NOT a person, NOT a humanoid, no human body, no human face, no limbs, no human clothes"
 	}
 	// 2026-08-28 非实体角色(用户实测:管理员=纯数据光生命,Q版被套实体衣服做成普通娃娃,
 	// 与写实全息体差距巨大):不套人类着装锁/chibi手办构成,走发光数据精灵形态。
@@ -3799,8 +4186,10 @@ func manjuQPrompt(m map[string]any) string {
 		p += ", a cute miniature chibi of the same female character, clearly feminine face, modest outfit fully covering the chest and collarbone"
 	} else if str(m["gender"]) == "男" {
 		// 2026-08-28 强化(顾清寒男 Q 版被画成女):阴柔美男词+chibi 幼态先验滑向女娃,
-		// masculine 单词压不住——面部结构/平胸/not a girl 三重加固(精简措辞)
-		p += ", a cute miniature chibi of the same male character, clearly masculine young man's face, flat chest, NOT a girl"
+		// masculine 单词压不住——面部结构/平胸/not a girl 三重加固(精简措辞)。
+		// 2026-08-30 年龄分档:老年男不得再锚 "young man's face"(老年 Q 版全是年轻脸
+		// 的直接根因之一),措辞按 manjuQMaleFaceCls 分档。
+		p += ", a cute miniature chibi of the same male character, " + manjuQMaleFaceCls(m) + ", flat chest, NOT a girl"
 	}
 	// appearance 剔中文(图像模型不读中文,中文记忆点=废 token 挤占权重),补道具点名
 	if apx := manjuStripCJK(ap); apx != "" && !strings.Contains(p, apx) {
@@ -3811,6 +4200,9 @@ func manjuQPrompt(m map[string]any) string {
 	}
 	p = p + ", same character as the reference image (identical hairstyle, hair color, outfit colors and design)"
 	// 年龄锚对全员成立:成年人防幼态化,未成年防被画成更小的宝宝(保持各自原年龄)
+	// 2026-08-30 分档正向锚(manjuQAgeAnchor):老年/中年/少年/儿童各档点名年龄相貌
+	// 特征(老年=皱纹/松弛/祖辈气质)——chibi 基底是年轻萌模板,弱锚压不住,必须正向写。
+	p += manjuQAgeAnchor(m)
 	p = p + ", keeping the character's original age, NOT aged down, no baby face"
 	p = p + ", body build strictly follows the original character, NOT chubby"
 	p = p + ", fully clothed head to toe, no nudity, no exposed skin except face and hands"
@@ -3848,7 +4240,10 @@ func (ctx *manjuCtx) portraitWF(prompt string, seed int, prefix string, char map
 	//  出半写实拟漫东方形象(用户要求拟漫化,避免真人照片=侵权)。
 	//  Z-Image 实测出真人照片(is_real_person_photo=true,视觉模型判图确认),仅保留作场景图引擎。
 	//  SDXL 全面禁用(观感差)。char_engine 字段保留兼容,但人物定妆一律 Krea-2。
-	return wfKrea2(prompt, str(ctx.R["krea2_unet"]), str(ctx.R["krea2_clip"]), str(ctx.R["krea2_vae"]), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.negPrompt(), initImage, initStrength)
+	// 负面按物种(2026-08-29 架构重构):物品角色追加禁人负面(charNegPrompt,
+	// 负面通道兜底正向锚);Q 版不经 portraitWF 此调用点时不受禁人负面影响
+	// (用户规则「Q版形象不影响」)
+	return wfKrea2(prompt, str(ctx.R["krea2_unet"]), str(ctx.R["krea2_clip"]), str(ctx.R["krea2_vae"]), seed, manjuPortraitW, manjuPortraitH, prefix, ctx.charNegPrompt(char), initImage, initStrength)
 }
 
 // comfyGenImage 提交图片工作流并复制结果到 dst,返回输出文件相对路径
@@ -3936,20 +4331,24 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 				}
 			}
 		}
-		amap["q_gen"] = manjuQGen
-		if n > 0 {
-			lg.logf(fmt.Sprintf("♻️ Q版生成逻辑已升级(发色锁):清除 %d 张旧Q版,按新逻辑(发色/毛色显式锚定)重新生成", n))
-		}
+			amap["q_gen"] = manjuQGen
+			if n > 0 {
+				lg.logf(fmt.Sprintf("♻️ Q版生成逻辑已升级(年龄分档锚):清除 %d 张旧Q版,按新逻辑(老年/中年/少年儿童特征分档锚定+发色锁)重新生成", n))
+			}
 	}
 	// 主图代数(2026-08-27 六修:用户四反馈——定妆多人/多外套/要纯白背景/日漫脸):
 	// 单人白底服装严格锚上线,存量主图必须重出。只清 <char>.png 主图(无下划线后缀的
 	// png;视图 mtime 联动重出,Q 版 q_gen 管,_gacha 抽卡历史/adopted 不动)。
+	// 2026-08-29 gen5:物品管线独立重构(物种路由,阿碧「女人脸+花盆头」实锤)——
+	// 人形链收尾词对物品的污染修复,存量主图+_form2(真身定妆同污染)一并清掉重出;
+	// _form2 无 mtime 联动(生成条件只看存在),必须在清理清单里点名。
 	if g, _ := manjuToInt(amap["portrait_gen"]); g != manjuPortraitGen {
 		n := 0
 		if entries, rerr := os.ReadDir(filepath.Join(ctx.assetsDir, "characters")); rerr == nil {
 			for _, e := range entries {
 				nm := e.Name()
-				if e.IsDir() || !strings.HasSuffix(nm, ".png") || strings.Contains(nm, "_") {
+				if e.IsDir() || !strings.HasSuffix(nm, ".png") ||
+					(strings.Contains(nm, "_") && !strings.HasSuffix(nm, "_form2.png")) {
 					continue
 				}
 				_ = os.Remove(filepath.Join(ctx.assetsDir, "characters", nm))
@@ -3995,8 +4394,11 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		}
 		cmap[cid] = "characters/" + cid + ".png"
 		cmap[cid+"_face"] = "characters/" + cid + "_face.png"
-		if err := ctx.ensureFaceCrop(cid, manjuIsBeast(m), lg); err != nil {
-			return err
+		// 物品类(2026-08-29 用户硬性规则):无正脸概念,跳过 facecrop(引用主图本体)
+		if !manjuIsItem(m) {
+			if err := ctx.ensureFaceCrop(cid, manjuIsBeast(m), lg); err != nil {
+				return err
+			}
 		}
 		// 多视图(审计升级:角色管理/一条龙共用同一套视图资产,保障人物统一):
 		// front=正脸特写(ensureFaceCrop 已生成)、full/side/detail 独立视图,
@@ -4091,7 +4493,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 						if view == "full" || view == "side" {
 							vw, vh = manjuViewW, manjuViewH
 						}
-						wf := wfKrea2(ctx.portraitPromptFor(anchored, m, false), str(ctx.R["krea2_unet"]), str(ctx.R["krea2_clip"]), str(ctx.R["krea2_vae"]), charSeed(cid, view), vw, vh, "manju_asset", ctx.negPrompt(), mainRef, st)
+						wf := wfKrea2(ctx.portraitPromptFor(anchored, m, false), str(ctx.R["krea2_unet"]), str(ctx.R["krea2_clip"]), str(ctx.R["krea2_vae"]), charSeed(cid, view), vw, vh, "manju_asset", ctx.charNegPrompt(m), mainRef, st)
 						if err := ctx.comfyGenImage(wf, vDst, lg, "角色 "+cid+"("+view+")"); err != nil {
 							lg.logf("  ⚠️ " + view + " 视图生成失败(回退主图+正脸): " + err.Error())
 							continue
@@ -4238,9 +4640,10 @@ func (ctx *manjuCtx) shotCondFingerprintAt(s manjuShot, w, h int) string {
 			}
 		}
 	}
-	// 提示词走最终化纯函数(2026-08-27 指纹对称修复):mark(渲染后)与 stale 检查(下次
-	// 运行)都必须基于同一份"含 guard 的最终化文本"算指纹,否则有角色镜恒 stale 反复重渲
-	finalPrompt := manjuFinalizePromptPure(s.H3Prompt, len(s.Characters) > 0, ctx.shotPicSlots(s))
+	// 提示词走最终化纯函数(2026-08-27 指纹对称修复 + 2026-08-30 契约对齐):mark(渲染后)
+	// 与 stale 检查(下次运行)都必须基于与渲染完全相同的"对齐+guard 最终化文本"算指纹,
+	// 否则对齐改词不触发重渲(旧缓存继续指鹿为马)或恒 stale 反复重渲。
+	finalPrompt := ctx.finalizeAlignedPrompt(s.H3Prompt, s, ctx.shotPicSlots(s))
 	fmt.Fprintf(hh, "w=%d|h=%d|len=%d|chars=%s|scene=%s|refs=%s|fl2va_end=%t|prompt=%s",
 		w, h, h3Length(s.Duration, ctx.fps),
 		strings.Join(s.Characters, ","), s.Scene, strings.Join(refs, ","), endFrame, finalPrompt)
@@ -4355,6 +4758,12 @@ func (ctx *manjuCtx) ensureEncodedAt(s manjuShot, cacheName string, w, h int, lg
 	if err := ctx.comfy.wait(pid, 1800*time.Second, 10*time.Second, lg.stopped); err != nil {
 		return err
 	}
+	// 落盘校验(2026-08-29 事故防御):ComfyUI 节点级输出缓存可能让同图重提全部短路
+	// (H3CondSave 不执行、文件不落盘、任务仍报 success)——wait 通过但文件缺失必须
+	// 显式报错,不能静默继续(否则渲染阶段 CondLoad 才暴露,白烧一次渲染任务)。
+	if !fileExists(h3CachePath(ctx.sharedModels, cacheName)) {
+		return fmt.Errorf("镜头 %d 编码任务完成但缓存未落盘(%s.pt)——疑似 ComfyUI 节点缓存短路,请重启 ComfyUI 后重试", s.ID, cacheName)
+	}
 	lg.logf("  ✅ 镜头 " + strconv.Itoa(s.ID) + " 条件缓存完成 -> " + cacheName + ".pt")
 	return nil
 }
@@ -4432,6 +4841,59 @@ func (ctx *manjuCtx) ensurePlanAndPrompts(lg *manjuLogger) (map[string]any, []ma
 	plan, shots, err = ctx.loadPlan() // 重读(提示词已回写)
 	if err != nil {
 		return nil, nil, err
+	}
+	// 全局说话人注册表(2026-08-30 ver14):按全集首次发声顺序为有音色绑定角色分配
+	// 全局 (Sx),finalize 汇点(finalizeAlignedPrompt)据此跨镜稳定说话人 ID——
+	// 音色一致性依赖该注册表,必须先于任何 finalize 构建。
+	ctx.speakerReg = ctx.buildSpeakerRegistry(shots)
+	// 渲染输入最终化统一汇点(2026-08-29 根治「纪律从未生效」):encode 阶段与 render
+	// 阶段各自从 plan 读 h3_prompt 提交——此前只有 renderShotTo 内 finalize,encode 阶段
+	// 用原文预编码,条件缓存固化的是无纪律的原文;渲染 CondLoad 复用该缓存,FRAME/
+	// MOTION/AUDIO/EXECUTION/CHAIN 全部纪律从未进入条件编码(实测 EP01 25 镜提交
+	// 与 plan 完全一致 sim=1.000,无任何追加)。这里在共用入口 finalize 并回写 plan,
+	// 指纹/编码/渲染三处拿同一份最终化文本,幂等(已含纪律不重复追加)。
+	// 风格句写实化(2026-08-29 用户反馈「不是写实,怎么变成了卡通」):脚本风格句按立项
+	// style 转写常带 anime-stylized/semi-realistic 动漫化措辞(万怪之主 56 章 251 处),
+	// H3 出片角色即 3D 动漫感。写实书(非动漫非 3D)在汇点统一替换为 photorealistic
+	// 并回写 plan——与纪律注入同位置,指纹/编码/渲染三处一致,自动触发全量重渲。
+	realized := false
+	if !manjuStyleIsAnime(ctx.style) && !manjuStyleIs3D(ctx.style) {
+		for i := range shots {
+			if rp := manjuRealizeStyle(shots[i].H3Prompt); rp != shots[i].H3Prompt {
+				shots[i].H3Prompt = rp
+				realized = true
+			}
+		}
+	}
+	finalized := realized
+	for i := range shots {
+		// plan 汇点在 assets 阶段之前,槽位走预期值(不探测文件)——实测恒 0 会把
+		// <Picture N> 引用整集剥光并固化(2026-08-29 绿萝实锤,见 finalizeShotPromptSlots)
+		fp := ctx.finalizeShotPromptSlots(shots[i].H3Prompt, shots[i], manjuExpectPicSlots(shots[i]), lg)
+		if fp != shots[i].H3Prompt {
+			shots[i].H3Prompt = fp
+			finalized = true
+		}
+	}
+	if finalized {
+		// 回写 plan 并落盘:ensurePlanAndPrompts 是 encode/render 共用入口,后续阶段
+		// loadPlan 重读必须拿到同一份最终化文本(指纹/编码/渲染三处一致)
+		if arr, ok := plan["shots"].([]any); ok {
+			byID := map[int]map[string]any{}
+			for _, x := range arr {
+				if m, ok := x.(map[string]any); ok {
+					if id, ok := manjuToInt(m["shot_id"]); ok {
+						byID[id] = m
+					}
+				}
+			}
+			for _, s := range shots {
+				if m := byID[s.ID]; m != nil {
+					m["h3_prompt"] = s.H3Prompt
+				}
+			}
+		}
+		_ = ctx.writePlan(plan)
 	}
 	return plan, applyTakes(plan, shots), nil
 }
@@ -4590,6 +5052,9 @@ func (ctx *manjuCtx) selectedShots(shots []manjuShot) []manjuShot {
 
 // charRefNames 全部登场角色的参考图:按视图预算收集(正脸特写优先,可含全身/细节多视图),
 // 同一角色多视图按 <Picture N..N+k> 顺序传入,与 prompt 的 subject_definitions 一一对应。
+// 2026-08-29 审计 P0 收敛:Q版/真身切换统一走 shotViewRelsFor(与提示词侧 shotRefViews
+// 同一数据源)——此前实际挂载走裸 charViewRels,真身镜提示词写 <Picture 1>=真身、
+// 实际挂的是正脸/全身视图,双形态/Q版链功能性失效。
 func (ctx *manjuCtx) charRefNames(s manjuShot) []string {
 	var out []string
 	n := len(s.Characters)
@@ -4600,7 +5065,7 @@ func (ctx *manjuCtx) charRefNames(s manjuShot) []string {
 		if i >= 3 {
 			break
 		}
-		for j, rel := range ctx.charViewRels(cid, i, n) {
+		for j, rel := range ctx.shotViewRelsFor(s, cid, i, n) {
 			name := fmt.Sprintf("dir_char_%d_%d_%d.png", s.ID, i, j)
 			_ = copyFile(filepath.Join(ctx.assetsDir, rel), filepath.Join(ctx.comfyInput, name))
 			out = append(out, name)
@@ -4609,19 +5074,24 @@ func (ctx *manjuCtx) charRefNames(s manjuShot) []string {
 	return out
 }
 
-// charVoiceNames 该镜绑定配音音色的角色音频(ComfyUI input 相对路径),按登场顺序 ≤3,
-// 与 prompt 的 <Audio N> 编号一一对应(2026-08-26 音色锁定:见 voiceBindingsFor)。
-func (ctx *manjuCtx) charVoiceNames(s manjuShot) []string {
-	var out []string
-	for i, cid := range s.Characters {
-		if i >= 3 {
-			break
-		}
-		if rel := ctx.charVoiceRef(cid); rel != "" {
-			out = append(out, rel)
+// shotViewRelsFor 该镜该角色的参考图相对路径清单(Q版/form2 切换单一数据源):
+// 内心戏镜(narration 含「内心·」)→ [front, q];真身镜(镜头文本标「真身·角色名」
+// 或含真身/化形关键词)且有 form2 资产 → [form2];否则 charViewRels 视图预算。
+// charRefNames(实际挂载)与 shotRefViews(提示词 Picture 清单)共用,保证编号对齐。
+func (ctx *manjuCtx) shotViewRelsFor(s manjuShot, cid string, i, n int) []string {
+	rels := ctx.charViewRels(cid, i, n)
+	// 内心戏(2026-08-23 用户规则):Q 版形象优先(front 锁脸 + q 呆萌)
+	if strings.Contains(s.Narration, "内心·") {
+		qRel := manjuViewRel(cid, "q")
+		if fileExists(filepath.Join(ctx.assetsDir, qRel)) {
+			rels = []string{manjuViewRel(cid, "front"), qRel}
 		}
 	}
-	return out
+	// 双形态切换(2026-08-26):整体切换为真身形态定妆
+	if form2Rel := manjuViewRel(cid, "form2"); fileExists(filepath.Join(ctx.assetsDir, form2Rel)) && shotWantsTrueForm(s, cid) {
+		rels = []string{form2Rel}
+	}
+	return rels
 }
 
 // charVoiceRef 角色配音音色音频相对 ComfyUI input 的路径;未绑定/未匹配返回空。
@@ -4632,23 +5102,35 @@ func (ctx *manjuCtx) charVoiceRef(cid string) string {
 	if cid == "" {
 		return ""
 	}
-	// ① 用户显式绑定
+	// ① 用户显式绑定(权威副本在 voice_lib/,input 缺失时同步,防误删后失效)
 	name := "voice_" + ctx.project + "_" + sanitizeFileName(cid) + ".mp3"
-	if fileExists(filepath.Join(ctx.comfyInput, "audio", name)) {
-		return filepath.ToSlash(filepath.Join("audio", name))
+	rel := filepath.ToSlash(filepath.Join("audio", name))
+	if !fileExists(filepath.Join(ctx.comfyInput, filepath.FromSlash(rel))) {
+		ctx.syncVoiceLibToComfy(rel)
 	}
-	// ② 自动匹配(角色人设 → 风格音色库)
-	lib := ctx.autoVoiceFor(cid)
+	if fileExists(filepath.Join(ctx.comfyInput, filepath.FromSlash(rel))) {
+		return rel
+	}
+	// ② 自动匹配(角色人设 → 风格音色库;2026-08-30 ver15 同档位差异化变体:
+	// 两个中年男不再共用 male_mag 一个音色文件)
+	lib := ctx.assignedVoiceFor(cid)
 	if lib == "" {
 		return ""
 	}
 	libName := "lib_" + lib + ".mp3"
-	if !fileExists(filepath.Join(ctx.comfyInput, "audio", libName)) {
-		if err := ctx.genVoiceLibAudio(lib); err != nil {
-			return "" // 生成失败(edge-tts 不可用/离线)跳过该角色音色,降级为无参考
+	rel = filepath.ToSlash(filepath.Join("audio", libName))
+	// 权威副本在 voice_lib/(2026-08-29 稳定化):input 副本缺失时从权威同步,
+	// 权威也缺失才生成(生成写权威+同步 input),edge-tts 不可用时跳过该角色音色
+	if !fileExists(filepath.Join(ctx.comfyInput, filepath.FromSlash(rel))) {
+		if !fileExists(ctx.voiceLibAuthoritative(rel)) {
+			if err := ctx.genVoiceLibAudio(lib); err != nil {
+				return "" // 生成失败(edge-tts 不可用/离线)跳过该角色音色,降级为无参考
+			}
+		} else {
+			ctx.syncVoiceLibToComfy(rel)
 		}
 	}
-	return filepath.ToSlash(filepath.Join("audio", libName))
+	return rel
 }
 
 // charInfoFor 方案角色对象(id → 角色卡),懒加载 plan.characters;找不到返回 nil
@@ -4673,6 +5155,142 @@ func (ctx *manjuCtx) charInfoFor(cid string) map[string]any {
 // 粤语音色、反派女也是粤语,全是「不友好」来源)。
 // 返回音色库 Key(lib_<Key>.mp3 与绑定下拉同标识)。
 // 匹配优先级:兽类/灵宠→萌系;反派→低沉冷冽(强化辨识);性别×年龄矩阵;性别兜底;无信息→温柔女声。
+// reManjuNumAge 数字年龄(2026-08-30 ver14):"74岁"/"60 岁"/"22岁"——autoVoiceFor
+// 数字档位优先的依据,与 manjuAgeBand 同档位。
+var reManjuNumAge = regexp.MustCompile(`(\d+)\s*岁`)
+
+// voiceVariantsFor 档位 → 变体链(base 本身 + _2/_3 后缀;音色库有变体才返回多条)
+func voiceVariantsFor(base string) []string {
+	out := []string{base}
+	if manjuVoiceLibFor(base+"_2") == nil {
+		return out
+	}
+	for i := 2; ; i++ {
+		k := base + "_" + strconv.Itoa(i)
+		if manjuVoiceLibFor(k) == nil {
+			break
+		}
+		out = append(out, k)
+	}
+	return out
+}
+
+// dialectVoiceFor 角色卡 → 热门方言音色(2026-08-30 ver15,用户要求「适当给一些
+// 热门方言,语言不单一」):卡内「音色/声线/方言」字段或人设(记忆点/口癖/外观)
+// 含地域词时分配对应方言音色(东北/陕西女声、四川/河南/广西/湖南男声、粤/台男女);
+// 仅人设强关联才触发,无地域词的角色保持普通话档位(方言是语言调味,不能全员方言)。
+// 性别不匹配跳过(如女角色配四川话但无声源→回退普通话档位)。
+func (ctx *manjuCtx) dialectVoiceFor(cid string) string {
+	c := ctx.charInfoFor(cid)
+	if c == nil {
+		return ""
+	}
+	gender := str(c["gender"])
+	src := str(c["voice"]) + " " + str(c["age"]) + " " + str(c["appearance"]) + " " + str(c["costume"]) + " " + str(c["image_prompt"])
+	has := func(ws ...string) bool {
+		for _, w := range ws {
+			if strings.Contains(src, w) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("粤", "广东", "香港", "港风", "粤语", "广普"):
+		if gender == "男" {
+			return "hk_male"
+		}
+		return "hk_female"
+	case has("台湾", "台普", "台妹"):
+		if gender == "男" {
+			return "tw_male"
+		}
+		return "tw_female"
+	case has("四川", "川渝", "成都", "重庆", "川普"):
+		if gender == "男" {
+			return "cn_sichuan"
+		}
+	case has("河南", "郑州", "中原", "豫"):
+		if gender == "男" {
+			return "cn_henan"
+		}
+	case has("广西", "南宁", "桂林", "白话"):
+		if gender == "男" {
+			return "cn_guangxi"
+		}
+	case has("湖南", "长沙", "湘"):
+		if gender == "男" {
+			return "cn_hunan"
+		}
+	case has("东北", "辽宁", "吉林", "黑龙江", "大碴子"):
+		if gender == "女" {
+			return "cn_dongbei"
+		}
+	case has("陕西", "西安", "关中"):
+		if gender == "女" {
+			return "cn_shaanxi"
+		}
+	}
+	return ""
+}
+
+// buildVoiceAssignment 全局音色分配(2026-08-30 ver15,用户实锤「玄经理和陈守家及
+// 旁白全用同一个」的根治):按全集登场序,①方言角色(卡内音色/人设含地域词)分配
+// 热门方言音色(语言不单一);②其余角色按档位轮转分配变体(male_mag/male_mag_2/
+// male_mag_3)——不同角色不同音色文件,分得清谁是谁;档位无变体时仍共用。
+// narrator 叙述音色不参与分配(旁白专属,见 manjuOffscreenBindings)。
+func (ctx *manjuCtx) buildVoiceAssignment() map[string]string {
+	assign := map[string]string{}
+	used := map[string]int{}
+	for _, cid := range ctx.charIDs() {
+		if d := ctx.dialectVoiceFor(cid); d != "" {
+			assign[cid] = d // 方言角色不占普通话档位变体配额
+			continue
+		}
+		base := ctx.autoVoiceFor(cid)
+		if base == "" {
+			continue
+		}
+		vs := voiceVariantsFor(base)
+		n := used[base]
+		assign[cid] = vs[n%len(vs)]
+		used[base] = n + 1
+	}
+	return assign
+}
+
+// charIDs 方案全部角色 id(按 plan.characters 顺序=登场序;懒加载)
+func (ctx *manjuCtx) charIDs() []string {
+	var out []string
+	if plan, _, err := ctx.loadPlan(); err == nil {
+		if arr, ok := plan["characters"].([]any); ok {
+			for _, x := range arr {
+				if m, ok := x.(map[string]any); ok {
+					if id := str(m["id"]); id != "" {
+						out = append(out, id)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// assignedVoiceFor 角色最终音色 key(2026-08-30 ver15):voiceAssign(同档位差异化
+// 变体)优先,缺省回退 autoVoiceFor 档位。懒构建(与 charInfoFor 同风格;主流程
+// ensurePlanAndPrompts 已预构建,渲染期只读)。
+func (ctx *manjuCtx) assignedVoiceFor(cid string) string {
+	if ctx.voiceAssign == nil {
+		ctx.voiceAssign = ctx.buildVoiceAssignment()
+	}
+	if v, ok := ctx.voiceAssign[cid]; ok {
+		return v
+	}
+	return ctx.autoVoiceFor(cid)
+}
+
+// autoVoiceFor 自动音色匹配:按角色卡 种族/阵营/性别/年龄 返回音色库 Key
+// (voice_lib 权威音色文件,详见 manjuVoiceLibFor)。返回 "" = 无角色卡。
 func (ctx *manjuCtx) autoVoiceFor(cid string) string {
 	c := ctx.charInfoFor(cid)
 	if c == nil {
@@ -4686,6 +5304,10 @@ func (ctx *manjuCtx) autoVoiceFor(cid string) string {
 	if species != "" && species != "人" {
 		return "beast_cute"
 	}
+	// 物品类(2026-08-29 用户硬性规则):有意识器物,萌系声线(中性呆萌)
+	if manjuIsItem(c) {
+		return "beast_cute"
+	}
 	// 反派:低沉磁性(男)/冷冽(女),强化辨识度
 	if role == "反派" {
 		if gender == "女" {
@@ -4693,34 +5315,63 @@ func (ctx *manjuCtx) autoVoiceFor(cid string) string {
 		}
 		return "male_deep"
 	}
-	// 年龄分档:儿童/少年(少女)/青年/中年/老年,关键词从宽命中
-	child := strings.Contains(age, "儿童") || strings.Contains(age, "孩童") || strings.Contains(age, "幼") || strings.Contains(age, "稚") || strings.Contains(age, "小男") || strings.Contains(age, "小女")
-	teen := strings.Contains(age, "少年") || strings.Contains(age, "少女") || strings.Contains(age, "小男孩") || strings.Contains(age, "小女孩") || strings.Contains(age, "萝莉") || strings.Contains(age, "正太")
-	elder := strings.Contains(age, "老年") || strings.Contains(age, "老者") || strings.Contains(age, "暮年") || strings.Contains(age, "花甲")
-	mature := strings.Contains(age, "中年") || strings.Contains(age, "成熟") || strings.Contains(age, "沉稳") || strings.Contains(age, "大叔") || strings.Contains(age, "御姐") || strings.Contains(age, "妇")
-	if gender == "女" {
+	// 年龄分档(2026-08-30 ver14 修复:age="74岁"/"22岁" 等数字年龄此前全部掉进默认
+	// 青年声——白名单只认「老年/少年」等中文词;现与 manjuAgeBand 同档位数字优先:
+	// ≥50 老年 / ≥40 中年 / <13 儿童 / <20 少年 / 其他 青年)
+	band := ""
+	if m := reManjuNumAge.FindStringSubmatch(age); len(m) > 0 {
+		if n, aerr := strconv.Atoi(m[1]); aerr == nil && n > 0 {
+			switch {
+			case n >= 50:
+				band = "elder"
+			case n >= 40:
+				band = "mature"
+			case n < 13:
+				band = "child"
+			case n < 20:
+				band = "teen"
+			}
+		}
+	}
+	if band == "" {
+		child := strings.Contains(age, "儿童") || strings.Contains(age, "孩童") || strings.Contains(age, "幼") || strings.Contains(age, "稚") || strings.Contains(age, "小男") || strings.Contains(age, "小女")
+		teen := strings.Contains(age, "少年") || strings.Contains(age, "少女") || strings.Contains(age, "小男孩") || strings.Contains(age, "小女孩") || strings.Contains(age, "萝莉") || strings.Contains(age, "正太")
+		elder := strings.Contains(age, "老年") || strings.Contains(age, "老者") || strings.Contains(age, "暮年") || strings.Contains(age, "花甲")
+		mature := strings.Contains(age, "中年") || strings.Contains(age, "成熟") || strings.Contains(age, "沉稳") || strings.Contains(age, "大叔") || strings.Contains(age, "御姐") || strings.Contains(age, "妇")
 		switch {
 		case child:
-			return "child_girl"
+			band = "child"
 		case teen:
-			return "girl_lively"
+			band = "teen"
 		case elder:
-			return "female_elder"
+			band = "elder"
 		case mature:
+			band = "mature"
+		}
+	}
+	if gender == "女" {
+		switch band {
+		case "child":
+			return "child_girl"
+		case "teen":
+			return "girl_lively"
+		case "elder":
+			return "female_elder"
+		case "mature":
 			return "female_mature"
 		default:
 			return "female_warm"
 		}
 	}
 	if gender == "男" {
-		switch {
-		case child:
+		switch band {
+		case "child":
 			return "child_boy"
-		case teen:
+		case "teen":
 			return "boy_teen"
-		case elder:
+		case "elder":
 			return "male_elder"
-		case mature:
+		case "mature":
 			return "male_mag"
 		default:
 			return "male_sun"
@@ -4730,9 +5381,39 @@ func (ctx *manjuCtx) autoVoiceFor(cid string) string {
 	return "female_warm"
 }
 
-// genVoiceLibAudio 生成单个风格库音色参考音频(input/audio/lib_<Key>.mp3);幂等(已存在跳过)。
-// key=音色库 Key(旧版传 edge 音色名的调用经 manjuVoiceLibFor 兼容解析);派生变体的
-// Pitch/Rate(童声拔高/老年放缓)随条目带出。
+// voiceLibRel 音色库文件相对路径(audio/lib_<key>.mp3)
+func voiceLibRel(key string) string {
+	return filepath.Join("audio", "lib_"+key+".mp3")
+}
+
+// voiceLibAuthoritative 音色库权威文件路径(voice_lib/,2026-08-29 稳定化):
+// 音色是跨项目全局资源,权威副本固定在自包含根 voice_lib/,不随项目清理/ComfyUI
+// 输入目录波动;InitPaths 未解析(测试/工具调用)时回退旧路径 comfyInput/audio。
+func (ctx *manjuCtx) voiceLibAuthoritative(rel string) string {
+	if VoiceLibDir != "" {
+		return filepath.Join(VoiceLibDir, filepath.FromSlash(rel))
+	}
+	return filepath.Join(ctx.comfyInput, filepath.FromSlash(rel))
+}
+
+// syncVoiceLibToComfy 把权威副本同步到 ComfyUI input(LoadAudio 只能读 input)。
+// 幂等(目标存在即跳过),只增不删——input 副本随时可由权威目录重建,误删无害。
+func (ctx *manjuCtx) syncVoiceLibToComfy(rel string) {
+	src := ctx.voiceLibAuthoritative(rel)
+	if !fileExists(src) {
+		return
+	}
+	dst := filepath.Join(ctx.comfyInput, filepath.FromSlash(rel))
+	if fileExists(dst) {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(dst), 0755)
+	_ = copyFile(src, dst)
+}
+
+// genVoiceLibAudio 生成单个风格库音色参考音频:权威副本写入 voice_lib/,再同步副本到
+// ComfyUI input/audio(幂等:已存在跳过)。key=音色库 Key(旧版传 edge 音色名的调用经
+// manjuVoiceLibFor 兼容解析);派生变体的 Pitch/Rate(童声拔高/老年放缓)随条目带出。
 func (ctx *manjuCtx) genVoiceLibAudio(key string) error {
 	item := manjuVoiceLibFor(key)
 	if item == nil {
@@ -4745,11 +5426,12 @@ func (ctx *manjuCtx) genVoiceLibAudio(key string) error {
 		return nil // 本 run 已尝试过(成功或失败都记,防重复生成)
 	}
 	ctx.voiceLibDone[item.Key] = true
-	out := filepath.Join(ctx.comfyInput, "audio", "lib_"+item.Key+".mp3")
+	out := ctx.voiceLibAuthoritative(voiceLibRel(item.Key))
 	if fileExists(out) {
+		ctx.syncVoiceLibToComfy(voiceLibRel(item.Key))
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Join(ctx.comfyInput, "audio"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
 		return err
 	}
 	args := []string{"voice-gen", "--text", manjuVoiceGenText, "--voice", item.Name, "--out", out}
@@ -4769,17 +5451,15 @@ func (ctx *manjuCtx) genVoiceLibAudio(key string) error {
 		_ = os.Remove(out)
 		return fmt.Errorf("生成音色 %s 产出空文件(音色不可用?)", item.Key)
 	}
+	ctx.syncVoiceLibToComfy(voiceLibRel(item.Key))
 	return nil
 }
 
-// ensureVoiceLib 预生成风格音色库中全部缺失的参考音频(voice/prepare 与渲染兜底共用);
-// 返回 (生成数, 失败数)
+// ensureVoiceLib 预生成风格音色库中全部缺失的参考音频(权威目录 voice_lib/ 生成,
+// 再全量同步副本到 ComfyUI input);返回 (生成数, 失败数)
 func (ctx *manjuCtx) ensureVoiceLib() (int, int) {
 	done, failed := 0, 0
 	for _, v := range manjuVoiceLib {
-		if fileExists(filepath.Join(ctx.comfyInput, "audio", "lib_"+v.Key+".mp3")) {
-			continue
-		}
 		if err := ctx.genVoiceLibAudio(v.Key); err != nil {
 			failed++
 			continue
@@ -4793,6 +5473,7 @@ func (ctx *manjuCtx) ensureVoiceLib() (int, int) {
 type voiceBinding struct {
 	CharID string
 	Audio  string // "<Audio N>"
+	SubN   int    // 该角色的 Subject 编号(=登场序,官方 Audio 定义绑 <Subject M> (Sx) 用)
 }
 
 // voiceBindingsFor 该镜绑定音色角色的 <Audio N> 编号映射(按登场顺序,≤3;与 charVoiceNames 同序)。
@@ -4806,7 +5487,7 @@ func (ctx *manjuCtx) voiceBindingsFor(s manjuShot) []voiceBinding {
 		if ctx.charVoiceRef(cid) == "" {
 			continue
 		}
-		out = append(out, voiceBinding{CharID: cid, Audio: fmt.Sprintf("<Audio %d>", len(out)+1)})
+		out = append(out, voiceBinding{CharID: cid, Audio: fmt.Sprintf("<Audio %d>", len(out)+1), SubN: i + 1})
 	}
 	return out
 }
@@ -4814,6 +5495,9 @@ func (ctx *manjuCtx) voiceBindingsFor(s manjuShot) []voiceBinding {
 // ensureVoiceBindings 音色定义兜底(2026-08-26):LLM 生成 h3_prompt 时漏写 <Audio> 定义
 // 音色参考就进不了条件编码(实测 H3 音色跟随的前提是 prompt 有 <Audio> 引用)。
 // 只在完全没有 <Audio> 引用时补写 subject_definitions 定义(有引用则信任 LLM,避免双重定义)。
+// 2026-08-30 官方格式对齐:定义行绑 <Subject M>(ref-en §2.4 官方示例形态;绑中文名
+// 时模型无法把音色与画面里的英文名角色关联=配音乱根源之一);行内 Sx 以登场序占位,
+// 渲染前 alignAudioDefs 会按画面段实际发声顺序重写。
 func ensureVoiceBindings(hp string, bindings []voiceBinding) string {
 	if len(bindings) == 0 || strings.Contains(hp, "<Audio ") {
 		return hp
@@ -4821,8 +5505,8 @@ func ensureVoiceBindings(hp string, bindings []voiceBinding) string {
 	var lines []string
 	for _, b := range bindings {
 		lines = append(lines, fmt.Sprintf(
-			"<Audio %d> is the voice-timbre reference for the voice of %s (S%d), containing a spoken voiceover.",
-			audioNum(b.Audio), b.CharID, audioNum(b.Audio)))
+			"<Audio %d> is the voice-timbre reference for <Subject %d> (S%d), containing a spoken voiceover.",
+			audioNum(b.Audio), b.SubN, audioNum(b.Audio)))
 	}
 	// subject_definitions 段末尾追加(六段式第一段,以 summary: 为界)
 	idx := strings.Index(hp, "summary:")
@@ -4840,6 +5524,305 @@ func audioNum(tag string) int {
 		return 1
 	}
 	return n
+}
+
+// offscreenVoice 画外说话者(群众/路人喊话,非 narrator 旁白)差异化音色绑定
+type offscreenVoice struct {
+	Desc string // 声线描述片段(仅诊断/日志用)
+	Key  string // 音色库 Key
+}
+
+// reOffscreenAnchor 画外音句式锚点(官方 off-screen voiceover 句式的尾部标记)
+var reOffscreenAnchor = regexp.MustCompile(`(?i)in an off-?screen voiceover`)
+
+// manjuOffscreenDescs 提取 h3_prompt 中所有 off-screen voiceover 说话者描述段
+// (锚点向前取上一个句号后的片段);narrator 旁白跳过(旁白不换音色,2026-08-29
+// 用户反馈「路人配音和主角配音都是主角在说话」的修复输入)。
+func manjuOffscreenDescs(hp string) []string {
+	anchors := reOffscreenAnchor.FindAllStringIndex(hp, -1)
+	var out []string
+	for _, a := range anchors {
+		seg := hp[:a[0]]
+		if i := strings.LastIndex(seg, ". "); i >= 0 {
+			seg = seg[i+2:]
+		}
+		low := strings.ToLower(seg)
+		if strings.Contains(low, "narrator") {
+			continue // 旁白:保持默认叙述音色,不参与差异化
+		}
+		desc := strings.TrimSpace(seg)
+		desc = strings.TrimSuffix(desc, ",")
+		if len(desc) > 140 {
+			desc = desc[len(desc)-140:]
+		}
+		if len([]rune(desc)) < 8 {
+			continue
+		}
+		out = append(out, desc)
+	}
+	return out
+}
+
+// manjuOffscreenKey 画外声线描述 → 差异化音色库 Key。与登场角色错开:默认男声用
+// male_mag(中年磁性,与主角常配的 male_sun 阳光男声区分),默认女声用 female_mature
+// (与 female_warm 区分);语气/年龄词优先(威压→male_deep、童声→child、老年→elder)。
+func manjuOffscreenKey(desc string) string {
+	low := strings.ToLower(desc)
+	has := func(ws ...string) bool {
+		for _, w := range ws {
+			if strings.Contains(low, w) {
+				return true
+			}
+		}
+		return false
+	}
+	// 旁白/叙述(2026-08-30 ver15):独立叙述音色,与所有角色档位区分——此前
+	// narrator 无性别词掉默认 male_mag,与中年男角色撞音色(用户实锤「旁白和
+	// 角色分不清」)
+	if has("narrator") {
+		return "male_narrator"
+	}
+	female := has("woman", "female", "girl", "lady", "her", "she", "grandma", "aunt", "sister", "mrs", "mother")
+	male := has("man", "male", "boy", "his", "he", "grandpa", "uncle", "brother", "mr", "father")
+	// 注意:不用 "aged"(middle-aged 中年会误判老年)
+	old := has("old", "elder", "elderly", "ancient", "grandma", "grandpa", "senior", "wrinkled")
+	young := has("young", "kid", "child", "youth", "little", "eager", "teen")
+	deep := has("gruff", "deep", "rough", "hoarse", "harsh", "gravelly")
+	switch {
+	case female && old:
+		return "female_elder"
+	case female && young:
+		return "girl_lively"
+	case female && deep:
+		return "female_deep"
+	case female:
+		return "female_mature"
+	case male && old:
+		return "male_elder"
+	case male && young:
+		return "boy_teen"
+	case male && deep:
+		return "male_deep"
+	default:
+		return "male_mag"
+	}
+}
+
+// manjuOffscreenBindings 该镜画外说话者绑定列表(按出现顺序;与 charVoiceNames 的
+// <Audio N> 编号接续登场角色之后,一一对应)
+// manjuOffscreenBindings 画外说话者差异化音色绑定清单。2026-08-30 ver14(问题⑥
+// 内心戏音色):内心戏镜(innerCid 非空)的 narrator 画外音句不再跳过——绑定该角色
+// 音色库 key,desc 改写为「角色内心声线」描述(H3 按描述区分内心戏与客观旁白/
+// 对白:内心=角色声线基底 + quiet inner voice 语气,对白=同源声线+场上语气)。
+func (ctx *manjuCtx) manjuOffscreenBindings(hp string, innerCid, innerKey string) []offscreenVoice {
+	descs := manjuOffscreenDescs(hp)
+	narrDescs := manjuNarratorDescs(hp)
+	if innerKey != "" {
+		// 内心戏镜: narrator 句=该角色内心,绑定角色音色(ver14)
+		for _, d := range narrDescs {
+			descs = append(descs, "inner:"+d)
+		}
+	} else if len(narrDescs) > 0 {
+		// 客观旁白镜(2026-08-30 ver15):旁白绑定独立叙述音色——此前 narrator 不绑定
+		// =H3 默认声易与角色撞(用户实锤「玄经理陈守家旁白全用同一个」),现在旁白
+		// 固定 male_narrator 叙述声,与所有角色档位区分
+		for _, d := range narrDescs {
+			descs = append(descs, "narr:"+d)
+		}
+	}
+	if len(descs) == 0 {
+		return nil
+	}
+	out := make([]offscreenVoice, 0, len(descs))
+	seen := map[string]bool{}
+	phrase := ""
+	if innerCid != "" {
+		phrase = ctx.voiceTimbrePhrase(innerCid)
+	}
+	for _, d := range descs {
+		var key, desc string
+		if strings.HasPrefix(d, "inner:") {
+			desc = "the quiet inner voice of " + innerCid
+			if phrase != "" {
+				desc += ", " + phrase
+			}
+			key = innerKey
+		} else if strings.HasPrefix(d, "narr:") {
+			desc = "the narrator with a calm, neutral storytelling voice"
+			key = "male_narrator"
+		} else {
+			key = manjuOffscreenKey(d)
+			desc = d
+		}
+		if seen[key] && len(out) > 0 {
+			// 同音色画外说话者只绑一次(H3 音色参考一个就够,防 ref_audios 冗余)
+			continue
+		}
+		seen[key] = true
+		out = append(out, offscreenVoice{Desc: desc, Key: key})
+	}
+	return out
+}
+
+// manjuNarratorDescs 提取 narrator 画外音句描述(off-screen voiceover 句中带
+// narrator 的):内心戏与客观旁白都由 narrator 句式念出(脚本直出/LLM 规则),
+// 渲染端区分处理——内心戏绑定角色音色(ver14)、客观旁白绑定叙述音色(ver15)。
+func manjuNarratorDescs(hp string) []string {
+	if !strings.Contains(hp, "narrator") {
+		return nil
+	}
+	anchors := reOffscreenAnchor.FindAllStringIndex(hp, -1)
+	var out []string
+	for _, a := range anchors {
+		seg := hp[:a[0]]
+		if i := strings.LastIndex(seg, ". "); i >= 0 {
+			seg = seg[i+2:]
+		}
+		low := strings.ToLower(seg)
+		if !strings.Contains(low, "narrator") {
+			continue
+		}
+		desc := strings.TrimSpace(seg)
+		desc = strings.TrimSuffix(desc, ",")
+		if len(desc) > 140 {
+			desc = desc[len(desc)-140:]
+		}
+		if len([]rune(desc)) < 8 {
+			continue
+		}
+		out = append(out, desc)
+	}
+	return out
+}
+
+// innerVoiceFor 内心戏角色与其音色库 key(2026-08-30 ver14,问题⑥):从 narration 的
+// 「内心·角色名:」前缀提取角色,归一匹配登场角色后取 autoVoiceFor 音色。
+// 非内心戏镜返回 ("","")。
+func (ctx *manjuCtx) innerVoiceFor(s manjuShot) (string, string) {
+	for _, line := range strings.Split(s.Narration, "\n") {
+		i := strings.Index(line, "内心·")
+		if i < 0 {
+			continue
+		}
+		rest := line[i+len("内心·"):]
+		j := strings.IndexAny(rest, "：:")
+		if j <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(rest[:j])
+		for _, cid := range s.Characters {
+			if cid == name || strings.HasSuffix(cid, "·"+name) || strings.HasSuffix(name, "·"+cid) {
+				if k := ctx.autoVoiceFor(cid); k != "" {
+					return cid, k
+				}
+			}
+		}
+		if k := ctx.autoVoiceFor(name); k != "" {
+			return name, k
+		}
+	}
+	return "", ""
+}
+
+// injectOffscreenVoiceBindings 在 subject_definitions 段末追加画外说话者的 <Audio N>
+// 定义(接续登场角色编号)。幂等:已注入过画外定义(<Audio N> ... off-screen voice
+// described as)则直接返回——同一镜重 finalize 时描述不变,不重复追加。
+func injectOffscreenVoiceBindings(hp string, obs []offscreenVoice, startN int) string {
+	if len(obs) == 0 || strings.Contains(hp, "for the off-screen voice described as") {
+		return hp
+	}
+	idx := strings.Index(hp, "summary:")
+	if idx < 0 {
+		return hp
+	}
+	var lines []string
+	n := startN
+	for _, ob := range obs {
+		n++
+		lines = append(lines, fmt.Sprintf(
+			"<Audio %d> is the voice-timbre reference for the off-screen voice described as %s, containing a spoken voiceover.",
+			n, ob.Desc))
+	}
+	return hp[:idx] + strings.Join(lines, "\n") + "\n\n" + hp[idx:]
+}
+
+// reAudioDefLine <Audio N> 定义行(音色绑定的 prompt 侧来源,charVoiceNames 据此挂载
+// ref_audios,保证编号/顺序与注入完全一致)
+var reAudioDefLine = regexp.MustCompile(`(?m)^<Audio (\d+)> is the voice-timbre reference for (.+?), containing a spoken voiceover\.$`)
+
+// charVoiceNames 该镜挂载的配音音色音频(ComfyUI input 相对路径),与 prompt 的
+// <Audio N> 编号一一对应(2026-08-29 重写:单一来源=最终化 prompt 的 <Audio> 定义行,
+// 不再按角色列表推导——画外说话者的 <Audio> 定义与登场角色同一机制注入,挂载顺序
+// 天然一致;解析不到定义时回退旧逻辑(登场角色顺序)。)
+func (ctx *manjuCtx) charVoiceNames(s manjuShot) []string {
+	hp := s.H3Prompt
+	if hp != "" {
+		lines := reAudioDefLine.FindAllStringSubmatch(hp, -1)
+		if len(lines) > 0 {
+			byNum := make(map[int]string, len(lines))
+			for _, m := range lines {
+				n, err := strconv.Atoi(m[1])
+				if err != nil || n < 1 {
+					continue
+				}
+				byNum[n] = m[2]
+			}
+			maxN := 0
+			for n := range byNum {
+				if n > maxN {
+					maxN = n
+				}
+			}
+			var out []string
+			c := ctx.refContractFor(s)
+			for n := 1; n <= maxN; n++ {
+				who := byNum[n]
+				if who == "" {
+					continue
+				}
+				rel := ""
+				cid, offDesc := manjuAudioDefTarget(who, c)
+				if offDesc != "" {
+					// 画外说话者:按声线描述解析音色(与注入同函数,确定性)
+					key := manjuOffscreenKey(offDesc)
+					if key != "" {
+						rel = "audio/lib_" + key + ".mp3"
+						if !fileExists(filepath.Join(ctx.comfyInput, filepath.FromSlash(rel))) {
+							if !fileExists(ctx.voiceLibAuthoritative(rel)) {
+								if err := ctx.genVoiceLibAudio(key); err != nil {
+									rel = ""
+								}
+							} else {
+								ctx.syncVoiceLibToComfy(rel)
+							}
+						}
+						if rel != "" {
+							rel = filepath.ToSlash(rel)
+						}
+					}
+				} else if cid != "" {
+					rel = ctx.charVoiceRef(cid)
+				}
+				if rel != "" {
+					out = append(out, rel)
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+		}
+	}
+	// 回退:无 <Audio> 定义(旧方案/未 finalize)时按登场角色顺序
+	var out []string
+	for i, cid := range s.Characters {
+		if i >= 3 {
+			break
+		}
+		if rel := ctx.charVoiceRef(cid); rel != "" {
+			out = append(out, rel)
+		}
+	}
+	return out
 }
 
 // refRelFor 角色参考图相对路径:优先正脸特写(身份锁定强),缺省回退全身定妆照,都没有则空串
@@ -5060,6 +6043,8 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 			rCopy[k] = v
 		}
 		ctx.applySageToR(rCopy)
+		ctx.pddGuard(lg) // PDD 节点探测(每 run 一次)
+		ctx.applyPddToR(rCopy)
 		wf := h3RenderWorkflow(rCopy, seed, w, h, h3Length(s.Duration, ctx.fps),
 			ctx.steps, cacheName, len(s.Characters) > 0, chained, idx-1, idx)
 		return ctx.comfy.submit(wf)
@@ -5564,6 +6549,12 @@ func fileMD5Hex(p string) string {
 // beast=兽类角色:YuNet 只检测人脸,兽脸必然未命中(白跑一次检测+刷检测告警),
 // 直接走启发式窗口。
 func (ctx *manjuCtx) ensureFaceCrop(cid string, beast bool, lg *manjuLogger) error {
+	// 物品豁免下沉到封装内(2026-08-29 审计 V2 修复:此前豁免只打在 stageAssets
+	// 调用点,抽卡采纳链 manjuAdoptGacha 未复制 → 物品采纳后 _face 被人脸裁剪乱裁,
+	// 渲染 front 参考引用裁坏图。豁免进封装,两个调用点自然一致)
+	if m := ctx.charCardByName(cid); m != nil && manjuIsItem(m) {
+		return nil
+	}
 	mainP := filepath.Join(ctx.assetsDir, "characters", cid+".png")
 	faceP := filepath.Join(ctx.assetsDir, "characters", cid+"_face.png")
 	if !fileExists(mainP) {
@@ -5590,16 +6581,22 @@ func (ctx *manjuCtx) ensureFaceCrop(cid string, beast bool, lg *manjuLogger) err
 
 // charIsBeastByName 按角色名查方案角色卡判兽类(采纳流程等无角色卡在手时用)
 func (ctx *manjuCtx) charIsBeastByName(cid string) bool {
+	m := ctx.charCardByName(cid)
+	return m != nil && manjuIsBeast(m)
+}
+
+// charCardByName 按名查方案角色卡(物种查询统一入口,facecrop/音色等旁路共用)
+func (ctx *manjuCtx) charCardByName(cid string) map[string]any {
 	plan, _, err := ctx.loadPlan()
 	if err != nil {
-		return false
+		return nil
 	}
 	for _, c := range anyArr(plan["characters"]) {
 		if m, ok := c.(map[string]any); ok && str(m["id"]) == cid {
-			return manjuIsBeast(m)
+			return m
 		}
 	}
-	return false
+	return nil
 }
 
 // ---- 环境自检 ----
@@ -5868,7 +6865,19 @@ func resolveNovelPath(novel string) (file, dir string) {
 	}
 	if st, err := os.Stat(novel); err == nil {
 		if !st.IsDir() {
-			return novel, filepath.Dir(novel)
+			// 2026-08-30 回归修复(轮回欠费九世实锤「资产 0 角色/0 场景直接编码」):
+			// 文件输入(全本 md)时 dir=父目录——父目录是布局子目录(全本/正文/素材)时
+			// 必须上提到书根,否则 config.novel_dir=…/书/全本,素材卡(人物/场景提示词)
+			// 与分镜脚本目录全部找不到 → 方案零角色卡 → 资产空转直接编码。
+			d := filepath.Dir(novel)
+			for i := 0; i < 3; i++ {
+				base := filepath.Base(d)
+				if !(base == "全本" || strings.Contains(base, "正文") || base == "素材" || base == "分镜脚本") {
+					break
+				}
+				d = filepath.Dir(d)
+			}
+			return novel, d
 		}
 		dir = novel
 		// 优先 全本 类(完整正文),其次 正文 类;先查根目录,再查同名子目录
@@ -6003,6 +7012,16 @@ func manjuGachaDraw(configPath, episode, char, view string, count int) ([]map[st
 		count = 8
 	}
 	view = strings.TrimSpace(view)
+	// 抽卡是独立旁路入口(2026-08-29 实测修复:上次渲染被手动停止后 stopped 卡 true,
+	// 抽卡任务提交 ComfyUI 后立即被 wait 停止感知 interrupt,候选永不落盘、无法采纳;
+	// 与 manjuRun/agent/upscale/IR 各入口一致,旁路开始即复位停止标记;渲染运行中仍拒绝)
+	manjuState.mu.Lock()
+	if manjuState.running {
+		manjuState.mu.Unlock()
+		return nil, fmt.Errorf("渲染任务运行中,请先停止")
+	}
+	manjuState.stopped = false
+	manjuState.mu.Unlock()
 	ctx, err := newManjuCtx(configPath, episode, "", "", "")
 	if err != nil {
 		return nil, err
@@ -6104,28 +7123,12 @@ func charViewPromptFor(ctx *manjuCtx, char, view string) string {
 	if err == nil {
 		for _, c := range anyArr(plan["characters"]) {
 			if m, ok := c.(map[string]any); ok && str(m["id"]) == char {
-			// 角色板(2026-08-25 即梦角色版):优先 board_prompt/views.board,兜底 image_prompt+布局+配色
-			// 兽类(2026-08-26):LLM board_prompt 模板是人形措辞,兽类忽略之直接兽形板布局
+			// 角色板(2026-08-25 即梦角色版):统一走 manjuBoardPromptFor 三分类路由
+			// (2026-08-29 审计 V1 修复:此处旧内联副本缺物品路由,物品 board 吃到人形板
+			// 布局 "three full-body views of the same character"——与正确的三分类版本
+			// 漂移成两份实现,删内联副本收敛到单一封装)
 			if view == "board" {
-				beast := manjuIsBeast(m)
-				if !beast {
-					if p := str(m["board_prompt"]); p != "" {
-						return p
-					}
-					if vs, ok := m["views"].(map[string]any); ok {
-						if p := str(vs["board"]); p != "" {
-							return p
-						}
-					}
-				}
-				layout := manjuBoardLayout
-				if beast {
-					layout = manjuBeastBoardLayout
-				}
-				if p := str(m["image_prompt"]); p != "" {
-					return p + layout + manjuColorAnchor(m)
-				}
-				return "portrait of " + char + ", " + layout + manjuColorAnchor(m)
+				return ctx.manjuBoardPromptFor(char, m)
 			}
 			// 身份特征优先:image_prompt 含具体发色/胡须/服装,视图提示词必须带上;
 			// 性别锚(2026-08-26):高 denoise 重绘下防性别漂移(墨姨 side 长胡须)
@@ -6144,6 +7147,11 @@ func charViewPromptFor(ctx *manjuCtx, char, view string) string {
 				suffix := manjuViewSuffix(view)
 				if beast {
 					suffix = manjuBeastViewSuffix(view)
+				}
+				// 物品视图后缀(2026-08-29 架构重构):人形后缀 standing pose/complete
+				// outfit/hairstyle silhouette 对物品是拟人邀请——物品只描述本体,禁人
+				if manjuIsItem(m) {
+					suffix = manjuItemViewSuffix(view)
 				}
 				return p + manjuViewGenderAnchor(m) + ", " + suffix + manjuColorAnchor(m)
 			}
@@ -6271,32 +7279,13 @@ func (ctx *manjuCtx) shotRefViews(s manjuShot) []string {
 	if n > 3 {
 		n = 3
 	}
-	// 内心戏镜(2026-08-23 用户规则):narration 含「内心·」→ 该角色参考优先用 Q 版图
-	innerChars := map[string]bool{}
-	if strings.Contains(s.Narration, "内心·") {
-		for _, cid := range s.Characters {
-			innerChars[cid] = true
-		}
-	}
 	for i, cid := range s.Characters {
 		if i >= 3 {
 			break
 		}
-		rels := ctx.charViewRels(cid, i, n)
-		if innerChars[cid] {
-			// 内心戏:Q 版形象优先(front 锁脸 + q 呆萌),供 h3_prompt 引用 Q 版图
-			qRel := manjuViewRel(cid, "q")
-			if fileExists(filepath.Join(ctx.assetsDir, qRel)) {
-				rels = []string{manjuViewRel(cid, "front"), qRel}
-			}
-		}
-		// 双形态切换(2026-08-26):镜头文本标「真身·<角色名>」(或画面同时含 真身/化形/原形/
-		// 兽形 关键词与角色名)且角色有第二形态定妆 <id>_form2.png → 参考图整体切换为真身形态
-		// (萌宠 Q版↔神话真身、人形↔兽形;与「内心·」同款前缀约定,assets 由 second_form 定妆)
-		if form2Rel := manjuViewRel(cid, "form2"); fileExists(filepath.Join(ctx.assetsDir, form2Rel)) && shotWantsTrueForm(s, cid) {
-			rels = []string{form2Rel}
-		}
-		for _, rel := range rels {
+		// 2026-08-29 收敛:Q版/form2 切换统一走 shotViewRelsFor(与 charRefNames 同源,
+		// 此处只负责把相对路径翻译成 "角色(视图)" 标签)
+		for _, rel := range ctx.shotViewRelsFor(s, cid, i, n) {
 			view := strings.TrimSuffix(filepath.Base(rel), ".png")
 			view = strings.TrimPrefix(strings.TrimPrefix(view, sanitizeFileName(cid)+"_"), sanitizeFileName(cid))
 			if view == "" || view == "face" {
@@ -6381,6 +7370,15 @@ func manjuAdoptedMap(ctx *manjuCtx) map[string]string {
 
 // manjuPlanCharacters 抽卡前置:生成角色/场景方案(复用已有,保证与渲染方案一致)
 func manjuPlanCharacters(configPath, episode string) error {
+	// 旁路入口复位停止标记(同 manjuGachaDraw 2026-08-29 实测:上次渲染被停止后
+	// stopped 卡 true,方案生成/抽卡提交后立即被 interrupt,全部失败)
+	manjuState.mu.Lock()
+	if manjuState.running {
+		manjuState.mu.Unlock()
+		return fmt.Errorf("渲染任务运行中,请先停止")
+	}
+	manjuState.stopped = false
+	manjuState.mu.Unlock()
 	ctx, err := newManjuCtx(configPath, episode, "", "", "")
 	if err != nil {
 		return err

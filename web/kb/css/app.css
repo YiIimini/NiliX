@@ -385,6 +385,56 @@ body.panel-open::after {
   flex: none;
 }
 .hrs-tools .hrs-btn-icon { flex: none; }
+.hrs-tools #cfy-versions { flex: none; }
+
+/* 版本管理弹窗(2026-08-29,#/comfy 嵌套页):版本/模型/插件/工作流 检测展示 */
+.vm-modal { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 9999; display: flex; align-items: center; justify-content: center; }
+.vm-panel { width: min(860px, 92vw); max-height: 86vh; display: flex; flex-direction: column; background: var(--card-bg, #1e1e1e); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.5); color: var(--text); overflow: hidden; }
+.vm-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--panel-border); font-size: 15px; font-weight: 700; }
+.vm-head-btns { display: flex; align-items: center; gap: 8px; }
+/* 头部按钮:与应用弹窗按钮统一风格(30px 圆形 chip 底 + SVG 图标,2026-08-29) */
+.vm-refresh, .vm-close { width: 30px; height: 30px; flex: 0 0 auto; border-radius: 50%; background: var(--chip-bg); border: 1px solid var(--panel-border); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); padding: 0; transition: color .2s, border-color .2s, transform .2s; }
+.vm-refresh:hover { color: var(--accent, #4a90d9); border-color: var(--accent, #4a90d9); transform: rotate(180deg); }
+.vm-close:hover { color: var(--danger, #d64545); border-color: var(--danger, #d64545); transform: rotate(90deg); }
+.vm-refresh svg { width: 14px; height: 14px; }
+.vm-close svg { width: 15px; height: 15px; }
+.vm-body { padding: 12px 14px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.vm-loading { text-align: center; padding: 30px 0; color: var(--muted); }
+.vm-section { border: 1px solid var(--panel-border); border-radius: 10px; overflow: hidden; }
+.vm-sec-title { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--chip-bg); font-weight: 700; font-size: 13px; }
+.vm-scroll { max-height: 30vh; overflow: auto; padding: 4px 0; }
+.vm-scroll-wf { max-height: 16vh; }
+.vm-empty { color: var(--muted); padding: 10px 12px; font-size: 12px; }
+.vm-group { margin: 2px 6px; }
+.vm-group-head { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 6px 8px; font-size: 12.5px; font-weight: 600; border-radius: 6px; }
+.vm-group-head:hover { background: var(--chip-bg); }
+.vm-group-head .vm-count { color: var(--muted); font-weight: 400; font-size: 11px; margin-left: auto; }
+.vm-arrow { display: inline-block; width: 12px; color: var(--muted); }
+.vm-group-body { padding: 0 4px 4px 22px; }
+.vm-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-size: 12px; border-top: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent); }
+.vm-mname { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vm-msize { color: var(--muted); font-size: 11px; min-width: 64px; text-align: right; }
+.vm-mmtime { color: var(--muted); font-size: 11px; min-width: 76px; text-align: right; }
+.vm-more { color: var(--muted); font-size: 11px; padding: 4px 8px; }
+.vm-pname { flex: 0 0 auto; min-width: 150px; font-weight: 600; }
+.vm-pmeta { flex: 1; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vm-upd { min-width: 52px; text-align: right; font-size: 11px; color: var(--muted); }
+.vm-upd-ok { color: #3a9a5f; }
+.vm-upd-new { color: #c98a1b; font-weight: 700; }
+/* 版本对比双列:当前/最新;相同两绿,不同当前红+最新绿(2026-08-29) */
+.vm-ver { display: inline-flex; align-items: center; gap: 6px; min-width: 150px; justify-content: flex-end; font-size: 11.5px; }
+.vm-cur, .vm-lat { font-family: Consolas, Monaco, monospace; padding: 1px 6px; border-radius: 4px; border: 1px solid transparent; white-space: nowrap; }
+.vm-cur { color: var(--text); }
+.vm-lat { color: var(--muted); }
+.vm-cur.vm-ok, .vm-lat.vm-ok { color: #3a9a5f; border-color: #3a9a5f44; background: #3a9a5f12; }
+.vm-cur.vm-bad { color: #d64545; border-color: #d6454544; background: #d6454512; font-weight: 700; }
+.vm-sec-hint { margin-left: auto; font-size: 10.5px; font-weight: 400; color: var(--muted); }
+.vm-badge { font-size: 10.5px; border: 1px solid var(--panel-border); border-radius: 20px; padding: 1px 8px; color: var(--muted); }
+.vm-badge-ok { color: #3a9a5f; border-color: #3a9a5f66; }
+.vm-badge-warn { color: #c98a1b; border-color: #c98a1b66; }
+.vm-btn { font-size: 11.5px; padding: 2px 10px; border-radius: 6px; border: 1px solid var(--panel-border); background: var(--chip-bg); color: var(--text); cursor: pointer; margin-left: auto; }
+.vm-btn-primary:hover { border-color: #3a9a5f88; color: #3a9a5f; }
+.vm-btn:disabled { opacity: .5; cursor: default; }
 .hrs-status {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 6px 14px;
@@ -3969,41 +4019,7 @@ pre, code { border-radius: 6px; }
 .mj-ag-esc-acts .hrs-btn { padding: 3px 10px; font-size: 11px; }
 .mj-ag-hint { margin-top: 8px; font-size: 11px; opacity: .7; }
 
-/* 审片详情弹窗 */
-.manju-judge { display: flex; flex-direction: column; gap: 10px; }
-.mj-jd-score { font-size: 40px; font-weight: 800; line-height: 1; align-self: center; }
-.mj-jd-score small { font-size: 14px; opacity: .5; font-weight: 500; }
-.mj-jd-score.ok { color: var(--ok, #00a63e); }
-.mj-jd-score.mid { color: #e6a23c; }
-.mj-jd-score.bad { color: #d25c4d; }
-.mj-jd-status { text-align: center; font-size: 13px; color: var(--text-2, #9aa4b8); }
-.mj-jd-dims { display: flex; flex-direction: column; gap: 5px; }
-.mj-jd-row { display: grid; grid-template-columns: 110px 1fr 34px; align-items: center; gap: 8px; font-size: 12px; }
-.mj-jd-name { color: var(--text-2, #9aa4b8); white-space: nowrap; }
-.mj-jd-name i { font-style: normal; opacity: .55; font-size: 10px; }
-.mj-jd-bar { height: 7px; border-radius: 4px; background: rgba(127,127,127,.18); overflow: hidden; }
-.mj-jd-bar b { display: block; height: 100%; border-radius: 4px; }
-.mj-jd-bar b.ok { background: var(--ok, #00a63e); }
-.mj-jd-bar b.mid { background: #e6a23c; }
-.mj-jd-bar b.bad { background: #d25c4d; }
-.mj-jd-val { text-align: right; font-weight: 600; }
-.mj-jd-val.ok { color: var(--ok, #00a63e); }
-.mj-jd-val.mid { color: #e6a23c; }
-.mj-jd-val.bad { color: #d25c4d; }
-.mj-jd-sec { font-size: 12px; color: var(--text-2, #9aa4b8); line-height: 1.6; }
-.mj-jd-sec ul { margin: 4px 0 0 18px; padding: 0; }
 
-/* ===================== 2026-08-17 设置弹窗改版:智能体主卡(含 LLM Key) + 双列布局 + 全站下拉居中 ===================== */
-
-/* 全站下拉框文本居中(闭合态与展开列表) */
-select,
-.manju-select,
-.manju-input select,
-.settings-dialog select {
-  text-align: center;
-  text-align-last: center;
-}
-select option { text-align: center; }
 
 
 /* 悬浮 AI 小助手(对话云朵 + 角色) */
@@ -4693,6 +4709,78 @@ select option { text-align: center; }
 .manju-confirm .mc-q { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.6; margin: 0 0 8px; }
 .manju-confirm .mc-d { font-size: 12.5px; color: var(--muted); line-height: 1.8; margin: 0; }
 
+/* 便签弹窗(2026-08-29 用户需求升级):独立编辑弹窗 + 瀑布流卡片(标题/日期/内容/一键复制) */
+.manju-notes-toolbar { display: flex; justify-content: flex-end; margin: 10px 0 12px; }
+.manju-notes-addbtn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 10px; font-size: 13px; }
+.manju-notes-addbtn svg { width: 15px; height: 15px; }
+.manju-notes-field { margin-bottom: 12px; }
+.manju-notes-label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
+.manju-notes-input { width: 100%; min-height: 44px; padding: 9px 12px; font-size: 13px; line-height: 1.6; border-radius: 10px; border: 1px solid var(--panel-border); background: var(--chip-bg); color: var(--text); resize: vertical; font-family: inherit; box-sizing: border-box; transition: border-color .15s; }
+.manju-notes-input:focus { outline: none; border-color: var(--accent, #4a90d9); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4a90d9) 18%, transparent); }
+/* 瀑布流:纵向直列自适应(列宽触发换列,卡片不跨列) */
+.manju-notes-list { max-height: 56vh; overflow: auto; columns: 230px; column-gap: 12px; padding: 2px 4px 6px; }
+.manju-notes-empty { color: var(--muted); text-align: center; padding: 34px 0; font-size: 12.5px; display: flex; flex-direction: column; align-items: center; gap: 8px; columns: auto; }
+.manju-notes-empty svg { width: 40px; height: 40px; opacity: .45; }
+.manju-notes-empty p { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.manju-notes-empty span { color: var(--muted); }
+.manju-note-card { break-inside: avoid; margin-bottom: 12px; padding: 12px 14px; border: 1px solid var(--panel-border); border-radius: 12px; background: color-mix(in srgb, var(--bg) 45%, transparent); transition: border-color .15s, transform .1s; position: relative; }
+.manju-note-card:hover { border-color: color-mix(in srgb, var(--accent, #4a90d9) 45%, var(--panel-border)); }
+/* 配色主题(2026-08-29):6 套柔和色板按 id 哈希分配,深浅主题自适应 */
+.mn-t0 { background: color-mix(in srgb, #4a90d9 9%, var(--bg)); border-color: color-mix(in srgb, #4a90d9 38%, var(--panel-border)); }
+.mn-t0 .manju-note-title, .mn-t0 .mn-dot { color: #4a90d9; }
+.mn-t1 { background: color-mix(in srgb, #3a9a5f 9%, var(--bg)); border-color: color-mix(in srgb, #3a9a5f 38%, var(--panel-border)); }
+.mn-t1 .manju-note-title, .mn-t1 .mn-dot { color: #3a9a5f; }
+.mn-t2 { background: color-mix(in srgb, #8b5cf6 9%, var(--bg)); border-color: color-mix(in srgb, #8b5cf6 38%, var(--panel-border)); }
+.mn-t2 .manju-note-title, .mn-t2 .mn-dot { color: #8b5cf6; }
+.mn-t3 { background: color-mix(in srgb, #c98a1b 9%, var(--bg)); border-color: color-mix(in srgb, #c98a1b 38%, var(--panel-border)); }
+.mn-t3 .manju-note-title, .mn-t3 .mn-dot { color: #c98a1b; }
+.mn-t4 { background: color-mix(in srgb, #2aa1a8 9%, var(--bg)); border-color: color-mix(in srgb, #2aa1a8 38%, var(--panel-border)); }
+.mn-t4 .manju-note-title, .mn-t4 .mn-dot { color: #2aa1a8; }
+.mn-t5 { background: color-mix(in srgb, #d65a8a 9%, var(--bg)); border-color: color-mix(in srgb, #d65a8a 38%, var(--panel-border)); }
+.mn-t5 .manju-note-title, .mn-t5 .mn-dot { color: #d65a8a; }
+/* 装饰样式随机:顶部色条 / 左侧色条 / 标题色点 */
+.mn-d0::before { content: ""; position: absolute; top: 0; left: 10px; right: 10px; height: 3px; border-radius: 0 0 3px 3px; background: currentColor; opacity: .8; }
+.mn-d1 { border-left: 3px solid; }
+.mn-d1::before { content: ""; position: absolute; top: 12px; left: 12px; width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .9; }
+.mn-d1 .manju-note-title { padding-left: 16px; }
+.mn-d2 .mn-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: currentColor; vertical-align: 1px; }
+.mn-dot { display: none; }
+.manju-note-title { font-size: 14px; font-weight: 700; color: var(--text); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.manju-note-time { margin-top: 4px; font-size: 11px; color: var(--muted); }
+.manju-note-text { margin-top: 8px; font-size: 12.5px; line-height: 1.7; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.manju-note-ops { display: flex; gap: 6px; margin-top: 10px; align-items: center; justify-content: flex-end; }
+.manju-note-ops .hrs-btn { width: 30px; height: 30px; padding: 0; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; }
+.manju-note-ops .hrs-btn svg { width: 15px; height: 15px; }
+.manju-note-ops .mn-del:hover { color: var(--danger, #d64545); border-color: var(--danger, #d64545); }
+.manju-note-ops .mn-edit:hover { color: var(--accent, #4a90d9); border-color: var(--accent, #4a90d9); }
+.manju-note-ops .mn-copy:hover { color: #3a9a5f; border-color: #3a9a5f; }
+.manju-note-ops .mn-copied { color: #3a9a5f; border-color: #3a9a5f; }
+
+/* 渲染镜头管理弹窗(2026-08-29):卡片式镜头列表,集可收起/展开;仅此弹窗使用 */
+.manju-shots-list { max-height: 52vh; overflow: auto; margin-top: 10px; border: 1px solid var(--panel-border); border-radius: 10px; padding: 6px 10px; background: color-mix(in srgb, var(--bg) 45%, transparent); }
+.manju-shots-list .rs-ep { margin-bottom: 8px; }
+/* 集头:整行可点(收起/展开),箭头指示状态 */
+.manju-shots-list .rs-ep-head { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-size: 13px; font-weight: 700; color: var(--text); padding: 8px 4px 6px; border-bottom: 1px dashed var(--panel-border); margin-bottom: 8px; }
+.manju-shots-list .rs-ep-head:hover { color: var(--accent, #4a90d9); }
+.manju-shots-list .rs-arrow { display: inline-block; width: 14px; color: var(--muted); transition: transform .15s ease; }
+.manju-shots-list .rs-ep-title { flex: 0 0 auto; }
+.manju-shots-list .rs-ep-stat { flex: 1; text-align: right; font-size: 11.5px; font-weight: 500; color: var(--muted); }
+/* 镜头卡片网格 */
+.manju-shots-list .rs-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; padding-bottom: 6px; }
+.manju-shots-list .rs-card { border: 1px solid var(--panel-border); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; background: color-mix(in srgb, var(--bg) 60%, transparent); }
+.manju-shots-list .rs-card:hover { border-color: var(--accent, #4a90d9); }
+.manju-shots-list .rs-card-top { display: flex; align-items: center; gap: 6px; }
+.manju-shots-list .rs-id { min-width: 24px; font-weight: 700; font-size: 13px; color: var(--accent, #4a90d9); }
+.manju-shots-list .rs-dl { font-size: 11px; }
+.manju-shots-list .rs-badge { font-size: 11px; color: var(--muted); border: 1px solid var(--panel-border); border-radius: 20px; padding: 1px 8px; white-space: nowrap; }
+.manju-shots-list .rs-badge.rs-ok { color: #3a9a5f; border-color: #3a9a5f66; background: #3a9a5f14; }
+.manju-shots-list .rs-badge.rs-stale { color: #c98a1b; border-color: #c98a1b66; background: #c98a1b14; }
+.manju-shots-list .rs-badge.rs-todo { color: var(--muted); border-color: var(--panel-border); }
+.manju-shots-list .rs-card-body { flex: 1; min-height: 34px; }
+.manju-shots-list .rs-scene { font-size: 12.5px; color: var(--text); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.manju-shots-list .rs-meta { font-size: 11px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.manju-shots-list .rs-re { font-size: 12px; padding: 3px 10px; align-self: flex-start; }
+
 /* 风格预览弹窗:当前风格详细说明(解析后的英文措辞) */
 .manju-style-cur {
   border: 1px solid var(--panel-border); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px;
@@ -5078,3 +5166,38 @@ select option { text-align: center; }
 }
 .cc-confirm-list b { color: var(--err, #f87171); }
 .cc-confirm-warn { margin: 0; font-size: 11.5px; color: var(--err, #f87171); text-align: center; }
+
+/* 体检弹窗标题栏总「一键修复」按钮(2026-08-30 美化升级:描边→实心渐变蓝主按钮,
+   处理中呼吸脉冲,成功态浅绿底+绿色文字常驻不隐藏;JS 只切状态类,样式全量走 CSS,
+   不再内联 style 覆盖)。防 flex 压缩换行,与 ✕ 关闭按钮并排右对齐 */
+.manju-modal-head .mj-hi-fixall {
+  flex: 0 0 auto; white-space: nowrap;
+  margin-right: 8px; padding: 5px 14px;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.5px;
+  border-radius: 9px; cursor: pointer;
+  font-family: var(--font-ui);
+  color: #fff;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, var(--accent, #4da3ff), color-mix(in srgb, var(--accent, #4da3ff) 68%, #1f6fd0));
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent, #4da3ff) 35%, transparent);
+  transition: color 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s, transform 0.15s, filter 0.2s;
+}
+.manju-modal-head .mj-hi-fixall:hover {
+  filter: brightness(1.08); transform: translateY(-1px);
+  box-shadow: 0 3px 14px color-mix(in srgb, var(--accent, #4da3ff) 48%, transparent);
+}
+.manju-modal-head .mj-hi-fixall:active { transform: translateY(0) scale(0.97); transition-duration: 0.06s; }
+.manju-modal-head .mj-hi-fixall:disabled { cursor: default; box-shadow: none; filter: none; }
+/* 处理中:禁用 + 呼吸脉冲 */
+.manju-modal-head .mj-hi-fixall.is-busy { animation: mj-hi-busy 1.2s ease-in-out infinite; }
+@keyframes mj-hi-busy { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+/* 成功态(已全部修复 / 修复成功):浅绿底 + 绿色文字,常驻不隐藏 */
+.manju-modal-head .mj-hi-fixall.mj-hi-done {
+  color: var(--ok, #3a9d5d);
+  border-color: color-mix(in srgb, var(--ok, #3a9d5d) 45%, transparent);
+  background: color-mix(in srgb, var(--ok, #3a9d5d) 10%, transparent);
+  box-shadow: none;
+  cursor: default;
+  transform: none; filter: none;
+}
+.manju-modal-head .mj-hi-fixall.mj-hi-done:hover { transform: none; filter: none; box-shadow: none; }

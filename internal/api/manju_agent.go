@@ -1056,25 +1056,19 @@ func shotMetaFromPlan(s manjuShot, charMap, sceneMap map[string]map[string]any, 
 }
 
 // refImagesFor 镜头参考图:R2V=全部登场角色多视图(正脸优先+全身/细节,≤9 预算),FL2VA=场景图
+// 2026-08-29 审计 P0 收敛:Q版/form2 切换统一走 shotViewRelsFor(与 charRefNames/
+// shotRefViews 同一数据源,三处口径不再漂移——此前 agent 侧缺 form2 切换)
 func (ctx *manjuCtx) refImagesFor(s manjuShot) []string {
 	var out []string
 	n := len(s.Characters)
 	if n > 3 {
 		n = 3
 	}
-	// 内心戏镜(2026-08-23 用户规则):narration 含「内心·」→ 该角色参考含 Q 版图
-	inner := strings.Contains(s.Narration, "内心·")
 	for i, cid := range s.Characters {
 		if i >= 3 {
 			break
 		}
-		rels := ctx.charViewRels(cid, i, n)
-		if inner {
-			if qRel := manjuViewRel(cid, "q"); fileExists(filepath.Join(ctx.assetsDir, qRel)) {
-				rels = append([]string{manjuViewRel(cid, "front")}, qRel)
-			}
-		}
-		for _, rel := range rels {
+		for _, rel := range ctx.shotViewRelsFor(s, cid, i, n) {
 			p := filepath.Join(ctx.assetsDir, rel)
 			if fileExists(p) {
 				out = append(out, p)
@@ -1240,11 +1234,14 @@ func planCharSceneMaps(plan map[string]any) (charMap, sceneMap map[string]map[st
 	return
 }
 
-// clearShotArtifacts 删镜头 mp4 + 条件缓存(.pt)+ 清单记录,让定点重渲染真正重做
-// (提示词改动只在重新编码时生效;缓存名不含提示词指纹,必须显式删)。
+// clearShotArtifacts 删镜头 mp4 + 清单记录,让定点重渲染真正重做。
+// 条件缓存(.pt)不在这里删(2026-08-29 事故修复):cacheName 已含提示词/参考图指纹
+// (shotCacheNameAt = 项目_代数_c<指纹>),输入变化自动换缓存名,旧缓存只是占磁盘;
+// 显式删除反而制造事故——stale 场景下 stageEncode 刚按新指纹编好的缓存被删,
+// 重提同图又撞 ComfyUI 节点级输出缓存(同图 15s 内刚执行过)全部短路不落盘,
+// 渲染 CondLoad 找不到文件直接失败(实测 EP01 镜 4 定点重渲即此)。
 func (ctx *manjuCtx) clearShotArtifacts(s manjuShot) {
 	_ = os.Remove(filepath.Join(ctx.clipsDir, ctx.episode, fmt.Sprintf("%02d.mp4", s.ID)))
-	_ = os.Remove(h3CachePath(ctx.sharedModels, ctx.shotCacheName(s)))
 	ctx.manifestRemove(s.ID)
 	// 检查点一并清除:定点重渲/质检自愈/agent 返工删产物后,残留 ck 会让 tryReclaim 收回旧产物
 	ctx.renderCKClear(strconv.Itoa(s.ID))
@@ -1887,7 +1884,7 @@ func (ctx *manjuCtx) arbiterResolve(plan map[string]any, s manjuShot, jd *agent.
 	decisionCN := map[string]string{"accept": "自动接受", "regenerate": "从零重写"}[decision]
 	if decision == "regenerate" {
 		lg.logf(fmt.Sprintf("🤖 终审镜头 %d:%s(%s)→ 按分镜原文重写提示词,独立重渲一轮", s.ID, decisionCN, reason))
-		if np, ferr := ctx.genShotPrompt(s, charMap, sceneMap); ferr == nil {
+		if np, ferr := ctx.genShotPrompt(s, charMap, sceneMap, nil); ferr == nil {
 			if uerr := ctx.updateShotPrompt(s, np); uerr == nil {
 				s.H3Prompt = np
 			}

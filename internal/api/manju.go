@@ -2104,12 +2104,20 @@ func AutoRecoverRendering() {
 			}
 		}
 		episode := orDefault(ds.Episode, "EP01")
+		// 定点参数回读(2026-08-29):writeManjuRunParams 把 only 落盘到 config.render.shots,
+		// 恢复时必须带回,否则定点重渲(only=4)崩溃后恢复成全量重渲——实测浪费整轮 GPU。
+		resumeOnly := ""
+		if cfg0, cerr := readManjuConfig(cfgPath); cerr == nil {
+			if R, ok := cfg0["render"].(map[string]any); ok {
+				resumeOnly = str(R["shots"])
+			}
+		}
 		// 审计 P5:自动分集(episode=0)崩溃恢复——磁盘 Episode 落的是 "0",
 		// 若当作单集续跑会生成 analysis/0_*、clips/0/ 幽灵集并一次塞入全书;
 		// 恢复时识别 "0" → 按原 autoByChapter 语义重建分集
 		autoByChapter := ds.Episode == "0"
-		log.Printf("♻️ 检测到 %s 渲染中断于「%s」阶段,自动续跑…", name, stage)
-		if err := startManjuRun(cfgPath, "", episode, "all", "", "", autoByChapter, false, false); err != nil {
+		log.Printf("♻️ 检测到 %s 渲染中断于「%s」阶段,自动续跑…(定点镜头:%s)", name, stage, orDefault(resumeOnly, "全部"))
+		if err := startManjuRun(cfgPath, "", episode, "all", resumeOnly, "", autoByChapter, false, false); err != nil {
 			log.Printf("♻️ 自动恢复 %s 失败: %v", name, err)
 		}
 		// 注意:startManjuRun 遇"已有任务运行中"返回错误——这是已恢复第一个任务后的正常状态,
@@ -2671,6 +2679,143 @@ func manjuFindPlanDir(analysisDir, episode string) string {
 }
 
 // manjuPlan 读取方案 JSON,返回角色列表(供角色抽卡)
+// manjuShots 渲染镜头管理列表(2026-08-29 用户需求:「渲染」按钮弹窗的镜头数据源):
+// 按集分项返回每镜(编号/场景/景别/运镜/时长/有无台词/是否已渲染/是否过期),
+// 供前端弹窗做单镜「重新渲染」/「开始渲染」/「全部重做」交互。
+// episode 空 = 全部集;EP01 等 = 单集。仅返回已生成方案(direct_plan)的集。
+func manjuShots(w http.ResponseWriter, r *http.Request) {
+	configPath := r.URL.Query().Get("config")
+	episode := r.URL.Query().Get("episode")
+	if configPath == "" {
+		http.Error(w, `{"error":"missing config"}`, http.StatusBadRequest)
+		return
+	}
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	configPath = cp
+	cfg, err := readManjuConfig(configPath)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"episodes": []any{}, "error": err.Error()})
+		return
+	}
+	P, _ := cfg["paths"].(map[string]any)
+	eps := listManjuEpisodes(P)
+	if episode != "" && episode != "all" {
+		eps = []string{episode}
+	}
+	mctx, _ := newManjuCtx(configPath, "", "", "", "")
+	episodes := make([]any, 0, len(eps))
+	for _, e := range eps {
+		planPath := manjuFindPlanDir(str(P["analysis"]), e)
+		if planPath == "" {
+			continue
+		}
+		dataBytes, rerr := os.ReadFile(planPath)
+		if rerr != nil {
+			continue
+		}
+		var plan map[string]any
+		if json.Unmarshal(dataBytes, &plan) != nil {
+			continue
+		}
+		shotsArr, _ := plan["shots"].([]any)
+		shots := make([]any, 0, len(shotsArr))
+		renderedN, staleN := 0, 0
+		epEp := strings.TrimSuffix(filepath.Base(planPath), "_direct_plan.json")
+		if mctx != nil {
+			mctx.episode = epEp
+		}
+		for _, x := range shotsArr {
+			m, ok := x.(map[string]any)
+			if !ok {
+				continue
+			}
+			id, _ := manjuToInt(m["shot_id"])
+			clip := filepath.Join(str(P["clips"]), epEp, fmt.Sprintf("%02d.mp4", id))
+			rendered := fileExists(clip)
+			stale := false
+			if rendered && mctx != nil {
+				s := manjuShot{ID: id, Scene: str(m["scene"]), Duration: 5}
+				if n, ok := manjuToInt(m["duration"]); ok && n > 0 {
+					s.Duration = n
+				}
+				s.H3Prompt = str(m["h3_prompt"])
+				if mctx.shotManifestStatus(s) == "stale" {
+					stale = true
+				}
+			}
+			if rendered {
+				renderedN++
+			}
+			if stale {
+				staleN++
+			}
+			shots = append(shots, map[string]any{
+				"id":          id,
+				"scene":       str(m["scene"]),
+				"shot_size":   str(m["shot_size"]),
+				"camera":      str(m["camera"]),
+				"duration":    m["duration"],
+				"has_dialogue": str(m["dialogue"]) != "" || strings.Contains(str(m["h3_prompt"]), "<d>"),
+				"rendered":    rendered,
+				"stale":       stale,
+			})
+		}
+		episodes = append(episodes, map[string]any{
+			"episode":   epEp,
+			"shots":     shots,
+			"total":     len(shots),
+			"rendered":  renderedN,
+			"stale":     staleN,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"episodes": episodes})
+}
+
+// manjuShotsClear 清空指定集全部镜头渲染产物(mp4 + manifest 记录 + 条件缓存;
+// 方案/定妆照/场景图保留)——「全部重做」的产物侧操作,随后由前端触发 render 全量重渲。
+func manjuShotsClear(w http.ResponseWriter, r *http.Request) {
+	configPath := r.URL.Query().Get("config")
+	episode := r.URL.Query().Get("episode")
+	if configPath == "" || episode == "" {
+		http.Error(w, `{"error":"missing config/episode"}`, http.StatusBadRequest)
+		return
+	}
+	if !reEpisodeSafe.MatchString(episode) {
+		writeErr(w, http.StatusBadRequest, "非法 episode 参数")
+		return
+	}
+	cp, gerr := manjuGuardConfig(configPath)
+	if gerr != nil {
+		writeErr(w, http.StatusForbidden, gerr.Error())
+		return
+	}
+	if manjuStateRunningFor(cp) {
+		writeErr(w, http.StatusConflict, "渲染运行中,请先停止")
+		return
+	}
+	configPath = cp
+	ctx, err := newManjuCtx(configPath, episode, "", "", "")
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "创建上下文失败: " + err.Error()})
+		return
+	}
+	_, shots, err := ctx.loadPlan()
+	if err != nil || len(shots) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "该集无方案/镜头,无需清理"})
+		return
+	}
+	n := 0
+	for _, s := range shots {
+		ctx.clearShotArtifacts(s) // 删 mp4 + manifest + 检查点;条件缓存含指纹不显式删
+		n++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": n, "episode": episode})
+}
+
 func manjuPlan(w http.ResponseWriter, r *http.Request) {
 	configPath := r.URL.Query().Get("config")
 	episode := r.URL.Query().Get("episode")
@@ -3040,25 +3185,51 @@ type manjuVoiceLibItem struct {
 
 // manjuVoiceLib 内置风格音色库(2026-08-27 矩阵化):年龄×性别全覆盖 + 反派/兽类特化 +
 // 方言/区域手动组。基音偏移派生童声/老年声(edge-tts 无原生童声老年声)。
+// 2026-08-30 ver15 差异化变体:同档位多角色(如两个中年男)按登场序分配
+// _2/_3 变体(不同声源或音高/语速偏移)——根治「同档位角色共用一音色分不清」;
+// narrator 叙述音色为旁白专属(与所有角色档位区分,见 manjuOffscreenBindings)。
 var manjuVoiceLib = []manjuVoiceLibItem{
 	// ---- 自动匹配矩阵(性别×年龄) ----
 	{"child_boy", "zh-CN-YunxiaNeural", "童声 · 小男孩", "童", "儿童", "清脆", "+20Hz", "+6%"},
+	{"child_boy_2", "zh-CN-YunxiaNeural", "童声 · 小男孩·亮", "童", "儿童", "亮堂", "+26Hz", "+9%"},
 	{"child_girl", "zh-CN-XiaoyiNeural", "童声 · 小女孩", "童", "儿童", "娇萌", "+25Hz", "+8%"},
+	{"child_girl_2", "zh-CN-XiaoyiNeural", "童声 · 小女孩·甜", "童", "儿童", "甜糯", "+28Hz", "+10%"},
 	{"boy_teen", "zh-CN-YunxiaNeural", "少年 · 元气男声", "男", "少年", "元气", "", ""},
+	{"boy_teen_2", "zh-CN-YunxiaNeural", "少年 · 清亮男声", "男", "少年", "清亮", "-3Hz", "+5%"},
 	{"girl_lively", "zh-CN-XiaoyiNeural", "少女 · 活泼女声", "女", "少女", "活泼", "", ""},
+	{"girl_lively_2", "zh-CN-XiaoyiNeural", "少女 · 甜美女声", "女", "少女", "甜美", "+8Hz", "+3%"},
 	{"male_sun", "zh-CN-YunxiNeural", "青年 · 阳光男声", "男", "青年", "阳光", "", ""},
+	{"male_sun_2", "zh-CN-YunxiNeural", "青年 · 清爽男声", "男", "青年", "清爽", "-3Hz", "+4%"},
 	{"female_warm", "zh-CN-XiaoxiaoNeural", "青年 · 温柔女声", "女", "青年", "温柔", "", ""},
+	{"female_warm_2", "zh-CN-XiaoxiaoNeural", "青年 · 知性女声", "女", "青年", "知性", "-2Hz", "0%"},
 	{"male_mag", "zh-CN-YunjianNeural", "中年 · 磁性男声", "男", "中年", "磁性", "", ""},
+	{"male_mag_2", "zh-CN-YunyangNeural", "中年 · 沉稳男声", "男", "中年", "沉稳", "", ""},
+	{"male_mag_3", "zh-CN-YunxiNeural", "中年 · 粗犷男声", "男", "中年", "粗犷", "-8Hz", "-6%"},
 	{"female_mature", "zh-CN-XiaoxiaoNeural", "中年 · 知性女声", "女", "中年", "知性", "-4Hz", "-5%"},
+	{"female_mature_2", "zh-CN-XiaoxiaoNeural", "中年 · 温和女声", "女", "中年", "温和", "-6Hz", "-3%"},
 	{"male_elder", "zh-CN-YunjianNeural", "老年 · 沧桑男声", "男", "老年", "沧桑", "-15Hz", "-12%"},
+	{"male_elder_2", "zh-CN-YunyangNeural", "老年 · 厚重男声", "男", "老年", "厚重", "-12Hz", "-8%"},
 	{"female_elder", "zh-CN-XiaoxiaoNeural", "老年 · 沉稳女声", "女", "老年", "沉稳", "-10Hz", "-15%"},
+	{"female_elder_2", "zh-CN-XiaoxiaoNeural", "老年 · 温和女声", "女", "老年", "温和", "-14Hz", "-12%"},
 	// ---- 特化(反派/兽类,autoVoiceFor 优先于年龄矩阵) ----
 	{"male_deep", "zh-CN-YunjianNeural", "反派 · 低沉男声", "男", "通用", "威压", "-8Hz", "-8%"},
+	{"male_deep_2", "zh-CN-YunxiNeural", "反派 · 沙哑男声", "男", "通用", "沙哑", "-10Hz", "-10%"},
 	{"female_deep", "zh-CN-XiaoxiaoNeural", "反派 · 冷冽女声", "女", "通用", "冷冽", "-6Hz", "-8%"},
+	{"female_deep_2", "zh-CN-XiaoxiaoNeural", "反派 · 肃杀女声", "女", "通用", "肃杀", "-8Hz", "-10%"},
 	{"beast_cute", "zh-CN-XiaoyiNeural", "萌系 · 灵宠兽类", "通用", "通用", "呆萌", "+12Hz", "+8%"},
-	// ---- 方言/区域(手动选择,不参与自动匹配) ----
-	{"cn_dongbei", "zh-CN-liaoning-XiaobeiNeural", "方言 · 东北女声", "女", "方言", "幽默", "", ""},
+	{"beast_cute_2", "zh-CN-XiaoyiNeural", "萌系 · 奶音兽类", "通用", "通用", "奶音", "+16Hz", "+10%"},
+	// ---- 叙述(旁白专属,autoVoiceFor 不返回;manjuOffscreenBindings 绑定客观旁白) ----
+	{"male_narrator", "zh-CN-YunyangNeural", "叙述 · 沉稳男声", "男", "叙述", "中立", "-2Hz", "0%"},
+	{"female_narrator", "zh-CN-XiaoxiaoNeural", "叙述 · 冷静女声", "女", "叙述", "中立", "-2Hz", "-2%"},
+	// ---- 方言/区域(手动选择/技能侧「音色」字段配置;东北/陕西/粤/台=edge-tts 原生
+	// 方言声源;四川/河南/广西/湖南 edge-tts 无方言声源——用不同普通话声源做基底,
+	// 口音由 Audio 定义行描述驱动 H3 生成(manjuVoicePhraseFor 带 accent 描述)) ----
+	{"cn_dongbei", "zh-CN-liaoning-XiaobeiNeural", "方言 · 东北女声", "女", "方言", "爽朗", "", ""},
 	{"cn_shaanxi", "zh-CN-shaanxi-XiaoniNeural", "方言 · 陕西女声", "女", "方言", "亮堂", "", ""},
+	{"cn_sichuan", "zh-CN-YunxiNeural", "方言 · 四川男声", "男", "方言", "麻辣", "+2Hz", "0%"},
+	{"cn_henan", "zh-CN-YunxiaNeural", "方言 · 河南男声", "男", "方言", "质朴", "-2Hz", "0%"},
+	{"cn_guangxi", "zh-CN-YunyangNeural", "方言 · 广西男声", "男", "方言", "温吞", "0%", "-4%"},
+	{"cn_hunan", "zh-CN-YunjianNeural", "方言 · 湖南男声", "男", "方言", "热辣", "-4Hz", "0%"},
 	{"hk_female", "zh-HK-HiuMaanNeural", "区域 · 粤语女声", "女", "区域", "港风", "", ""},
 	{"hk_male", "zh-HK-WanLungNeural", "区域 · 粤语男声", "男", "区域", "港风", "", ""},
 	{"tw_female", "zh-TW-HsiaoChenNeural", "区域 · 台湾女声", "女", "区域", "台普", "", ""},
@@ -3203,8 +3374,11 @@ func manjuVoiceGen(w http.ResponseWriter, r *http.Request) {
 	rel := "audio/voice_" + ctx.project + "_" + char + ".mp3"
 	out := filepath.Join(ctx.comfyInput, filepath.FromSlash(rel))
 	if voice == "" {
-		// 解绑:删音频 + 清 plan 绑定
+		// 解绑:删音频(权威副本+input 副本) + 清 plan 绑定
 		_ = os.Remove(out)
+		if VoiceLibDir != "" {
+			_ = os.Remove(filepath.Join(VoiceLibDir, filepath.FromSlash(rel)))
+		}
 		setVoiceBinding(plan, char, "", "")
 		if err := ctx.writePlan(plan); err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "保存方案失败: " + err.Error()})
@@ -3232,6 +3406,7 @@ func manjuVoiceGen(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "音色包复制失败: " + err.Error()})
 			return
 		}
+		ctx.syncVoiceBindingAuthoritative(rel)
 		setVoiceBinding(plan, char, filepath.ToSlash(rel), voice)
 		if err := ctx.writePlan(plan); err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "保存方案失败: " + err.Error()})
@@ -3264,6 +3439,7 @@ func manjuVoiceGen(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "音色生成产出空文件(音色不可用?): " + item.Name})
 		return
 	}
+	ctx.syncVoiceBindingAuthoritative(rel)
 	setVoiceBinding(plan, char, filepath.ToSlash(rel), item.Key)
 	if err := ctx.writePlan(plan); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "保存方案失败: " + err.Error()})
@@ -3271,6 +3447,21 @@ func manjuVoiceGen(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx.writeCharactersJSON(plan)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "bound": true, "voice_ref": filepath.ToSlash(rel), "voice_name": item.Key})
+}
+
+// syncVoiceBindingAuthoritative 角色显式绑定音频同步权威副本(voice_lib/audio/…,
+// 2026-08-29 稳定化:ComfyUI input 副本被误删时可由权威目录重建)
+func (ctx *manjuCtx) syncVoiceBindingAuthoritative(rel string) {
+	if VoiceLibDir == "" {
+		return
+	}
+	src := filepath.Join(ctx.comfyInput, filepath.FromSlash(rel))
+	if !fileExists(src) {
+		return
+	}
+	dst := filepath.Join(VoiceLibDir, filepath.FromSlash(rel))
+	_ = os.MkdirAll(filepath.Dir(dst), 0755)
+	_ = copyFile(src, dst)
 }
 
 // setVoiceBinding 写角色音色绑定到方案 characters(voice 为空清绑定)
@@ -3301,6 +3492,7 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/manju/render", manjuSaveRender)
 	mux.HandleFunc("GET /api/manju/style", manjuStyleInfo)
 	mux.HandleFunc("POST /api/manju/create", manjuCreate)
+	mux.HandleFunc("POST /api/manju/probe-dir", manjuProbeDir)
 	mux.HandleFunc("POST /api/manju/delete", manjuDeleteProject)
 	mux.HandleFunc("GET /api/manju/settings", manjuSettingsGet)
 	mux.HandleFunc("POST /api/manju/settings", manjuSettingsPost)
@@ -3364,6 +3556,10 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/manju/kill", manjuKill)
 	mux.HandleFunc("GET /api/manju/outputs", manjuOutputs)
 	mux.HandleFunc("GET /api/manju/plan", manjuPlan)
+	mux.HandleFunc("GET /api/manju/shots", manjuShots)
+	mux.HandleFunc("POST /api/manju/shots/clear", manjuShotsClear)
+	mux.HandleFunc("GET /api/manju/notes", manjuNotesGet)
+	mux.HandleFunc("POST /api/manju/notes", manjuNotesPost)
 	mux.HandleFunc("GET /api/manju/paths", manjuPathsGet)
 	mux.HandleFunc("POST /api/manju/paths", manjuPathsPost)
 	mux.HandleFunc("POST /api/manju/skill/update", manjuSkillUpdate)

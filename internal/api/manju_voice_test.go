@@ -11,15 +11,17 @@ import (
 
 // ensureVoiceBindings:LLM 漏写 <Audio> 定义时程序补写 subject_definitions,有引用则不重复
 func TestEnsureVoiceBindings(t *testing.T) {
-	bindings := []voiceBinding{{CharID: "阿拾", Audio: "<Audio 1>"}, {CharID: "陈鱼", Audio: "<Audio 2>"}}
+	// 2026-08-30 官方格式对齐:注入行绑 <Subject M>(M=登场序;Sx 占位由渲染前
+	// alignAudioDefs 按画面段实际发声顺序重写),不再绑中文名
+	bindings := []voiceBinding{{CharID: "阿拾", Audio: "<Audio 1>", SubN: 1}, {CharID: "陈鱼", Audio: "<Audio 2>", SubN: 2}}
 
 	// 完全无引用 → 补写到 subject_definitions 段(以 summary: 为界)
 	hp := "subject_definitions:\n<Subject 1> is ...\n\nsummary:\n[reference generation] ...\ndetailed_description:\n..."
 	out := ensureVoiceBindings(hp, bindings)
-	if !strings.Contains(out, "<Audio 1> is the voice-timbre reference for the voice of 阿拾 (S1)") {
+	if !strings.Contains(out, "<Audio 1> is the voice-timbre reference for <Subject 1> (S1), containing a spoken voiceover.") {
 		t.Fatalf("补写缺少 <Audio 1> 定义:\n%s", out)
 	}
-	if !strings.Contains(out, "<Audio 2> is the voice-timbre reference for the voice of 陈鱼 (S2)") {
+	if !strings.Contains(out, "<Audio 2> is the voice-timbre reference for <Subject 2> (S2), containing a spoken voiceover.") {
 		t.Fatalf("补写缺少 <Audio 2> 定义:\n%s", out)
 	}
 	// 定义必须在 subject_definitions 段(summary: 之前)
@@ -134,6 +136,13 @@ func TestAutoVoiceFor(t *testing.T) {
 		"女反派":  {"gender": "女", "age": "青年", "role": "反派"},
 		"灵宠":   {"gender": "女", "age": "幼年", "species": "灵宠"},
 		"无信息":  {},
+		// 2026-08-30 ver14 数字年龄档位(此前关键词白名单全落空→默认青年声:
+		// "74岁" 掉 male_sun/female_warm,与角色年龄严重脱节)
+		"八岁女孩": {"gender": "女", "age": "8岁"},
+		"十九少年": {"gender": "男", "age": "19岁"},
+		"廿二青年": {"gender": "男", "age": "22岁"},
+		"七四老妪": {"gender": "女", "age": "74岁"},
+		"四八中男": {"gender": "男", "age": "48岁"},
 	}}
 	cases := []struct{ cid, want string }{
 		{"男童", "child_boy"},
@@ -150,6 +159,11 @@ func TestAutoVoiceFor(t *testing.T) {
 		{"女反派", "female_deep"},
 		{"灵宠", "beast_cute"},
 		{"无信息", "female_warm"}, // 有角色卡但字段空 → 兜底温柔女声(有音色比没有强)
+		{"八岁女孩", "child_girl"},
+		{"十九少年", "boy_teen"},
+		{"廿二青年", "male_sun"},
+		{"七四老妪", "female_elder"},
+		{"四八中男", "male_mag"},
 	}
 	for _, c := range cases {
 		if got := ctx.autoVoiceFor(c.cid); got != c.want {
@@ -254,5 +268,100 @@ func TestCharVoiceNamesIntegration(t *testing.T) {
 	s4 := manjuShot{Characters: []string{"c0", "c1", "c2", "c3"}}
 	if got := ctx.charVoiceNames(s4); len(got) != 3 {
 		t.Fatalf("超过 3 角色应只取前 3: %v", got)
+	}
+}
+
+// ---- 2026-08-30 ver15:同档位差异化变体 + 方言 + 旁白叙述音色 ----
+
+func TestVoiceVariantsFor(t *testing.T) {
+	vs := voiceVariantsFor("male_mag")
+	if len(vs) < 2 || vs[0] != "male_mag" || vs[1] != "male_mag_2" {
+		t.Fatalf("male_mag 变体链 = %v, want [male_mag male_mag_2 ...]", vs)
+	}
+	if len(voiceVariantsFor("hk_male")) != 1 {
+		t.Fatalf("无变体条目应只返回自身")
+	}
+	if vs2 := voiceVariantsFor("male_sun"); len(vs2) < 2 || vs2[1] != "male_sun_2" {
+		t.Fatalf("male_sun 变体链 = %v", vs2)
+	}
+}
+
+func TestDialectVoiceFor(t *testing.T) {
+	ctx := &manjuCtx{charInfo: map[string]map[string]any{
+		"东北大婶": {"gender": "女", "appearance": "东北大妈,红棉袄"},
+		"川渝老板": {"gender": "男", "voice": "四川男声,热辣"},
+		"河南大叔": {"gender": "男", "appearance": "河南老农"},
+		"粤语仔":  {"gender": "男", "voice": "粤语,港风"},
+		"台湾妹":  {"gender": "女", "voice": "台普"},
+		"东北大汉": {"gender": "男", "appearance": "东北大汉"}, // 东北男声无声源→回退
+		"普通话男": {"gender": "男", "age": "45岁"},            // 无地域词→普通话档位
+	}}
+	cases := []struct{ cid, want string }{
+		{"东北大婶", "cn_dongbei"},
+		{"川渝老板", "cn_sichuan"},
+		{"河南大叔", "cn_henan"},
+		{"粤语仔", "hk_male"},
+		{"台湾妹", "tw_female"},
+		{"东北大汉", ""}, // 东北无男声源,性别不匹配→回退
+		{"普通话男", ""},
+	}
+	for _, c := range cases {
+		if got := ctx.dialectVoiceFor(c.cid); got != c.want {
+			t.Fatalf("dialectVoiceFor(%s) = %q, want %q", c.cid, got, c.want)
+		}
+	}
+}
+
+// 同档位角色分配不同变体:陈守家(45男)+玄经理(40男)两个中年男不得同音色
+func TestBuildVoiceAssignmentVariants(t *testing.T) {
+	// buildVoiceAssignment 依赖 charIDs(loadPlan),这里直接验证分配逻辑核心:
+	// voiceVariantsFor 轮转——两个同档位角色 index 0/1 → male_mag / male_mag_2
+	vs := voiceVariantsFor("male_mag")
+	if vs[0] == vs[1%len(vs)] {
+		t.Fatalf("同档位变体轮转不能同音色")
+	}
+}
+
+func TestManjuOffscreenKeyNarrator(t *testing.T) {
+	if got := manjuOffscreenKey("The narrator with a calm, neutral storytelling voice"); got != "male_narrator" {
+		t.Fatalf("narrator desc 应绑定叙述音色, got %q", got)
+	}
+	// 角色/群杂推断不受影响
+	if got := manjuOffscreenKey("A hushed middle-aged woman's voice off-screen among the onlookers"); got != "female_mature" {
+		t.Fatalf("画外女声推断 = %q, want female_mature", got)
+	}
+	if got := manjuOffscreenKey("a man speaking Mandarin with a lively Sichuan accent"); got != "male_mag" {
+		t.Fatalf("方言描述应落普通话档位兜底, got %q", got)
+	}
+}
+
+// 角色卡「音色」行 → card["voice"](技能侧配置优先)
+func TestParseCharCardsVoiceField(t *testing.T) {
+	text := `# 《测试》人物生成提示词（风格说明）
+
+# 统一风格前缀（所有角色共用）
+...
+## 1. 陈守家（主角·下岗保安）
+- 记忆点：深蓝旧保安服/红绳项链/掉漆保温杯
+- 音色：中年磁性男声，语速偏慢
+` + "```\nCinematic film still, photorealistic, a 45-year-old male Chinese security guard.\n```" + `
+## 2. 玄经理（物业经理·规则控）
+- 记忆点：壳形公文包/老花镜/一沓表格
+- 音色：中年沉稳男声
+` + "```\nCinematic film still, photorealistic, a 40-year-old male Chinese office manager.\n```" + `
+`
+	cards := parseCharCards(text, "", false)
+	if len(cards) != 2 {
+		t.Fatalf("角色卡数 = %d, want 2", len(cards))
+	}
+	byID := map[string]string{}
+	for _, c := range cards {
+		byID[str(c["id"])] = str(c["voice"])
+	}
+	if byID["陈守家"] != "中年磁性男声，语速偏慢" {
+		t.Fatalf("陈守家 voice = %q", byID["陈守家"])
+	}
+	if byID["玄经理"] != "中年沉稳男声" {
+		t.Fatalf("玄经理 voice = %q", byID["玄经理"])
 	}
 }

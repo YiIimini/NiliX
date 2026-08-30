@@ -19,6 +19,7 @@ var (
 	ComfyRootDir   string // ComfyUI 安装目录(含 main.py / .venv)
 	ComfySharedDir string // ComfyUI 共享目录(models/input/output)
 	NovelSkillDir  string // 小说续作技能目录(词库/写作规范/qa 脚本)
+	VoiceLibDir    string // 配音音色库权威目录(自包含根/voice_lib,跨项目共享)
 )
 
 // 旧硬编码路径(老安装的默认位置;新安装优先自包含目录)
@@ -37,6 +38,9 @@ func InitPaths(exeDir string, manjuRoot, novelRoot, comfyRoot, comfyShared, nove
 	ComfyRootDir = pickPath(comfyRoot, filepath.Join(exeDir, "comfyui", "ComfyUI"), legacyComfyRoot)
 	ComfySharedDir = pickPath(comfyShared, filepath.Join(exeDir, "comfyui", "shared"), legacyComfyShared)
 	NovelSkillDir = pickPath(novelSkill, filepath.Join(exeDir, "skills", "shuangwen-novel"), legacyNovelSkill)
+	// 音色库权威目录固定收在自包含根(与 ComfyUI input 解耦,防清理/重建误删;
+	// 2026-08-29 用户要求「音色保存到稳定位置」)。换电脑整体拷贝即随迁。
+	VoiceLibDir = filepath.Join(exeDir, "voice_lib")
 }
 
 // pickPath 显式配置优先;否则自包含目录存在时用之;否则回退旧路径。

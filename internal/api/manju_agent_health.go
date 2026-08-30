@@ -62,6 +62,10 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 			}
 		}
 	}
+	// 2.5 角色面容特征(2026-08-30 ver17 防男角色面容趋同):素材卡主要角色
+	// image_prompt 需 ≥4 类具体五官特征+≥1 独有印记、无泛化词(handsome face 等),
+	// 与技能侧 SKILL.md 面容独特性硬规范同口径。不达标→warn 提示(定妆图会撞脸)。
+	items = append(items, manjuFaceFeatureItems(ctx)...)
 	// 3. LLM 配置
 	if ctx.llm == nil || ctx.llm.apiKey == "" {
 		items = append(items, manjuHealthItem{Key: "llm", Label: "LLM 配置", Status: "bad", Detail: "未填 DeepSeek Key", FixHint: "设置 → 智能体调度 → 填 Key 并应用/保存"})
@@ -180,12 +184,54 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 	if n, _ := manjuToInt(R["shots_per_take"]); n >= 2 {
 		if ctx.scriptMode {
 			// 脚本直出恒单镜(渲染层禁用 takes):配置了也如实说明,避免用户以为分组生效
-			items = append(items, manjuHealthItem{Key: "long_take", Label: "多切点长镜", Status: "warn", Detail: fmt.Sprintf("配置 %d 镜/组,但脚本直出模式不分组(脚本六段式逐字权威,分组会丢镜),已按单镜渲染", n)})
+			// 2026-08-30 用户要求可一键修复:改回单镜配置,与实际渲染行为对齐(消除配置与行为的偏差告警)
+			items = append(items, manjuHealthItem{Key: "long_take", Label: "多切点长镜", Status: "warn",
+				Detail:    fmt.Sprintf("配置 %d 镜/组,但脚本直出模式不分组(脚本六段式逐字权威,分组会丢镜),已按单镜渲染", n),
+				Fixable:   true,
+				FixHint:   "一键改回 1 镜/组,配置与脚本直出的实际渲染行为对齐"})
 		} else {
 			items = append(items, ok("long_take", fmt.Sprintf("多切点长镜 %d 镜/组(实验特性;相邻同场景镜头一次生成多机位切点)", n)))
 		}
 	}
 	items = append(items, manjuPlanAuditItem(ctx))
+	// 8. 更新升级排查(2026-08-29):ComfyUI 版本 / 插件更新 / PDD 加速模型
+	// 数据复用版本管理快照(本地 origin/HEAD 秒回;GitHub 最新版本带 10min 缓存)
+	snap := comfyVersionSnapshot()
+	if cv, cvOK := snap["comfy"].(map[string]any); cvOK && cv["online"] == true {
+		cur := str(cv["version"])
+		latest := comfyLatestVerCached()
+		if latest != "" && strings.TrimPrefix(cur, "v") != strings.TrimPrefix(latest, "v") {
+			items = append(items, manjuHealthItem{Key: "comfy_ver", Label: "ComfyUI 版本", Status: "warn",
+				Detail: fmt.Sprintf("当前 %s,官方最新 %s,建议升级", cur, latest),
+				FixHint: "更新 ComfyUI 后需重启服务生效(版本管理弹窗可对比)"})
+		} else if latest != "" {
+			items = append(items, ok("comfy_ver", "ComfyUI "+cur+" 已是最新"))
+		} else {
+			items = append(items, ok("comfy_ver", "ComfyUI "+cur+"(官方最新版本获取失败,联网后重新体检)"))
+		}
+	}
+	var upd []string
+	if ps, psOK := snap["plugins"].([]any); psOK {
+		for _, p := range ps {
+			m, _ := p.(map[string]any)
+			if m == nil || m["git"] != true {
+				continue
+			}
+			if n, _ := manjuToInt(m["behind"]); n > 0 {
+				upd = append(upd, fmt.Sprintf("%s↑%d", str(m["name"]), n))
+			}
+		}
+	}
+	if len(upd) > 0 {
+		items = append(items, manjuHealthItem{Key: "plugin_upd", Label: "插件更新", Status: "warn",
+			Detail: "有更新: " + strings.Join(upd, ", "),
+			FixHint: "ComfyUI 页 → 版本管理 → 检查更新 → git pull(更新后需重启 ComfyUI)"})
+	} else {
+		items = append(items, ok("plugin_upd", "ComfyUI 插件均最新"))
+	}
+	if pdd, pdOK := snap["pdd"].(map[string]any); pdOK && pdd["available"] == true {
+		items = append(items, ok("pdd", "PDD 8 步加速 LoRA 已就位("+str(pdd["file"])+")"))
+	}
 	return items
 }
 
@@ -361,6 +407,9 @@ func manjuApplyHealthFix(configPath, key string) (bool, error) {
 	case "render_dur":
 		R["min_shot_seconds"] = 4
 		R["max_shot_seconds"] = 12
+	case "long_take":
+		// 2026-08-30:脚本直出模式配置了 N 镜/组但渲染层恒单镜——改回 1 对齐实际行为
+		R["shots_per_take"] = 1
 	default:
 		return false, fmt.Errorf("该检查项不可自动修复")
 	}
@@ -698,4 +747,110 @@ func manjuDiagnoseError(stage string, err error) (string, string) {
 	default:
 		return "未知错误", "点「环境自检」体检项目,或查看运行日志定位具体阶段"
 	}
+}
+
+// ---- 角色面容特征检测(2026-08-30 ver17 防面容趋同) ----
+
+// manjuFaceFeatureItems 项目体检「角色面容特征」检查项:素材卡主要角色(非群演、
+// 非人影灵)的 image_prompt 需 ≥4 类具体五官特征 + ≥1 独有印记、无泛化词。
+// 规则与技能侧 SKILL.md 面容独特性硬规范同口径(防男角色定妆撞脸)。
+func manjuFaceFeatureItems(ctx *manjuCtx) []manjuHealthItem {
+	roots := []string{}
+	if ctx.workdir != "" {
+		roots = append(roots, filepathJoin(ctx.workdir, "素材"))
+	}
+	if d := ctx.novelRootDir(); d != "" {
+		roots = append(roots, filepathJoin(d, "素材"))
+	}
+	charFile := firstExisting(roots, "人物生成提示词.md")
+	if charFile == "" {
+		return nil // 无素材卡:不检查(方案直出路径另有 LLM 纪律)
+	}
+	b, err := os.ReadFile(charFile)
+	if err != nil {
+		return nil
+	}
+	cards := parseCharCards(string(toUTF8(b)), manjuAssetStyle(ctx.style), manjuStyleIs3D(ctx.style))
+	bad := []string{}
+	for _, c := range cards {
+		id, _ := c["id"].(string)
+		if id == "" {
+			continue
+		}
+		// 群演轻量卡/非人影灵:面容不适用
+		if v, _ := c["minor"].(bool); v {
+			continue
+		}
+		if strings.Contains(id, "影灵") || strings.Contains(id, "影子") {
+			continue
+		}
+		// 非人异物(蠹/镰主/器物/兽形本体等):本体特征非人脸,面容检测不适用
+		if sp := str(c["species"]); sp != "" && sp != "人" {
+			continue
+		}
+		if img := str(c["image_prompt"]); img != "" {
+			if why := manjuFaceWeakness(img); why != "" {
+				bad = append(bad, id+"("+why+")")
+			}
+		}
+	}
+	if len(bad) == 0 {
+		return []manjuHealthItem{{Key: "face", Label: "角色面容特征", Status: "ok", Detail: "全部主要角色 ≥4 类五官特征+独有印记"}}
+	}
+	shows := strings.Join(bad, "、")
+	if len(shows) > 120 {
+		shows = shows[:120] + "…"
+	}
+	return []manjuHealthItem{{Key: "face", Label: "角色面容特征", Status: "warn",
+		Detail:   "面容特征不足/泛化词,定妆图易撞脸: " + shows,
+		FixHint:  "按 SKILL.md 面容独特性硬规范补写 ≥4 类具体五官特征+1 独有印记(眼型/眉型/鼻型/唇型/脸型/肤质/发型+scar/mole 等),禁 handsome face 类泛化词",
+		Fixable:  false}}
+}
+
+// manjuFaceWeakness 单卡面容检测:返回不达标原因(空=达标)。
+// 特征类别≥4 且(有印记或胡须)且无泛化词。
+func manjuFaceWeakness(img string) string {
+	low := strings.ToLower(img)
+	has := func(ws ...string) bool {
+		for _, w := range ws {
+			if strings.Contains(low, w) {
+				return true
+			}
+		}
+		return false
+	}
+	cats := 0
+	if has("almond eyes", "slanting eyes", "narrow eyes", "round eyes", "droopy eyes", "deep-set eyes", "sharp eyes", "keen eyes", "warm eyes", "dark eyes", "bright eyes", "sunken eyes", "beady eyes", "piercing eyes", "gentle eyes", "sleepy eyes", "hooded eyes", "big round eyes") {
+		cats++
+	}
+	if has("thick brows", "arched brows", "straight brows", "fierce brows", "bushy brows", "heavy brows", "slanting brows", "thick eyebrows") {
+		cats++
+	}
+	if has("straight nose", "hooked nose", "snub nose", "broad nose", "aquiline nose", "flat nose", "bulbous nose") {
+		cats++
+	}
+	if has("thin lips", "full lips", "firm lips", "tight lips", "full mouth") {
+		cats++
+	}
+	if has("square face", "angular jaw", "round face", "oval face", "lean face", "gaunt face", "long face", "broad face", "chiseled jaw", "strong jaw", "soft jaw", "sunken cheeks", "hollow cheeks", "high cheekbones", "haggard face") {
+		cats++
+	}
+	if has("weather-beaten", "weathered", "wrinkled", "leathery", "sallow", "ruddy", "sun-darkened", "lined", "calloused", "greasy", "pallid") {
+		cats++
+	}
+	if has("crew cut", "buzz cut", "long hair", "short hair", "slicked-back", "ponytail", "bun", "bald", "white hair", "grey hair", "gray hair", "black hair", "braid", "curly hair", "mohawk", "side parting", "middle part", "tousled", "shaved head", "thin hair", "wispy hair", "salt-and-pepper hair", "receding hairline") {
+		cats++
+	}
+	mark := has("scar", "mole", "birthmark", "earring", "tattoo", "gold tooth", "freckles", "beauty mark", "missing tooth", "broken nose", "blind eye", "glass eye", "eyepatch", "twin scars", "brand mark") ||
+		has("beard", "mustache", "goatee", "stubble", "whiskers", "sideburns")
+	generic := has("handsome face", "fair face", "standard face", "ordinary face", "good-looking", "attractive face", "clean-cut face", "regular features")
+	switch {
+	case generic:
+		return "含泛化词"
+	case cats < 4:
+		return fmt.Sprintf("五官特征仅 %d 类(<4)", cats)
+	case !mark:
+		return "无独有印记/胡须"
+	}
+	return ""
 }

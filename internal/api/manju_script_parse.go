@@ -27,15 +27,18 @@ import (
 
 // scriptShotRaw 分镜表一行解析出的镜头(未绑定角色/场景卡)
 type scriptShotRaw struct {
-	ID       int
-	Scene    string // 从画面内容匹配到的场景卡 id(可为空,渲染兜底)
-	ShotSize string
-	Camera   string
-	Action   string
-	Dialogue string
+	ID        int
+	Scene     string // 从画面内容匹配到的场景卡 id(可为空,渲染兜底)
+	ShotSize  string
+	Camera    string
+	Action    string
+	Dialogue  string
 	Narration string
-	Duration int
-	H3Prompt string
+	Light     string // 光影列(2026-08-30 ver14 保留:此前正则捕获后丢弃,LLM 重写路径失去光照信息)
+	Sound     string // 音效列(同上)
+	Style     string // 风格列(9 列格式,2026-08-30 ver14 保留:此前仅当时长兜底,从不入 shots)
+	Duration  int
+	H3Prompt  string
 }
 
 var (
@@ -57,10 +60,19 @@ var (
 	// 2026-08-27 补:群演(群演轻量卡前缀,「群演 · 周管事」→ id=周管事 + minor:true)
 	reMdTitle    = regexp.MustCompile(`(?m)^#{2,3}\s*(?:\d+(?:\.\d+)?[\.、]\s*)?(?:(?:主角|女主|男主|男配|女配|反派|助攻|盟友|调剂位|工具人反派|工具人|传说位|昆仑守山神|灵宠|兽宠|宠物|坐骑|妖兽|神兽|精怪|长老|群演)\s*[·:：\-—]\s*)?([^（(]+?)\s*[（(]([^）)]*)[）)]`)
 	reSceneTitle = regexp.MustCompile(`(?m)^#{2,3}\s*(?:场景[一二三四五六七八九十]+\s*[·:：\-—]\s*|[a-zA-Z\d]+[\.、]\s*)([^（(]+?)\s*[（(]([^）)]*)[）)]`)
+	// reSceneBareTitle 纯名字场景卡标题兜底(2026-08-29 绿萝实锤:32 张卡「## 星海大厦外景」
+	// 无编号无括号,reSceneTitle/reMdTitle 都强制括号→一张不匹配→scenes=0,25 镜全无场景图,
+	// 同场景跨镜长相漂移;文件里唯二带括号的标题是两张重复的封面备用卡,匹配后又被封面过滤
+	// 拦掉,日志只剩「过滤 2 张」极具迷惑性)。仅收名字内无括号/冒号/逗号的短标题,配合
+	// 「节内必须有提示词代码块」护栏 + 全局段黑名单,防把说明性小节收进卡池。
+	reSceneBareTitle = regexp.MustCompile(`(?m)^#{2,3}\s*([^（(：:,\n]+?)\s*$`)
 	// 全局段标题黑名单(人物生成提示词.md 中「统一风格前缀/统一质量后缀/通用负向词」等
 	// 所有角色共用的字段;创作侧契约=一级标题,若误写二级/三级标题则被 reMdTitle 当角色,
 	// parseCharCards 命中即跳过。关键词只匹配标题名,正常角色名不会含这些词)
 	reManjuGlobalSection = regexp.MustCompile(`统一|共用|前缀|后缀|负向|负面|通用|说明|备注|清单|记忆点|全书`)
+	// 角色卡音色字段(2026-08-30 ver15 技能侧配置):节内「音色:/声线:/方言:」行
+	// (记忆点列表项常见「- 音色:xxx」,允许列表前缀)
+	reCharVoiceLine = regexp.MustCompile(`(?m)^\s*(?:[-*]+\s*)?(?:音色|声线|方言)\s*[：:]\s*([^\n]+)`)
 	// 素材代码块(英文提示词)
 	reMdCodeBlock = regexp.MustCompile("(?s)```[^\\n]*\\n(.*?)\\n```")
 	// 台词:(S1)沈玉衡:"晚老板..."(非贪婪到闭合引号,多句逐条匹配;兼容无引号句)
@@ -98,12 +110,13 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 	firstShot := map[string]int{}
 	sNum := map[string]string{}
 	var order []string
-	for i := range raws {
-		for _, m := range reSpeakerTag.FindAllStringSubmatch(raws[i].Dialogue, -1) {
-			name := strings.TrimSpace(m[2])
-			if name == "" || manjuIsOffScreenSpeaker(name) || known[name] {
-				continue
-			}
+		for i := range raws {
+			for _, m := range reSpeakerTag.FindAllStringSubmatch(raws[i].Dialogue, -1) {
+				name := strings.TrimSpace(m[2])
+				// 内心·(ver14 防御):正常已转 narration,漏网形态不建幽灵群演卡
+				if name == "" || manjuIsOffScreenSpeaker(name) || strings.HasPrefix(name, "内心·") || known[name] {
+					continue
+				}
 			if _, ok := firstShot[name]; !ok {
 				firstShot[name] = raws[i].ID
 				order = append(order, name)
@@ -219,8 +232,22 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 //   [封面/备用/开篇/终章]查 id+desc);
 // 11=h3 捞人三层收紧(2026-08-29 镜9 误捞:短词 dark 恰为陈默卡独有,环境句「dark
 //   office aisle」触发捞人,镜9 4 角色超 H3 参考图上限告警)——独有词≥5字母+主体句
-//   须含人物外观信号词(hair/glasses/shirt/…),环境/道具句不参与捞人。
-const manjuScriptParseVer = 11
+//   须含人物外观信号词(hair/glasses/shirt/…),环境/道具句不参与捞人;
+// 12=场景卡三级兜底+plan 汇点槽位时机(2026-08-29 绿萝全书实锤:渲染画面与分镜脚本
+//   脱节双根因)——①parseSceneCards 新增纯名字标题兜底(绿萝 32 张卡「## 星海大厦外景」
+//   无编号无括号,reSceneTitle/reMdTitle 强制括号一张不匹配→scenes=0,25 镜全无场景图,
+//   同场景跨镜长相漂移;文件唯二带括号标题是两张重复封面备用卡,匹配后又被封面过滤拦掉,
+//   日志只剩「过滤 2 张」极具迷惑性)——重解析后场景匹配池/场景图恢复;②plan 汇点
+//   (ensurePlanAndPrompts)finalize 早于定妆照生成,实测槽位恒 0 把全部 <Picture N>
+//   引用剥除并回写固化,渲染时人物参考图整集失效(人物长相与角色卡无关)——改用预期
+//   槽位纯函数(manjuExpectPicSlots),重解析后 h3_prompt 恢复脚本原文含 Picture 引用;
+// 13=角色节多形态段错位修复(2026-08-29 阿影 Q 版串色实锤:【Q版·内心戏专用提示词】段
+//   写在主形象段前,旧逻辑恒取第一个代码块→Q版黑团子提示词被当主形象拼人形风格锚,
+//   影灵主图出银白团子黑↔白串色,影子形态正主提示词被顶掉)——scriptMainBlock 主形象块
+//   跳过带 Q版/真身/形态标记的代码块,Q版段独立解析为 q_form(manjuQPrompt 优先取);
+//   兽形 Q 版毛色锁改按提示词出现序排色(主体色永远在小色块前,white 不再恒排 black 前)。
+//   plan.characters 缓存旧素材内容,须重解析吸收。
+const manjuScriptParseVer = 14
 
 // scriptParsePlan 脚本直出程序化解析入口。
 // 解析出 characters/scenes/shots/directing/episode_title/chapters=script。
@@ -295,7 +322,13 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 			ShotSize: col2,
 			Camera:   strings.TrimSpace(m[3]),
 			Action:   strings.TrimSpace(m[4]),
+			Light:    strings.TrimSpace(m[6]),
+			Sound:    strings.TrimSpace(m[7]),
 			Duration: 5,
+		}
+		// 风格列:仅 9 列格式存在(m[9]=时长非空 → m[8]=风格);8 列格式 m[8]=时长,不误认
+		if strings.TrimSpace(m[9]) != "" {
+			raw.Style = strings.TrimSpace(m[8])
 		}
 		// 台词/旁白列:旁白前缀→narration;其余 (Sx)角色:"..." → dialogue
 		dialCol := strings.TrimSpace(m[5])
@@ -312,6 +345,31 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 			if rest != "" {
 				raw.Narration = "旁白：" + rest + "。"
 			}
+		}
+		// 内心独白(2026-08-30 ver14 修复):「内心·角色名:内容」→ narration 保留「内心·」
+		// 前缀——渲染端 Q 版挂载(shotViewRelsFor 判 Narration 含「内心·」)与画外音音色
+		// 差异化都依赖该前缀。此前裸写(无 S 号)被整句丢弃、带 (Sx) 的「内心·」被
+		// reDialogue 当普通说话人→scriptMinorCast 建幽灵群演卡,Q 版参考图永不挂载。
+		if j := strings.Index(dialCol, "内心·"); j >= 0 {
+			inner := strings.TrimPrefix(dialCol[j:], "内心·")
+			k := strings.Index(inner, "：")
+			if k < 0 {
+				k = strings.Index(inner, ":")
+			}
+			if k > 0 {
+				name := strings.TrimSpace(inner[:k])
+				content := strings.TrimSpace(inner[k+1:])
+				content = strings.Trim(content, "。！？.!? ")
+				if name != "" && content != "" {
+					line := "内心·" + name + ":" + content + "。"
+					if raw.Narration != "" {
+						raw.Narration += "\n" + line
+					} else {
+						raw.Narration = line
+					}
+				}
+			}
+			dialCol = dialCol[:j] // 剔除内心段,防 reDialogue 把「内心·」当说话人
 		}
 		for _, dm := range reDialogue.FindAllStringSubmatch(dialCol, -1) {
 			speaker, line := dm[1], dm[2]
@@ -535,6 +593,9 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 			"action":     raw.Action,
 			"dialogue":   raw.Dialogue,
 			"narration":  raw.Narration,
+			"light":      raw.Light,
+			"sound":      raw.Sound,
+			"style":      raw.Style,
 			"duration":   raw.Duration,
 			"h3_prompt":  raw.H3Prompt,
 			"characters": charArr,
@@ -661,8 +722,19 @@ func scriptValidateShots(raws []scriptShotRaw, lg *manjuLogger) {
 			if line == "" {
 				continue
 			}
-			if j := strings.IndexAny(line, ":："); j >= 0 && j < 16 {
-				line = strings.TrimSpace(line[j+1:])
+			// 剥「说话人:」前缀(2026-08-29 修复:旧 j<16 是字节索引阈值,「群演·贾秘书」
+			// 6 汉字=18 字节被挡 → 剥前缀失败 → key 带前缀匹配不上六段式 → 误补写重复 <d>
+			// (别惹这盆绿萝 镜头3/4/7 配音重复实锤)。用 rune 级索引,不混字节/rune。
+			rs := []rune(line)
+			ci := -1
+			for i, ch := range rs {
+				if ch == ':' || ch == '：' {
+					ci = i
+					break
+				}
+			}
+			if ci >= 0 {
+				line = strings.TrimSpace(string(rs[ci+1:]))
 			}
 			key := string([]rune(line)[:minInt(8, len([]rune(line)))])
 			if len([]rune(key)) < 4 || strings.Contains(r.H3Prompt, key) {
@@ -757,10 +829,7 @@ func parseCharCards(text, assetStyle string, is3D bool) []map[string]any {
 		if reManjuGlobalSection.MatchString(name) {
 			continue
 		}
-		block := ""
-		if bm := reMdCodeBlock.FindStringSubmatch(sec.body); bm != nil {
-			block = strings.TrimSpace(bm[1])
-		}
+		block := scriptMainBlock(sec.body)
 		if block == "" {
 			// 行内英文提示词:支持 "**生图提示词**：Cinematic..." / "生图提示词（磕碜反派）**：Cinematic..."
 			// (关键词可被 ** 加粗包裹,可带括号后缀,冒号前可有任意星号/括号)
@@ -781,24 +850,34 @@ func parseCharCards(text, assetStyle string, is3D bool) []map[string]any {
 				gender = seg
 			}
 		}
+		// 身份词画像(2026-08-26):「盟友 · 陈墨」「灵宠 · 吞吞」等身份前缀解析出 role/species——
+		// id 已去前缀,beast/性别/胡须/Q 版兽形/兽形角色板全靠卡上的 species/role 判定。
+		// 2026-08-29 提前解析:image_prompt 构建就要用物种路由(物品不烤人形锚)
+		role, species := scriptRoleSpecies(sec.head)
+		isItem := manjuIsItem(map[string]any{"species": species, "role": role, "id": name, "image_prompt": block})
 		card := map[string]any{
 			"id":           name,
 			"gender":       gender,
 			"age":          scriptAgeOf(desc + " " + block),
 			"appearance":   scriptAppearanceOf(sec.body, block),
 			"costume":      "",
-			"image_prompt": scriptImagePrompt(block, assetStyle, is3D),
+			"image_prompt": scriptImagePrompt(block, assetStyle, is3D, isItem),
 			"views":        map[string]any{},
 		}
-		// 身份词画像(2026-08-26):「盟友 · 陈墨」「灵宠 · 吞吞」等身份前缀解析出 role/species——
-		// id 已去前缀,beast/性别/胡须/Q 版兽形/兽形角色板全靠卡上的 species/role 判定
-		if role, species := scriptRoleSpecies(sec.head); role != "" || species != "" {
-			if role != "" {
-				card["role"] = role
+		// 音色字段(2026-08-30 ver15 技能侧配置优先):角色卡节内「音色:/声线:/方言:」
+		// 行 → card["voice"],渲染端 dialectVoiceFor(方言)/voiceTimbrePhrase 优先使用。
+		// 技能侧约定:配角/喜剧/地域角色可配热门方言(东北/陕西/粤/台),主角/正派
+		// 默认普通话档位,同剧角色音色互异(分得清谁是谁)。
+		if vm := reCharVoiceLine.FindStringSubmatch(sec.body); vm != nil {
+			if v := strings.TrimSpace(vm[1]); v != "" && !strings.HasPrefix(v, "（") {
+				card["voice"] = v
 			}
-			if species != "" {
-				card["species"] = species
-			}
+		}
+		if role != "" {
+			card["role"] = role
+		}
+		if species != "" {
+			card["species"] = species
 		}
 		// 群演轻量卡(2026-08-27 群演分级·技能侧源头):爽文技能素材直出的「群演 · 名字」
 		// 条目 → minor:true(资产阶段只出 1 张定妆照+正脸,跳过视图/Q版);说话人在
@@ -811,7 +890,13 @@ func parseCharCards(text, assetStyle string, is3D bool) []map[string]any {
 		// 双形态(2026-08-26):素材角色节含「真身提示词」标注(萌宠 Q版↔神话真身、人形↔兽形)
 		// → second_form 字段,assets 阶段额外定妆 <id>_form2.png,渲染遇「真身·<角色名>」镜切换
 		if f2 := scriptSecondForm(sec.body); f2 != "" {
-			card["second_form"] = scriptImagePrompt(f2, assetStyle, is3D)
+			card["second_form"] = scriptImagePrompt(f2, assetStyle, is3D, isItem)
+		}
+		// Q版专属段(2026-08-29 阿影实锤):非人角色的【Q版·内心戏专用提示词】独立代码块
+		// → q_form,渲染端 manjuQPrompt 优先取它(卡内作者措辞=Q版形象的权威定义),
+		// 兜底才是兽形 chibi 模板拼接。
+		if q := scriptQForm(sec.body); q != "" {
+			card["q_form"] = q
 		}
 		out = append(out, card)
 	}
@@ -870,9 +955,64 @@ func scriptSecondForm(body string) string {
 	return ""
 }
 
+// scriptMainBlock 角色节主形象代码块:第一个上方标记窗(150字符)内不含
+// Q版/真身/化形/原形/兽形/第二形态 标记的代码块。2026-08-29 阿影实锤:
+// 【Q版·内心戏专用提示词】段写在主形象段之前,旧逻辑恒取第一个代码块——
+// Q版黑团子提示词被当主形象拼人形风格锚渲染,影灵主图出银白团子(黑↔白串色),
+// 影子形态正主提示词被顶掉。全部带标记时回退第一个块(保底不空)。
+func scriptMainBlock(body string) string {
+	blocks := reMdCodeBlock.FindAllStringSubmatchIndex(body, -1)
+	if len(blocks) == 0 {
+		return ""
+	}
+	hasKw := func(s string) bool {
+		for _, k := range []string{"真身", "化形", "原形", "兽形", "第二形态", "Q版", "Q 版"} {
+			if strings.Contains(s, k) {
+				return true
+			}
+		}
+		return false
+	}
+	for i := range blocks {
+		start := 0
+		if i > 0 {
+			start = blocks[i-1][1]
+		}
+		if blocks[i][0]-start > 150 {
+			start = blocks[i][0] - 150
+		}
+		if !hasKw(body[start:blocks[i][0]]) {
+			return strings.TrimSpace(body[blocks[i][2]:blocks[i][3]])
+		}
+	}
+	return strings.TrimSpace(body[blocks[0][2]:blocks[0][3]])
+}
+
+// scriptQForm 角色节 Q 版专属提示词块:上方标记窗内含「Q版」标记的代码块
+// (与 scriptSecondForm 同款定位法);未标注返回空(渲染端兜底 chibi 模板)。
+func scriptQForm(body string) string {
+	blocks := reMdCodeBlock.FindAllStringSubmatchIndex(body, -1)
+	for i := range blocks {
+		start := 0
+		if i > 0 {
+			start = blocks[i-1][1]
+		}
+		if blocks[i][0]-start > 150 {
+			start = blocks[i][0] - 150
+		}
+		ctx := body[start:blocks[i][0]]
+		if strings.Contains(ctx, "Q版") || strings.Contains(ctx, "Q 版") {
+			return strings.TrimSpace(body[blocks[i][2]:blocks[i][3]])
+		}
+	}
+	return ""
+}
+
 // parseSceneCards 解析 场景提示词.md → scenes 卡。
 // 格式:### 场景一 · 烛龙村（雪夜废墟） 或 ## 1. 晚膳小馆（主角主场） + 英文 image_prompt 代码块。
 // 只收"场景N·名字"或"编号. 名字"形式的标题,过滤"主场场景清单/色锚系统"等说明性大节。
+// 2026-08-29 三级兜底:纯名字标题「## 星海大厦外景」(绿萝第三代格式)——要求节内有
+// 提示词代码块才算卡(护栏,防误收说明性小节),全局段黑名单双保险。
 func parseSceneCards(text, assetStyle string, is3D bool) []map[string]any {
 	var out []map[string]any
 	sections := splitMdSections(text)
@@ -881,12 +1021,23 @@ func parseSceneCards(text, assetStyle string, is3D bool) []map[string]any {
 		if tm == nil {
 			tm = reMdTitle.FindStringSubmatch(sec.head)
 		}
+		bare := false
 		if tm == nil {
-			continue
+			bt := reSceneBareTitle.FindStringSubmatch(sec.head)
+			if bt == nil {
+				continue
+			}
+			tm = []string{bt[0], bt[1], ""}
+			bare = true
 		}
 		name := scriptCleanName(tm[1])
 		// 过滤说明性标题(场景清单/色锚系统/用途等,非具体场景卡)
 		if name == "" || strings.Contains(name, "场景清单") || strings.Contains(name, "色锚") || strings.Contains(name, "清单") || strings.Contains(name, "系统") || strings.Contains(name, "说明") {
+			continue
+		}
+		// 纯名字兜底分支的护栏:全局共用段(统一风格/通用负向等写成二级标题的格式漂移)
+		// 与无提示词的空节都不是场景卡
+		if bare && (reManjuGlobalSection.MatchString(name) || !reMdCodeBlock.MatchString(sec.body)) {
 			continue
 		}
 		block := ""
@@ -1006,7 +1157,25 @@ func scriptCleanName(raw string) string {
 // 2026-08-26 is3D 分档(用户反馈"选写实/3D 风格却渲染成动漫形象"):次世代3D/BJD 风格
 // 不做写实词替换、不拼插画风 assetStyle、不附插画风锚——3D 渲染虚拟人本身非真人照片,
 // 改附 manju3DPortraitAnchor + 正面人脸锚(用户规则:人物角色提示词必须正面人脸)。
-func scriptImagePrompt(block, assetStyle string, is3D bool) string {
+// scriptImagePrompt 素材代码块 → image_prompt(物种路由版,2026-08-29 审计 V3 根治):
+// 物品类(器物/植物/法宝,species 或代码块植物本体词判定)**不烤人形锚**——此前对
+// 所有物种统一拼 manjuPortraitAnchor(East Asian/Chinese character)+防真人词替换,
+// 物品 image_prompt 被污染成「物品本体+人形锚」自相矛盾,正是「绿萝→女人脸」的源头。
+func scriptImagePrompt(block, assetStyle string, is3D bool, isItem bool) string {
+	if isItem {
+		// 物品管线:画物品本体,无正面人脸锚/无人形锚/无防真人替换(那些是人形语义)
+		if block == "" {
+			return "the item itself, " + assetStyle + manjuItemAnchor
+		}
+		p := block
+		if assetStyle != "" && !strings.Contains(p, "3D") && !strings.Contains(p, "CG") {
+			p = p + ", " + assetStyle
+		}
+		if !strings.Contains(p, "NOT a person") {
+			p = p + manjuItemAnchor
+		}
+		return p
+	}
 	if is3D {
 		if block == "" {
 			return manju3DPortraitAnchor + manjuPortraitFrontFace
@@ -1047,10 +1216,22 @@ func scriptImagePrompt(block, assetStyle string, is3D bool) string {
 }
 
 // scriptRoleSpecies 素材标题身份词 → role/species(2026-08-26):
-// 灵宠/坐骑/妖兽/神兽等 → species(非人形,Q 版萌兽/兽形角色板靠它判定);
+// 灵宠/坐骑/妖兽/神兽/灵植等 → species(非人形,Q 版萌兽/兽形角色板靠它判定);
 // 盟友/主角/女主/助攻 → 正角;反派/工具人 → 反派/功能配角。
+// 2026-08-29 扩展:①植物类词(灵植/植物/藤精/花精/树精/盆栽)判 species(物品渲染链);
+// ②标题内显式字段「species: X;role: Y」(素材契约,阿碧卡格式)优先于身份词。
 func scriptRoleSpecies(head string) (role, species string) {
-	for _, k := range []string{"灵宠", "兽宠", "宠物", "坐骑", "妖兽", "神兽", "精怪"} {
+	// 显式字段优先:「species: 灵植·紫藤精」「role: 正角」(分号/逗号分隔均可)
+	if m := regexp.MustCompile(`species\s*[:：]\s*([^;,，)）]+)`).FindStringSubmatch(head); m != nil {
+		species = strings.TrimSpace(m[1])
+	}
+	if m := regexp.MustCompile(`role\s*[:：]\s*([^;,，)）]+)`).FindStringSubmatch(head); m != nil {
+		role = strings.TrimSpace(m[1])
+	}
+	if role != "" || species != "" {
+		return role, species
+	}
+	for _, k := range []string{"灵宠", "兽宠", "宠物", "坐骑", "妖兽", "神兽", "精怪", "灵植", "植物", "盆栽", "藤精", "花精", "树精"} {
 		if strings.Contains(head, k) {
 			return "", k
 		}

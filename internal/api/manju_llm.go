@@ -387,6 +387,9 @@ func manjuStyleIs3D(style string) bool {
 		if t == "" {
 			continue
 		}
+		if strings.HasPrefix(t, "不要") {
+			continue // 负面 token(如「不要3D游戏渲染」)不代表 3D 风格,2026-08-29
+		}
 		if strings.Contains(t, "3d") || strings.Contains(t, "bjd") || strings.Contains(t, "unreal") ||
 			strings.Contains(t, "blender") || strings.Contains(t, "zbrush") ||
 			strings.Contains(t, "virtual human") || strings.Contains(t, "digital human") ||
@@ -398,6 +401,54 @@ func manjuStyleIs3D(style string) bool {
 		}
 	}
 	return false
+}
+
+// manjuStyleIsAnime 风格是否动漫/插画向(anime/2.5D/卡通/二次元/国漫/日漫/插画/漫画等
+// token)→ 动漫书不做风格句写实化。注意「不要2D漫画线条」这类负面 token 以「不要」开头,
+// 表示的是「不要动漫感」,必须跳过不判为动漫向(2026-08-29 写实化误判防线)。
+func manjuStyleIsAnime(style string) bool {
+	for _, tok := range strings.Split(style, "+") {
+		t := strings.ToLower(strings.TrimSpace(tok))
+		if t == "" {
+			continue
+		}
+		if strings.HasPrefix(t, "不要") {
+			continue
+		}
+		if strings.Contains(t, "anime") || strings.Contains(t, "2.5d") || strings.Contains(t, "2d") ||
+			strings.Contains(t, "卡通") || strings.Contains(t, "二次元") || strings.Contains(t, "国漫") ||
+			strings.Contains(t, "日漫") || strings.Contains(t, "插画") || strings.Contains(t, "漫画") ||
+			strings.Contains(t, "painterly") || strings.Contains(t, "illustration") {
+			return true
+		}
+	}
+	return false
+}
+
+// manjuRealizeStyle 风格句写实化(2026-08-29 用户反馈「不是写实,怎么变成了卡通」):
+// 分镜脚本风格句按立项 style 转写时常带「subtly anime-stylized semi-realistic characters」
+// 等动漫化措辞(万怪之主 56 章 251 处),H3 出片角色即带 3D 动漫感;写实风格书在
+// finalize 汇点统一把角色画风措辞替换为 photorealistic。幂等(替换后不含目标词);
+// 动漫向书(manjuStyleIsAnime)与 3D 风格书(manjuStyleIs3D,用户规则「3D 就出 3D」)
+// 不替换。场景词(如 low-poly game world 的题材设定)不碰。
+func manjuRealizeStyle(hp string) string {
+	if !strings.Contains(hp, "anime-stylized") && !strings.Contains(hp, "semi-realistic") {
+		return hp
+	}
+	out := hp
+	repl := [][2]string{
+		// 2026-08-29 物种路由(审计 V6):替换词去 human——纯字符串替换不看镜内物种,
+		// 物品独角镜/兽形镜也会被注入「photorealistic human characters」人形主体词
+		{"subtly anime-stylized semi-realistic characters", "photorealistic cinematic characters and subjects with natural detailed textures"},
+		{"anime-stylized semi-realistic characters", "photorealistic cinematic characters and subjects with natural detailed textures"},
+		{"subtly anime-stylized", "photorealistic"},
+		{"anime-stylized", "photorealistic"},
+		{"semi-realistic", "realistic"},
+	}
+	for _, r := range repl {
+		out = strings.ReplaceAll(out, r[0], r[1])
+	}
+	return out
 }
 
 // manjuSceneAnchor 场景图锚:场景无人脸,只需明亮清晰;不带人物锚(防误伤)。
@@ -817,7 +868,7 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
 【输出 JSON（严格）】：
 {
   "episode_title": "集标题",
-  "characters": [{"id": "角色名", "role": "正角|反派|功能配角（按剧情阵营判定:主角/女主/正派灵宠/重要正派助攻=正角;主要反派=反派;次要反派/下属/炮灰/龙套=功能配角。【Q版纪律·2026-08-24 用户规则】只有正角才生成 Q 版呆萌形象,反派与功能配角一律不生成、不配使用 Q 版）", "gender": "男/女", "species": "人|妖兽|灵宠|神兽|精怪|鬼物|机械（种族:人=人类角色;妖兽/灵宠/神兽/精怪/鬼物=非人形兽类/生灵,image_prompt 画的是兽形本体(毛色/种族特征)而非人形,严禁把兽类当人画;角色是兽类必须标非人）", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，逐字从原文提炼，具体到可渲染）", "costume": "完整服装描述", "color_palette": "角色配色板(5色HEX,如 #1E2A33 #31414D #53606D #D8D1C6 #A89B8B,顺序=主色/辅色/点缀色/肤色/发色;角色板与所有视图严格用它统一配色)", "expressions": "表情神态(4-6个该角色关键情绪,中文逗号分隔,如 清冷/沉思/轻笑/审视/惊疑)", "board_prompt": "给图片模型的英文文生图提示词:角色板/角色资料卡整合图（【角色板结构·强制,2026-08-25 即梦角色版教程】①三视图整合:正面/侧面/背面全身并排;②细节特写模块:脸部/发型/服装纹样/配饰各一小格;③服饰分层展示:外袍/内衬/腰带,纹样刺绣细节;④表情神态 4-6 格(用 expressions);⑤配色板:5 色 HEX 色块一行标注;⑥人设文字:身份/气质/视觉标志一行中文。整图竖版网格排版、浅色底、清晰分区、所有分格同一人同一服装;拟漫化半写实东方风格,禁日漫禁真人;` + assetStyle + ` 风格;外观/服装逐字引用 appearance/costume,配色严格用 color_palette）", "image_prompt": "给图片模型的英文文生图提示词（【全身立绘·强制】full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;species≠人 的兽类角色此处画兽形本体,不套人形立绘措辞;` + assetStyle + ` 风格;【拟动漫硬规则·2026-08-24 用户规则】semi-realistic stylized illustration of an East Asian/Chinese character, 禁日漫(not a Japanese anime/manga style, avoid japanese-style facial features, japanese anime eyes), 禁真人(not a photorealistic photo of a real person, avoid resembling any real person)——写实风格同样按拟动漫渲染,不输出真人照片;含完整外观/服装/性别强化）", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版形象（【Q版纪律·2026-08-25 用户规则】①仅 role=正角 才填此项;反派/功能配角此字段留空,不生成 Q 版,其内心独白用写实镜头+画外音渲染;②Q版面容随角色本人——脸型/眼型/发型/年龄感/胡须按该角色具体面容,禁止统一做成通用宝宝脸(老人要有老相、有胡须者保留胡须、少年保持少年相);③species≠人 的妖兽/灵宠/神兽:Q版=该妖兽本体的萌化小兽形(保留种族/毛色/特征),禁止画成人形或人类宝宝;④人类按性别与年龄:女性一律无胡须、年轻男性(少年/青年/男孩)一律无胡须,仅成年/老年男性可有胡须且 Q版必须保留;⑤Q版渲染以该角色正面定妆照为参考图生成(同一人,禁止形象大变)。chibi cute style, 短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记/胡须], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
+  "characters": [{"id": "角色名", "role": "正角|反派|功能配角（按剧情阵营判定:主角/女主/正派灵宠/重要正派助攻=正角;主要反派=反派;次要反派/下属/炮灰/龙套=功能配角。【Q版纪律·2026-08-24 用户规则】只有正角才生成 Q 版呆萌形象,反派与功能配角一律不生成、不配使用 Q 版）", "gender": "男/女", "species": "人|妖兽|灵宠|神兽|精怪|鬼物|机械|物品（种族:人=人类角色;妖兽/灵宠/神兽/精怪/鬼物=非人形兽类/生灵,image_prompt 画的是兽形本体(毛色/种族特征)而非人形,严禁把兽类当人画;物品=有意识的器物/植物/法宝/灵植(如会说话的剑/盆栽精灵/古镜),image_prompt 画的是物品/植物本体(材质/形制/纹理/标志性细节),严禁画人形/人脸/人衣;角色是兽类或物品必须标对应非人类,不得标精怪/机械 兜底）", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，逐字从原文提炼，具体到可渲染）", "costume": "完整服装描述", "color_palette": "角色配色板(5色HEX,如 #1E2A33 #31414D #53606D #D8D1C6 #A89B8B,顺序=主色/辅色/点缀色/肤色/发色;角色板与所有视图严格用它统一配色)", "expressions": "表情神态(4-6个该角色关键情绪,中文逗号分隔,如 清冷/沉思/轻笑/审视/惊疑)", "board_prompt": "给图片模型的英文文生图提示词:角色板/角色资料卡整合图（【角色板结构·强制,2026-08-25 即梦角色版教程】①三视图整合:正面/侧面/背面全身并排;②细节特写模块:脸部/发型/服装纹样/配饰各一小格;③服饰分层展示:外袍/内衬/腰带,纹样刺绣细节;④表情神态 4-6 格(用 expressions);⑤配色板:5 色 HEX 色块一行标注;⑥人设文字:身份/气质/视觉标志一行中文。整图竖版网格排版、浅色底、清晰分区、所有分格同一人同一服装;拟漫化半写实东方风格,禁日漫禁真人;` + assetStyle + ` 风格;外观/服装逐字引用 appearance/costume,配色严格用 color_palette）", "image_prompt": "给图片模型的英文文生图提示词（【按物种分档·2026-08-29 审计V3/V5根治】人类:full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;兽类(species≠人):画兽形本体(毛色/种族特征),不套人形立绘措辞;物品(species=物品):画物品/植物本体 the item/plant itself(材质/形制/纹理/标志性细节),不写 full body/7头身/服装/人脸,严禁任何人类形象与叶子拼脸;` + assetStyle + ` 风格;【拟动漫硬规则·2026-08-24 用户规则】人类角色:semi-realistic stylized illustration of an East Asian/Chinese character, 禁日漫(not a Japanese anime/manga style, avoid japanese-style facial features, japanese anime eyes), 禁真人(not a photorealistic photo of a real person, avoid resembling any real person)——写实风格同样按拟动漫渲染,不输出真人照片;兽类/物品角色:不用 East Asian/Chinese character 措辞,改用 semi-realistic stylized rendering of the creature/item itself;含完整外观/服装/性别强化仅适用于人类）", "voice": "音色描述(可选,2026-08-30 ver15 技能侧配置优先):年龄段+性别+音色质感+语速(如 中年磁性男声·语速偏慢),或热门方言(东北/陕西/四川/河南/广西/湖南/粤语/台普,人设契合才配,主角/正派默认普通话;渲染端 dialectVoiceFor 优先使用,同剧角色音色互异)", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版形象（【Q版纪律·2026-08-25 用户规则】①仅 role=正角 才填此项;反派/功能配角此字段留空,不生成 Q 版,其内心独白用写实镜头+画外音渲染;②Q版面容随角色本人——脸型/眼型/发型/年龄感/胡须按该角色具体面容,禁止统一做成通用宝宝脸(老人要有老相、有胡须者保留胡须、少年保持少年相;【年龄措辞分物种·2026-08-30】人形老年写 aged face with wrinkles/眼角纹/白发;兽形老年写口鼻眼周毛色渐灰(greying muzzle)的老兽相,严禁给兽写人类皱纹;物品无年龄语义不写年龄词);③species≠人 的妖兽/灵宠/神兽:Q版=该妖兽本体的萌化小兽形(保留种族/毛色/特征),禁止画成人形或人类宝宝;④人类按性别与年龄:女性一律无胡须、年轻男性(少年/青年/男孩)一律无胡须,仅成年/老年男性可有胡须且 Q版必须保留;⑤Q版渲染以该角色正面定妆照为参考图生成(同一人,禁止形象大变)。chibi cute style, 短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记/胡须], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
   "scenes": [{"id": "场景名（取自原文;只收剧情实际发生的具体场景——素材里的全局配置段(通用负向词/统一风格前缀/质量后缀/色锚系统等)是作画排除词不是场景,禁止列为 scenes）", "description": "空间结构/材质/光线/氛围", "image_prompt": "给图片模型的英文文生图提示词（空场景无人物，明亮清晰，` + assetStyle + ` 风格）"}],
   "shots": [
     {
@@ -852,6 +903,9 @@ func manjuDirectSystem(cfg map[string]any, style string) string {
 - 【说话人纪律·强制】谁说的就是谁:原文对白按说话角色逐句标入对应 dialogue(前缀"角色:"),严禁把某角色说的话标成他人台词或塞进旁白;旁白只承载原文叙述,绝不含角色话语
 - 有台词的说话人必须是该镜的视觉中心主体(景别/机位优先对准说话人),其他登场角色不得遮挡或抢占画面中心
 - 同一角色在整集所有镜头中形象必须完全一致(外观/服装逐字复用其 characters 卡,禁止同角色换装/换写法)
+- 【位置锚定·强制】(2026-08-30 ver14,官方 Reference Anchors)shots[].action 中每个登场角色首次出现处写**屏幕位置**(画面左/中/右+前景/中景/背景)+**朝向**(面对镜头/朝左/朝右);同一场景地标(门/窗/桌/柜台)写屏幕相对位置跨镜沿用;非首镜开头人物位置与上一镜收尾一致,需要换位写明确换位动作过渡,禁止无过渡的左右翻转
+- 【跨镜衔接·强制】(2026-08-30 ver14,H3 MotionContext 接缝契约)每镜 action 开头承接上一镜收尾(人物位置/姿势/情绪,气闸 1-2 秒保持上镜收尾构图再发展本镜内容——与 pinned 帧矛盾的排布会被渲染成 union 多出人脸);承接段写微小可见动作(呼吸/重心转移/视线变化),禁止静止 hold(渲染成字面冻结);接缝镜动作节拍按早 0.92s 预算(pin 头 22 帧)
+- 【内心戏·强制】(2026-08-30 ver14)narration 中「内心·角色名:」前缀的内心独白:该角色为正角时画面=其 Q 版形象(逐镜 h3_prompt 里 Q 版单独定义 Subject 并引用 Q 版参考图),Q 版动作必须**具象演绎内心内容语义**(数数/盘算→掰指头,思考→托腮歪头,惊讶→瞪眼捂嘴,担忧→抱膝揪衣角),禁止动作与内心内容语义脱节;内心内容走 off-screen voiceover 画外音;反派/功能配角内心=写实正脸图+画外音
 【面容独特性纪律·强制(防跨剧撞脸)】:
 - 每个角色的 image_prompt 必须给出**独一无二的面容锚点组合**:从 眼型(丹凤眼/桃花眼/狭长眼/圆眼)、眉型(剑眉/柳叶眉/浓眉/细眉)、鼻型(高挺/小巧/鹰钩)、唇形(薄唇/丰唇/唇珠)、脸型(瓜子/方圆/棱角/鹅蛋)、肤色(苍白/小麦/古铜)、气质 中选至少 4 个具体特征,并给 1 个独有印记(痣/疤/耳饰/发色挑染等);**禁止** generic 泛化词(sharp jawline/clear eyes/handsome/young man 单独出现都算,必须搭配具体特征)
 - 同剧多角色面容必须**互不相同**(五官/发型/气质可辨认区分);不同剧的相同职位角色(如各剧主角)也必须是不同面容,禁止模板化雷同
@@ -901,7 +955,7 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 【输出 JSON（严格）】:
 {
   "episode_title": "集标题",
-  "characters": [{"id": "角色名", "role": "正角|反派|功能配角（按剧情阵营判定:主角/女主/正派灵宠/重要正派助攻=正角;主要反派=反派;次要反派/下属/炮灰/龙套=功能配角。【Q版纪律·2026-08-24 用户规则】只有正角才生成 Q 版呆萌形象,反派与功能配角一律不生成、不配使用 Q 版）", "gender": "男/女", "species": "人|妖兽|灵宠|神兽|精怪|鬼物|机械（种族:人=人类角色;妖兽/灵宠/神兽/精怪/鬼物=非人形兽类/生灵,image_prompt 画的是兽形本体(毛色/种族特征)而非人形,严禁把兽类当人画;角色是兽类必须标非人）", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，从脚本提取并补全，具体到可渲染）", "costume": "完整服装描述", "color_palette": "角色配色板(5色HEX,如 #1E2A33 #31414D #53606D #D8D1C6 #A89B8B,顺序=主色/辅色/点缀色/肤色/发色;角色板与所有视图严格用它统一配色)", "expressions": "表情神态(4-6个该角色关键情绪,中文逗号分隔,如 清冷/沉思/轻笑/审视/惊疑)", "board_prompt": "给图片模型的英文文生图提示词:角色板/角色资料卡整合图（【角色板结构·强制,2026-08-25 即梦角色版教程】①三视图整合:正面/侧面/背面全身并排;②细节特写模块:脸部/发型/服装纹样/配饰各一小格;③服饰分层展示:外袍/内衬/腰带,纹样刺绣细节;④表情神态 4-6 格(用 expressions);⑤配色板:5 色 HEX 色块一行标注;⑥人设文字:身份/气质/视觉标志一行中文。整图竖版网格排版、浅色底、清晰分区、所有分格同一人同一服装;拟漫化半写实东方风格,禁日漫禁真人;` + assetStyle + ` 风格;外观/服装逐字引用 appearance/costume,配色严格用 color_palette）", "image_prompt": "给图片模型的英文文生图提示词（【全身立绘·强制】full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;species≠人 的兽类角色此处画兽形本体,不套人形立绘措辞;` + assetStyle + ` 风格;【拟动漫硬规则·2026-08-24 用户规则】semi-realistic stylized illustration of an East Asian/Chinese character, 禁日漫(not a Japanese anime/manga style, avoid japanese-style facial features, japanese anime eyes), 禁真人(not a photorealistic photo of a real person, avoid resembling any real person)——写实风格同样按拟动漫渲染,不输出真人照片;含完整外观/服装/性别强化）", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版形象（【Q版纪律·2026-08-25 用户规则】①仅 role=正角 才填此项;反派/功能配角此字段留空,不生成 Q 版,其内心独白用写实镜头+画外音渲染;②Q版面容随角色本人——脸型/眼型/发型/年龄感/胡须按该角色具体面容,禁止统一做成通用宝宝脸(老人要有老相、有胡须者保留胡须、少年保持少年相);③species≠人 的妖兽/灵宠/神兽:Q版=该妖兽本体的萌化小兽形(保留种族/毛色/特征),禁止画成人形或人类宝宝;④人类按性别与年龄:女性一律无胡须、年轻男性(少年/青年/男孩)一律无胡须,仅成年/老年男性可有胡须且 Q版必须保留;⑤Q版渲染以该角色正面定妆照为参考图生成(同一人,禁止形象大变)。chibi cute style, 短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记/胡须], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
+  "characters": [{"id": "角色名", "role": "正角|反派|功能配角（按剧情阵营判定:主角/女主/正派灵宠/重要正派助攻=正角;主要反派=反派;次要反派/下属/炮灰/龙套=功能配角。【Q版纪律·2026-08-24 用户规则】只有正角才生成 Q 版呆萌形象,反派与功能配角一律不生成、不配使用 Q 版）", "gender": "男/女", "species": "人|妖兽|灵宠|神兽|精怪|鬼物|机械|物品（种族:人=人类角色;妖兽/灵宠/神兽/精怪/鬼物=非人形兽类/生灵,image_prompt 画的是兽形本体(毛色/种族特征)而非人形,严禁把兽类当人画;物品=有意识的器物/植物/法宝/灵植(如会说话的剑/盆栽精灵/古镜),image_prompt 画的是物品/植物本体(材质/形制/纹理/标志性细节),严禁画人形/人脸/人衣;角色是兽类或物品必须标对应非人类,不得标精怪/机械 兜底）", "age": "年龄段", "appearance": "完整外观（发型/脸型/五官/气质，从脚本提取并补全，具体到可渲染）", "costume": "完整服装描述", "color_palette": "角色配色板(5色HEX,如 #1E2A33 #31414D #53606D #D8D1C6 #A89B8B,顺序=主色/辅色/点缀色/肤色/发色;角色板与所有视图严格用它统一配色)", "expressions": "表情神态(4-6个该角色关键情绪,中文逗号分隔,如 清冷/沉思/轻笑/审视/惊疑)", "board_prompt": "给图片模型的英文文生图提示词:角色板/角色资料卡整合图（【角色板结构·强制,2026-08-25 即梦角色版教程】①三视图整合:正面/侧面/背面全身并排;②细节特写模块:脸部/发型/服装纹样/配饰各一小格;③服饰分层展示:外袍/内衬/腰带,纹样刺绣细节;④表情神态 4-6 格(用 expressions);⑤配色板:5 色 HEX 色块一行标注;⑥人设文字:身份/气质/视觉标志一行中文。整图竖版网格排版、浅色底、清晰分区、所有分格同一人同一服装;拟漫化半写实东方风格,禁日漫禁真人;` + assetStyle + ` 风格;外观/服装逐字引用 appearance/costume,配色严格用 color_palette）", "image_prompt": "给图片模型的英文文生图提示词（【按物种分档·2026-08-29 审计V3/V5根治】人类:full body, head to toe, 自然 7 头身正常比例, 禁止大头小身/半身/头像/portrait;兽类(species≠人):画兽形本体(毛色/种族特征),不套人形立绘措辞;物品(species=物品):画物品/植物本体 the item/plant itself(材质/形制/纹理/标志性细节),不写 full body/7头身/服装/人脸,严禁任何人类形象与叶子拼脸;` + assetStyle + ` 风格;【拟动漫硬规则·2026-08-24 用户规则】人类角色:semi-realistic stylized illustration of an East Asian/Chinese character, 禁日漫(not a Japanese anime/manga style, avoid japanese-style facial features, japanese anime eyes), 禁真人(not a photorealistic photo of a real person, avoid resembling any real person)——写实风格同样按拟动漫渲染,不输出真人照片;兽类/物品角色:不用 East Asian/Chinese character 措辞,改用 semi-realistic stylized rendering of the creature/item itself;含完整外观/服装/性别强化仅适用于人类）", "voice": "音色描述(可选,2026-08-30 ver15 技能侧配置优先):年龄段+性别+音色质感+语速(如 中年磁性男声·语速偏慢),或热门方言(东北/陕西/四川/河南/广西/湖南/粤语/台普,人设契合才配,主角/正派默认普通话;渲染端 dialectVoiceFor 优先使用,同剧角色音色互异)", "views": {"front": "英文文生图提示词：正面全身立绘（full body 正面, 头到脚完整, 脸部五官清晰占画面合理比例, ` + assetStyle + ` 风格）", "full": "英文文生图提示词：全身立绘（完整头到脚，正面站姿，自然 7 头身比例，完整服装/鞋履/体态，` + assetStyle + ` 风格）", "side": "英文文生图提示词：侧面全身（侧身 90 度完整头到脚，发型/脸型/服装侧面轮廓清晰，自然比例，` + assetStyle + ` 风格）", "detail": "英文文生图提示词：细节特写（该角色最有辨识度的 1 个细节：饰品/花纹/发饰/疤痕等，大特写构图，` + assetStyle + ` 风格）", "q": "英文文生图提示词：Q版形象（【Q版纪律·2026-08-25 用户规则】①仅 role=正角 才填此项;反派/功能配角此字段留空,不生成 Q 版,其内心独白用写实镜头+画外音渲染;②Q版面容随角色本人——脸型/眼型/发型/年龄感/胡须按该角色具体面容,禁止统一做成通用宝宝脸(老人要有老相、有胡须者保留胡须、少年保持少年相;【年龄措辞分物种·2026-08-30】人形老年写 aged face with wrinkles/眼角纹/白发;兽形老年写口鼻眼周毛色渐灰(greying muzzle)的老兽相,严禁给兽写人类皱纹;物品无年龄语义不写年龄词);③species≠人 的妖兽/灵宠/神兽:Q版=该妖兽本体的萌化小兽形(保留种族/毛色/特征),禁止画成人形或人类宝宝;④人类按性别与年龄:女性一律无胡须、年轻男性(少年/青年/男孩)一律无胡须,仅成年/老年男性可有胡须且 Q版必须保留;⑤Q版渲染以该角色正面定妆照为参考图生成(同一人,禁止形象大变)。chibi cute style, 短手短脚, 保留该角色标志特征[发型/瞳色/服饰/印记/胡须], 呆萌可爱表情, 内心独白/心理活动渲染用 Q 版形象表现, ` + assetStyle + ` 风格）"}}],
   "scenes": [{"id": "场景名（取自脚本;只收剧情实际发生的具体场景——素材里的全局配置段(通用负向词/统一风格前缀/质量后缀/色锚系统等)是作画排除词不是场景,禁止列为 scenes）", "description": "空间结构/材质/光线/氛围", "image_prompt": "给图片模型的英文文生图提示词（空场景无人物，明亮清晰，` + assetStyle + ` 风格）"}],
   "shots": [
     {
@@ -937,10 +991,10 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 
 【H3 官方格式硬规定·h3_prompt 必须遵守】(官方 VIDEO_PROMPT_WRITING_GUIDE base-en/ref-en):
 - 有角色的镜用 Ref2VA 六段式(subject_definitions/summary/retention_analysis/detailed_description/overall_soundscape/non_diegetic_music),无角色的空镜用 FL2VA 三段式(首行对齐指令 + integrated_multimodal_description/overall_soundscape/non_diegetic_music)——模板见下方
-- [Shot 1] 无时间戳;后续镜 [Shot N] At MM:SS.mmm 严格递增切点
+- 【时码 clip-local·强制】(2026-08-30 官方源码核验:H3 官方要求切点时码"falls within the video duration",且每镜独立编码渲染、时轴从 0 起)h3_prompt 的时码一律用【本镜内时间轴】:首段 [Shot 1] 无时间戳;后续切点 [Shot N] At MM:SS.mmm 从 0 严格递增且必须小于本镜 duration——严禁写全片累计时间(如前镜共 15 秒时本镜写 At 00:15.000 是越界错误,应写本镜内实际切点如 At 00:04.000);多切点长镜直接引用输入 take_shots[].cut_at(已是镜内时轴)
 - 运镜三要素(类型+幅度+速度)写成句内自然英语(Push In/Pull Out/Pan/Truck/Tilt/Pedestal/Arc/Tracking/Static/POV/Roll/Shake;with small/large amplitude;at slow/fast speed)
-- 说话者稳定 ID (S1)(S2),首次出现给身份描述,发声者写 <Subject N> (Sx);台词写 <d>…</d>——d 标签内是分镜台词的中文原文逐字保留(原词原标点,句末 。？！;禁止把「中文」「原文」等占位说明字样写进 d 标签,如 <d>[中文]陈默？</d> 是错误示范,正确是 <d>陈默？</d>);画外音写 says in an off-screen voiceover ... while his/her lips remain completely closed
-- 【画外音/旁白措辞·硬禁中文】(2026-08-23 实测:直出的 h3_prompt 用中文「画外音/旁白/嘴唇完全闭合」H3 无法识别对白驱动→该镜静音 rms≈0.005;d 标签内同样禁止写「中文」「旁白」等占位字样——2026-08-28 实测 <d>[中文]…</d> 被逐字抄进台词破坏配音):detailed_description 里画外音/旁白一律用英文指令句——旁白写 The narrator (Sx) says in an off-screen voiceover: <d>…</d>(d 标签内=分镜 narration 的中文原文)while the on-screen characters' lips remain completely closed;画外音台词写 (Sx) says in an off-screen voiceover: <d>…</d>(d 标签内=台词中文原文)while his/her lips remain completely closed;禁止出现中文「画外音」「旁白」「嘴唇闭合」字样
+- 说话者稳定 ID (S1)(S2),首次出现给身份描述,发声者写 <Subject N> (Sx);【镜内编号·强制】(2026-08-30 官方源码核验:每镜是独立 clip 独立编码,模型看不到其它镜头——跨镜全局编号是悬空引用)说话者 ID 在【本镜内】按实际发声顺序从 S1 连续分配:第一个开口的是 S1、第二个是 S2,严禁跳号、严禁沿用全片序号(如本镜只有两人对话却出现 S6);台词写 <d>[Chinese] 台词中文原文</d>——【官方语言标签·强制】(2026-08-30 官方 base-en §4.4 核验:d 标签内必须带语言标签,官方写法 <d>[English] ...</d>;中文台词即写 <d>[Chinese]陈默？</d>,标签词用英文 Chinese——2026-08-28 的 <d>[中文]…</d> 被逐字念出事故根因是标签用了中文词而非标签不该存在,裸 <d>中文</d> 无标签会让模型猜配音语言,两者都禁止);画外音写 says in an off-screen voiceover ... while his/her lips remain completely closed
+- 【画外音/旁白措辞·硬禁中文】(2026-08-23 实测:直出的 h3_prompt 用中文「画外音/旁白/嘴唇完全闭合」H3 无法识别对白驱动→该镜静音 rms≈0.005;d 标签内同样禁止写中文占位说明字样——2026-08-28 实测 <d>[中文]…</d> 中文标签词被逐字抄进台词,2026-08-30 官方核验正解=标签用英文 Chinese 而非剥掉标签):detailed_description 里画外音/旁白一律用英文指令句——旁白写 The narrator (Sx) says in an off-screen voiceover: <d>[Chinese] …</d>(d 标签内=[Chinese] 标签+分镜 narration 的中文原文)while the on-screen characters' lips remain completely closed;画外音台词写 (Sx) says in an off-screen voiceover: <d>[Chinese] …</d>(d 标签内=[Chinese] 标签+台词中文原文)while his/her lips remain completely closed;禁止出现中文「画外音」「旁白」「嘴唇闭合」字样
 - 台词跨切点写 <scenetrans>,被结尾截断写 <cutoff>
 - 画面可见文字(招牌/字幕/霓虹)用英文双引号原文
 - overall_soundscape 1-4 句英文连续段落(环境/动作/非语言人声,不重复台词);non_diegetic_music 1-3 句(乐器+速度+节奏+动态,禁抽象情绪词,无配乐写 N/A)
@@ -998,13 +1052,13 @@ func manjuStyleShot1(style string) string {
 
 const manjuRef2vaTpl = `【Ref2VA 六段式(有角色,锁人物),严格此顺序】:
 subject_definitions:
-<Subject 1> is the character in <Picture 1> and <Picture 2> ... with [完整外观：逐字引用角色卡 appearance（发型/眼睛/疤痕/气质/道具等全部特征逐项覆盖，禁止省略/概括/编造）；服装 costume 全字段；【性别强化】女=feminine facial structure, soft delicate features, long hair（禁男性化），男=masculine jawline, strong brow, broad shoulders（禁女性化）]
+<Subject 1> is the character in <Picture 1> and <Picture 2> ... with [完整外观：逐字引用角色卡 appearance（发型/眼睛/疤痕/气质/道具等全部特征逐项覆盖，禁止省略/概括/编造）；服装 costume 全字段；【性别强化·仅人类】(species=人)女=feminine facial structure, soft delicate features, long hair（禁男性化），男=masculine jawline, strong brow, broad shoulders（禁女性化）；【物种分档·2026-08-29 审计修复】species=物品 的角色(器物/植物/法宝/灵植)主体写 the item/plant itself + 本体特征(材质/形制/纹理/标志性细节),严禁写人脸/发型/服装/人形身体;兽类主体写兽形本体特征]
 [同一角色多视图:该角色有几个参考图就引用几张——<Subject 1> is the character in <Picture 1> (正面/正脸特写), <Picture 2> (全身/侧面/细节), ...;每张视图对应一个 <Picture N> 标签,顺序与 ref_available 该角色的视图顺序一致,全部引用后统一写 with [外观...]]
 [多角色镜:每个登场角色一行 <Subject N> is the character in <Picture A> and <Picture B> ...,与参考图顺序一致(角色在前场景在后);画面里谁先出现谁 Subject 号靠前]
 [群像镜纪律·强制(2026-08-27 用户反馈:分镜 4 两名牢卒未定义 Subject,模型自由发挥时从参考图复制了白发管事的形象,画面出现重复人物):动作/画面中出现的每一个人物——包括无名群演(牢卒/士兵/侍卫/侍女/随从/路人/仆役)都必须 subject_definitions 逐一定义:有参考图引用 <Picture N>,无参考图写 <Subject N> is [群演身份] with 独立外观描述(年龄/体型/服装颜色,不引用任何 Picture);严禁省略群演、严禁把多人写成复数笼统词(如 two jailers 必须拆成 <Subject N> 与 <Subject N+1> 两个独立个体);每个 Subject 是独立个体,严禁复用/复制其他 Subject 或参考图人物的外观与脸]
-[参考图纪律·强制:ref_available 是「角色+视图」的平铺清单,顺序就是参考图传入顺序;<Picture 1..N> 严格对应清单第 1..N 项(同一角色多视图占多个 Picture 编号),Subject 编号与角色一一对应(Subject 1=清单第 1 个角色,依次),禁止调换/跳过/合并视图;清单外的登场角色(本镜参考图不足)写 <Subject N> is [角色名] with 外观描述(不引用任何 Picture),并保持与参考角色不串脸]
+[参考图纪律·强制:ref_available 是「角色+视图」的平铺清单,顺序就是参考图传入顺序;<Picture 1..N> 严格对应清单第 1..N 项(同一角色多视图占多个 Picture 编号),Subject 编号与角色一一对应(Subject 1=清单第 1 个角色,依次),禁止调换/跳过/合并视图;清单外的登场角色(本镜参考图不足)写 <Subject N> is [角色名] with 外观描述(不引用任何 Picture),并保持与参考角色不串脸。【官方机制·2026-08-30 源码核验:H3 文本编码器把参考图按挂载顺序自动标为 Picture 1/2/3…列在提示词之前——<Picture N> 是对第 N 张挂载图的指认,编号错位=模型拿错图(场景图当人脸/别人脸当本角色),subject_definitions 编号必须与 ref_available 清单逐一对齐,这是硬性输入契约不是修辞偏好】]
 [外观锁定·强制:每个角色的外观只允许出现角色卡 appearance+costume 里的特征,且逐项覆盖(发型/眼睛/疤痕/服装/道具缺一不可);禁止 generic 泛化词(ordinary/plain/sturdy/average/young man 等),禁止编造角色卡没有的特征(白发/换装/错误年龄);多角色镜严禁把其他角色的特征写进本角色(谁的特征写谁)]
-[拟漫化硬规则·2026-08-24 用户强制:所有角色均为 semi-realistic stylized illustration of an East Asian/Chinese character——参考图已拟漫化,subject_definitions 必须延续此画风;禁止写 photorealistic/realistic photo/real human(真人脸=侵权);禁止写 japanese anime/manga style, japanese-style facial features, japanese anime eyes(禁日漫);角色外形以参考图为准逐字保留,画风恒定拟漫]
+[拟漫化硬规则·2026-08-24 用户强制,2026-08-29 物种分档:人类角色均为 semi-realistic stylized illustration of an East Asian/Chinese character——参考图已拟漫化,subject_definitions 必须延续此画风;兽类/物品角色不套 East Asian/Chinese character 措辞——兽类=semi-realistic stylized rendering of the creature itself,物品=semi-realistic stylized rendering of the item/plant itself,严禁给兽/物品写人脸/人形/人衣;禁止写 photorealistic/realistic photo/real human(真人脸=侵权);禁止写 japanese anime/manga style, japanese-style facial features, japanese anime eyes(禁日漫);角色外形以参考图为准逐字保留,画风恒定拟漫]
 [场景编号·强制:场景的 Picture 编号 = 全部角色视图总数 + 1(如 2 角色各 2 视图 → 场景在 <Picture 5>);Subject 编号 = 角色数 + 1]
 <Subject N+1> is the [场景名] environment in <Picture M>(M=角色视图总数+1), with [空间结构/材质/光线客观描述，引用场景卡]
 [关键道具：<Subject M> is the [道具名] in <Picture M>, with 外观描述；说明与角色互动]
@@ -1013,14 +1067,14 @@ summary:
 [reference generation] 本镜任务概述（1-2 句英文，说明目标视频与参考主体关系；任务前缀用官方固定值——参考生成为 reference generation，本管线恒用此值；只引用已定义标签，禁在 summary 引入新标签）
 
 retention_analysis:
-<Subject 1> (appears in [Shot 1]): fully_preserved - 面部/发型/服装与 <Picture 1> 完全一致
+<Subject 1> (appears in [Shot 1]): fully_preserved - 面部/发型/服装与 <Picture 1> 完全一致(兽类=毛色/体型/种族特征一致;物品=本体形态/材质/标志性细节一致)
 [多角色镜:每个角色一行 retention_analysis,全部 fully_preserved]
 <Subject N+1> (appears in [Shot 1]): fully_preserved - 场景布局/光线/背景与 <Picture M>(场景编号,同 subject_definitions) 一致
 [道具行同理]（标记只用官方固定四值：fully_preserved / partially_preserved / attribute_transfer / weak_reference；【官方规范】retention_analysis 内禁写 (Sx) 说话者 ID）
 
 detailed_description:
 {style}。[实体锁定句：The face, hairstyle, costume of <Subject 1> must remain exactly as in <Picture 1> throughout the shot; the scene layout of <Subject N+1> must match its reference.; 多角色镜加 Each character must keep their own identity from their own reference picture, never swap or blend identities.]
-[拟漫化锚句·强制:All characters appear as semi-realistic stylized illustrations, East Asian/Chinese facial features, not photorealistic photos, not Japanese anime style — keep the stylized look consistent with the reference character.]
+[拟漫化锚句·强制(人类角色):All characters appear as semi-realistic stylized illustrations, East Asian/Chinese facial features, not photorealistic photos, not Japanese anime style — keep the stylized look consistent with the reference character.;本镜含兽类/物品角色时改用:The creatures/items appear as semi-realistic stylized renderings of themselves, no human face, no human form, consistent with their reference pictures.]
 [Shot 1] [官方建议 350-500 英文词(对话密集优先完整台词时间线):开场构图→主体外观位置→动作状态变化→运镜(类型+幅度+速度,句内自然英语)→光影→台词/旁白→收尾；<Subject N> 标签在主体首次出现处插入,后续镜复用同标签不重定义；情感戏/对话优先近景/中景；末尾散文排除项 no subtitles, no text overlays, no watermark；【亮度护栏·强制】Dark mood is fine for atmosphere, but the subject's face and body must remain clearly visible and well-lit at all times - use a clear light source on the subject (candlelight, moonlight, torch, window light); never render the frame nearly black]
 
 overall_soundscape:
@@ -1041,10 +1095,10 @@ non_diegetic_music:【BGM 定向文案·强制】(2026-08-24 知识库「官方�
 const manjuShotWritingRules = `
 
 【写作规范（官方强制，两种模式都遵守）】：
-1. 首镜 [Shot 1] 无时间戳；多切点长镜后续镜 [Shot N] At MM:SS.mmm 严格递增切点时间（官方格式）
-2. 说话者 (S1)(S2) 按实际发声顺序分配一次、跨镜复用同一 ID；首次出现给身份描述（年龄/性别/音色/语速/是否画内）；发声者写 <Subject N> (Sx)；【复合说话者】多人齐声/合唱写复合 ID 如 (S1,S2)（官方规范）；从不发声的角色不分配 ID；retention_analysis 中禁写 (Sx)
-3. 台词 <d>…</d> 逐字保留（d 标签内=分镜台词中文原文,原词原标点，句末以 。？！结束，不译不改写,H3 原生对白配音;禁止在 d 标签内写「中文」「原文」等占位字样——<d>[中文]陈默？</d> 是错误示范,正确是 <d>陈默？</d>;听不清的片段写 [unclear] 不许猜写）。【说话人硬约束】分镜 dialogue 的每句台词必须由标注的对应角色开口说出：写该角色 <Subject N> (Sx) says: <d>…</d>——谁说的就是谁，禁止把台词安到别的角色头上、禁止把角色台词改写成旁白/画外音
-4. 【旁白 = H3 原生画外音，不是 TTS，更不是角色台词】：只有分镜 narration 字段的内容才写 The narrator (S1) says in an off-screen voiceover: <d>…</d>（d 标签内=narration 中文原文,禁止写「中文」「旁白」等占位字样）while the on-screen characters' lips remain completely closed（旁白计入 (S1) 说话顺序；旁白与台词不同时出现；【硬约束】分镜 dialogue 里的角色台词禁止写成旁白——必须由对应角色开口，画面中该角色嘴唇在动）
+1. 【时码 clip-local·强制】(2026-08-30 官方核验:每镜独立渲染时轴从 0 起,切点必须落在本镜时长内)首段 [Shot 1] 无时间戳;后续切点 [Shot N] At MM:SS.mmm 在本镜内严格递增且 < duration;多切点长镜直接引用输入 take_shots[].cut_at(镜内时轴);严禁全片累计时间码
+2. 说话者 (S1)(S2) 在【本镜内】按实际发声顺序从 S1 连续分配(2026-08-30 ver14:渲染端会按全集首次发声顺序把有音色绑定角色重写为全局 (Sx) 跨镜稳定——LLM 侧按镜内序写即可,机械层自动对齐;同一角色同一镜内必须同一 ID,禁止镜内换号);【音色身份短语·强制】说话者首次出现必须写身份描述——年龄段+性别+音高/音色质感+语速(官方示例 "the middle-aged baker with a calm, slightly raspy voice (S1)"、ref-en 示例 "the same clear youthful voice",如 a young man with a clear steady voice / an elderly woman with a warm crackly voice / a little girl with a high bright voice),同一角色跨镜复用同一短语(in the same ... voice),禁止逐镜换措辞——这是声线前后漂移的根源;发声者写 <Subject N> (Sx)；【复合说话者】多人齐声/合唱写复合 ID 如 (S1,S2)（官方规范）；从不发声的角色不分配 ID；retention_analysis 中禁写 (Sx)
+3. 台词写 <d>[Chinese] 中文原文</d>（【官方语言标签·2026-08-30 官方 base-en §4.4 核验】d 标签内=语言标签+原话:标签词必须用英文 Chinese(历史 <d>[中文]…</d> 被逐字念出=标签语种用错,不是标签不该存在);原词原标点，句末以 。？！结束，不译不改写,H3 原生对白配音;裸 <d>中文</d> 无标签禁止——模型会猜错配音语言;听不清的片段写 [unclear] 不许猜写）。【说话人硬约束】分镜 dialogue 的每句台词必须由标注的对应角色开口说出：写该角色 <Subject N> (Sx) says: <d>[Chinese] …</d>——谁说的就是谁，禁止把台词安到别的角色头上、禁止把角色台词改写成旁白/画外音
+4. 【旁白 = H3 原生画外音，不是 TTS，更不是角色台词】：只有分镜 narration 字段的内容才写 The narrator (Sx) says in an off-screen voiceover: <d>[Chinese] …</d>(d 标签内=narration 中文原文+官方语言标签)while the on-screen characters' lips remain completely closed（旁白按镜内发声顺序计入 (Sx)；旁白与台词不同时出现；【硬约束】分镜 dialogue 里的角色台词禁止写成旁白——必须由对应角色开口，画面中该角色嘴唇在动）
 5. 画外音台词也写 says in an off-screen voiceover ... while his/her lips remain completely closed
 6. 【跨镜台词连续性（官方标签）】同一句台词跨越镜头切点时，两段接续处各写 <scenetrans> 并声明音频跨切点连续（continues seamlessly across the cut / carries over from the previous shot）；台词被视频结尾截断写 <cutoff>
 7. 运镜三要素（类型+幅度+速度）写成句内自然英语（Push In/Pull Out/Pan Left/Pan Right/Truck/Tilt/Pedestal/Arc/Tracking/Static/POV/Roll/Shake；幅度 with small/large amplitude、速度 at slow/fast speed，中等默认省略——官方词表）
@@ -1072,7 +1126,7 @@ const manjuShotWritingRules = `
 23. 【画面物品清单·强制】(2026-08-23 用户反馈乱入物品)detailed_description 里每个出现的物品写明数量/位置/与主体的关系(「他手里握着缺角镜子,桌面没有其他物品」);禁止笼统场景描述让模型自由发挥补物品;不需要的物品写排除句(no other objects in frame / only XX on the table);同一镜物品数≤3,超过拆镜
 24. 【动作流畅·强制】(2026-08-23 用户反馈人物镜头不流畅)每镜**单一主导动作**+小幅+慢速(动作太大/太多 H3 易崩);走位/位移写「已到位」+原地姿态微变;连续动作拆成 2 镜或静态+微动;禁止一镜内多个不相干动作堆叠
 25. 【日本人物形象·禁止·强制】(2026-08-23 用户规则:动漫渲染也禁止日本人物形象)无论渲染风格(含 anime/2.5d/动漫),所有人物一律**中式/东方面孔**——detailed_description 人物镜写 East Asian/Chinese facial features(自然眼型,非日漫大眼),正面排除句 avoid japanese-style facial features, japanese anime eyes, big sparkly anime eyes, sharp anime chin;禁止出现日本式脸型/日式动漫大眼/日本风格面容;anime/cartoon **风格词保留**(风格可动漫,脸必须中式东方)
-26. 【内心戏 Q 版化·强制·仅正角】(2026-08-23 用户规则 + 2026-08-24 限定:Q 版仅限正角)narration 若为角色内心独白(前缀 内心·角色名,如「内心·阿拾:…」):①若该角色 role=正角(有 Q 版参考图),detailed_description **画面主体=该角色 Q 版呆萌形象**(圆脸/大眼/短手短脚,保留角色标志特征,引用其 Q 版参考图 <Picture>),画外音 The narrator (S1) says in an off-screen voiceover 念内心内容 while lips closed;内心戏镜的 <Subject> 引用该角色 Q 版图而非正脸图;②若该角色 role=反派/功能配角(无 Q 版图),**禁止用 Q 版**——画面主体=该角色写实正脸图+画外音念内心(off-screen voiceover, lips closed);③角色无 role 字段时按有无 Q 版参考图判断:有则 Q 版,无则写实+画外音;非内心客观旁白保持原画面+画外音
+26. 【内心戏 Q 版化·强制·仅正角】(2026-08-23 用户规则 + 2026-08-24 限定:Q 版仅限正角;2026-08-30 ver14 Q版动作演绎)narration 若为角色内心独白(前缀 内心·角色名,如「内心·阿拾:…」):①若该角色 role=正角(有 Q 版参考图),subject_definitions 为该 Q 版形象**单独定义一行 Subject**(<Subject N> is the chibi version of 角色名 in <Picture M>, with a big head, round face, short limbs, keeping the character's signature features 发型/瞳色/服饰),引用其 Q 版参考图 <Picture>(编号按参考图挂载清单);detailed_description 画面主体=该 Q 版形象,带 stylized Q-version proportions 风格签名句;【Q版动作演绎内心·强制】Q 版的动作/表情必须**具象演绎内心内容语义**——数数/盘算类→掰手指头,思考/疑惑类→托腮歪头,惊讶→瞪眼捂嘴,担忧→抱膝揪衣角,得意→叉腰晃头,禁止 Q 版动作与内心内容无关(如掰指头配"冷柜有动静"这类语义脱节);内心内容按逐秒表演指令铺满时长(节拍+微表情);画外音 The narrator (S1) says in an off-screen voiceover 念内心内容 while lips closed(2026-08-30 ver14:内心戏画外音由渲染端绑定该角色音色,与客观旁白区分);②若该角色 role=反派/功能配角(无 Q 版图),**禁止用 Q 版**——画面主体=该角色写实正脸图+画外音念内心(off-screen voiceover, lips closed);③角色无 role 字段时按有无 Q 版参考图判断:有则 Q 版,无则写实+画外音;非内心客观旁白保持原画面+画外音
 27. 【人物微动漫写实·强制】(2026-08-23 用户规则:避免写实人物侵权)写实电影级渲染时,人物形象**微动漫化**——detailed_description 人物写 subtly anime-stylized semi-realistic character, stylized East Asian features(略带动漫风格化:适度圆润/线条化,避免与任何真人肖像高度相似);场景/光影/镜头保持写实电影级(人物微动漫,场景写实);Q 版内心形象不受此限(本就呆萌)
 28. 【动物禁人脸·强制】(2026-08-23 用户规则:动物别乱入人脸)动物/萌宠/妖兽/兽类角色一律保持**动物形态**(物种特征:毛皮/鳞甲/兽瞳/喙/爪/尾/角),禁止人脸/人形化/拟人过头;detailed_description 动物镜写 animal form, species-specific features(如 round ink-black blob spirit with golden bead eyes),并明确 no human face;定妆 image_prompt 动物角色加 animal form 约束;穿衣服的拟人化角色(设定明确)除外
 29. 【表演层·情绪三层拆解·强制】(2026-08-24 知识库「H3提示词优化5层结构方法论」整合:专治蜡像脸/假表情)H3 把抽象情绪形容词当低质量指令——禁止直接写"她很伤心/愤怒/害怕"(模型只会出呆滞假脸),必须把情绪翻译成**三层物理细节**:①外部动作(可观察:转身/握拳/低头/咬唇);②生理反应(不可控真相:瞳孔收缩/喉结滚动/下眼睑微红/鼻翼轻颤);③量化指标(振幅<1mm/时长1.5s/眉心上聚2mm/单侧嘴角下沉0.5°)。detailed_description 人物镜按此三层写表演,禁止情绪形容词单独出现
@@ -1080,8 +1134,9 @@ const manjuShotWritingRules = `
 31. 【哭戏四梯度·强制】(2026-08-24 知识库「AIGC人物微表情设计指南」整合:哭戏的情绪刻度表)哭戏按强度分四档写,禁止笼统"哭了":①强忍泪水(隐忍哭)=眉尾下垂+眼睑轻颤+下眼睑泛红+鼻翼微颤+泪水不落;②无声落泪(安静哭)=泪珠缓慢滑落+眼尾泛红+嘴角微下垂;③抽泣哭(压抑哭)=肩部胸廓起伏+鼻翼煽动+嘴角抽搐;④崩溃大哭(爆发哭)=眼裂放大+泪水滚落+面部张力强。变体:哽咽哭(喉结滚动/泪珠挂睫毛/说不出话)、喜极而泣(嘴角带笑+泪珠眼尾滑落)、委屈哭(下唇轻突+眼睑微颤)。情绪越深越要"少一点更准"(隐忍心动=目光轻回+嘴角极轻上扬+耳尖微红)
 32. 【非对称与克制中断·强制】(2026-08-24 知识库「H3提示词优化5层结构方法论」第三层整合:去 AI 感两手法)①非对称:情绪只让半边脸动,明确"眼部不参与/左脸不动"——全脸同步动=AI 味;②克制与中断:动作启动后写中断点,不写"摇头否认",写"摇头启动后在第 10° 突然减速停止"。情绪演出带肌肉层次和克制(泪锁在睫毛边缘不滑落/笑到一半收住),比写满更真
 33. 【原子需求台账·强制】(2026-08-24 知识库「H3提示词优化5层结构方法论」第四层整合:每条约束必须可验收)每镜详细描述按台账四栏自查并落实:必须出现(核心主体/关键动作/关键道具)/必须保持(发型/瞳色/服装/疤痕/场景布局——写"第 N 秒时仍是长黑发、蓝开衫、圆框眼镜"这类可见终态,不写"保持一致")/允许变化(表情/光线/镜头内可动元素)/禁止出现(无关人物/多余物品/画面文字/水印)。"保持一致"=没写,必须改写成可被结果检查的可见终态;多素材任务显式写清每张图各自负责什么,不让两份素材抢同一核心身份
-34. 【配音音色绑定·条件强制】(2026-08-26 用户需求,voice_bindings 非空时生效;空则完全忽略本条)输入 voice_bindings 是本镜绑定配音音色的角色编号表([{"char_id": 角色名, "audio": "<Audio 1>"}...],按登场顺序编号,audio 编号严禁改动):①subject_definitions 中为每个绑定角色追加一行音色定义——<Audio N> is the voice-timbre reference for the voice of <Subject M> (Sx), containing a spoken voiceover.(N=voice_bindings 的 audio 编号,M=该角色在 subject_definitions 的 Subject 编号,Sx=该角色说话者 ID);②detailed_description 中该角色说台词处写 with voice timbre referencing <Audio N>(放在 (Sx) 之后、<d> 之前,并入句内自然英语,不另起句);③旁白/画外音不绑定(voice_bindings 只含登场角色);④禁止把 <Audio N> 绑定到别的角色、禁止改写编号、禁止编造 voice_bindings 里没有的 <Audio>
-35. 【链式衔接·气闸原则·强制】(2026-08-27 官方 MotionContext README 核验转化)非首镜的镜头是接上一镜续写的(pinned 头):①detailed_description 开头先承接上一镜的收尾构图约 1 秒(同一构图/人物位置,无新主体无台词),再发展本镜内容——官方实测这种"气闸"衔接比直接硬切更紧;②开头画面的人物安排必须与上一镜收尾一致:提示词若与 pinned 帧矛盾(上一镜结尾 A 特写、本镜开头写 B+C 双人),模型不二选一而是**全部渲染(union)**——这正是"多出不相干人脸"的深层根源;③承接段也要有微小可见动作(a breath/a weight shift/an eyeline change/fabric or hair movement),官方:"静止的 hold 渲染成字面冻结"`
+34. 【配音音色绑定·条件强制】(2026-08-26 用户需求;2026-08-30 官方格式对齐:Audio 定义必须绑 <Subject M> (Sx)——绑中文名时模型无法把音色与画面里的英文名角色关联=音色随机分配的根源;2026-08-30 ver14 音色指纹:Audio 定义行必须带该角色年龄段+音色质感短语,模型按身份短语分配声线——无年龄信息=音色与角色年龄无关。voice_bindings 非空时生效;空则完全忽略本条)输入 voice_bindings 是本镜绑定配音音色的角色编号表([{"char_id": 角色名, "audio": "<Audio 1>"}...],按登场顺序编号,audio 编号严禁改动):①subject_definitions 中为每个绑定角色追加一行音色定义——<Audio N> is the voice-timbre reference for <Subject M> (Sx), with <该角色年龄段+音色质感短语(与角色卡 age/gender 一致,如 an elderly woman with a warm crackly voice / a young man with a clear steady voice)>, containing a spoken voiceover.(N=voice_bindings 的 audio 编号,M=该角色 Subject 编号=登场序,Sx=该角色在【本镜内】的说话者 ID——按本镜发声顺序从 S1 连续分配,与第 2 条同源);②detailed_description 中该角色说台词处写 with voice timbre referencing <Audio N>(放在 (Sx) 之后、<d> 之前,并入句内自然英语,不另起句);③旁白/画外音不绑定(voice_bindings 只含登场角色);④禁止把 <Audio N> 绑定到别的角色、禁止改写编号、禁止编造 voice_bindings 里没有的 <Audio>
+35. 【链式衔接·气闸原则·强制】(2026-08-27 官方 MotionContext README 核验转化;2026-08-30 ver14 注入上一镜收尾)非首镜的镜头是接上一镜续写的(pinned 头),输入 prev_shot 是上一镜收尾分镜数据,本镜开头画面必须承接它:①detailed_description 开头 1-2 句用官方延续句式承接上一镜收尾(continues seamlessly from the previous shot / carries over from the previous shot,写人物位置/姿势/情绪/景别的承接),再写本镜内容;②气闸:开头先保持上一镜收尾构图约 1-2 秒(同一构图/人物位置,无新主体无台词),再发展本镜内容——官方实测这种"气闸"衔接比直接硬切更紧;③开头画面的人物安排必须与上一镜收尾一致:提示词若与 pinned 帧矛盾(上一镜结尾 A 特写、本镜开头写 B+C 双人),模型不二选一而是**全部渲染(union)**——这正是"多出不相干人脸"的深层根源;④承接段也要有微小可见动作(a breath/a weight shift/an eyeline change/fabric or hair movement),官方:"静止的 hold 渲染成字面冻结";⑤接缝时间预算:渲染出片比采样短 0.92s(pin 头 22 帧),动作节拍按早 0.92s 预算(写给 4.0s 的节拍成品在 3.08s)
+36. 【位置锚定纪律·强制】(2026-08-30 ver14,H3 官方 Reference Anchors:人物点位错乱的根治面——官方 3d-animation 技能逐镜必填「屏幕相对位置+朝向」)①每个登场角色在 detailed_description 首次清晰出现处,必须写**屏幕位置**(画面左/中/右 + 前景/中景/背景)+**朝向**(facing camera / facing left / facing right,背对时写 turned away),禁止只写动作不写位置;②场景固定地标(门/窗/桌/柜台)写屏幕相对位置(如 door-frame at the right third of the frame),同一场景跨镜沿用,位置变化写明确连续说明;③非首镜开头人物位置必须与上一镜收尾一致,需要换位时写明确换位动作过渡(如 she steps from the left side to the center),禁止无过渡的左右翻转;④同一镜内人物相对位置(谁在左谁在右)一旦确定,镜内不得翻转`
 
 
 func manjuShotPromptSystem(hasChar bool, style string) string {

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -545,8 +546,16 @@ type turboLoRASpec struct {
 	R2VOnly    bool    // R2V 专用蒸馏版(lightx2v ref2v):FL2V 空镜不挂,自动回退全步数
 	VideoShift float64 // >0 时 model 链挂 MiniMaxH3SigmaShift(蒸馏训练 shift,官方工作流同款)
 	AudioShift float64
+	PDD        bool // PDD Acc 模式(2026-08-29):MiniMaxH3PDDAccApply 专用节点应用+输出 sigmas,
+	// shift 12/3 由节点内置校验,euler+cfg 1.0+steps 8 为官方强制配方;不叠加其它 distill LoRA
 }
 
+// turboLoRASpecOf 不同 Turbo LoRA 的最优参数(按文件名识别,数据驱动可扩展):
+// 采样器/强度/步数/shift 不兼容会明显劣化画质甚至出废片,换 LoRA 无需改代码。
+// 2026-08-29 PDD Acc 接入:alibaba-pai MiniMax-H3-Acc-LoRAs(官方 8 步 Parallel
+// Decoding Distillation,2026-08-26 发布)——专用节点 MiniMaxH3PDDAccApply 应用
+// LoRA+PDD head bank 并输出 sigmas,euler/cfg 1.0/shift 12-3 为强制配方(节点内置校验),
+// 不叠加其它 distill LoRA。文件名含 pdd_acc 即启用,与既有 4step turbo 并存可选。
 func turboLoRASpecOf(name string) turboLoRASpec {
 	n := strings.ToLower(name)
 	step := 4
@@ -554,6 +563,8 @@ func turboLoRASpecOf(name string) turboLoRASpec {
 		step = 8
 	}
 	switch {
+	case strings.Contains(n, "pdd_acc"):
+		return turboLoRASpec{Strength: 1.0, Sampler: "euler", Scheduler: "simple", Steps: 8, PDD: true, VideoShift: 12, AudioShift: 3}
 	case strings.Contains(n, "ref2v") && (strings.Contains(n, "turbo") || strings.Contains(n, "step")):
 		// lightx2v Ref2VA Turbo(角色镜专用):官方 ref2v 工作流 euler/1.0/Shift(12,3)
 		return turboLoRASpec{Strength: 1.0, Sampler: "euler", Scheduler: "simple", Steps: step, R2VOnly: true, VideoShift: 12, AudioShift: 3}
@@ -640,7 +651,23 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 			steps = n
 		}
 	}
-	if loraName != "" {
+	// LoRA 应用:PDD Acc 走专用节点(输出 [0]=model,[1]=sigmas,shift 12/3 内置校验);
+	// 普通 distill LoRA 走 LoraLoaderModelOnly + MiniMaxH3SigmaShift。
+	// PDD 节点未安装(ComfyUI 未重启/缺 custom_node)时回退普通模式并告警——
+	// 提交 400 missing_node_type 会白烧一轮,探测优于失败。
+	pddApplyID := ""
+	if spec.PDD && loraName != "" {
+		if ok, _ := R["_pdd_ok"].(bool); ok {
+			a := wfAdd(wf, "MiniMaxH3PDDAccApply", map[string]any{"model": refOf(model), "lora_name": loraName})
+			model = a + "[0]"
+			pddApplyID = a + "[1]"
+		} else {
+			log.Printf("⚠️ PDD Acc 节点未安装(ComfyUI-MiniMax-H3-PDD-Acc),回退普通 LoRA 模式: %s", loraName)
+			loraName = ""
+			spec = turboLoRASpecOf("")
+		}
+	}
+	if loraName != "" && !spec.PDD {
 		model = wfAdd(wf, "LoraLoaderModelOnly", map[string]any{"model": refOf(model), "lora_name": loraName, "strength_model": spec.Strength})
 	}
 	// SageAttention 加速补丁(KJNodes,starter 官方工作流同款):
@@ -657,8 +684,9 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 			})
 		}
 	// SigmaShift 挂 LoRA 之后(官方 lightx2v 工作流:蒸馏 shift 是采样网格的一部分,
-	// BasicGuider 与 BasicScheduler 共用 shift 后的 model;768p 版 6/3,544p/Ref2V 版 12/3)
-	if spec.VideoShift > 0 {
+	// BasicGuider 与 BasicScheduler 共用 shift 后的 model;768p 版 6/3,544p/Ref2V 版 12/3)。
+	// PDD 模式不挂(节点内置 shift 校验,配错拒绝运行)
+	if spec.VideoShift > 0 && !spec.PDD {
 		model = wfAdd(wf, "MiniMaxH3SigmaShift", map[string]any{
 			"model": refOf(model), "shift_video": spec.VideoShift, "shift_audio": spec.AudioShift,
 		})
@@ -692,14 +720,23 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 		trimFramesID = mc + "[1]"
 	}
 
-	guider := wfAdd(wf, "BasicGuider", map[string]any{"model": refOf(model), "conditioning": refOf(condID)})
+	// PDD Acc 官方强制配方 cfg=1.0(无 CFG 单次前向);普通模式沿用默认
+	guiderInputs := map[string]any{"model": refOf(model), "conditioning": refOf(condID)}
+	if spec.PDD {
+		guiderInputs["cfg"] = 1.0
+	}
+	guider := wfAdd(wf, "BasicGuider", guiderInputs)
 	noise := wfAdd(wf, "RandomNoise", map[string]any{"noise_seed": seed})
 	// 采样器随 Turbo LoRA 类型:Kijai LightX2V 4步版必须 sa_solver(er_sde 亦可),旧 larryvrh 系用 res_multistep
 	sampler := wfAdd(wf, "KSamplerSelect", map[string]any{"sampler_name": spec.Sampler})
-	sched := wfAdd(wf, "BasicScheduler", map[string]any{"model": refOf(model), "scheduler": spec.Scheduler, "steps": steps, "denoise": 1.0})
+	// sigmas 来源:PDD 模式用 Apply 节点输出(含训练 shift 的采样网格),普通模式 BasicScheduler
+	sigmasID := pddApplyID
+	if sigmasID == "" {
+		sigmasID = wfAdd(wf, "BasicScheduler", map[string]any{"model": refOf(model), "scheduler": spec.Scheduler, "steps": steps, "denoise": 1.0})
+	}
 	samp := wfAdd(wf, "SamplerCustomAdvanced", map[string]any{
 		"noise": refOf(noise), "guider": refOf(guider), "sampler": refOf(sampler),
-		"sigmas": refOf(sched), "latent_image": refOf(latentID),
+		"sigmas": refOf(sigmasID), "latent_image": refOf(latentID),
 	})
 
 	imgID := wfAdd(wf, "VAEDecode", map[string]any{"samples": refOf(samp), "vae": refOf(vae)})

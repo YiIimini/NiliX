@@ -254,20 +254,23 @@ func TestManjuSceneFeatureWords(t *testing.T) {
 	}
 }
 
-// 回归(2026-08-28 EP01 配音事故):爽文技能规范示例「台词 <d>[中文]原文</d>」被 LLM 字面
-// 抄袭,EP01 六段式台词段直出 <d>[中文]陈默？</d>——H3 把「中文」二字当台词念/对白驱动
-// 失效,有台词的镜全部近静默。最终化汇点必须剥掉 d 标签内的 [中文]/[chinese] 占位前缀。
+// 回归(2026-08-28 EP01 配音事故→2026-08-30 官方格式修正):爽文技能规范示例
+// 「台词 <d>[中文]原文</d>」被 LLM 字面抄袭——旧修复是剥掉语言标签;2026-08-30 深挖
+// H3 官方源码(base-en §4.4)核验:d 标签内【必须】带语言标签(官方示例
+// <d>[English] ...</d>),裸 <d>中文</d> 会让模型猜配音语言。正确语义=规范化:
+// [中文]/[chinese](中文标签词会被逐字念出)→ 官方英文写法 [Chinese]。
+// 职责在 manju_prompt_align.go alignDialogueLangTags,汇点入口 manjuFinalizeAligned。
 func TestManjuFinalizePromptStripsDialogueTagNoise(t *testing.T) {
 	in := "The engineer (S1) says: <d>[中文]陈默？</d> while typing.\nThe narrator says: <d>[Chinese] 凌晨两点,写字楼还亮着一盏灯。</d>"
-	out := manjuFinalizePromptPure(in, true, 3)
-	if strings.Contains(out, "[中文]") || strings.Contains(out, "[Chinese]") {
-		t.Fatalf("d 标签占位前缀应被剥除, got: %s", out)
+	out := alignDialogueLangTags(in)
+	if strings.Contains(out, "[中文]") {
+		t.Fatalf("中文标签词应规范化为 [Chinese](中文词会被逐字念出), got: %s", out)
 	}
-	if !strings.Contains(out, "<d>陈默？</d>") {
-		t.Errorf("台词本体应保留, want <d>陈默？</d>, got: %s", out)
+	if !strings.Contains(out, "<d>[Chinese] 陈默？</d>") {
+		t.Errorf("台词应带官方语言标签, want <d>[Chinese] 陈默？</d>, got: %s", out)
 	}
-	if !strings.Contains(out, "<d>凌晨两点,写字楼还亮着一盏灯。</d>") {
-		t.Errorf("旁白本体应保留, got: %s", out)
+	if !strings.Contains(out, "<d>[Chinese] 凌晨两点,写字楼还亮着一盏灯。</d>") {
+		t.Errorf("已规范的标签应原样保留, got: %s", out)
 	}
 }
 

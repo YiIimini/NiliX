@@ -51,6 +51,10 @@ const App = {
   },
 
   async init() {
+    // 首帧启动加载层撤场(2026-08-29):index.html 内联 boot-loader 覆盖 JS 链+I18N
+    // 初始化期间的空白;初始化完成(或异常)都撤场,15s 内联超时兜底不困死
+    const blDone = () => { try { window.__blDismiss && window.__blDismiss(); } catch (e) {} };
+    try {
     this.theme = localStorage.getItem("kbw-theme") || "nebula";
     this.applyTheme(this.theme, true);
     this.style = localStorage.getItem("kbw-style") || "default";
@@ -82,6 +86,11 @@ const App = {
     this.initTips();
     this.applyNavVisibility();
     this.route();
+    } finally {
+      // route() 已切出首屏视图壳,下一帧撤场(确保 loader 消失瞬间页面已绘制,
+      // 各视图内部数据加载有自己的 loading 态接棒)
+      requestAnimationFrame(() => setTimeout(blDone, 60));
+    }
   },
 
   bindControls() {

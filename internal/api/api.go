@@ -72,6 +72,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/comfy/install", comfyInstallStart)
 	mux.HandleFunc("GET /api/comfy/install/status", comfyInstallStatus)
 	mux.HandleFunc("POST /api/comfy/install/stop", comfyInstallStop)
+	mux.HandleFunc("GET /api/comfy/versions", handleComfyVersions)
+	mux.HandleFunc("POST /api/comfy/plugins/check", handleComfyPluginsCheck)
 	// DeepSeek Harness 服务(监控/启动/重启,灵动岛 + 应用内嵌窗口共用)
 	mux.HandleFunc("GET /api/harness", s.handleHarness)
 	mux.HandleFunc("POST /api/harness/start", s.handleHarnessStart)

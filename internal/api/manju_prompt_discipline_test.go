@@ -104,7 +104,7 @@ func TestShotPromptKeepsUserConfig(t *testing.T) {
 		},
 	}
 	_ = os.MkdirAll(ctx.analysisDir, 0755)
-	hp, err := ctx.genShotPromptRaw(manjuShot{ID: 1, Characters: []string{"陈鱼"}}, nil, nil, "")
+	hp, err := ctx.genShotPromptRaw(manjuShot{ID: 1, Characters: []string{"陈鱼"}}, nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("genShotPromptRaw: %v", err)
 	}

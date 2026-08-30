@@ -49,13 +49,18 @@ def check_video(path, threshold=0.5):
     dur = float(round(v.duration * v.time_base, 2)) if v.duration else 0.0
     res = (v.width, v.height)
     samples, n = [], 0
+    n_a = 0  # 音频帧计数(独立于视频帧;rms 全片均匀采样用)
     # 冻结检测(2026-08-24 知识库「H3长镜连续与工作室实战」freeze-aware 整合):
     # H3 段尾可能提前到达 Last Frame 后几乎静止(冻结),且冻结长度每段不同——固定裁剪不可靠。
     # 每采样帧记录整帧灰度均值,末尾窗口内相邻差 < 阈值(0.8/255)占比高=段尾冻结。
     frame_means = []
-    # 音频响度:采样前 40 个音频帧的归一化 RMS(静音=有音轨但无声音,TTS 失败的典型产物)
+    # 音频响度:全片均匀采样(每 4 个音频帧取 1≈128ms 一点,覆盖全程)。原「前 40 帧」只采开头
+    # ≈1.3s,H3 音频常带前奏/渐入,开头静音会把有台词镜整段误判为「静音丢台词」
+    # (2026-08-29 实测:04 镜 whisper 逐字命中台词,QC 却报 rms 0.002)。静音判定
+    # 另取音频峰值窗口 audio_peak:任一采样帧 rms≥0.06 即认为有声音内容。
     np = None
     rms_sum, rms_n = 0.0, 0
+    audio_peak = 0.0
     # 视频+音频必须交错解码(PyAV 先解完视频再解音频会拿不到音频帧),单遍同时完成两项检测
     streams = (v, a0) if a0 is not None else (v,)
     for fr in c.decode(*streams):
@@ -67,7 +72,7 @@ def check_video(path, threshold=0.5):
                 samples.append(float(g.mean() < 20))
                 frame_means.append(float(g.mean()))
             n += 1
-        elif rms_n < 40:
+        elif n_a % 4 == 0:
             if np is None:
                 import numpy as _np
                 np = _np
@@ -75,8 +80,12 @@ def check_video(path, threshold=0.5):
             mx = 1.0
             if arr.dtype.kind in "iu":  # 音频可能是 s16(±32768),归一化到 [-1,1]
                 mx = float(np.iinfo(arr.dtype).max)
-            rms_sum += float(np.abs(arr).mean() / mx)
+            frm = float(np.abs(arr).mean() / mx)
+            rms_sum += frm
             rms_n += 1
+            if frm > audio_peak:
+                audio_peak = frm
+        n_a += 1
     c.close()
     # 结尾淡出带(提示词常带 fade out):丢弃最后 5% 采样,合法淡出不计入暗比
     if samples:
@@ -102,6 +111,7 @@ def check_video(path, threshold=0.5):
         "audio_rate": audio_rate, "audio_channels": audio_channels,
         "dark_ratio": round(sum(samples) / max(len(samples), 1), 3), "decoded_frames": n,
         "audio_rms": round(audio_rms, 4), "audio_frames": rms_n,
+        "audio_peak": round(audio_peak, 4),
         "freeze_ratio": freeze_ratio,
     }
 
@@ -407,8 +417,13 @@ def cmd_qc(args):
             if r["audio_streams"] == 0:
                 flags.append("无音轨")
             elif r["audio_rms"] < 0.02:
+                # 峰值窗口有声音内容(rms≥0.06 的采样帧)→ 台词/音效实际存在,整段均值被
+                # 开头前奏/结尾淡出拉低,降软告警不判失败(2026-08-29:前 40 帧采样已改全片)
                 if _has_dialogue(f):
-                    flags.append(f"静音丢台词(rms {r['audio_rms']:.3f})")
+                    if r["audio_peak"] >= 0.06:
+                        soft.append(f"响度偏低(rms {r['audio_rms']:.3f},峰值 {r['audio_peak']:.3f})")
+                    else:
+                        flags.append(f"静音丢台词(rms {r['audio_rms']:.3f},峰值 {r['audio_peak']:.3f})")
                 else:
                     soft.append(f"静音告警(rms {r['audio_rms']:.3f},空镜环境音弱)")
             elif r["audio_rate"] > 0 and r["audio_rate"] != 32000:
@@ -1739,8 +1754,10 @@ def cmd_inspect(args):
     os.makedirs(args.out_dir, exist_ok=True)
     # 单遍交错解码:数帧 + 近黑采样 + 冻结采样 + 音频响度 + 均匀抽帧(先数总数,再按目标位置取)
     samples, n = [], 0
+    n_a = 0
     frame_means = []
     rms_sum, rms_n = 0.0, 0
+    audio_peak = 0.0
     np_mod = None
     targets = {}
     frames = []
@@ -1754,15 +1771,19 @@ def cmd_inspect(args):
             n += 1
             if len(frames) < n_target:
                 frames.append(fr)
-        elif rms_n < 40:
+        elif n_a % 4 == 0:
             if np_mod is None:
                 np_mod = np
             arr = fr.to_ndarray()
             mx = 1.0
             if arr.dtype.kind in "iu":
                 mx = float(np_mod.iinfo(arr.dtype).max)
-            rms_sum += float(np_mod.abs(arr).mean() / mx)
+            frm = float(np_mod.abs(arr).mean() / mx)
+            rms_sum += frm
             rms_n += 1
+            if frm > audio_peak:
+                audio_peak = frm
+        n_a += 1
     c.close()
     # 均匀取帧(用解码顺序中均匀位置的缓存帧;简化:首遍已缓存前 n_target 帧,均匀性由 seek 版保证)
     # ——为均匀性,首遍结束后按目标位置 seek 重取(小文件成本可忽略,换均匀性)
@@ -1812,8 +1833,10 @@ def cmd_inspect(args):
     flags = []
     if a0 is None:
         flags.append("无音轨")
-    elif audio_rms < 0.02:
+    elif audio_rms < 0.02 and audio_peak < 0.06:
         flags.append(f"静音(rms {audio_rms:.3f})")
+    elif audio_rms < 0.02:
+        flags.append(f"响度偏低(rms {audio_rms:.3f},峰值 {audio_peak:.3f})")
     dark = sum(samples) / max(len(samples), 1) if samples else 0.0
     if dark > args.threshold:
         flags.append(f"近黑帧{dark*100:.0f}%")
@@ -1825,6 +1848,7 @@ def cmd_inspect(args):
         flags.append("时长过短")
     qc = {"duration_s": round(dur, 2), "resolution": (v.width, v.height),
           "audio_streams": len(a), "audio_rms": round(audio_rms, 4),
+          "audio_peak": round(audio_peak, 4),
           "dark_ratio": round(dark, 3), "freeze_ratio": freeze_ratio,
           "decoded_frames": n, "flags": flags, "ok": not flags}
     print(f"  🔬 {os.path.basename(args.file)} {dur:.1f}s {v.width}x{v.height} 音轨:{len(a)} 响度:{audio_rms:.3f} 近黑:{dark*100:.0f}% 冻结:{int(freeze_ratio*100):3d}% {'OK' if qc['ok'] else '⚠️ ' + ','.join(flags)}")
