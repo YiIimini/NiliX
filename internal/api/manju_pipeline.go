@@ -2307,7 +2307,14 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 			lg.logf("  ⚠️ 内容 " + strconv.Itoa(runes) + " 字超出 20000 字上限,超出部分可能未被方案覆盖(建议缩小章节范围或分集)")
 		}
 	}
-	lg.logf("🤖 大模型直出 人物/场景/分镜" + manjuModeTag(ctx.scriptMode) + "...")
+	// 2026-09-01 日志口径修正:脚本直出(技能侧分镜 json)零 LLM——程序化解析直接采用
+	// 脚本内嵌六段式,此前统一打印「🤖 大模型直出」误导(用户以为走了 LLM 浪费时间);
+	// 脚本直出明示零 LLM,仅小说解析/LLM 直出才用 🤖 前缀
+	if ctx.scriptMode {
+		lg.logf("🎬 脚本直出(零 LLM):程序化解析分镜脚本,逐镜 H3 提示词直接采用" + manjuModeTag(ctx.scriptMode) + "...")
+	} else {
+		lg.logf("🤖 大模型直出 人物/场景/分镜" + manjuModeTag(ctx.scriptMode) + "...")
+	}
 	// 2026-08-25 防污染:style 净化丢弃词 + knowledge 模板缺失——明示用户,防静默(此前配置串里的
 	// "玄幻修仙/Q版呆萌可爱小角色(…)/反派磕碜"等非美术风格词被原样拼进提示词,角色/场景/视频与小说不符)
 	if dropped := manjuStyleLastDropped; len(dropped) > 0 {
