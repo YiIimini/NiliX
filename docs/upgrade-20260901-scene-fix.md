@@ -327,3 +327,25 @@ Q 版形象只有正角(女主/男主/正角)渲染,配角/群演不生成 Q 版
 
 ### 技能侧(SKILL.md,已推送)
 5. q_form 契约注明:全员输出备而不用·渲染端仅正角生成 Q 版资产;内心戏规则本就正确(正角 Q 版/其他写实+画外音,派发模板 53 行)
+
+---
+
+# ComfyUI 插件排查更新(2026-09-01)
+
+## 排查结果(8 个 git 插件)
+| 插件 | 版本状态 | 处置 |
+|---|---|---|
+| ComfyUI-H3-ConditioningCache | 本地=远程(自研,third_party 源) | 无需更新 |
+| ComfyUI-H3-Motion-Context | 本地=远程(**NiliX 核心节点源**:ReferenceToVideo/SigmaShift/ImageToVideo) | 无需更新 |
+| ComfyUI-MiniMax-H3-PDD-Acc | 8335330→311a65d | **更新**(量化 trunk 指纹崩溃修复/离线 bake/模型验证开关) |
+| ComfyUI-MiniMaxH3-Easy | 33b6a79→ebf7493(v1.1.0 大改版,节点体系重构为 Easy* 系列) | **更新**(NiliX 不调用 Easy 节点,兼容无影响) |
+| rgthree-comfy | 35c9f1e→2c5342a | **更新**(扩展更新机制缓存) |
+| ComfyUI-KJNodes | 3f20054→e8e88f7(ghproxy.net 证书过期→换直连 fetch 后还原) | **更新**(结构改为 nodes/ 分包) |
+| ComfyUI_IPAdapter_plus | 本地=远程 | 无需更新 |
+| was-node-suite-comfyui | 本地=远程 | 不动(缺 numba 属既有环境问题,NiliX 不依赖) |
+
+## 验证
+- py_compile 全过(KJNodes nodes/*.py 分包结构)
+- ComfyUI 0.34.0 启动加载:核心插件全部 OK,1245 节点在线;
+  MiniMaxH3ReferenceToVideo/SigmaShift/ImageToVideo/PDDAccApply/Easy 全部 ✓
+- 回滚点:PDD-Acc 83353308 / Easy 33b6a795 / rgthree 35c9f1e1 / KJNodes 3f200542
