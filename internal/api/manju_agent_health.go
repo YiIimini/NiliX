@@ -57,7 +57,7 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 	// 2.5 分镜脚本目录(爽文技能阶段6 产物:H3分镜脚本文档模板生成,可一键导入脚本直出)
 	if !ctx.scriptMode {
 		if nv := strings.TrimSpace(str(ctx.P["novel"])); nv != "" {
-			if ms, _ := filepath.Glob(filepath.Join(nv, "素材", "分镜脚本", "第*章*_分镜脚本.md")); len(ms) > 0 {
+			if ms, _ := filepath.Glob(filepath.Join(nv, "素材", "分镜脚本", "第*章*_分镜脚本.json")); len(ms) > 0 {
 				items = append(items, ok("storyboard", fmt.Sprintf("小说分镜脚本 %d 集(素材/分镜脚本/),可一键导入脚本直出", len(ms))))
 			}
 		}

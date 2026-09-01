@@ -17,6 +17,7 @@ package api
 // 解析成功返回完整 plan;失败返回 error(调用方回退 LLM 直出,不阻断)。
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -39,6 +40,9 @@ type scriptShotRaw struct {
 	Style     string // 风格列(9 列格式,2026-08-30 ver14 保留:此前仅当时长兜底,从不入 shots)
 	Duration  int
 	H3Prompt  string
+	// JSONChars JSON 分镜脚本的 shots[].characters 显式声明(2026-08-31 JSON 格式;
+	// 组装登场角色时并入文本匹配结果,说话人仍强制入画)
+	JSONChars []string
 }
 
 var (
@@ -110,11 +114,19 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 	firstShot := map[string]int{}
 	sNum := map[string]string{}
 	var order []string
-		for i := range raws {
+	for i := range raws {
 			for _, m := range reSpeakerTag.FindAllStringSubmatch(raws[i].Dialogue, -1) {
 				name := strings.TrimSpace(m[2])
 				// 内心·(ver14 防御):正常已转 narration,漏网形态不建幽灵群演卡
-				if name == "" || manjuIsOffScreenSpeaker(name) || strings.HasPrefix(name, "内心·") || known[name] {
+				if name == "" || manjuIsOffScreenSpeaker(name) || strings.HasPrefix(name, "内心·") {
+					continue
+				}
+				// 2026-09-01 变体归一:说话人简称命中有素材卡 → 不建重复自动卡
+				// (杳杳→涂山杳杳,避免同一角色两卡形象冲突)
+				if rid := manjuResolveCharID(name, knownKeys(known)); rid != "" {
+					continue
+				}
+				if known[name] {
 					continue
 				}
 			if _, ok := firstShot[name]; !ok {
@@ -207,6 +219,15 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 	return out
 }
 
+// knownKeys map key 快照(scriptMinorCast 变体归一用,避免在循环里反复分配)
+func knownKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 // manjuScriptParseVer 脚本程序化解析器代数:写入 plan.script_parse_ver,ensurePlan 复用
 // 校验发现版本落后 → 强制重新解析替换旧 plan。背景(2026-08-26 用户实测:16 分镜脚本
 // 只渲染 8 个,普通一条龙):旧版解析器对脚本解析失败时静默回退 LLM 直出,LLM 拆镜数
@@ -247,11 +268,25 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 //   跳过带 Q版/真身/形态标记的代码块,Q版段独立解析为 q_form(manjuQPrompt 优先取);
 //   兽形 Q 版毛色锁改按提示词出现序排色(主体色永远在小色块前,white 不再恒排 black 前)。
 //   plan.characters 缓存旧素材内容,须重解析吸收。
-const manjuScriptParseVer = 14
+// 14=六维度升级(2026-08-30):内心·前缀保留+光影/音效/风格三列保留+Sx 说话人注册表。
+// 15=五问整改(2026-08-30):①机械补写剥「内心·/旁白」前缀与引号+内容命中即不补
+//   (内心配音重复根治,EP01 镜4/5/6/14 每镜重复画外音句随重解析消失);②scriptValidateShots
+//   新增站位/运镜/动作-对白三项 WARN 检查(站位不清/运镜失配/说话人无动作在解析期暴露);
+//   ③拆镜密度放宽(每 80-130 字一镜,内容完整优先,拆镜数不设上限)。
+// 16=JSON 分镜脚本格式(2026-08-31 技能侧新格式:md 表格弃用——表格断行丢镜
+//   (EP01 25 镜解析成 21 镜/541 行异常)根治;scriptParsePlan 检测 .json/首字符 {
+//   结构化解析,shots[].characters 显式声明并入登场角色;存量 336 章已 md→json 转换)。
+// 17=2026-09-01 角色名变体归一(manjuResolveCharID):characters 声明/说话人简称
+//    (杳杳/主持人/小汤)归一到素材卡全名(涂山杳杳/天才榜主持人/孟小汤),精确匹配
+//    不上=无参考图=主次混乱/形象漂移(杂毛杳杳×108、影子主持人×6 实锤);
+//    scriptMinorCast 建卡前置归一,有素材卡不建重复自动卡。
+const manjuScriptParseVer = 17
 
 // scriptParsePlan 脚本直出程序化解析入口。
 // 解析出 characters/scenes/shots/directing/episode_title/chapters=script。
 // 任一步关键缺失(无分镜表行 / 无 Shot 代码块)返回 error → 调用方回退 LLM。
+// 2026-08-31 双格式:JSON 分镜脚本(技能侧新格式,.json 或首字符 {)结构化解析;
+// Markdown 分镜脚本(分镜表 + ### Shot N 六段式)原有解析。JSON 后 md 弃用。
 func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 	if ctx.novel == "" {
 		return nil, fmt.Errorf("脚本路径为空")
@@ -261,6 +296,20 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 		return nil, fmt.Errorf("读脚本失败: %w", err)
 	}
 	text := string(toUTF8(b))
+	trimmed := strings.TrimSpace(text)
+
+	// ---- JSON 分镜脚本分支(2026-08-31 技能侧新格式) ----
+	if strings.HasSuffix(ctx.novel, ".json") || strings.HasPrefix(trimmed, "{") {
+		raws, err := parseScriptJSON(text)
+		if err != nil {
+			return nil, fmt.Errorf("JSON 分镜脚本解析失败: %w", err)
+		}
+		if len(raws) == 0 {
+			return nil, fmt.Errorf("JSON 分镜脚本无镜头(shots 为空)")
+		}
+		lg.logf(fmt.Sprintf("  📦 JSON 分镜脚本: %d 镜结构化解析(字段直读,零表格断行风险)", len(raws)))
+		return ctx.buildPlanFromRaws(raws, text, lg)
+	}
 
 	// 1) 每镜六段式代码块 → h3_prompt 逐字保留
 	shotPrompts := map[int]string{}
@@ -406,7 +455,121 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 	if len(raws) == 0 {
 		return nil, fmt.Errorf("脚本无分镜表行(未识别 | 镜号 | ... | 时长 | 表格)")
 	}
+	return ctx.buildPlanFromRaws(raws, text, lg)
+}
 
+// ---- JSON 分镜脚本(2026-08-31 技能侧新格式,md 表格弃用) ----
+// Schema:
+//
+//	{
+//	  "book": "《书名》", "episode": 1, "chapter_title": "章节名", "global_style": "风格句",
+//	  "bridge": {"prev_ending": "", "opening_beat": "", "position": "", "closing_hook": "", "next_entry": ""},
+//	  "shots": [{
+//	    "shot_id": 1, "shot_size": "景别", "camera": "运镜", "action": "【场景名】画面",
+//	    "dialogue": "(S1)角色:\"...\" / 内心·角色:\"...\" / 旁白：... / 无(多行 \n 分隔)",
+//	    "characters": ["登场角色"], "light": "光影", "sound": "音效", "duration": 5,
+//	    "style": "可选风格列", "h3_prompt": "六段式全文"
+//	  }]
+//	}
+
+type scriptShotJSON struct {
+	ShotID     int      `json:"shot_id"`
+	ShotSize   string   `json:"shot_size"`
+	Camera     string   `json:"camera"`
+	Action     string   `json:"action"`
+	Dialogue   string   `json:"dialogue"`
+	Characters []string `json:"characters"`
+	Light      string   `json:"light"`
+	Sound      string   `json:"sound"`
+	Duration   int      `json:"duration"`
+	Style      string   `json:"style"`
+	H3Prompt   string   `json:"h3_prompt"`
+}
+
+type scriptJSON struct {
+	Book         string            `json:"book"`
+	Episode      int               `json:"episode"`
+	ChapterTitle string            `json:"chapter_title"`
+	GlobalStyle  string            `json:"global_style"`
+	Bridge       map[string]string `json:"bridge"`
+	Shots        []scriptShotJSON  `json:"shots"`
+}
+
+// parseScriptJSON JSON 分镜脚本 → []scriptShotRaw(与 md 路径等效,后续组装共用):
+// 台词列按行拆分「内心·/旁白」进 Narration(前缀保留,渲染端 Q 版/音色差异化依赖);
+// 镜号重复递增分配(防同名覆盖,同 md 路径);时长 4-15 校验。
+func parseScriptJSON(text string) ([]scriptShotRaw, error) {
+	var sj scriptJSON
+	if err := json.Unmarshal([]byte(text), &sj); err != nil {
+		return nil, fmt.Errorf("JSON 格式错误: %w", err)
+	}
+	var raws []scriptShotRaw
+	seenIDs := map[int]bool{}
+	for _, s := range sj.Shots {
+		id := s.ShotID
+		if id <= 0 {
+			continue
+		}
+		// 镜号重复递增分配(防同名覆盖,同 md 路径)
+		if seenIDs[id] {
+			for seenIDs[id] {
+				id++
+			}
+		}
+		seenIDs[id] = true
+		dur := s.Duration
+		if dur < 4 || dur > 15 {
+			dur = 5
+		}
+		raw := scriptShotRaw{
+			ID:        id,
+			ShotSize:  strings.TrimSpace(s.ShotSize),
+			Camera:    strings.TrimSpace(s.Camera),
+			Action:    strings.TrimSpace(s.Action),
+			Light:     strings.TrimSpace(s.Light),
+			Sound:     strings.TrimSpace(s.Sound),
+			Style:     strings.TrimSpace(s.Style),
+			Duration:  dur,
+			H3Prompt:  strings.TrimSpace(s.H3Prompt),
+			JSONChars: s.Characters,
+		}
+		// 台词列逐行拆分:内心·/旁白 → Narration(前缀保留),其余 → Dialogue
+		for _, line := range strings.Split(s.Dialogue, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if i := strings.Index(line, "内心·"); i >= 0 {
+				if raw.Narration != "" {
+					raw.Narration += "\n"
+				}
+				raw.Narration += strings.TrimSpace(line[i:])
+				continue
+			}
+			if strings.HasPrefix(line, "旁白") {
+				if raw.Narration != "" {
+					raw.Narration += "\n"
+				}
+				raw.Narration += line
+				continue
+			}
+			if raw.Dialogue != "" {
+				raw.Dialogue += "\n"
+			}
+			raw.Dialogue += line
+		}
+		raws = append(raws, raw)
+	}
+	if len(raws) == 0 {
+		return nil, fmt.Errorf("shots 为空")
+	}
+	return raws, nil
+}
+
+// buildPlanFromRaws 从分镜表行(raws)组装方案(md 与 JSON 分镜脚本共用,
+// 2026-08-31 抽取):语音预算补偿 → 机械质检 → 角色/场景卡 → 场景匹配/登场角色 →
+// 场景收尾三件套 → plan。
+func (ctx *manjuCtx) buildPlanFromRaws(raws []scriptShotRaw, text string, lg *manjuLogger) (map[string]any, error) {
 	// 2026-08-26 语音预算自动补偿:台词+旁白总字数 ÷ 字速 > 时长 → 自动延长该镜时长
 	// (clamp 到 15s API 上限)。此前旁白零预算,超预算镜 H3 念一半就切(「画面有字无配音」
 	// 的渲染侧诱因);脚本为权威不改动内容,只补时长让语音念得完。
@@ -526,6 +689,22 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 				charSet[cid] = true
 			}
 		}
+		// JSON 分镜脚本显式 characters 声明并入(2026-08-31:LLM 拆镜时已判定在场,
+		// 文本匹配漏判的(代称/英文名)由声明兜底;说话人仍强制入画)
+		// 2026-09-01 变体归一:声明常用简称(杳杳/主持人/小汤),素材卡是完整名
+		// (涂山杳杳/天才榜主持人/孟小汤)——精确匹配不上=无参考图=形象漂移主次混乱
+		for _, cid := range raw.JSONChars {
+			if cid == "" {
+				continue
+			}
+			if allIDs[cid] {
+				charSet[cid] = true
+				continue
+			}
+			if rid := manjuResolveCharID(cid, charIDs); rid != "" {
+				charSet[rid] = true
+			}
+		}
 		// 2026-08-28 EP01 人物不一致根治:脚本画面叙述常用「男人/屏幕前的男人」代称(镜3
 		// h3 写 "Chen Mo in <Picture 1>",画面列只写「屏幕前的男人」),名字匹配判空 →
 		// 渲染端不挂人物参考图,h3 的 <Picture 1> 错位指到场景图 → H3 拿城市夜景图当
@@ -538,13 +717,18 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 		}
 		// 台词说话人强制入画(谁说的就是谁);画外群杂豁免(2026-08-27:画外·前缀
 		// =画外群众议论,不入画不占角色名额——叙述群众议论化的解析契约)
+		// 2026-09-01 变体归一:说话人简称先归一到素材卡(杳杳→涂山杳杳,不建重复自动卡)
 		for _, dm := range reDialogue.FindAllStringSubmatch(raw.Dialogue+" "+raw.Narration, -1) {
 			speaker := strings.TrimSpace(dm[1])
 			if speaker == "" {
 				speaker = strings.TrimSpace(dm[3])
 			}
 			if speaker != "" && !manjuIsOffScreenSpeaker(speaker) {
-				charSet[speaker] = true
+				if rid := manjuResolveCharID(speaker, charIDs); rid != "" {
+					charSet[rid] = true
+				} else {
+					charSet[speaker] = true
+				}
 			}
 		}
 		// charArr 排序(2026-08-27 群演分级):说话人优先——参考图名额 ≤3,开口的人
@@ -554,6 +738,9 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 			speaker := strings.TrimSpace(dm[1])
 			if speaker == "" {
 				speaker = strings.TrimSpace(dm[3])
+			}
+			if rid := manjuResolveCharID(speaker, charIDs); rid != "" {
+				speaker = rid
 			}
 			if speaker == "" || manjuIsOffScreenSpeaker(speaker) || !charSet[speaker] || !allIDs[speaker] {
 				continue
@@ -743,18 +930,34 @@ func scriptValidateShots(raws []scriptShotRaw, lg *manjuLogger) {
 			miss++
 			patch += "\n<d>" + line + "</d>"
 		}
-		if narr := strings.TrimSpace(r.Narration); narr != "" {
-			n := strings.TrimPrefix(narr, "旁白")
-			n = strings.TrimPrefix(strings.TrimPrefix(n, ":"), "：")
-			n = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(n, "。"), "."))
-			if n != "" {
-				key := string([]rune(n)[:minInt(8, len([]rune(n)))])
-				if len([]rune(key)) >= 4 && !strings.Contains(r.H3Prompt, key) {
-					miss++
-					// 官方画外音写法(base-en.txt §4.4):旁白由 H3 直出,不用 TTS
-					patch += "\nThe narrator says in an off-screen voiceover: <d>" + n + "</d> while the on-screen characters' lips remain completely closed."
+		// 旁白/内心逐行同步(2026-08-30 五问修复):旧逻辑只剥「旁白」前缀,「内心·角色名:」
+		// 前缀留在 key 里恒匹配不上 h3_prompt(LLM 已剥离前缀的正确写法)→ 每次导入都补出
+		// 一条带「内心·阿影:」字面量+引号的重复画外音 <d> 句(EP01 镜4/5/6/14 实锤,成片
+		// 同一句内心独白念两遍且把标签念出来)。现在逐行处理:剥前缀与引号,行内逐句判定,
+		// 任一子句内容命中 h3_prompt 即视为已同步不补。
+		for _, narrLine := range strings.Split(r.Narration, "\n") {
+			n := stripNarrationPrefix(strings.TrimSpace(narrLine))
+			if n == "" {
+				continue
+			}
+			// 逐句判定:行内多句(旁白+内心并存/两句连写)任一子句缺失才补整行
+			allHit := true
+			for _, sub := range splitNarrationSentences(n) {
+				key := string([]rune(sub)[:minInt(8, len([]rune(sub)))])
+				if len([]rune(key)) < 4 {
+					continue
+				}
+				if !strings.Contains(r.H3Prompt, key) {
+					allHit = false
+					break
 				}
 			}
+			if allHit {
+				continue
+			}
+			miss++
+			// 官方画外音写法(base-en.txt §4.4):旁白/内心由 H3 直出,不用 TTS
+			patch += "\nThe narrator says in an off-screen voiceover: <d>" + n + "</d> while the on-screen characters' lips remain completely closed."
 		}
 		if miss > 0 {
 			// 插到最后一个 </d> 之后(与既有对白同段);无 </d> 则追加末尾
@@ -764,9 +967,149 @@ func scriptValidateShots(raws []scriptShotRaw, lg *manjuLogger) {
 			} else {
 				r.H3Prompt += patch
 			}
-			lg.logf(fmt.Sprintf("  ✅ 机械质检: 镜头 %d 检出 %d 句台词/旁白未同步进六段式,已自动补写(<d>对白/画外音,渲染含此句配音)", r.ID, miss))
+			lg.logf(fmt.Sprintf("  ✅ 机械质检: 镜头 %d 检出 %d 句台词/旁白/内心未同步进六段式,已自动补写(<d>对白/画外音,渲染含此句配音)", r.ID, miss))
 		}
 	}
+	// 4) 站位完整性 WARN(2026-08-30 五问整改,问题③):detailed_description 段零位置词
+	//    =画面人物无屏幕位置/朝向,渲染站位全靠模型自由发挥(EP01 14 镜中 8 镜零位置词
+	//    实锤)。只告警不阻断(脚本权威,作者改脚本后重导入)。
+	// 5) 运镜 WARN(2026-08-30 五问整改,问题④):运镜列缺失/长固定镜(静态机位+画面
+	//    动作衰减=成片趋静)。
+	// 6) 动作-对白协调 WARN(2026-08-30 五问整改,问题⑤):有台词镜的画面描述无任何
+	//    动作/表情词——说话人可能呆立念白(动作僵硬来源之一)。
+	rePosWord := regexp.MustCompile(`(?i)\b(left|right|center|centre|foreground|midground|background|behind|beside|in front of|facing|turned away)\b`)
+	reActionWord := regexp.MustCompile(`(?i)\b(turns?|stands?|walks?|raises?|lowers?|looks?|glances?|smiles?|frowns?|clenches?|grips?|steps?|leans?|gestures?|sighs?|nods?|shakes?|opens?|reaches?|moves?|holds?|sits?|rises?|bows?|points?|throws?|catches?|kneels?|waves?|shrugs?|blinks?|stares?|tilts?|rolls?)\b|转身|抬头|低头|握拳|咬牙|皱眉|抬手|迈步|坐下|站起|点头|摇头|开口|微笑|回头|耸肩|眯眼|攥拳|侧身|俯身|背对`)
+	for i := range raws {
+		r := &raws[i]
+		dd := r.H3Prompt
+		if a := strings.Index(dd, "detailed_description:"); a >= 0 {
+			dd = dd[a+len("detailed_description:"):]
+			if b := strings.Index(dd, "overall_soundscape:"); b >= 0 {
+				dd = dd[:b]
+			}
+		} else {
+			dd = ""
+		}
+		if dd == "" {
+			continue
+		}
+		if !rePosWord.MatchString(dd) {
+			lg.logf(fmt.Sprintf("  ⚠️ 机械质检: 镜头 %d 画面描述无任何人物位置/朝向词(left/right/center/foreground/facing 等)——站位信息缺失,建议按【位置锚定纪律】补写谁在画面哪侧、谁对着谁", r.ID))
+		}
+		if cm := strings.TrimSpace(r.Camera); cm == "" {
+			lg.logf(fmt.Sprintf("  ⚠️ 机械质检: 镜头 %d 运镜列为空——按默认机位渲染,建议写清运镜(类型+幅度+速度,如 缓推/Push In, small, slow)", r.ID))
+		} else if strings.Contains(cm, "固定") && r.Duration >= 6 {
+			lg.logf(fmt.Sprintf("  ⚠️ 机械质检: 镜头 %d 为长固定镜(%ds)——静态机位+画面动作衰减=成片趋静,建议改缓推/微摇或缩短时长", r.ID, r.Duration))
+		}
+		if strings.TrimSpace(r.Dialogue) != "" && !reActionWord.MatchString(dd) {
+			lg.logf(fmt.Sprintf("  ⚠️ 机械质检: 镜头 %d 有台词但画面描述无动作/表情词——说话人可能呆立念白,建议补该角色的动作/微表情", r.ID))
+		}
+	}
+	// 7) 内心/旁白双写去重(2026-08-31 用户实测「内心配音重复」的脚本层根源):
+	//    LLM 直出时同一句内心/旁白常被写两次——一次 <Subject N> (Sx) says:(内心被
+	//    安到画面角色开口,还会乱对嘴型),一次 narrator off-screen voiceover。
+	//    程序保留画外音句式那条,删除角色 says 版(内心/旁白禁止角色开口)。
+	//    实测形态(第8章镜18):「<Subject 1> (S5) says: <d>放眼皮底下…</d>」+
+	//    「The narrator says in an off-screen voiceover: <d>放眼皮底下…</d>」。
+	reSubjSaysD := regexp.MustCompile(`<Subject\s+\d+>\s*\(S\d+\)\s+says:.*?<d>(?:\[Chinese\]|\[中文\])?([^<]+)</d>`)
+	for i := range raws {
+		r := &raws[i]
+		hp := r.H3Prompt
+		if hp == "" || !strings.Contains(hp, "<d>") {
+			continue
+		}
+		// 收集画外音句式 <d> 内容(norm)作为「权威保留集」
+		keep := map[string]bool{}
+		for _, m := range reOffscreenD.FindAllStringSubmatch(hp, -1) {
+			keep[manjuNormText(m[1])] = true
+		}
+		if len(keep) == 0 {
+			continue
+		}
+		changed := false
+		hp = reSubjSaysD.ReplaceAllStringFunc(hp, func(m string) string {
+			sm := reSubjSaysD.FindStringSubmatch(m)
+			if len(sm) > 1 && keep[manjuNormText(sm[1])] {
+				changed = true
+				return "" // 该句已在画外音中,删除角色 says 版
+			}
+			return m
+		})
+		if changed {
+			// 清理残留的空行/多余空格
+			hp = regexp.MustCompile(`\n{3,}`).ReplaceAllString(hp, "\n\n")
+			r.H3Prompt = strings.TrimSpace(hp)
+			lg.logf(fmt.Sprintf("  ✅ 机械质检: 镜头 %d 内心/旁白双写已去重(保留 off-screen voiceover 版,删除角色开口版——防重复配音与乱对嘴型)", r.ID))
+		}
+	}
+}
+
+// reOffscreenD 画外音句式 <d> 内容提取(去重保留集)
+var reOffscreenD = regexp.MustCompile(`in an off-?screen voiceover:.*?<d>(?:\[Chinese\]|\[中文\])?([^<]+)</d>`)
+
+// manjuNormText 台词/提示词片段归一(去空白与常见标点,去重比对用)
+func manjuNormText(s string) string {
+	return regexp.MustCompile(`[\s,，。.．!！?？\-—·、:；:;"'‘’“”()\[\]{}<>《》【】~～…]+`).ReplaceAllString(s, "")
+}
+
+// stripNarrationPrefix 剥旁白/内心行前缀与杂质,取纯内容(2026-08-30 五问整改):
+// 「内心·角色名:内容。」「旁白:内容。」「内容(S1)」统一归一为「内容」——
+// 前缀/引号/说话人标注留在补写 key 里会导致与 h3_prompt 的内容命中判定失败,
+// 每次导入都补出带「内心·阿影:」字面量的重复画外音 <d> 句(EP01 镜4/5/6/14 实锤)。
+func stripNarrationPrefix(line string) string {
+	// 1) 「内心·角色名:」前缀:取角色名后第一个冒号之后为内容
+	if i := strings.Index(line, "内心·"); i >= 0 {
+		rest := line[i+len("内心·"):]
+		if j := strings.IndexAny(rest, "：:"); j >= 0 {
+			rest = rest[j+1:]
+		}
+		line = rest
+	}
+	// 2) 「旁白」前缀与冒号
+	line = strings.TrimPrefix(line, "旁白")
+	line = strings.TrimPrefix(strings.TrimPrefix(line, ":"), "：")
+	// 3) (Sx) 说话人标注(可能出现在内容尾部)
+	if j := strings.Index(line, "(S"); j >= 0 {
+		line = line[:j]
+	}
+	// 4) 首尾引号(全半角/弯引号)与收尾标点循环剥(交替出现时一轮剥不干净)
+	for {
+		before := line
+		line = strings.Trim(line, "「」『』\"'“”‘’ ")
+		line = strings.Trim(line, "。！？.!?…~ ")
+		if line == before {
+			break
+		}
+	}
+	line = strings.TrimSpace(line)
+	// 5) 中间成对引号(「"句一。""句二。"」)→ 句号,逐句判定才能拆开
+	line = strings.ReplaceAll(line, "\"\"", "。")
+	line = strings.ReplaceAll(line, "''", "。")
+	line = strings.TrimSpace(line)
+	// 6) 内容尾部补规范句号(补写 <d> 内容以「。」收尾,与原文风格一致)
+	line = line + "。"
+	// 防御:剥完为空或只剩单字(内容过短无判定意义)
+	if len([]rune(line)) < 2 {
+		return ""
+	}
+	return line
+}
+
+// splitNarrationSentences 按中文句末标点拆句(保留标点;用于补写判定逐句命中)
+func splitNarrationSentences(n string) []string {
+	var out []string
+	var cur []rune
+	for _, ch := range n {
+		cur = append(cur, ch)
+		if ch == '。' || ch == '！' || ch == '？' {
+			out = append(out, string(cur))
+			cur = nil
+		}
+	}
+	if len(cur) > 0 {
+		out = append(out, string(cur))
+	}
+	return out
 }
 
 // parseScriptAssetCards 从素材解析角色/场景卡:
@@ -785,24 +1128,120 @@ func (ctx *manjuCtx) parseScriptAssetCards(lg *manjuLogger) (chars []map[string]
 		roots = append(roots, filepathJoin(d, "素材"))
 	}
 	// 素材解析失败不阻断方案:返回空,调用方回退 LLM 或角色管理补
-	charFile := firstExisting(roots, "人物生成提示词.md")
-	sceneFile := firstExisting(roots, "场景提示词.md")
+	// 2026-08-31 JSON 素材卡优先(技能侧新格式),md 兼容旧项目
+	charFile := firstExisting(roots, "人物生成提示词.json")
+	if charFile == "" {
+		charFile = firstExisting(roots, "人物生成提示词.md")
+	}
+	sceneFile := firstExisting(roots, "场景提示词.json")
+	if sceneFile == "" {
+		sceneFile = firstExisting(roots, "场景提示词.md")
+	}
 	assetStyle := manjuAssetStyle(ctx.style)
 
 	if charFile != "" {
 		if b, err := os.ReadFile(charFile); err == nil {
-			chars = parseCharCards(string(toUTF8(b)), assetStyle, manjuStyleIs3D(ctx.style))
+			if strings.HasSuffix(charFile, ".json") {
+				chars = parseCharCardsJSON(string(toUTF8(b)))
+			} else {
+				chars = parseCharCards(string(toUTF8(b)), assetStyle, manjuStyleIs3D(ctx.style))
+			}
 		}
 	}
 	if sceneFile != "" {
 		if b, err := os.ReadFile(sceneFile); err == nil {
-			scenes = parseSceneCards(string(toUTF8(b)), assetStyle, manjuStyleIs3D(ctx.style))
+			if strings.HasSuffix(sceneFile, ".json") {
+				scenes = parseSceneCardsJSON(string(toUTF8(b)))
+			} else {
+				scenes = parseSceneCards(string(toUTF8(b)), assetStyle, manjuStyleIs3D(ctx.style))
+			}
 		}
 	}
 	if len(chars) == 0 {
-		lg.logf("  ⚠️ 素材/人物生成提示词.md 未找到或解析为空,角色卡需由角色管理补")
+		lg.logf("  ⚠️ 素材/人物生成提示词(.json/.md) 未找到或解析为空,角色卡需由角色管理补")
 	}
 	return chars, scenes
+}
+
+// parseCharCardsJSON 解析 人物生成提示词.json → characters 卡(2026-08-31 技能侧
+// 新格式,md 弃用)。字段:id/name/gender/age/role/species/appearance/costume/voice/
+// memories/image_prompt/q_form/second_form/minor;与 md 解析输出同构(渲染端
+// 消费字段一致)。
+func parseCharCardsJSON(text string) []map[string]any {
+	var arr []map[string]any
+	if err := json.Unmarshal([]byte(text), &arr); err != nil {
+		return nil
+	}
+	var out []map[string]any
+	for _, c := range arr {
+		id := str(c["id"])
+		if id == "" {
+			id = str(c["name"])
+		}
+		if id == "" {
+			continue
+		}
+		age := str(c["age"])
+		// 2026-09-01 age 兜底:image_prompt 里的 "N-year-old"(JSON 素材 age 缺失时,
+		// 如「(人类·男,星陨组织头目)」无年龄数字但提示词带 45-year-old——年龄档位
+		// 决定 Q 版皱纹/音色/老年特征,缺失=Q 版无年龄感)
+		if age == "" {
+			if m := regexp.MustCompile(`(\d+)-year-old|(\d+)\s*岁`).FindStringSubmatch(str(c["image_prompt"])); len(m) > 1 {
+				if m[1] != "" {
+					age = m[1] + "岁"
+				} else {
+					age = m[2]
+				}
+			}
+		}
+		card := map[string]any{
+			"id":           id,
+			"gender":       str(c["gender"]),
+			"age":          age,
+			"appearance":   str(c["appearance"]),
+			"costume":      str(c["costume"]),
+			"image_prompt": str(c["image_prompt"]),
+			"views":        map[string]any{},
+		}
+		for k, v := range map[string]string{
+			"role": "role", "species": "species", "voice": "voice",
+			"memories": "memories", "q_form": "q_form", "second_form": "second_form",
+		} {
+			if s := str(c[k]); s != "" {
+				card[v] = s
+			}
+		}
+		if b, _ := c["minor"].(bool); b {
+			card["minor"] = true
+		}
+		out = append(out, card)
+	}
+	return out
+}
+
+// parseSceneCardsJSON 解析 场景提示词.json → scenes 卡(2026-08-31 新格式)
+func parseSceneCardsJSON(text string) []map[string]any {
+	var arr []map[string]any
+	if err := json.Unmarshal([]byte(text), &arr); err != nil {
+		return nil
+	}
+	var out []map[string]any
+	for _, s := range arr {
+		id := str(s["id"])
+		if id == "" {
+			id = str(s["name"])
+		}
+		if id == "" {
+			continue
+		}
+		card := map[string]any{
+			"id":          id,
+			"description": str(s["description"]),
+			"image_prompt": str(s["image_prompt"]),
+		}
+		out = append(out, card)
+	}
+	return out
 }
 
 // parseCharCards 解析 人物生成提示词.md → characters 卡。

@@ -1341,7 +1341,7 @@ func manjuScriptImportFromNovel(w http.ResponseWriter, r *http.Request) {
 		matches, _ = filepath.Glob(filepath.Join(dir, "EP"+strings.TrimPrefix(ep, "EP")+".md"))
 	}
 	if len(matches) == 0 {
-		writeErr(w, http.StatusNotFound, fmt.Sprintf("小说分镜脚本目录(%s)未找到「第%s章*_分镜脚本.md」;请确认已按爽文技能 H3分镜脚本文档模板 生成", dir, chap))
+		writeErr(w, http.StatusNotFound, fmt.Sprintf("小说分镜脚本目录(%s)未找到「第%s章*_分镜脚本.json/.md」;请确认已按爽文技能分镜派发模板生成", dir, chap))
 		return
 	}
 	src := pickStoryboardMatch(matches) // 同章号多文件择优(排除备份,取最新)
@@ -1966,6 +1966,8 @@ func startManjuRun(configPath, chapters, episode, phase, only, novel string, aut
 	runFile, _ := os.OpenFile(manjuRunLogPath(projName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	lg := newManjuLogger(manjuState, runFile, ctx.project, ctx.episode)
 	phaseName := orDefault(phase, "all")
+	// 2026-09-01 用户规则:AI 一条龙=全走 LLM+Agent,跳过脚本检测强制 LLM 直出
+	ctx.agentMode = agentMode
 
 	// 全本自动分段分集:把整本书切成多集,逐集跑管线,免去用户手动换集号
 	// 集数 0 = 每章一集(第 N 章 = 第 N 集);否则沿用 按卷/字数打包 的自动分集
@@ -2039,6 +2041,7 @@ func startManjuRun(configPath, chapters, episode, phase, only, novel string, aut
 					break
 				}
 				epCtx.auto = true
+				epCtx.agentMode = agentMode // AI 一条龙:跳过脚本检测,全 LLM+Agent
 				epLg := newManjuLogger(manjuState, runFile, epCtx.project, seg.Episode)
 				lg.logf("🎬 第 " + strconv.Itoa(i+1) + "/" + strconv.Itoa(len(autoEps)) + " 集 " + seg.Episode + "（章节 " + seg.Chapters + "）")
 				rc = runPipeline(epCtx, epLg)

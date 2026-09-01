@@ -70,11 +70,11 @@ func TestManjuExpectPicSlots(t *testing.T) {
 		want  int
 	}{
 		{"空镜无场景", nil, "", 0},
-		{"单角色", []string{"苏苗苗"}, "", 3},    // front/full/detail
-		{"双角色", []string{"苏苗苗", "小圆"}, "", 4}, // 各 front+full
-		{"三角色", []string{"a", "b", "c"}, "", 4},  // 主角 front+full+其余各 front
-		{"四角色截断", []string{"a", "b", "c", "d"}, "", 4},
-		{"单角色+场景图", []string{"苏苗苗"}, "走廊绿萝角", 4},
+		{"单角色", []string{"苏苗苗"}, "", 4},    // front/full/detail/side(2026-09-01 加 side)
+		{"双角色", []string{"苏苗苗", "小圆"}, "", 6}, // 各 front+full+side
+		{"三角色", []string{"a", "b", "c"}, "", 7},  // 主角 front+full+side+其余各 front+side
+		{"四角色截断", []string{"a", "b", "c", "d"}, "", 7},
+		{"单角色+场景图", []string{"苏苗苗"}, "走廊绿萝角", 5},
 		{"纯空镜+场景图", nil, "走廊绿萝角", 1},
 	}
 	for _, c := range cases {

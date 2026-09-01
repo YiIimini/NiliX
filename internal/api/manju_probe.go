@@ -210,7 +210,7 @@ func probeManjuDir(raw string) manjuDirProbe {
 		p.Notes = append(p.Notes, "未检测到小说全本:将启用视频脚本直出模式(分镜脚本创建后自动按章导入)")
 	default:
 		p.Errors = append(p.Errors, "未找到小说全本(期望 <书目录>/全本/*.md)")
-		p.Errors = append(p.Errors, "未找到分镜脚本(期望 <书目录>/素材/分镜脚本/ 下文件名含「分镜」的 .md)")
+		p.Errors = append(p.Errors, "未找到分镜脚本(期望 <书目录>/素材/分镜脚本/ 下文件名含「分镜」的 .json/.md)")
 		p.Errors = append(p.Errors, "至少需要小说全本或分镜脚本之一才能创建项目;请检查所选目录是否为某一本书的根目录")
 	}
 	return p

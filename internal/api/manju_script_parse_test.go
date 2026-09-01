@@ -552,7 +552,7 @@ func TestScriptValidateAutoPatch(t *testing.T) {
 	if !strings.Contains(p, "<d>你听不到我的声音吗</d>") {
 		t.Fatalf("对白应补进 <d>: %s", p)
 	}
-	if !strings.Contains(p, "off-screen voiceover: <d>雨夜的风声掠过屋顶</d>") {
+	if !strings.Contains(p, "off-screen voiceover: <d>雨夜的风声掠过屋顶。</d>") {
 		t.Fatalf("旁白应补画外音: %s", p)
 	}
 	if !strings.Contains(p, "<d>[中文]既有台词</d>") {

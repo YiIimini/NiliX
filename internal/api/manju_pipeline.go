@@ -51,7 +51,8 @@ type manjuCtx struct {
 	chapters     string
 	only         string
 	novel        string // 实际使用的小说文件(前端覆盖优先)
-	scriptMode   bool   // 视频脚本直出模式(输入为 H3 官方格式的分镜脚本 md,而非小说正文)
+	scriptMode   bool   // 视频脚本直出模式(输入为 H3 官方格式的分镜脚本 md/json,而非小说正文)
+	agentMode    bool   // AI 一条龙(2026-09-01 用户规则):全走 LLM+Agent 全流程,跳过脚本检测强制 LLM 直出
 	auto         bool   // 全本自动分集模式:该集章节由引擎按内容量切分(方案复用校验用)
 	llm          *manjuLLM
 	comfy        *comfyClient
@@ -563,6 +564,13 @@ func manjuSanitizeRenderWords(s string) (string, map[string]int) {
 // 二修追加「每人独立形象/禁止复制同人/禁止复用他人形象」——自由发挥的群演不复用参考图人物脸。
 const manjuFrameGuard = "FRAME DISCIPLINE: this shot contains ONLY the characters listed in subject_definitions; every face in the frame belongs to these characters alone - absolutely no other people, no extra faces, no bystanders, no passers-by, no crowd, no background figures with visible faces; every person in the frame is a distinct individual with their own unique appearance - never show the same character twice, never duplicate a face, never reuse another character's look for an extra person"
 
+// manjuConsistencyGuard 身份一致性纪律(2026-09-01 知识库「五步导演法」整合):
+// 图生视频翻车第一因=五官漂移/发型变/服装变色/配饰消失——官方/社区一致推荐提示词
+// 主动声明一致性约束(「保持参考图中人物脸部特征/发型/服装/配饰/身体比例/位置/场景
+// 布局/光线方向一致」+「appearance and costume remain unchanged throughout the shot」)。
+// 注入条件:提示词引用 <Picture N>(有人物参考图);无参考图镜不注入(文字描述自行成型)。
+const manjuConsistencyGuard = "IDENTITY CONSISTENCY: the characters' facial features, hairstyles, outfit styles and colors, accessories, body proportions, positions in the frame, and the scene layout and lighting direction must remain unchanged throughout this shot, matching the reference pictures exactly - no facial drift, no hair or costume changes, no lost accessories"
+
 // manjuMotionGuard 运动纪律(2026-08-27 用户反馈"像PPT/运镜不电影级"):H3 长镜存在
 // 运动衰减——动作早早 settle 后画面趋静止,叠加段尾固有冻结,成片观感即幻灯片。这里在
 // 提示词尾部强注入持续运动要求(镜头运动/人物动作/环境动态三选一持续到最后帧),
@@ -740,6 +748,11 @@ func manjuFinalizePromptPure(hp string, hasChars bool, picSlots int) string {
 	if !strings.Contains(hp, "CHAIN DISCIPLINE") {
 		hp = strings.TrimRight(hp, " \n") + "\n" + manjuChainGuard
 	}
+	// 2026-09-01 身份一致性纪律(知识库五步导演法):有人物参考图(<Picture N> 引用)
+	// 才注入——无参考图镜注入反而约束文字自由成型;幂等锚=IDENTITY CONSISTENCY
+	if strings.Contains(hp, "<Picture ") && !strings.Contains(hp, "IDENTITY CONSISTENCY") {
+		hp = strings.TrimRight(hp, " \n") + "\n" + manjuConsistencyGuard
+	}
 	return hp
 }
 
@@ -768,10 +781,12 @@ func (ctx *manjuCtx) finalizeShotPromptSlots(hp string, s manjuShot, picSlots in
 	// 「路人配音和主角配音都是主角在说话」:画外音无 <Audio> 引用时 H3 用默认/主角
 	// 音色念所有画外音;按声线描述(性别/年龄/语气)分配独立音色并挂 ref_audios。
 	vbs := ctx.voiceBindingsFor(s)
-	hp = ensureVoiceBindings(hp, vbs)
+	hp = ensureVoiceBindings(hp, vbs, ctx.refContractFor(s))
 	innerCid, innerKey := ctx.innerVoiceFor(s) // 内心戏角色音色(2026-08-30 ver14,问题⑥)
 	obs := ctx.manjuOffscreenBindings(hp, innerCid, innerKey)
-	hp = injectOffscreenVoiceBindings(hp, obs, len(vbs))
+	// 画外编号从补写后最大 <Audio N> 接续(2026-08-30 五问整改:ensureVoiceBindings
+	// 逐角色补写后编号可能超过 len(vbs),再按 len(vbs) 起步会与补写定义编号冲突)
+	hp = injectOffscreenVoiceBindings(hp, obs, maxAudioNum(hp))
 	// 画外音唇动任务句注入 summary(2026-08-29 二修):LIP DISCIPLINE 在 prompt 队尾,
 	// H3 对尾部约束注意力弱(实测镜4 画外音时主角仍对口型)。summary 是模型的任务定义
 	// 段,服从度最高——存在 off-screen voiceover 时在 summary 追加「画外音期间所有
@@ -816,7 +831,116 @@ func (ctx *manjuCtx) finalizeShotPromptSlots(hp string, s manjuShot, picSlots in
 func (ctx *manjuCtx) finalizeAlignedPrompt(hp string, s manjuShot, picSlots int) string {
 	c := ctx.refContractFor(s)
 	out := manjuFinalizeAlignedReg(hp, c, s.Duration, s.Dialogue, len(s.Characters) > 0, picSlots, ctx.speakerReg)
+	// 2026-08-30 五问整改(问题②乱对嘴型):画外说话句机械 off-screen 标注——
+	// 对齐层把画面角色写成 <Subject N> (Sx) says,裸 (Sx) says: 即画外说话者,
+	// 未标 off-screen 时 H3 会把台词安给画面角色动嘴。纯函数,指纹/渲染共用。
+	out = markOffscreenSays(out)
+	// 2026-08-30 五问整改(问题④运镜垃圾):分镜运镜列三要素机械注入——
+	// LLM 软规则可忽略,纪律句是渲染前硬兜底;「固定」镜与 MOTION DISCIPLINE
+	// 不冲突(static camera + 画面动作/环境动效持续,官方三选一)。
+	out = injectCameraDiscipline(out, s.Camera)
+	// 2026-08-30 五问整改(问题③站位不清):站位纪律硬注入——存量脚本六段式
+	// 站位稀疏(EP01 14 镜 8 镜零位置词)且「脚本即权威」无人补,纪律句强制
+	// 每个登场角色带屏幕位置+朝向,新渲染即生效。
+	out = injectPositionDiscipline(out)
 	return ctx.injectAudioTimbrePhrases(out, c)
+}
+
+// manjuCameraPhrase 分镜运镜列 → 英文三要素短语(2026-08-30 五问整改,问题④):
+// ①括号内英文直取(「缓推（Push In, small, slow）」→ Push In, small, slow);
+// ②「固定」→ static locked-off camera;③中文词走映射表兜底;④解析不出返回空
+// (不注入,信任既有提示词文本)。
+func manjuCameraPhrase(camera string) string {
+	cm := strings.TrimSpace(camera)
+	if cm == "" {
+		return ""
+	}
+	// ①括号内英文三要素(rune 级索引,全角括号 3 字节不能按字节切)
+	if rs := []rune(cm); len(rs) > 0 {
+		for k, ch := range rs {
+			if ch != '（' && ch != '(' {
+				continue
+			}
+			rest := rs[k+1:]
+			for m, c2 := range rest {
+				if c2 != '）' && c2 != ')' {
+					continue
+				}
+				en := strings.TrimSpace(string(rest[:m]))
+				if len([]rune(en)) >= 3 && !strings.ContainsAny(en, "《<>") {
+					return en
+				}
+				break
+			}
+			break
+		}
+	}
+	// ②固定机位
+	if strings.Contains(cm, "固定") {
+		return "static locked-off camera"
+	}
+	// ③中文映射表(注意顺序:复合词在前,单字在后)
+	table := []struct{ zh, en string }{
+		{"低机位", "low-angle shot"},
+		{"贴地", "ground-level shot"},
+		{"过肩", "over-the-shoulder shot"},
+		{"俯拍", "high-angle shot"},
+		{"仰拍", "low-angle shot"},
+		{"缓推", "push in with small amplitude at slow speed"},
+		{"急推", "push in with large amplitude at fast speed"},
+		{"缓拉", "pull back with small amplitude at slow speed"},
+		{"急拉", "pull back with large amplitude at fast speed"},
+		{"横移", "lateral truck with medium amplitude"},
+		{"跟移", "tracking shot following the subject"},
+		{"甩镜", "whip pan"},
+		{"环绕", "arc move around the subject"},
+		{"环摇", "arc move around the subject"},
+		{"慢升", "slow crane rise"},
+		{"快升", "fast crane rise"},
+		{"缓摇", "slow pan"},
+		{"推", "push in"},
+		{"拉", "pull back"},
+		{"摇", "pan"},
+		{"移", "lateral truck"},
+		{"升", "crane rise"},
+		{"降", "crane drop"},
+	}
+	for _, t := range table {
+		if strings.Contains(cm, t.zh) {
+			return t.en
+		}
+	}
+	return ""
+}
+
+// injectCameraDiscipline 运镜必达纪律注入(2026-08-30 五问整改,问题④):队尾追加
+// CAMERA DISCIPLINE(幂等锚),机械保证运镜列三要素进入渲染输入。
+func injectCameraDiscipline(hp, camera string) string {
+	if strings.Contains(hp, "CAMERA DISCIPLINE") {
+		return hp
+	}
+	ph := manjuCameraPhrase(camera)
+	if ph == "" {
+		return hp
+	}
+	guard := "CAMERA DISCIPLINE: this shot's camera performs " + ph
+	if strings.Contains(ph, "static") {
+		guard += "; the camera stays locked but on-screen character action or environmental motion (light flicker, moving fabric and hair, drifting particles) must keep every second of the frame alive"
+	} else {
+		guard += "; keep that camera movement visible from the first frame to the last frame - never settle into a static locked-off frame"
+	}
+	return strings.TrimRight(hp, " \n") + "\n" + guard
+}
+
+// injectPositionDiscipline 站位纪律注入(2026-08-30 五问整改,问题③):队尾追加
+// POSITION DISCIPLINE(幂等锚)——存量脚本 detailed_description 站位稀疏且
+// 「脚本即权威」逐字保留无人补,纪律句强制每个登场角色带屏幕位置+朝向。
+func injectPositionDiscipline(hp string) string {
+	if strings.Contains(hp, "POSITION DISCIPLINE") {
+		return hp
+	}
+	guard := "POSITION DISCIPLINE: every on-screen character must appear at a specific screen position - left/center/right third of the frame combined with foreground/midground/background depth - with a clear facing direction (facing camera, facing left, facing right, or turned away); no character may float without a position, and once the relative arrangement of characters is set it must not flip within the shot"
+	return strings.TrimRight(hp, " \n") + "\n" + guard
 }
 
 // reAudioDefPhrase 规范化后的 Audio 定义行(alignAudioDefs 输出格式,稳定可匹配;
@@ -907,7 +1031,24 @@ func (ctx *manjuCtx) buildSpeakerRegistry(shots []manjuShot) map[string]string {
 		for _, cid := range c.VoiceRoster {
 			roster[cid] = true
 		}
+		names := map[string]bool{}
 		for cid := range dialogueSpeakerIDs(s.Dialogue, c) {
+			names[cid] = true
+		}
+		// 2026-08-30 五问整改(问题②兜底):内心戏「内心·角色名」说话人也注册全局
+		// Sx——内心说话者此前不在注册表,画外内心句的 (Sx) 跨镜漂移(旁白不注册,
+		// 独立叙述音色,镜内序即可)
+		for _, line := range strings.Split(s.Narration, "\n") {
+			if i := strings.Index(line, "内心·"); i >= 0 {
+				rest := line[i+len("内心·"):]
+				if j := strings.IndexAny(rest, "：:"); j > 0 {
+					if cid := charIDMatch(rest[:j], c); cid != "" {
+						names[cid] = true
+					}
+				}
+			}
+		}
+		for cid := range names {
 			if !roster[cid] {
 				continue
 			}
@@ -956,14 +1097,14 @@ func manjuExpectPicSlots(s manjuShot) int {
 	for i := 0; i < n; i++ {
 		switch {
 		case n <= 1:
-			slots += 3 // front/full/detail
+			slots += 4 // front/full/detail/side(2026-09-01 加 side 视图)
 		case n == 2:
-			slots += 2 // front/full
-		default: // 3 角色:主角 front+full,其余 front
+			slots += 3 // front/full/side
+		default: // 3 角色:主角 front+full+side,其余 front+side
 			if i == 0 {
-				slots += 2
+				slots += 3
 			} else {
-				slots++
+				slots += 2
 			}
 		}
 	}
@@ -1521,17 +1662,27 @@ func (ctx *manjuCtx) autoStoryboardForEpisode(lg *manjuLogger) string {
 		return ""
 	}
 	chap := fmt.Sprintf("%03d", n)
-	matches, _ := filepath.Glob(filepath.Join(dir, "第"+chap+"章*.md"))
+	// 2026-08-31 JSON 分镜脚本优先(.json 为新格式,md 兼容旧项目)
+	matches, _ := filepath.Glob(filepath.Join(dir, "第"+chap+"章*.json"))
+	if len(matches) == 0 {
+		matches, _ = filepath.Glob(filepath.Join(dir, "第"+chap+"章*.md"))
+	}
 	if len(matches) == 0 {
 		// 2026-08-26 兜底:部分分镜脚本文件名无前导零(第1章_xxx.md)——补两位/一位数字匹配
 		for _, w := range []int{2, 1} {
 			if n < 10 || w == 2 {
+				matches, _ = filepath.Glob(filepath.Join(dir, fmt.Sprintf("第%0*d章*.json", w, n)))
+			}
+			if len(matches) == 0 {
 				matches, _ = filepath.Glob(filepath.Join(dir, fmt.Sprintf("第%0*d章*.md", w, n)))
 			}
 			if len(matches) > 0 {
 				break
 			}
 		}
+	}
+	if len(matches) == 0 {
+		matches, _ = filepath.Glob(filepath.Join(dir, "EP"+fmt.Sprintf("%02d", n)+".json"))
 	}
 	if len(matches) == 0 {
 		matches, _ = filepath.Glob(filepath.Join(dir, "EP"+fmt.Sprintf("%02d", n)+".md"))
@@ -2074,7 +2225,7 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 		// → 清空已完成镜头+缓存重新生成(脚本没变却重复烧 GPU,实测 EP01 6 镜被误清)。
 		// 方案为脚本直出时,先尝试找回同集分镜脚本:找回且脚本指纹一致 → 切回脚本模式复用;
 		// 找回但指纹已变 → 脚本真换了,走「脚本已更换」重新生成;找回不到 → 按原章节范围判定。
-		if planC == "script" && !ctx.scriptMode {
+		if planC == "script" && !ctx.scriptMode && !ctx.agentMode {
 			if sp := ctx.autoStoryboardForEpisode(lg); sp != "" {
 				ctx.scriptMode = true
 				ctx.novel = sp
@@ -2172,7 +2323,9 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 	// 2026-08-24 再修复:小说解析模式(用户导入小说目录)也应自动检测 素材/分镜脚本/ 里的
 	// 对应集分镜脚本——有则自动切脚本直出(程序化解析零 LLM,且避免逐镜提示词截断),
 	// 否则用户"导入小说目录"却走 LLM 直出分镜+逐镜 H3,镜头多时提示词超长截断(实测镜头 10)。
-	if !ctx.scriptMode {
+	// 2026-09-01 用户规则分流:AI 一条龙(agentMode)=全走 LLM+Agent,不检测脚本;
+	// 普通一条龙/小说导入/全本自动分集=检测对应 json 分镜脚本,有则脚本直出,无则 LLM 直出。
+	if !ctx.scriptMode && !ctx.agentMode {
 		if sp := ctx.autoStoryboardForEpisode(lg); sp != "" {
 			lg.logf("  📽 自动检测到分镜脚本「" + filepath.Base(sp) + "」,切换脚本直出(程序化解析,六段式逐字保留)")
 			ctx.scriptMode = true
@@ -2454,7 +2607,10 @@ func (ctx *manjuCtx) novelFingerprint() string {
 					walk(p)
 					continue
 				}
-				if !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+				// 2026-09-01:场景/人物卡已 JSON 化,指纹须同时纳入 .md 与 .json 素材,
+				// 否则补卡/改卡不失效旧方案(场景池仍用旧卡)
+				if !strings.HasSuffix(strings.ToLower(e.Name()), ".md") &&
+					!strings.HasSuffix(strings.ToLower(e.Name()), ".json") {
 					continue
 				}
 				// 只纳入与方案相关的素材(排除正文/全本章节文件——正文由 ctx.novel 指纹覆盖)
@@ -2930,7 +3086,7 @@ func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]
 			cd, _ := json.Marshal(compactData)
 			if out2, err2 := ctx.llm.chatJSON(compactSys, string(cd), 0.3); err2 == nil {
 				if hp2 := str(out2["h3_prompt"]); hp2 != "" {
-					return ensureVoiceBindings(hp2, vbs), nil
+					return ensureVoiceBindings(hp2, vbs, ctx.refContractFor(s)), nil
 				}
 			}
 		}
@@ -2940,7 +3096,7 @@ func (ctx *manjuCtx) genShotPromptRaw(s manjuShot, charMap, sceneMap map[string]
 	if hp == "" {
 		return "", fmt.Errorf("LLM 未返回 h3_prompt")
 	}
-	return ensureVoiceBindings(hp, vbs), nil
+	return ensureVoiceBindings(hp, vbs, ctx.refContractFor(s)), nil
 }
 
 // manjuTimecode 秒 → MM:SS.mmm(H3 官方多切点时间戳格式)
@@ -3487,6 +3643,11 @@ func manjuQStrip(s string) string {
 		"8K ultra detailed", "8k ultra detailed", "8K", "8k", "soft facial lighting",
 		"ultra detailed", "walking briskly", "walking quickly", "always walking",
 		"walking down", "walking toward", "walking slowly", "walking ", "running ", "sitting ", "standing ",
+		// 2026-09-01 光效词(苏晚萤 Q 版实锤):image_prompt 的 luminous eyes/gentle light
+		// 等光效描述进 chibi prompt,img2img 0.93 高重绘下被放大成发光连体装/科幻光效,
+		// Q 版画风与主图割裂——光效是光影描述,chibi 手办不需要,整段剥除
+		"luminous dark almond eyes with a gentle light", "luminous eyes", "luminous", "with a gentle light",
+		"glowing", "radiant", "ethereal glow", "soft glow", "gentle glow", "shimmering", "sparkling aura",
 	} {
 		s = strings.ReplaceAll(s, w, "")
 		if len(w) > 1 {
@@ -3506,8 +3667,8 @@ var manjuViewAnchors = map[string]string{
 	// 「全身可见+视角」,下半身着装零约束——image_prompt 常只写上衣(儿童角色尤甚),
 	// 下半身全靠模型自由发挥。full/side 补下半身硬锚:完整下装(裤/袍/裙随角色)、
 	// 腿脚全程着装到鞋,禁光腿/缺下装。
-	"full":   "FULL BODY view, standing full figure from head to toe, entire body visible including feet and shoes, standing on the ground, full figure framing with margin above head and below feet, front view facing the camera, wearing complete clothing on both upper and lower body, full lower-body garment (trousers, pants, robes or a skirt matching the character's outfit) fully covering the hips and legs down to the shoes, never bare legs, never missing trousers or skirt",
-	"side":   "SIDE PROFILE view, face turned exactly 90 degrees to the side, strong profile silhouette, nose and chin clearly in profile, only one eye visible, head pointing sideways not toward the camera, full body seen from the side, full lower-body garment (trousers, robes or skirt matching the character's outfit) fully covering the hips and legs, never bare legs",
+	"full":   "FULL BODY view, standing full figure from head to toe, entire body visible including feet and shoes, standing on the ground, full figure framing with margin above head and below feet, front view facing the camera, wearing complete clothing on both upper and lower body, full lower-body garment (trousers, pants, robes or a skirt matching the character's outfit) fully covering the hips and legs down to the shoes, never bare legs, never missing trousers or skirt, single continuous figure, one character only, no duplication, no mirror image, no double exposure, no two figures stacked or side by side",
+	"side":   "SIDE PROFILE view, face turned exactly 90 degrees to the side, strong profile silhouette, nose and chin clearly in profile, only one eye visible, head pointing sideways not toward the camera, full body seen from the side, full lower-body garment (trousers, robes or skirt matching the character's outfit) fully covering the hips and legs, never bare legs, single continuous figure, one character only, no duplication, no mirror image, no double exposure, no two figures stacked or side by side",
 	"detail": "EXTREME CLOSE-UP detail shot, zoomed on the single most distinctive feature (ornament/pattern/hairstyle/scar), large detailed close-up composition, macro framing",
 }
 
@@ -3520,8 +3681,8 @@ const manjuIdentityAnchor = ", same character as the reference image (identical 
 // 人互动描述("sitting on a young cultivator's shoulder")叠加,禁词压不住矛盾(矛盾=并集)
 // → 兽类 full/side 必须用纯兽形锚:完整兽体占满画面、四足落地、无人无衣。
 var manjuBeastViewAnchors = map[string]string{
-	"full":   "FULL BODY view of the creature from head to tail, the complete beast body entirely filling the frame, front view facing the camera, purely animal creature form on four paws, absolutely no humans, no human body, no human figure, no human clothes",
-	"side":   "SIDE PROFILE view of the creature, the complete beast body seen from the side from head to tail, purely animal creature form on four paws, absolutely no humans, no human body, no human figure, no human clothes",
+	"full":   "FULL BODY view of the creature from head to tail, the complete beast body entirely filling the frame, front view facing the camera, purely animal creature form on four paws, absolutely no humans, no human body, no human figure, no human clothes, single continuous figure, one creature only, no duplication, no mirror image, no two figures stacked",
+	"side":   "SIDE PROFILE view of the creature, the complete beast body seen from the side from head to tail, purely animal creature form on four paws, absolutely no humans, no human body, no human figure, no human clothes, single continuous figure, one creature only, no duplication, no mirror image, no double exposure, no two figures stacked",
 	"detail": "EXTREME CLOSE-UP detail shot, zoomed on the creature's single most distinctive feature (markings/fur texture/eyes/horns), large detailed close-up composition, macro framing, no humans",
 }
 
@@ -3612,7 +3773,29 @@ func manjuViewPromptBuild(p string, view string, m map[string]any) string {
 	if manjuIsItem(m) {
 		return manjuItemViewAnchors[view] + ", " + manjuViewStrip(p) + manjuItemIdentityAnchor
 	}
+	// 无脸/剪影类角色(影子/雾/剪影形态,2026-09-01 阿影 side 上下双体实锤):
+	// 人形 side 锚的 face/nose/chin/one eye 语义对无脸角色是乱画邀请(Krea2 img2img
+	// 依锚尝试画脸与五官,黑雾人形被拆成上下两个体)。用剪影侧锚:纯轮廓单一体。
+	if view == "side" && manjuFacelessChar(m) {
+		return "SILHOUETTE PROFILE view, the single continuous dark figure seen from the side, pure outline and shadow mass with no facial features, no face, no eyes, no nose, no mouth, no limbs separated from the body, one continuous figure only, no duplication, no mirror image, no two figures stacked or split" + ", " + manjuViewStrip(p) + manjuIdentityAnchor + manjuMinorGuard(m)
+	}
 	return manjuViewAnchors[view] + ", " + manjuViewStrip(p) + manjuIdentityAnchor + manjuMinorGuard(m)
+}
+
+// manjuFacelessChar 无脸/剪影类角色判定(2026-09-01):非人且形象描述为影子/雾/
+// 剪影/无五官——侧面视图必须用剪影锚,人形面部锚会诱导模型乱画(阿影 side 上下双体)
+func manjuFacelessChar(m map[string]any) bool {
+	if m == nil {
+		return false
+	}
+	species := str(m["species"])
+	if species != "" && species != "人" {
+		low := strings.ToLower(str(m["image_prompt"]) + " " + species)
+		return strings.Contains(low, "shadow") || strings.Contains(low, "mist") ||
+			strings.Contains(low, "silhouette") || strings.Contains(low, "无脸") ||
+			strings.Contains(low, "no facial") || strings.Contains(low, "影子")
+	}
+	return false
 }
 
 // manjuCharImagePrompt 角色<视图>形态图的最终生图提示词(2026-08-27 角色管理「复制提示词」用;
@@ -4429,8 +4612,13 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		// 重绘容易画风漂移)。存量 _board.png 由视图清理逻辑(views_gen 升级)统一删除。
 		// 群演轻量卡(2026-08-27 群演分级):minor=true 跳过全部视图/Q版/双形态——
 		// 只保留上方已生成的主图定妆照+正脸(1张图成本),渲染参考 front 缺视图自动降级主图。
-		if !manjuIsMinorCast(m) {
-			for _, view := range []string{"full", "side", "detail", "q"} {
+		// 2026-09-01 群演卡补 side 视图:主持人/多角度镜头侧面渲染崩的修复——侧面参考图
+		// 让 H3 侧面镜头有据可依(群演仍跳过 full/detail/q,只多 1 张 side)。
+		// 2026-09-01 群演卡完整视图(用户问「主持人为什么只有正面和侧面」):minor
+		// 轻量卡此前跳过 full/detail/q——主持人群演也需全身/细节/Q版(群演 Q 版
+		// 渲染/审片判分可用);视图成本每卡 3 张,群演卡数量有限,完整视图收益更高。
+		viewSet := []string{"full", "side", "detail", "q"}
+		for _, view := range viewSet {
 			var p string
 			if view == "q" {
 				// 2026-08-27 用户规则更新:Q 版资产全角色渲染(反派/配角同样出 Q 版资产备用)——
@@ -4502,7 +4690,6 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 				}
 				cmap[cid+"_"+view] = "characters/" + cid + "_" + view + ".png"
 			}
-		}
 		}
 		scenes, _ := plan["scenes"].([]any)
 	for i, sc := range scenes {
@@ -5494,26 +5681,57 @@ func (ctx *manjuCtx) voiceBindingsFor(s manjuShot) []voiceBinding {
 
 // ensureVoiceBindings 音色定义兜底(2026-08-26):LLM 生成 h3_prompt 时漏写 <Audio> 定义
 // 音色参考就进不了条件编码(实测 H3 音色跟随的前提是 prompt 有 <Audio> 引用)。
-// 只在完全没有 <Audio> 引用时补写 subject_definitions 定义(有引用则信任 LLM,避免双重定义)。
+// 2026-08-30 五问整改:逐绑定角色检查——只补「该角色尚无 <Audio> 定义」的,不再整体
+// bail(此前只要存在任意 1 条 <Audio>(如内心戏画外音定义),同镜登场角色定义缺失也
+// 不补 → 说台词的登场角色无音色挂载,与画外共用默认声=配音分不清人物)。
 // 2026-08-30 官方格式对齐:定义行绑 <Subject M>(ref-en §2.4 官方示例形态;绑中文名
 // 时模型无法把音色与画面里的英文名角色关联=配音乱根源之一);行内 Sx 以登场序占位,
 // 渲染前 alignAudioDefs 会按画面段实际发声顺序重写。
-func ensureVoiceBindings(hp string, bindings []voiceBinding) string {
-	if len(bindings) == 0 || strings.Contains(hp, "<Audio ") {
+func ensureVoiceBindings(hp string, bindings []voiceBinding, c manjuRefContract) string {
+	if len(bindings) == 0 || !strings.Contains(hp, "summary:") {
 		return hp
 	}
 	var lines []string
+	maxN := maxAudioNum(hp)
 	for _, b := range bindings {
+		if audioDefExistsFor(hp, b, c) {
+			continue
+		}
+		maxN++
 		lines = append(lines, fmt.Sprintf(
 			"<Audio %d> is the voice-timbre reference for <Subject %d> (S%d), containing a spoken voiceover.",
-			audioNum(b.Audio), b.SubN, audioNum(b.Audio)))
+			maxN, b.SubN, maxN))
+	}
+	if len(lines) == 0 {
+		return hp
 	}
 	// subject_definitions 段末尾追加(六段式第一段,以 summary: 为界)
 	idx := strings.Index(hp, "summary:")
-	if idx < 0 {
-		return hp
-	}
 	return hp[:idx] + strings.Join(lines, "\n") + "\n\n" + hp[idx:]
+}
+
+// audioDefExistsFor 该绑定角色是否已有 <Audio> 定义行(按定义目标解析,任意编号;
+// LLM 直出绑中文名/对齐后绑 <Subject M> 两种形态都算已定义,防重复补写)
+func audioDefExistsFor(hp string, b voiceBinding, c manjuRefContract) bool {
+	for _, m := range reAudioDefLine.FindAllStringSubmatch(hp, -1) {
+		cid, _ := manjuAudioDefTarget(m[2], c)
+		if cid == b.CharID {
+			return true
+		}
+	}
+	return false
+}
+
+// maxAudioNum h3_prompt 中已存在的最大 <Audio N> 编号(0=无定义;补写/画外注入
+// 都从 maxN+1 接续,避免与 LLM 已写编号(含内心戏画外定义)冲突)
+func maxAudioNum(hp string) int {
+	maxN := 0
+	for _, m := range reAudioDefLine.FindAllStringSubmatch(hp, -1) {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > maxN {
+			maxN = n
+		}
+	}
+	return maxN
 }
 
 // audioNum 从 "<Audio N>" 提取 N
@@ -5606,6 +5824,32 @@ func manjuOffscreenKey(desc string) string {
 	default:
 		return "male_mag"
 	}
+}
+
+// offscreenVoiceKeyFor 画外说话者音色 key(2026-08-30 五问整改,挂载侧单一事实源):
+// ①内心戏描述「the quiet inner voice of X」→ 归一匹配登场角色 → 该角色音色(与注入侧
+//   innerVoiceFor→autoVoiceFor 同源)——此前挂载侧 manjuOffscreenKey 靠关键词猜音色,
+//   呆萌兽音描述无性别/年龄词掉默认 male_mag,EP01 四镜内心戏全挂中年男声(描述与
+//   参考音频自相矛盾=「配音分不清人物」直接来源);
+// ②旁白「narrator ... calm, neutral storytelling voice」→ 叙述音色(与注入侧同源);
+// ③其余(路人/群杂/环境喊话)才按声线关键词猜测(回退既有逻辑)。
+func (ctx *manjuCtx) offscreenVoiceKeyFor(offDesc string, c manjuRefContract) string {
+	low := strings.ToLower(offDesc)
+	if i := strings.Index(low, "the quiet inner voice of "); i >= 0 {
+		name := strings.TrimSpace(offDesc[i+len("the quiet inner voice of "):])
+		if j := strings.IndexAny(name, ",，"); j >= 0 {
+			name = name[:j]
+		}
+		if cid := charIDMatch(name, c); cid != "" {
+			if k := ctx.autoVoiceFor(cid); k != "" {
+				return k
+			}
+		}
+	}
+	if strings.Contains(low, "narrator") {
+		return "male_narrator"
+	}
+	return manjuOffscreenKey(offDesc)
 }
 
 // manjuOffscreenBindings 该镜画外说话者绑定列表(按出现顺序;与 charVoiceNames 的
@@ -5782,9 +6026,10 @@ func (ctx *manjuCtx) charVoiceNames(s manjuShot) []string {
 				}
 				rel := ""
 				cid, offDesc := manjuAudioDefTarget(who, c)
-				if offDesc != "" {
-					// 画外说话者:按声线描述解析音色(与注入同函数,确定性)
-					key := manjuOffscreenKey(offDesc)
+					if offDesc != "" {
+						// 画外说话者:音色 key 走单一事实源(内心→角色音色/旁白→叙述音色/
+						// 其余→声线关键词,与注入侧同源;2026-08-30 五问整改)
+						key := ctx.offscreenVoiceKeyFor(offDesc, c)
 					if key != "" {
 						rel = "audio/lib_" + key + ".mp3"
 						if !fileExists(filepath.Join(ctx.comfyInput, filepath.FromSlash(rel))) {
@@ -7226,14 +7471,16 @@ func (ctx *manjuCtx) charViewRels(cid string, idx, total int) []string {
 	var picks []string
 	switch {
 	case total <= 1:
-		picks = []string{"front", "full", "detail"}
+		// 2026-09-01 加 side 侧面视图:参考图含侧面,H3 侧面镜头有据可依
+		// (主持人/多角度镜头侧面渲染崩的修复);4 视图 ≤8 张预算
+		picks = []string{"front", "full", "detail", "side"}
 	case total == 2:
-		picks = []string{"front", "full"}
+		picks = []string{"front", "full", "side"}
 	default: // 3 角色
 		if idx == 0 {
-			picks = []string{"front", "full"}
+			picks = []string{"front", "full", "side"}
 		} else {
-			picks = []string{"front"}
+			picks = []string{"front", "side"}
 		}
 	}
 	out := []string{}

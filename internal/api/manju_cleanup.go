@@ -275,6 +275,13 @@ func manjuCacheClear(w http.ResponseWriter, r *http.Request) {
 			totalFails += fl
 			clean = append(clean, map[string]any{"target": "characters", "files": files, "bytes": bytes, "dir": charDir})
 		}
+		// 场景图(2026-09-01):场景图按「文件存在」生成无代际——场景卡改卡后旧图不重
+		// 生成(趋同旧图残留),清掉后按新卡重生成(场景渲染趋同根治配套)
+		sceneDir := filepath.Join(ctx.assetsDir, "scenes")
+		if files, bytes, fl := removeTreeEx(sceneDir, &failed); files > 0 || fl > 0 {
+			totalFails += fl
+			clean = append(clean, map[string]any{"target": "scenes", "files": files, "bytes": bytes, "dir": sceneDir})
+		}
 		// 6) 运行日志(2026-08-26 用户要求:高级清理同时清运行日志数据):
 		// 内存日志(清空日志按钮同款)+ 全部项目 run.log 落盘截断(manju/logs 平台日志保留)
 		manjuState.mu.Lock()

@@ -96,7 +96,7 @@ func TestManjuDurationRule(t *testing.T) {
 	if !strings.Contains(rule, "(3-10 秒)") || !strings.Contains(rule, "约 5 字/秒") {
 		t.Fatalf("时长规则应注入配置区间/字速, got: %s", rule)
 	}
-	if !strings.Contains(rule, "拆镜密度") || !strings.Contains(rule, "11-17 镜") {
+	if !strings.Contains(rule, "拆镜密度") || !strings.Contains(rule, "内容完整优先") || !strings.Contains(rule, "拆镜数不设上限") {
 		t.Fatalf("拆镜密度指引缺失, got: %s", rule)
 	}
 	// 默认:4-12 / 4 字每秒

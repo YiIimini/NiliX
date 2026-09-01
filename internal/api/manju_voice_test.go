@@ -17,7 +17,7 @@ func TestEnsureVoiceBindings(t *testing.T) {
 
 	// 完全无引用 → 补写到 subject_definitions 段(以 summary: 为界)
 	hp := "subject_definitions:\n<Subject 1> is ...\n\nsummary:\n[reference generation] ...\ndetailed_description:\n..."
-	out := ensureVoiceBindings(hp, bindings)
+	out := ensureVoiceBindings(hp, bindings, manjuRefContract{})
 	if !strings.Contains(out, "<Audio 1> is the voice-timbre reference for <Subject 1> (S1), containing a spoken voiceover.") {
 		t.Fatalf("补写缺少 <Audio 1> 定义:\n%s", out)
 	}
@@ -30,14 +30,15 @@ func TestEnsureVoiceBindings(t *testing.T) {
 		t.Fatalf("<Audio> 定义不在 subject_definitions 段")
 	}
 
-	// 已有引用 → 信任 LLM,不重复定义
-	hp2 := "subject_definitions:\n<Subject 1> is ...\n<Audio 1> is the voice-timbre reference ...\n\nsummary:\n..."
-	if out2 := ensureVoiceBindings(hp2, bindings); out2 != hp2 {
-		t.Fatalf("已有 <Audio> 引用时不应重复补写:\n%s", out2)
+	// 全部角色已有定义 → 信任,不重复补写(2026-08-30 逐角色语义:只补缺的角色)
+	hp2 := "subject_definitions:\n<Subject 1> is ...\n<Subject 2> is ...\n<Audio 1> is the voice-timbre reference for <Subject 1> (S1), containing a spoken voiceover.\n<Audio 2> is the voice-timbre reference for <Subject 2> (S2), containing a spoken voiceover.\n\nsummary:\n..."
+	c2 := manjuRefContract{Chars: []manjuCharSlot{{ID: "阿拾"}, {ID: "陈鱼"}}}
+	if out2 := ensureVoiceBindings(hp2, bindings, c2); out2 != hp2 {
+		t.Fatalf("全部角色已定义时不应重复补写:\n%s", out2)
 	}
 
 	// 空绑定 → 原样返回
-	if out3 := ensureVoiceBindings(hp, nil); out3 != hp {
+	if out3 := ensureVoiceBindings(hp, nil, manjuRefContract{}); out3 != hp {
 		t.Fatalf("无绑定不应改动提示词")
 	}
 }

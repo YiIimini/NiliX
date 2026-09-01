@@ -496,6 +496,20 @@ func charIDMatch(name string, c manjuRefContract) string {
 			return cs.ID
 		}
 	}
+	// 2026-08-30 五问整改(问题②兜底):剥括号标注(「挑战者程野(剪影)」→「程野」)
+	// 再匹配——括号说话人此前匹配不上,进不了 dialogueSpeakerIDs 与 Sx 注册表,
+	// 跨镜声线漂移/画外判定失效。身份词+名字连写(「挑战者程野」)无分隔符,
+	// 用后缀匹配兜底(名字≥2字,身份词在前)
+	for _, cand := range speakerNameCandidates(name) {
+		if cand == name {
+			continue
+		}
+		for _, cs := range c.Chars {
+			if cs.ID == cand || (len([]rune(cs.ID)) >= 2 && strings.HasSuffix(cand, cs.ID)) {
+				return cs.ID
+			}
+		}
+	}
 	if i := strings.LastIndex(name, "·"); i >= 0 {
 		name = strings.TrimSpace(name[i+len("·"):])
 		for _, cs := range c.Chars {
@@ -505,6 +519,90 @@ func charIDMatch(name string, c manjuRefContract) string {
 		}
 	}
 	return ""
+}
+
+// speakerNameCandidates 说话人名字的归一候选(2026-08-30 五问整改):
+// 「挑战者程野(剪影)」→ [挑战者程野(剪影), 挑战者程野, 程野]——括号标注是
+// 分镜表里常见的画面限定写法,不是角色名的一部分。
+func speakerNameCandidates(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	out := []string{name}
+	for _, c := range []string{"（", "(", "【", "["} {
+		close := map[string]string{"（": "）", "(": ")", "【": "】", "[": "]"}[c]
+		if i := strings.Index(name, c); i > 0 {
+			before := strings.TrimSpace(name[:i])
+			out = append(out, before)
+			if j := strings.Index(name, close); j > i {
+				inner := strings.TrimSpace(name[i+1 : j])
+				if inner != "" {
+					out = append(out, inner)
+				}
+			}
+			break
+		}
+	}
+	return out
+}
+
+// manjuResolveCharID 角色名变体归一(2026-09-01 主次混乱/无参考图根因根治):
+// 分镜 characters 声明/说话人常用简称/带前缀名,素材卡是完整名——精确匹配不上
+// 就无参考图,H3 自由发挥(实测:杳杳×108 对不上卡「涂山杳杳」、主持人×6 对不上
+// 「天才榜主持人」,杂毛/影子书主配角形象漂移)。归一顺序:
+//  ①精确;②剥「·」/括号标注后精确;③卡 ID 以候选结尾(涂山杳杳⊃杳杳);
+//  ④候选以卡 ID 结尾(挑战者程野⊃程野);⑤卡 ID 包含候选(天才榜主持人⊃主持人)
+// 同一变体命中多卡时取最短卡 ID(最专一);候选/卡 ID 长度 <2 不参与变体匹配
+// (防单字误配);旁白/画外/内心等非角色词直接不匹配。
+func manjuResolveCharID(name string, charIDs []string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || len([]rune(name)) < 2 {
+		return ""
+	}
+	for _, p := range []string{"旁白", "画外", "内心", "群杂"} {
+		if strings.HasPrefix(name, p) {
+			return ""
+		}
+	}
+	for _, cs := range charIDs {
+		if cs == name {
+			return cs
+		}
+	}
+	base := name
+	if i := strings.LastIndex(base, "·"); i >= 0 {
+		base = strings.TrimSpace(base[i+1:])
+	}
+	if base != name {
+		for _, cs := range charIDs {
+			if cs == base {
+				return cs
+			}
+		}
+	}
+	best, bestLen := "", 0
+	for _, cand := range speakerNameCandidates(name) {
+		if len([]rune(cand)) < 2 {
+			continue
+		}
+		for _, cs := range charIDs {
+			n := len([]rune(cs))
+			if n < 2 {
+				continue
+			}
+			hit := false
+			if n >= len([]rune(cand)) {
+				hit = strings.HasSuffix(cs, cand) || strings.Contains(cs, cand)
+			} else {
+				hit = strings.HasSuffix(cand, cs)
+			}
+			if hit && (best == "" || n < bestLen) {
+				best, bestLen = cs, n
+			}
+		}
+	}
+	return best
 }
 
 // bodyRange 画面段起点
@@ -683,7 +781,10 @@ func audioRank(target string, c manjuRefContract) (int, bool) {
 // 不在登场名单的名字跳过(旁白/画外音不属于登场角色音色绑定)。
 func dialogueSpeakerIDs(dialogue string, c manjuRefContract) map[string]string {
 	if dialogue == "" {
-		return nil
+		// 2026-09-01 崩溃修复:返回 nil 时调用方「画面段组合兜底」对 nil map
+		// 赋值 → panic「assignment to entry in nil map」(空镜 h3 含 <Subject N>
+		// (Sx) 引用时触发,轮回欠费九世 EP01 渲染崩溃)。空镜无发声者,空 map 即可。
+		return map[string]string{}
 	}
 	out := map[string]string{}
 	order := 0
@@ -714,6 +815,12 @@ func dialogueSpeakerIDs(dialogue string, c manjuRefContract) map[string]string {
 // (非空=画外音)。兼容两种形态:官方对齐后 "for <Subject M> (Sx)" 与历史中文名
 // "for the voice of 中文名 (Sx)"。
 func manjuAudioDefTarget(who string, c manjuRefContract) (cid, offscreenDesc string) {
+	// 2026-08-30 五问整改:兼容「for 」前缀缺失形态——reAudioDefLine 捕获组从
+	// "reference for " 之后开始,官方对齐形态「<Subject 1> (S1)」无 for 前缀,
+	// 此前解析恒空(挂载侧靠回退角色顺序碰巧对上,画外定义截断错位)
+	if !strings.HasPrefix(strings.TrimSpace(who), "for ") {
+		who = "for " + strings.TrimSpace(who)
+	}
 	if i := strings.Index(who, "the off-screen voice"); i >= 0 {
 		desc := strings.TrimPrefix(who[i:], "the off-screen voice described as ")
 		if j := strings.Index(desc, " (S"); j >= 0 {
@@ -931,4 +1038,53 @@ func alignShotTimecodes(hp string, durationSec int) string {
 		total := int(t * 1000)
 		return fmt.Sprintf("[Shot %d] At %02d:%02d.%03d", shotNo, total/60000, (total/1000)%60, total%1000)
 	})
+}
+
+// reBareSays 裸 (Sx) says: 形态(捕获组 1 为空=画外说话者;<Subject N> 前缀=画面角色)。
+// 兼容 (S1) says / (S1), says / (S1) says: 画外句逗号变体(EP01 镜5 实锤形态)。
+// 对齐层把画面发声角色统一写成 <Subject N> (Sx) says 形态(alignSpeakerIDsReg),
+// 不带 Subject 前缀的裸 (Sx) says: 即画外说话者——渲染端凭此判定口径。
+var reBareSays = regexp.MustCompile(`(<Subject \d+>\s+)?(\(S\d+\)[,，\s]*says:)`)
+
+// markOffscreenSays 画外说话句机械 off-screen 标注(2026-08-30 五问整改,问题②
+// 「乱对角色嘴型」执行层):裸 (Sx) says: 若未写 off-screen voiceover 标记,H3 会把
+// 台词安给画面角色动嘴(EP01 镜5/11 程野不在场却普通 says 句式实锤)。机械改写:
+// ① (Sx) says: → (Sx) says in an off-screen voiceover:(幂等:改写后形态不再命中
+//   reBareSays;已含 off-screen 的句不动);
+// ② 该句最后 </d> 后补 while the on-screen characters' lips remain completely closed
+//   (句内已含 lips-closed 则跳过,幂等)。
+// 纯函数,在 finalizeAlignedPrompt 统一汇点调用——指纹/预编码/渲染三侧一致。
+func markOffscreenSays(hp string) string {
+	if !strings.Contains(hp, "says:") {
+		return hp
+	}
+	hp = reBareSays.ReplaceAllStringFunc(hp, func(m string) string {
+		sm := reBareSays.FindStringSubmatch(m)
+		if sm[1] != "" {
+			return m // <Subject N> (Sx) says: 画面角色,不动
+		}
+		return strings.Replace(m, "says:", "says in an off-screen voiceover:", 1)
+	})
+	// ② 补 lips-closed 从句(按锚点顺序处理,插入长度累加偏移)
+	if !strings.Contains(hp, "off-screen voiceover") {
+		return hp
+	}
+	clause := " while the on-screen characters' lips remain completely closed."
+	out := hp
+	offset := 0
+	for _, a := range reOffscreenAnchor.FindAllStringIndex(hp, -1) {
+		segStart := a[1] + offset
+		segEnd := len(out)
+		if nl := strings.Index(out[segStart:], "\n"); nl >= 0 {
+			segEnd = segStart + nl
+		}
+		seg := out[segStart:segEnd]
+		if strings.Contains(seg, "lips remain completely closed") || !strings.Contains(seg, "</d>") {
+			continue
+		}
+		ins := segStart + strings.LastIndex(seg, "</d>") + len("</d>")
+		out = out[:ins] + clause + out[ins:]
+		offset += len(clause)
+	}
+	return out
 }

@@ -1190,6 +1190,7 @@ def cmd_asr(args):
 
     # 分镜台词:plan.json shots[].dialogue/narration(去「角色:」前缀)
     expected = {}
+    expected_lines = {}
     if args.plan and os.path.exists(args.plan):
         cues_by_id2, takes_map2 = _load_subtitle_cues(args.plan)
         for sid, lines in cues_by_id2.items():
@@ -1197,6 +1198,7 @@ def cmd_asr(args):
                 lines = lines + cues_by_id2.get(inner, [])
             if lines:
                 expected[sid] = " ".join(lines)
+                expected_lines[sid] = lines
 
     # 目标镜头
     ids = []
@@ -1257,19 +1259,42 @@ def cmd_asr(args):
             spoken = " ".join(s.text.strip() for s in segments).strip()
             exp = expected.get(sid, "")
             ok = True
+            reason = ""
             if exp:
-                ok = norm(spoken) == norm(exp)
-                # 完全包含也算过(whisper 可能多识别环境音字幕)
-                if not ok and norm(exp) and norm(exp) in norm(spoken):
-                    ok = True
+                ne = norm(exp)
+                ns = norm(spoken)
+                # 多念/标签检测(2026-08-30 五问整改:内心配音重复拦截)——旧判定只查
+                # 「该念的念了」(完全包含即过),不查「多念的」:补写重复画外音句被 H3
+                # 念两遍、带「内心·角色名:」字面量的标签句被逐字念出,全部误判通过
+                if any(tag in spoken for tag in ("内心·", "旁白:")):
+                    ok = False
+                    reason = "分镜标注(内心·/旁白:)被逐字念出"
+                else:
+                    # 逐句出现次数>1 = 同一句配音重复
+                    dup = ""
+                    for ln in expected_lines.get(sid, []):
+                        nln = norm(ln)
+                        if len(nln) >= 3 and ns.count(nln) > 1:
+                            dup = ln.strip()[:24]
+                            break
+                    if dup:
+                        ok = False
+                        reason = f"重复配音「{dup}…」出现多次"
+                    else:
+                        ok = ns == ne
+                        # 完全包含也算过(whisper 可能多识别环境音字幕)
+                        if not ok and ne and ne in ns:
+                            ok = True
             elif args.strict:
                 ok = bool(spoken)  # 无台词镜头:strict 模式要求完全静音
             else:
                 ok = True  # 无台词镜头非 strict 不核(旁白为 H3 画外音,字幕在成片烧录)
             mark = "✅" if ok else "❌"
             detail = f"期望[{clip_txt(exp, 30)}] 实听[{clip_txt(spoken, 30)}]" if exp else (f"实听[{clip_txt(spoken, 30)}]" if spoken else "(无台词,静音)")
+            if reason:
+                detail += f" [{reason}]"
             print(f"  {f:12s} {mark} {detail}")
-            out[str(sid or f)] = {"ok": ok, "spoken": spoken, "expected": exp}
+            out[str(sid or f)] = {"ok": ok, "spoken": spoken, "expected": exp, "reason": reason}
         except Exception as e:
             print(f"  {f:12s} ❌ {e}")
             out[str(sid or f)] = {"ok": False, "error": str(e)}
@@ -1337,6 +1362,23 @@ def manju_voiceover(args):
                     lines.append((body, args.voice_narr or "zh-CN-XiaoxiaoNeural"))
         if not lines:
             continue
+        # 2026-08-30 五问整改(双声根治):该镜 h3_prompt 已含内心句的 off-screen <d>
+        # (H3 原生已念)→ 跳过 TTS,不再依赖 RMS 阈值——RMS 偏低时 H3 原生画外音
+        # 也会被 TTS 再叠一遍=双轨重复(旧逻辑只靠阈值,音量低即双声)。仅当 prompt
+        # 完全无此句(旧片/画外音确实没渲染)才补 TTS。
+        hp_flat = (sh.get("h3_prompt") or "").replace(" ", "")
+        if "off-screen" in hp_flat:
+            todo = []
+            for body, voice in lines:
+                probe = re.sub(r"[\s,，。.．!！?？\-—·、:；:;\"'‘’“”()\[\]{}<>《》~～…]+", "", body)
+                if probe and probe in hp_flat:
+                    continue  # H3 原生已念该句,再配=双声
+                todo.append((body, voice))
+            if not todo:
+                skipped += 1
+                print(f"  ⏭ 镜 {sid} 内心句已由 H3 原生画外音念出(prompt 含 off-screen <d>),跳过 TTS 防双声")
+                continue
+            lines = todo
         if rms >= rms_threshold:
             skipped += 1
             print(f"  ⏭ 镜 {sid} 已有语音/环境音(rms {rms:.3f}),跳过配音(防双声)")
