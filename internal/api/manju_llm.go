@@ -997,7 +997,7 @@ func manjuScriptSystem(cfg map[string]any, style string) string {
 - 【画外音/旁白措辞·硬禁中文】(2026-08-23 实测:直出的 h3_prompt 用中文「画外音/旁白/嘴唇完全闭合」H3 无法识别对白驱动→该镜静音 rms≈0.005;d 标签内同样禁止写中文占位说明字样——2026-08-28 实测 <d>[中文]…</d> 中文标签词被逐字抄进台词,2026-08-30 官方核验正解=标签用英文 Chinese 而非剥掉标签):detailed_description 里画外音/旁白一律用英文指令句——旁白写 The narrator (Sx) says in an off-screen voiceover: <d>[Chinese] …</d>(d 标签内=[Chinese] 标签+分镜 narration 的中文原文)while the on-screen characters' lips remain completely closed;画外音台词写 (Sx) says in an off-screen voiceover: <d>[Chinese] …</d>(d 标签内=[Chinese] 标签+台词中文原文)while his/her lips remain completely closed;禁止出现中文「画外音」「旁白」「嘴唇闭合」字样
 - 台词跨切点写 <scenetrans>,被结尾截断写 <cutoff>
 - 画面可见文字(招牌/字幕/霓虹)用英文双引号原文
-- overall_soundscape 1-4 句英文连续段落(环境/动作/非语言人声,不重复台词);non_diegetic_music 1-3 句(乐器+速度+节奏+动态,禁抽象情绪词,无配乐写 N/A);【动作拆小·2026-09-01 知识库五步导演法】复杂动作拆 3-6 个连续可观察子动作,大幅移动+说话+复杂运镜+场景变化同镜=难度爆炸须拆镜或改画外;【单一运镜】每镜一种主要镜头运动,禁堆叠冲突运动词
+- overall_soundscape 1-4 句英文连续段落(环境/动作/非语言人声,不重复台词);non_diegetic_music 1-3 句(乐器+速度+节奏+动态,禁抽象情绪词,无配乐写 N/A);【动作拆小·2026-09-01 知识库五步导演法】复杂动作拆 3-6 个连续可观察子动作,大幅移动+说话+复杂运镜+场景变化同镜=难度爆炸须拆镜或改画外;【单一运镜】每镜一种主要镜头运动,禁堆叠冲突运动词;【特效锚定·2026-09-01 知识库仙侠打戏工作流】特效必须附着载体(武器/肢体/地面破坏点),写清载体→路径→落点,禁凭空漂浮;【场景服务动作】战斗镜场景写功能要素(可蹬踏柱/可借力壁/破坏承接点);【地面材质】战斗/近景镜写地面材质细节(裂纹/碎石/切割痕/烧蚀)
 - H3 为 CFG-distilled 无负面词:负面概念一律转正面排除句写进散文,禁堆叠负面词
 
 {MANJU_DURATION_RULE}
