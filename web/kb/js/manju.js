@@ -166,7 +166,7 @@
       "引擎已内置亮度护栏与运镜规范，无需手写",
     ] },
     { ic: "🗂️", t: "换电脑迁移 / 自包含部署", ps: [
-      "整个 NiliX 目录自包含:ComfyUI 放 <code>NiliX/comfyui/ComfyUI</code> + 模型放 <code>NiliX/comfyui/shared/</code>、小说放 <code>NiliX/novel/</code>、项目放 <code>NiliX/manju/</code>、技能放 <code>NiliX/skills/shuangwen-novel/</code>,拷走即用",
+      "整个 NiliX 目录自包含:ComfyUI 放 <code>NiliX/comfyui/ComfyUI</code> + 模型放 <code>NiliX/comfyui/shared/</code>、小说放 <code>NiliX/novel/</code>、项目放 <code>NiliX/manju/</code>、技能放 <code>NiliX/skills/NiliX-Novel/</code>(原 shuangwen-novel),拷走即用",
       "设置弹窗「目录与部署」:5 个路径可显式指定(留空=自动:优先 exe 目录子目录,其次旧位置);保存后即时生效(ComfyUI 需重启)",
       "旧安装(Comfy-Desktop 版 ComfyUI / C:\Mi\Ai\WorkBench 数据)留空即自动沿用,无需改配置",
       "小说续作技能是 git 仓库时,可在「目录与部署」点「🔄 更新技能」git pull 同步",

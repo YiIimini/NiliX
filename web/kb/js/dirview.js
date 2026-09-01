@@ -64,7 +64,7 @@ class DirView {
     // 列表搜索:书架/海报墙按作品名过滤(输入框 id = <实例id>-search)
     const searchIn = document.getElementById(this.id + "-search");
     if (searchIn) searchIn.addEventListener("input", () => this.applyListFilter());
-    // 网页版爽文创作(shuangwen-novel 技能流程)
+    // 网页版爽文创作(NiliX-Novel 技能流程,原 shuangwen-novel)
     const createBtn = document.getElementById("novel-create");
     if (createBtn && !createBtn._bound) {
       createBtn._bound = true;
@@ -712,7 +712,7 @@ class DirView {
     this.closeScript();
   }
 
-  /* ---- 网页版爽文创作:立项(大纲) → 逐章/自动连写,固化 shuangwen-novel 流程 ---- */
+  /* ---- 网页版爽文创作:立项(大纲) → 逐章/自动连写,固化 NiliX-Novel 流程(原 shuangwen-novel) ---- */
   async openNovelCreate(initTitle, lockId) {
     const wb = typeof ManjuWorkbench !== "undefined" ? ManjuWorkbench : null;
     if (!wb) { alert("创作工坊依赖加载失败(manju.js),请刷新页面"); return; }

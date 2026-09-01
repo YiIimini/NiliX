@@ -1,6 +1,6 @@
 package api
 
-// shuangwen-novel 技能资产接入:词库/写作规范按文件加载注入(数据驱动,增删词库文件即生效),
+// NiliX-Novel 技能资产接入(2026-09-01 由 shuangwen-novel 更名):词库/写作规范按文件加载注入(数据驱动,增删词库文件即生效),
 // 单章机械 QA 与技能 qa_check.py 同口径;文件缺失时静默降级(不阻塞创作)。
 
 import (

@@ -90,7 +90,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/fs/file", s.handleFSFile)
 	mux.HandleFunc("GET /api/fs/media", s.handleFSMedia)
 	mux.HandleFunc("POST /api/script/generate", s.handleGenerateScript)
-	// 网页版爽文小说创作(shuangwen-novel 技能流程固化)
+	// 网页版爽文小说创作(NiliX-Novel 技能流程固化,原 shuangwen-novel)
 	mux.HandleFunc("POST /api/novel/create", s.handleNovelCreate)
 	mux.HandleFunc("POST /api/novel/analyze", s.handleNovelAnalyze)
 	mux.HandleFunc("POST /api/novel/review", s.handleNovelReview)

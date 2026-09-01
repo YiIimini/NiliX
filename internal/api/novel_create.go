@@ -1,4 +1,4 @@
-// Package api —— 网页版爽文小说创作(固化 shuangwen-novel 技能核心流程):
+// Package api —— 网页版爽文小说创作(固化 NiliX-Novel 技能核心流程,2026-09-01 由 shuangwen-novel 更名):
 // 立项(LLM 生成人物/世界观/逐章大纲) → 逐章生成(≥1280 字,卷目录归档) → 落盘 Novel/<书名>/。
 package api
 
@@ -183,8 +183,8 @@ chapters 必须恰好 %d 条,no 从 1 连续递增;卷数=%d;首卷埋线、末�
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// 技能规范副本:创作指令卡 / 章节写作规范(模板存在则复制,缺失静默)
-	skillRef := `C:\Users\Administrator\.agents\skills\shuangwen-novel\references`
+	// 技能规范副本:创作指令卡 / 章节写作规范(模板存在则复制,缺失静默);路径跟随 NovelSkillDir(配置/自包含/legacy 三链解析)
+	skillRef := filepath.Join(NovelSkillDir, "references")
 	_ = copySkillFile(filepath.Join(skillRef, "创作指令卡-模板.md"), filepath.Join(proj, "设定集", "创作指令卡-AI版本.md"))
 	_ = copySkillFile(filepath.Join(skillRef, "章节写作规范.md"), filepath.Join(proj, "设定集", "章节写作规范.md"))
 	// 素材/人物生成提示词.md(全角色写实电影级提示词)
@@ -1066,7 +1066,7 @@ func writeNovelChapter(ctx context.Context, title string, no int, cfg config.Set
 	}
 	llm := backend.NewLLMClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model,
 		time.Duration(cfg.LLM.RequestTimeout)*time.Second)
-	// shuangwen-novel 技能规范:章节写作规范全文 + 违规词库硬禁词(动笔前必读,写作/QA 两关都生效)
+	// NiliX-Novel 技能规范:章节写作规范全文 + 违规词库硬禁词(动笔前必读,写作/QA 两关都生效)
 	sys := "你是爽文小说写手。要求:正文口语化短句、去AI味;场景/情绪具体;每章结尾留钩子;不要小标题、不要总结。只输出 JSON。"
 	if spec := novelWritingSpec(); spec != "" {
 		sys += "\n\n【章节写作规范(动笔前通读,逐条遵守)】\n" + spec

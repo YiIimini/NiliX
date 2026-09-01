@@ -28,7 +28,7 @@ const (
 	legacyNovelRoot   = `C:\Mi\Ai\WorkBench\novel`
 	legacyComfyRoot   = `C:\Users\Administrator\AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI (1)\ComfyUI`
 	legacyComfyShared = `C:\Users\Administrator\AppData\Local\Comfy-Desktop\ComfyUI-Shared`
-	legacyNovelSkill  = `C:\Users\Administrator\.agents\skills\shuangwen-novel`
+	legacyNovelSkill  = `C:\Users\Administrator\.agents\skills\NiliX-Novel`
 )
 
 // InitPaths 解析全部运行路径。exeDir 为可执行文件所在目录(自包含根)。
@@ -37,7 +37,7 @@ func InitPaths(exeDir string, manjuRoot, novelRoot, comfyRoot, comfyShared, nove
 	NovelRootDir = pickPath(novelRoot, filepath.Join(exeDir, "novel"), legacyNovelRoot)
 	ComfyRootDir = pickPath(comfyRoot, filepath.Join(exeDir, "comfyui", "ComfyUI"), legacyComfyRoot)
 	ComfySharedDir = pickPath(comfyShared, filepath.Join(exeDir, "comfyui", "shared"), legacyComfyShared)
-	NovelSkillDir = pickPath(novelSkill, filepath.Join(exeDir, "skills", "shuangwen-novel"), legacyNovelSkill)
+	NovelSkillDir = pickPath(novelSkill, filepath.Join(exeDir, "skills", "NiliX-Novel"), legacyNovelSkill)
 	// 音色库权威目录固定收在自包含根(与 ComfyUI input 解耦,防清理/重建误删;
 	// 2026-08-29 用户要求「音色保存到稳定位置」)。换电脑整体拷贝即随迁。
 	VoiceLibDir = filepath.Join(exeDir, "voice_lib")
