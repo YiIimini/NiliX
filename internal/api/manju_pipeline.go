@@ -3685,13 +3685,34 @@ func (ctx *manjuCtx) portraitPromptFor(prompt string, m map[string]any, frontFac
 // 构图+姿态失控)与 ultra detailed 质量词。
 // manjuIsLeadRole 正角判定(2026-09-01 用户规则:Q 版仅正角渲染,配角/群演不出
 // Q 版资产;内心活动只有正角才有,其他角色内心镜头写实正脸+画外音)。
-// 角色卡 role 字段:女主/男主/正角=正角;反派/助攻/群演/配角=非正角。
-func manjuIsLeadRole(m map[string]any) bool {
+// 角色卡 role 字段:女主/男主/正角/主角=正角;反派/助攻/群演/配角=非正角。
+// 2026-09-01 二修(阿影/沈照/小白等主角 role 缺失实锤——md2json 早期转换丢 role,
+// 判定 false → 主角 Q 版不生成):role 缺失时按「内心·角色名 在方案中出现过」
+// 兜底判定(技能契约:只有正角有内心戏,内心=正角证据),保证主角 Q 版不缺席。
+func (ctx *manjuCtx) manjuIsLeadRole(m map[string]any) bool {
 	if m == nil {
 		return false
 	}
+	cid := str(m["id"])
 	r := str(m["role"])
-	return r == "女主" || r == "男主" || r == "正角" || strings.Contains(r, "主角")
+	if r == "女主" || r == "男主" || r == "正角" || strings.Contains(r, "主角") {
+		return true
+	}
+	if r != "" {
+		return false // role 明确非正角,不再兜底
+	}
+	if cid != "" && ctx != nil {
+		if plan, _, err := ctx.loadPlan(); err == nil {
+			if shots, ok := planShots(plan); ok == nil {
+				for _, s := range shots {
+					if strings.Contains(s.Narration, "内心·"+cid) || strings.Contains(s.Dialogue, "内心·"+cid) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // manjuBannedItemStrip 违禁物品词剥离(2026-09-01 用户规则:人物角色不能带烟、酒等
@@ -4710,7 +4731,7 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		// 技能侧 q_form 提示词仍全员输出(备而不用),渲染端按 role 过滤。
 		// 正角判定:role 含 女主/男主/正角(角色卡 role 字段)。
 		viewSet := []string{"full", "side", "detail", "q"}
-		isLead := manjuIsLeadRole(m)
+		isLead := ctx.manjuIsLeadRole(m)
 		for _, view := range viewSet {
 			if view == "q" && !isLead {
 				continue // 配角/群演不出 Q 版资产(2026-09-01 用户规则)
