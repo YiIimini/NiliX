@@ -3655,6 +3655,17 @@ func (ctx *manjuCtx) portraitPromptFor(prompt string, m map[string]any, frontFac
 // 写实皮肤质感/电影镜头/质量词会把 chibi 拉向写实缩小版人物,一律剥除,只留身份特征词。
 // 2026-08-27 三修:补动作残词(walking briskly 等主图动作描述混进 Q 版定妆,诱发动态
 // 构图+姿态失控)与 ultra detailed 质量词。
+// manjuIsLeadRole 正角判定(2026-09-01 用户规则:Q 版仅正角渲染,配角/群演不出
+// Q 版资产;内心活动只有正角才有,其他角色内心镜头写实正脸+画外音)。
+// 角色卡 role 字段:女主/男主/正角=正角;反派/助攻/群演/配角=非正角。
+func manjuIsLeadRole(m map[string]any) bool {
+	if m == nil {
+		return false
+	}
+	r := str(m["role"])
+	return r == "女主" || r == "男主" || r == "正角" || strings.Contains(r, "主角")
+}
+
 // manjuBannedItemStrip 违禁物品词剥离(2026-09-01 用户规则:人物角色不能带烟、酒等
 // 违规物品——角色卡 image_prompt/q_form 若有 cigarette/smoking/alcohol 等词,定妆/
 // 视图/Q版 全部剥离(负面词是渲染期防御,正向剥离让素材侧不带烟酒);H3/云端审核
@@ -4666,12 +4677,18 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		// 2026-09-01 群演卡完整视图(用户问「主持人为什么只有正面和侧面」):minor
 		// 轻量卡此前跳过 full/detail/q——主持人群演也需全身/细节/Q版(群演 Q 版
 		// 渲染/审片判分可用);视图成本每卡 3 张,群演卡数量有限,完整视图收益更高。
+		// 2026-09-01 用户规则最终版:Q 版仅正角渲染——配角/群演不生成 Q 版资产
+		// (内心活动只有正角才有,配角/群演内心镜头走写实正脸+画外音);
+		// 技能侧 q_form 提示词仍全员输出(备而不用),渲染端按 role 过滤。
+		// 正角判定:role 含 女主/男主/正角(角色卡 role 字段)。
 		viewSet := []string{"full", "side", "detail", "q"}
+		isLead := manjuIsLeadRole(m)
 		for _, view := range viewSet {
+			if view == "q" && !isLead {
+				continue // 配角/群演不出 Q 版资产(2026-09-01 用户规则)
+			}
 			var p string
 			if view == "q" {
-				// 2026-08-27 用户规则更新:Q 版资产全角色渲染(反派/配角同样出 Q 版资产备用)——
-				// 旧「仅正角」限定取消;镜级内心戏用不用反派 Q 版仍由分镜/渲染规则决定,资产层不缺席。
 				// 2026-08-25 用户规则:Q 版按角色种族/性别/年龄/胡须构建——
 				// 妖兽/灵宠=萌化小兽本体(禁止人形);人类面容随角色本人(脸型/眼型/发型/胡须/年龄感),
 				// 女性一律无胡须、年轻男性无胡须、胡须老者保留胡须;不再统一宝宝脸。
