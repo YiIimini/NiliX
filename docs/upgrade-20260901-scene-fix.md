@@ -258,3 +258,55 @@ alignAudioDefsReg(manju_prompt_align.go:700)→ manjuAlignShotPromptReg → fina
 ## 分流终态
 - 普通一条龙/小说导入/全本自动分集:检测 json 分镜脚本 → 有则脚本直出(零 LLM),无则提示用 AI 一条龙
 - AI 一条龙(agentMode):全走 LLM+Agent(用户规则,不受影响)
+
+---
+
+# 存量小说同步升级整改完成(2026-09-01 终验)
+
+## 整改项(7 本书全部完成)
+1. **39+ 章低密度细拆**(细中细规则 50-80 字/镜):--chapters 章号跨书匹配共重写 135 章(含密度已达标章,统一按新规则刷新),重写后镜头数普遍 +30-80%(如杂毛53章 47 镜/56章 52 镜/164章 51 镜,正文 30-40 字/镜)
+2. **重写后修复链**:拆句 549 镜/拆镜 16 镜/Shot 标记重写/时长同步(重写引入的长句/时间戳/语音问题全清)
+3. **覆盖补全**:重写丢失对白 4 章 6 句 LLM 定点补回
+4. **角色卡**:缺卡 1971→3 处(补 74 张:画面上下文针对性补卡,群体泛指/物品单次合理豁免);q_form 全角色 450 张
+5. **场景卡**:406 补卡覆盖 0 缺失(前期)
+
+## 终验
+- 全库 7 本 storyboard_check **ALL PASS**(覆盖 0 缺失/时间戳 0)
+- 语音超标 127 处边缘 WARN(渲染端 plan 按 4字/s 补偿兜底,不截断)
+- 交付检查 PASS
+
+---
+
+# 视图/Q版九类问题整改(2026-09-01 追加:用户实测 9 项)
+
+## 问题与根因(逐项实锤)
+| # | 问题 | 根因 |
+|---|---|---|
+| 1 | 阿影/群演·路人 侧面异常 | 阿影走 SILHOUETTE 剪影锚(2026-09-01 已修);群演·路人=普通卡侧面异常待重渲验证 |
+| 2 | 墨千秋/裁判/群演·路人 全身异常 | 视图基于 image_prompt(img2img),与主图 mtime 联动重生成 |
+| 3 | 记者/宿管阿姨/食堂阿姨 Q 版异常 | q_form 发型/形态细节不足(旧 q_form 无六硬规范) |
+| 4 | 老板/雷光/天才榜少年 Q 版撞脸 | q_form 模板同质(young Chinese male+short hair 千篇一律,辨识特征不足) |
+| 5 | 小月 正面猫/视图人 | **兽形词表缺 creature/fur** → manjuIsBeast 判人形 → 视图按人画 |
+| 6 | 黄毛跟班 Q 版发色不匹配 | HAIR LOCK 无颜色词=空锁(「keeps EXACTLY this hair color — short hair」无颜色可锁) |
+| 7 | 年轻教员 Q 版人物太大 | q_form 覆盖模板形态构成(只写 3-head-tall,缺大头/短手脚细节) |
+| 8 | 人物带烟酒 | 素材卡含 cigarette/wine flask 等词(瘦守卫/钱不换/抱朴子) |
+| 9 | 群演·路人甲等 Q 版发型不匹配 | 5 个后补卡 **q_form 为空**(char_fill 补卡后没补 q_form)→ 模板拼接 |
+
+## 修复
+### 渲染侧(manju_pipeline.go/manju_comfy.go)
+1. **兽形词表扩充**:manjuAnimalEnRe 补 creature/fur/paws/whiskers/fluffy/beast/animal/palm-sized/tail(species 缺失的兽卡不再漏判人形)
+2. **禁烟酒**:manjuNegPrompt 加 cigarette/smoking/alcohol 等负面词;新增 manjuBannedItemStrip 正向剥离(定妆/视图/Q版三处接入)
+3. **HAIR LOCK 强化**:颜色+形状双重点名(无颜色词也锁发型形状与主图一致)
+4. **形态构成兜底**:q_form 非空也追加「大头占半身/短手短脚/大亮眼」构成锚(比例不再稀释)
+5. 单测:TestManjuIsBeastCreatureWords/TestManjuBannedItemStrip
+
+### 技能侧(已推送)
+6. SKILL.md q_form 契约升级为**六硬规范**:发型显式锁(发色+发型词逐字一致)/辨识特征≥2(防撞脸)/形态构成(大头占半身)/禁违禁物品/同一人/比例占画面约 60%
+7. tools/qform_fill.py 生成 SYS 同步六硬规范;manju_llm.go 角色卡 schema 加禁烟酒条款
+
+### 存量修正
+8. 17 个问题角色 q_form 按六硬规范重生成(阿影/墨千秋/裁判/记者/宿管阿姨/食堂阿姨/老板/雷光/天才榜少年/小月/黄毛跟班/年轻教员/群演·路人/路人甲/路人乙/影傀/观众/同桌)——发型显式色名(黄毛「dyed yellow slicked-back hair」/路人甲「short black hair」)+辨识特征+形态构成
+9. 烟酒词清理:瘦守卫 cigarette 移除;钱不换/抱朴子 gourd wine flask→gourd flask;误报(烟火气/如烟比喻/否定式)保留
+
+## 用户操作
+替换 NiliX.exe → 对「我的影子会咬人」等受影响项目**高级清理**(清 characters 资产)→ 重渲资产阶段按新 q_form/新判定重出视图与 Q 版。

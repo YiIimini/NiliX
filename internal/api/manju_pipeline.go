@@ -3326,7 +3326,10 @@ var manjuBeastBody = []string{
 // manjuAnimalEnRe 常见动物英文本体词(词边界匹配,2026-08-28 猫·二两判定修复):
 // an orange and white chubby stray cat 类英文卡面;词边界防 category/catch/
 // dogma/fishery 等子串误伤。
-var manjuAnimalEnRe = regexp.MustCompile(`(?i)\b(cat|kitten|kitty|dog|puppy|panda|fox|wolf|tiger|lion|bear|rabbit|bunny|hamster|parrot|bird|fish|snake|horse|deer|squirrel|otter|ferret|hedgehog|turtle|frog|dragon|phoenix)\b`)
+// 2026-09-01 扩充(小月案实锤:image_prompt「tiny palm-sized creature with soft fur」,
+// species 缺失+creature/fur 不在词表 → 判成人形 → 视图按人画,正面却按兽画):
+// 通用兽类词 creature/fur/paws/whiskers/fluffy 等补入,species 缺失的兽卡不再漏判
+var manjuAnimalEnRe = regexp.MustCompile(`(?i)\b(cat|kitten|kitty|dog|puppy|panda|fox|wolf|tiger|lion|bear|rabbit|bunny|hamster|parrot|bird|fish|snake|horse|deer|squirrel|otter|ferret|hedgehog|turtle|frog|dragon|phoenix|creature|fur|paws|whiskers|fluffy|beast|animal|palm-sized|tail)\b`)
 
 // manjuIsMinorCast 群演轻量卡判定(2026-08-27 群演分级):脚本直出时有台词但无角色卡
 // 的说话人自动建卡(minor:true)——资产阶段只出 1 张定妆照+正脸(跳过视图/Q版/双形态)。
@@ -3591,6 +3594,7 @@ var manjuBgStrip = regexp.MustCompile(`(?i),?\s*[a-z0-9\- ]{0,40}\s+background\b
 // 2026-08-27 六修:入口统一剥背景词段+单人白底服装严格锚;Q 版 chibi 分支补防日漫正向锚
 // (老龟 Q 版出日漫脸——chibi 分支提前 return 没吃到拟漫锚的漏洞)。
 func (ctx *manjuCtx) portraitPromptFor(prompt string, m map[string]any, frontFace bool) string {
+	prompt = manjuBannedItemStrip(prompt)
 	p := manjuBgStrip.ReplaceAllString(prompt, "")
 	ap := manjuSanitizeAppearance(m, str(m["appearance"]))
 	if strings.Contains(p, "chibi") {
@@ -3651,7 +3655,24 @@ func (ctx *manjuCtx) portraitPromptFor(prompt string, m map[string]any, frontFac
 // 写实皮肤质感/电影镜头/质量词会把 chibi 拉向写实缩小版人物,一律剥除,只留身份特征词。
 // 2026-08-27 三修:补动作残词(walking briskly 等主图动作描述混进 Q 版定妆,诱发动态
 // 构图+姿态失控)与 ultra detailed 质量词。
+// manjuBannedItemStrip 违禁物品词剥离(2026-09-01 用户规则:人物角色不能带烟、酒等
+// 违规物品——角色卡 image_prompt/q_form 若有 cigarette/smoking/alcohol 等词,定妆/
+// 视图/Q版 全部剥离(负面词是渲染期防御,正向剥离让素材侧不带烟酒);H3/云端审核
+// 与画面合规双保险。
+func manjuBannedItemStrip(s string) string {
+	for _, w := range []string{
+		"cigarette", "cigarettes", "smoking", "smokes", "smoked", "smoker", "cigar",
+		"alcohol", "alcoholic", "beer", "beers", "wine", "wines", "liquor", "whiskey",
+		"vodka", "brandy", "bottle of wine", "drinking alcohol", "drunk", "hangover",
+		"烟", "香烟", "卷烟", "烟蒂", "酒", "酒杯", "啤酒", "白酒", "红酒", "醉",
+	} {
+		s = strings.ReplaceAll(s, w, "")
+	}
+	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
+}
+
 func manjuQStrip(s string) string {
+	s = manjuBannedItemStrip(s)
 	for _, w := range []string{
 		"realistic skin texture with fine pores", "realistic skin texture", "fine pores",
 		"photorealistic real-world environment", "photorealistic environment", "photorealistic",
@@ -3840,6 +3861,7 @@ func manjuCharImagePrompt(ctx *manjuCtx, m map[string]any, char, view, kind stri
 // 素材/主定妆的 Front-facing portrait 前缀(正面人脸铁律产物)会把所有视图拉回正面半身特写构图;
 // 视图的视角由 viewAnchor 独家主导,这里剥掉一切正面/特写措辞,只留身份与外观特征。
 func manjuViewStrip(s string) string {
+	s = manjuBannedItemStrip(s)
 	for _, w := range []string{
 		"Front-facing portrait, head facing the camera directly, symmetrical frontal face, both eyes evenly visible, no profile angle",
 		"front-facing portrait, head facing the camera directly, symmetrical frontal face, both eyes evenly visible, no profile angle",
@@ -3892,7 +3914,10 @@ func manjuHairAnchor(m map[string]any) string {
 			phrases = append(phrases, "hair color from palette "+hexes[4])
 		}
 	}
-	return "HAIR LOCK: the chibi keeps EXACTLY this hair color as the reference portrait — " + strings.Join(phrases, "; ") + " — multi-tone or streaked hair (e.g. black-and-white two-tone) must stay multi-tone, never flatten into a single color"
+	// 2026-09-01 强化(黄毛跟班/群演发型不匹配实锤):短语无颜色词时旧锁是空锁
+	// (「keeps EXACTLY this hair color — short hair」无颜色可锁,模型自由发挥)。
+	// 颜色+形状双重点名:有颜色词锁颜色,无颜色词也锁发型形状与主图一致。
+	return "HAIR LOCK: the chibi keeps EXACTLY the same hairstyle and hair color as the reference portrait — " + strings.Join(phrases, "; ") + " — the hairstyle shape (length, parting, bun/braid/ponytail/bangs) must be identical to the reference; multi-tone or streaked hair (e.g. black-and-white two-tone) must stay multi-tone, never flatten into a single color"
 }
 
 // manjuFurAnchor 兽形毛色显式锁(2026-08-28 猫·二两案:主图橘白,Q版被画成黑灰狸花——
@@ -4367,6 +4392,12 @@ func manjuQPrompt(m map[string]any) string {
 		base = "3D rendered cute chibi collectible toy figure, about 3-head-tall chibi proportions, a large round head taking about one third of the total body height (leaving room on the body for outfit details), " + eyeCls + ", " + handCls + ", soft round face with a small cute mouth, adorable expression with rosy cheeks, compact mini body following the character's original body build, adorable huggable figure, premium high-detail movie-grade CGI quality, cinematic studio lighting, " + mat + ", octane-render level of finish"
 	}
 	p := base
+	// 2026-09-01 形态构成兜底(年轻教员 Q 版人物太大实锤):q_form 常只写「3-head-tall」
+	// 缺头部占比/短手脚/大眼细节,覆盖模板构成后比例被稀释成正常人物——q_form 非空时
+	// 也统一追加构成锚(身份内容以 q_form 为准,形态以构成锚为准,双管齐下)
+	if base != "" && str(m["q_form"]) != "" {
+		p += ", a tiny palm-sized chibi figure about 3-head-tall, oversized round head occupying about one third of the total figure height, tiny stubby arms and legs, small round hands, big sparkling eyes, soft round face with a small cute mouth"
+	}
 	// 2026-08-28 标志性特征锁前置(用户实测:韩天枢Q版丢眼镜/屠夫丢眼罩+液压钳——特征锁排
 	// 在 identity 锚前仍不够,Krea-2 0.93 高重绘下后置文本权重被 chibi 构成+着装锁稀释;
 	// 前置到 base 之后第一时间点名,与 HAIR LOCK 同级)。

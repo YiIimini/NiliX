@@ -80,3 +80,37 @@ func TestConsistencyGuardInject(t *testing.T) {
 		t.Fatal("无 Picture 引用不应注入 IDENTITY CONSISTENCY")
 	}
 }
+
+// 2026-09-01 小月案回归:image_prompt「tiny palm-sized creature with soft fur」species
+// 缺失时须判兽形(creature/fur 词表扩充前判人形 → 视图按人画,正面却按兽画)。
+func TestManjuIsBeastCreatureWords(t *testing.T) {
+	m := map[string]any{
+		"id": "小月", "role": "群演", "species": "",
+		"image_prompt": "a tiny palm-sized creature with a white crescent moon mark on its head, cute, soft fur, big eyes, pure white background",
+	}
+	if !manjuIsBeast(m) {
+		t.Fatal("creature/fur 卡应判兽形")
+	}
+	// 人形否决不回归:26 岁美妆博主(九尾狐精人设)仍判人形
+	m2 := map[string]any{
+		"id": "九尾", "role": "正角", "species": "",
+		"image_prompt": "a 26-year-old woman with long silver hair and fox ears, beauty blogger",
+	}
+	if manjuIsBeast(m2) {
+		t.Fatal("含 N-year-old woman 的人形妖怪不应判兽形")
+	}
+}
+
+// 2026-09-01 禁烟酒:正向剥离函数把 cigarette/wine 等词移除
+func TestManjuBannedItemStrip(t *testing.T) {
+	in := "a man with a cigarette in his mouth, holding a gourd wine flask, wearing a robe"
+	out := manjuBannedItemStrip(in)
+	for _, w := range []string{"cigarette", "wine"} {
+		if strings.Contains(out, w) {
+			t.Fatalf("应剥离 %s: %q", w, out)
+		}
+	}
+	if !strings.Contains(out, "gourd flask") {
+		t.Fatalf("gourd flask 应保留: %q", out)
+	}
+}
