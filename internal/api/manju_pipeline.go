@@ -2330,14 +2330,17 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 	// 2026-08-24 再修复:小说解析模式(用户导入小说目录)也应自动检测 素材/分镜脚本/ 里的
 	// 对应集分镜脚本——有则自动切脚本直出(程序化解析零 LLM,且避免逐镜提示词截断),
 	// 否则用户"导入小说目录"却走 LLM 直出分镜+逐镜 H3,镜头多时提示词超长截断(实测镜头 10)。
-	// 2026-09-01 用户规则分流:AI 一条龙(agentMode)=全走 LLM+Agent,不检测脚本;
-	// 普通一条龙/小说导入/全本自动分集=检测对应 json 分镜脚本,有则脚本直出,无则 LLM 直出。
+	// 2026-09-01 用户规则分流(2026-09-01 再收紧):AI 一条龙(agentMode)=全走 LLM+Agent,不检测脚本;
+	// 普通一条龙/小说导入/全本自动分集=检测对应 json 分镜脚本,有则脚本直出;
+	// 无则【不再 LLM 直出】——分镜产出统一交给技能侧(爽文小说技能),提示用户改用 AI 一条龙。
 	if !ctx.scriptMode && !ctx.agentMode {
 		if sp := ctx.autoStoryboardForEpisode(lg); sp != "" {
 			lg.logf("  📽 自动检测到分镜脚本「" + filepath.Base(sp) + "」,切换脚本直出(程序化解析,六段式逐字保留)")
 			ctx.scriptMode = true
 			ctx.novel = sp
 			ctx.chapters = "script"
+		} else {
+			return nil, fmt.Errorf("未检测到分镜脚本(素材/分镜脚本/*.json):普通模式仅支持脚本直出,分镜产出统一由技能侧完成。请①先用爽文小说技能生成该集分镜脚本(细中细+特效锚定等规则已内置),或②改用「AI 一条龙」走 LLM+Agent 全流程直出")
 		}
 	}
 	if ctx.scriptMode {
@@ -2370,6 +2373,7 @@ func (ctx *manjuCtx) ensurePlan(lg *manjuLogger) (map[string]any, error) {
 		} else {
 			// 2026-08-26 可发现性:回退 LLM 后拆镜数不受脚本约束(旧版曾把 16 镜脚本渲成 8 镜),
 			// 分镜表行数能数出来时明示落差,用户可当场发现并检查脚本格式,而不是渲完才发现缺镜
+			// (2026-09-01 注:回退仅限手动粘贴/旧 md 脚本;技能侧 json 分镜为标准格式,解析必成功)
 			if n := len(reScriptTableRow.FindAllString(chapterText, -1)); n > 0 {
 				lg.logf(fmt.Sprintf("  ⚠️ 脚本程序化解析失败(%s),回退 LLM 直出——脚本分镜表约 %d 行,LLM 拆镜数不受脚本约束,成片镜数可能对不上,请检查脚本格式(分镜表 8/9 列 + ### Shot N 六段式)后重新生成方案", perr.Error(), n))
 			} else {
@@ -2806,17 +2810,24 @@ func (ctx *manjuCtx) genShotPrompts(plan map[string]any, shots []manjuShot, lg *
 		}
 	}
 	need := false
+	missing := []int{}
 	for _, s := range shots {
 		if s.TakeTail {
 			continue // 长镜内镜不独立生成提示词(由组头多切点提示词覆盖)
 		}
 		if s.H3Prompt == "" && prompts[strconv.Itoa(s.ID)] == "" {
 			need = true
-			break
+			missing = append(missing, s.ID)
 		}
 	}
 	if !need {
 		return nil
+	}
+	// 2026-09-01 收紧(用户规则:分镜产出统一交给技能侧,不再 LLM 直出):
+	// 脚本直出模式 h3 缺失=脚本不完整,报错提示修正脚本,不用 LLM 补(补的 h3 丢
+	// 技能侧站位/运镜/特效锚定,且镜数漂移);LLM 直出/agentMode 才允许逐镜生成。
+	if ctx.scriptMode && !ctx.agentMode {
+		return fmt.Errorf("脚本直出模式检出 %d 镜缺 h3_prompt(镜 %v)——技能侧脚本为唯一权威,请修正脚本(每镜六段式完整)后重跑;或改用 AI 一条龙", len(missing), missing[:min(len(missing), 6)])
 	}
 	lg.logf("🤖 逐镜直出完整 H3 提示词（六段式/三段式）...")
 	chars, _ := plan["characters"].([]any)
