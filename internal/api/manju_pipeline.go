@@ -951,18 +951,23 @@ func injectPositionDiscipline(hp string) string {
 // 注入音色短语后再跑不命中=幂等)
 var reAudioDefPhrase = regexp.MustCompile(`(?m)^<Audio (\d+)> is the voice-timbre reference for <Subject (\d+)> \(S(\d+)\), containing a spoken voiceover\.?\r?$`)
 
-// injectAudioTimbrePhrases Audio 定义行注入角色音色指纹短语(2026-08-30 ver14,问题②
-// 音色年龄/一致性根治的执行层一环):H3 官方 base-en §4.4 要求说话者首次出现给足
-// 身份信息(年龄/性别/音高/音色/语速),模型按身份短语分配声线——此前 <Audio N> 行
-// 只写 "containing a spoken voiceover" 无任何年龄/音色信息,角色卡 age 字段(24/74 岁)
-// 从不进入渲染提示词。短语由 autoVoiceFor 音色档位编译(单一事实源)。
+// injectAudioTimbrePhrases Audio 定义行音色短语校正注入(2026-08-30 ver14 升级,
+// 2026-09-01 配音不随角色/重复根治):H3 按音色身份短语分配角色声线,短语是唯一
+// 角色音色事实源。此前仅「无短语」注入——LLM 写错(女主配中年男声)/雷同(同档
+// 角色同一短语)时直接透传 = 配音错配+重复(实测金珠=deep rough 中年男声)。
+// 现在校正模式:①有短语行(LLM 写的)→ 按角色卡标准短语替换(错配修正);
+// ②无短语行 → 注入标准短语;幂等(替换后=标准,重跑不叠加)。
 func (ctx *manjuCtx) injectAudioTimbrePhrases(hp string, c manjuRefContract) string {
 	if !strings.Contains(hp, "containing a spoken voiceover") || len(c.Chars) == 0 {
 		return hp
 	}
-	return reAudioDefPhrase.ReplaceAllStringFunc(hp, func(m string) string {
-		sm := reAudioDefPhrase.FindStringSubmatch(m)
-		no := mustAtoi(sm[2])
+	// 两种形态:带短语(, with X, containing)与裸行(, containing)
+	re := regexp.MustCompile(`(?m)^(<Audio (\d+)> is the voice-timbre reference for <Subject (\d+)> \(S(\d+)\), )(?:with [^
+]+?, )?(containing a spoken voiceover\.?
+?)$`)
+	return re.ReplaceAllStringFunc(hp, func(m string) string {
+		sm := re.FindStringSubmatch(m)
+		no := mustAtoi(sm[3])
 		if no < 1 || no > len(c.Chars) {
 			return m
 		}
@@ -970,8 +975,8 @@ func (ctx *manjuCtx) injectAudioTimbrePhrases(hp string, c manjuRefContract) str
 		if phr == "" {
 			return m
 		}
-		return fmt.Sprintf("<Audio %s> is the voice-timbre reference for <Subject %s> (S%s), with %s, containing a spoken voiceover.",
-			sm[1], sm[2], sm[3], phr)
+		return fmt.Sprintf("<Audio %s> is the voice-timbre reference for <Subject %s> (S%s), with %s, %s",
+			sm[2], sm[3], sm[4], phr, sm[5])
 	})
 }
 
@@ -979,18 +984,35 @@ func (ctx *manjuCtx) injectAudioTimbrePhrases(hp string, c manjuRefContract) str
 // with a calm, slightly raspy voice (S1)"):年龄/性别/音高/音色/语速一体,模型按此
 // 分配声线。key 与 autoVoiceFor 输出同源,单一事实源。
 func manjuVoicePhraseFor(key string) string {
+	// 2026-09-01 变体差异化(配音重复根治):同档角色(两个青年男)此前共用同一
+	// 短语(「young man's voice, clear and steady」遍地)→ H3 按短语分配声线,
+	// 短语同=声线同=听感重复。voiceAssign 已按 _2/_3 变体轮转音频文件,短语
+	// 同步差异化(音频不同+短语不同 → 声线显著区分)。
 	phrases := map[string]string{
 		"beast_cute":    "a cute, playful creature voice, bright and bubbly",
+		"beast_cute_2":  "a soft, chirpy creature voice, gentle and round",
 		"child_boy":     "a little boy's voice, high and clear with childlike energy",
+		"child_boy_2":   "a little boy's voice, piping and quick",
 		"child_girl":    "a little girl's voice, high and bright with childlike energy",
+		"child_girl_2":  "a little girl's voice, sweet and soft",
 		"boy_teen":      "a teenage boy's voice, bright and youthful",
+		"boy_teen_2":    "a teenage boy's voice, reedy and eager",
 		"girl_lively":   "a young girl's voice, lively and clear",
+		"girl_lively_2": "a young girl's voice, bubbly and quick",
 		"male_sun":      "a young man's voice, clear and steady",
+		"male_sun_2":    "a young man's voice, slightly husky and low",
+		"male_sun_3":    "a young man's voice, resonant and confident",
 		"female_warm":   "a young woman's voice, warm and gentle",
+		"female_warm_2": "a young woman's voice, soft and clear",
 		"male_mag":      "a middle-aged man's voice, calm and deep",
+		"male_mag_2":    "a middle-aged man's voice, low and rumbling",
+		"male_mag_3":    "a middle-aged man's voice, gravelly and forceful",
 		"female_mature": "a mature woman's voice, smooth and composed",
+		"female_mature_2": "a mature woman's voice, brisk and capable",
 		"male_elder":    "an old man's voice, low and weathered",
+		"male_elder_2":  "an old man's voice, slow and rasping",
 		"female_elder":  "an elderly woman's voice, warm and crackly",
+		"female_elder_2": "an elderly woman's voice, dry and creaky",
 		"male_deep":     "a man's voice, low and magnetic",
 		"female_deep":   "a woman's voice, cold and sharp",
 		// 方言/区域(2026-08-30 ver15):口音描述注入 Audio 定义行——H3 按描述
@@ -1014,7 +1036,9 @@ func manjuVoicePhraseFor(key string) string {
 // voiceTimbrePhrase 角色音色指纹短语(2026-08-30 ver14):按 autoVoiceFor 档位编译,
 // 注入 <Audio N> 定义行——H3 的年龄感/音色来自短语而非随机。
 func (ctx *manjuCtx) voiceTimbrePhrase(cid string) string {
-	key := ctx.autoVoiceFor(cid)
+	// 2026-09-01 变体轮转:assignedVoiceFor(voiceAssign 含 _2/_3 差异化)替代
+	// autoVoiceFor(恒返回档位基底)——同档角色短语互异,不再共用同一声线描述
+	key := ctx.assignedVoiceFor(cid)
 	if key == "" {
 		return ""
 	}

@@ -114,3 +114,36 @@ func TestManjuBannedItemStrip(t *testing.T) {
 		t.Fatalf("gourd flask 应保留: %q", out)
 	}
 }
+
+// 2026-09-01 配音不随角色/重复根治:Audio 定义短语校正(错配修正/幂等/变体差异化)
+func TestInjectAudioTimbrePhrasesFix(t *testing.T) {
+	ctx := &manjuCtx{R: map[string]any{}}
+	// 构造角色卡:金珠=女主(年轻女),石敢当=男主(青年男)
+	ctx.voiceAssign = map[string]string{"金珠": "female_warm", "石敢当": "male_sun_2", "老周": "male_elder"}
+	c := manjuRefContract{
+		Chars: []manjuCharSlot{{ID: "金珠"}, {ID: "石敢当"}, {ID: "老周"}},
+	}
+	// ① 错配短语(LLM 写的「middle-aged man with a deep rough voice」)→ 校正为角色标准
+	hp := "subject_definitions:\n<Audio 1> is the voice-timbre reference for <Subject 1> (S1), with a middle-aged man with a deep rough voice, containing a spoken voiceover.\n\n<Audio 2> is the voice-timbre reference for <Subject 2> (S2), with a young man with a clear steady voice, containing a spoken voiceover.\n\n<Audio 3> is the voice-timbre reference for <Subject 3> (S3), containing a spoken voiceover.\n\ndetailed_description:\nThe scene.\n"
+	out := ctx.injectAudioTimbrePhrases(hp, c)
+	if !strings.Contains(out, "a young woman's voice, warm and gentle") {
+		t.Fatalf("金珠错配短语未校正: %s", out[:200])
+	}
+	if !strings.Contains(out, "a young man's voice, slightly husky and low") {
+		t.Fatalf("石敢当变体短语未生效: %s", out[:250])
+	}
+	if !strings.Contains(out, "an old man's voice, low and weathered") {
+		t.Fatalf("老周裸行未注入: %s", out[:300])
+	}
+	// ② 幂等:重跑不叠加不漂移
+	out2 := ctx.injectAudioTimbrePhrases(out, c)
+	if out != out2 {
+		t.Fatalf("非幂等:\n%s\n---\n%s", out, out2)
+	}
+	// ③ 变体差异化:同档两角色短语互异
+	ctx2 := &manjuCtx{R: map[string]any{}}
+	ctx2.voiceAssign = map[string]string{"甲": "male_sun", "乙": "male_sun_2"}
+	if manjuVoicePhraseFor("male_sun") == manjuVoicePhraseFor("male_sun_2") {
+		t.Fatal("同档变体短语必须互异")
+	}
+}
