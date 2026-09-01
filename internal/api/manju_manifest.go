@@ -61,8 +61,11 @@ func (ctx *manjuCtx) shotRenderFingerprint(s manjuShot) string {
 		lora += "|r2v=" + r2v
 	}
 	spec := turboLoRASpecOf(str(R["turbo_lora"]))
-	q := fmt.Sprintf("|steps=%d|sampler=%s|sched=%s|lora=%s|sage=%v|policy=%s",
-		ctx.steps, spec.Sampler, spec.Scheduler, lora, R["sage_attention"], ctx.seedPolicy)
+	// 2026-09-01 二合一:按镜覆盖纳入指纹(镜头调试面板)——覆盖变化→该镜 stale→
+	// 自动重渲,其它镜不受影响(manifest 按镜记录天然隔离)
+	ovFp := shotOverrideFingerprint(ctx.shotOverrideFor(s.ID))
+	q := fmt.Sprintf("|steps=%d|sampler=%s|sched=%s|lora=%s|sage=%v|policy=%s|ov=%s",
+		ctx.steps, spec.Sampler, spec.Scheduler, lora, R["sage_attention"], ctx.seedPolicy, ovFp)
 	return md5Hex(ctx.shotCondFingerprint(s) + "|a=" + ctx.assetsFingerprint() + q)
 }
 

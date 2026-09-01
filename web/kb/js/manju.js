@@ -2298,7 +2298,10 @@
                   <div class="rs-scene">${esc(s.scene || "—")}</div>
                   <div class="rs-meta">${esc(s.shot_size || "")} · ${s.duration || 5}s${s.camera ? " · " + esc(s.camera) : ""}</div>
                 </div>
-                <button class="hrs-btn rs-re" data-ep="${esc(ep.episode)}" data-id="${s.id}">重新渲染</button>
+                <div class="manju-row" style="gap:6px;margin-top:8px">
+                  <button class="hrs-btn rs-re" data-ep="${esc(ep.episode)}" data-id="${s.id}">重新渲染</button>
+                  <button class="hrs-btn rs-dbg" data-ep="${esc(ep.episode)}" data-id="${s.id}" title="工作流可视化+参数调试">🎛 调试</button>
+                </div>
               </div>`;
             }).join("");
             const epId = "rs-ep-" + esc(ep.episode).replace(/[^A-Za-z0-9]/g, "");
@@ -2331,6 +2334,12 @@
               if (cards) { cards.style.display = "none"; h.querySelector(".rs-arrow").textContent = "▸"; }
             }
           });
+          // 镜头调试(2026-09-01 二合一阶段一):工作流可视化+参数覆盖+单镜重渲
+          listEl.querySelectorAll(".rs-dbg").forEach((b) => {
+            b.addEventListener("click", () => {
+              this.openShotDebug(b.dataset.ep, parseInt(b.dataset.id, 10));
+            });
+          });
           // 单镜重新渲染
           listEl.querySelectorAll(".rs-re").forEach((b) => {
             b.addEventListener("click", () => {
@@ -2353,6 +2362,99 @@
           });
         })
         .catch((e) => { listEl.innerHTML = `<div class="mc-d" style="color:#c33">加载失败：${esc(e.message)}</div>`; });
+    },
+
+    /* 2026-09-01 二合一阶段一:镜头调试弹窗(工作流可视化+参数覆盖+单镜重渲) */
+    openShotDebug(ep, shotId) {
+      const q = "?config=" + encodeURIComponent(this.project) + "&episode=" + encodeURIComponent(ep) + "&shot=" + shotId;
+      get("/api/manju/shot/workflow" + q)
+        .then((d) => {
+          const ov = d.override || {};
+          const g = d.globals || {};
+          const isOverride = (k) => ov[k] !== undefined && ov[k] !== null && ov[k] !== "";
+          // 参考图区
+          const refs = (d.refs || []).map((rf) => {
+            const label = rf.view ? rf.name + "·" + rf.view : rf.name;
+            return `<div class="dbg-ref" title="${esc(rf.kind)} ${esc(label)}">
+              <img src="/api/manju/shot/asset?config=${encodeURIComponent(this.project)}&file=${encodeURIComponent(rf.file)}"
+                   onerror="this.style.display='none'" loading="lazy">
+              <span>${esc(label)}</span>
+            </div>`;
+          }).join("");
+          // 节点图
+          const nodes = (d.nodes || []).map((nd) => {
+            const ps = Object.entries(nd.params || {}).map(([k, v]) =>
+              `<div class="wf-p"><span class="wf-pk">${esc(k)}</span><span class="wf-pv">${esc(String(v))}</span></div>`).join("");
+            return `<div class="wf-node"><div class="wf-name">${esc(nd.name)}</div><div class="wf-class">${esc(nd.class)}</div>${ps ? '<div class="wf-params">' + ps + "</div>" : ""}</div>`;
+          }).join("");
+          const wfHtml = nodes ? nodes.split("</div></div>").map((seg, i, arr) =>
+            i < arr.length - 1 ? seg + "</div></div><div class='wf-arrow'>→</div>" : seg).join("") : '<div class="mc-d">无节点数据</div>';
+          // 参数表单(覆盖标记:有覆盖显示 ●)
+          const ovMark = (k) => isOverride(k) ? ' <span class="dbg-ov" title="镜级覆盖">●</span>' : "";
+          const engineOpts = ["", ...(d.engines || [])].map((en) => {
+            const label = en ? en : "(全局默认)";
+            const sel = ov.turbo_lora === en ? " selected" : "";
+            return `<option value="${esc(en)}"${sel}>${esc(label)}</option>`;
+          }).join("");
+          const samplerOpts = ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "uni_pc", "heun", "ddim"].map((s) =>
+            `<option value="${s}"${(ov.sampler || g.sampler || "euler") === s ? " selected" : ""}>${esc(s)}</option>`).join("");
+          this.openModal(`🎛 镜头调试 ${ep} · 镜 ${String(shotId).padStart(2, "0")}${d.scene ? " · " + esc(d.scene) : ""}`,
+            `<div class="dbg-wrap">
+              <div class="dbg-sec-title">工作流节点(当前生效)</div>
+              <div class="wf-flow">${wfHtml}</div>
+              <div class="dbg-cache">条件缓存: <code>${esc(d.cache || "—")}</code>${d.chained ? ' <span class="rs-badge rs-stale">接缝镜</span>' : ""}</div>
+              ${refs ? `<div class="dbg-sec-title">参考图(${(d.refs || []).length})</div><div class="dbg-refs">${refs}</div>` : ""}
+              <div class="dbg-sec-title">参数(●=镜级覆盖)</div>
+              <div class="dbg-form">
+                <div class="dbg-row"><label>Seed${ovMark("seed")}</label><input id="dbg-seed" type="number" placeholder="全局 ${g.seed || ""} (${esc(g.seed_policy || "fixed")})" value="${ov.seed !== undefined ? ov.seed : ""}"></div>
+                <div class="dbg-row"><label>步数${ovMark("steps")}</label><input id="dbg-steps" type="number" min="1" max="40" placeholder="全局 ${g.steps || ""}" value="${ov.steps !== undefined ? ov.steps : ""}"></div>
+                <div class="dbg-row"><label>采样器${ovMark("sampler")}</label><select id="dbg-sampler">${samplerOpts}</select></div>
+                <div class="dbg-row"><label>引擎${ovMark("turbo_lora")}</label><select id="dbg-engine">
+                  <option value="">(全局默认)</option>
+                  <option value="-"${ov.turbo_lora === "-" ? " selected" : ""}>🚫 禁用引擎(全步数)</option>
+                  ${(d.engines || []).map((en) => `<option value="${esc(en)}"${ov.turbo_lora === en ? " selected" : ""}>${esc(en)}</option>`).join("")}
+                </select></div>
+                <div class="dbg-row"><label>负面词${ovMark("neg_prompt")}</label><input id="dbg-neg" type="text" placeholder="全局默认" value="${esc(ov.neg_prompt || "")}"></div>
+                <div class="dbg-row"><label>备注</label><input id="dbg-note" type="text" placeholder="为什么覆盖(可选)" value="${esc(ov.note || "")}"></div>
+              </div>
+              <div class="manju-row" style="justify-content:center;gap:10px;margin-top:14px">
+                <button id="dbg-save" class="hrs-btn">💾 保存参数</button>
+                <button id="dbg-save-run" class="hrs-btn hrs-btn-primary">🎬 保存并重渲此镜</button>
+                <button id="dbg-reset" class="hrs-btn">↺ 重置默认</button>
+                <button id="dbg-close" class="hrs-btn">关闭</button>
+              </div>
+            </div>`, true);
+          const collect = () => {
+            const o = {};
+            const num = (id) => { const v = $(id).value.trim(); return v === "" ? null : parseInt(v, 10); };
+            const seed = num("dbg-seed"); if (seed !== null && !isNaN(seed)) o.seed = seed;
+            const steps = num("dbg-steps"); if (steps !== null && !isNaN(steps) && steps > 0) o.steps = steps;
+            if ($("dbg-sampler").value) o.sampler = $("dbg-sampler").value;
+            if ($("dbg-engine").value) o.turbo_lora = $("dbg-engine").value;
+            if ($("dbg-neg").value.trim()) o.neg_prompt = $("dbg-neg").value.trim();
+            if ($("dbg-note").value.trim()) o.note = $("dbg-note").value.trim();
+            return o;
+          };
+          const save = (run) => {
+            const o = collect();
+            post("/api/manju/shot/override", { config: this.project, episode: ep, shot: shotId, override: o })
+              .then(() => {
+                this.closeModal();
+                if (run) this._runShotsRender(ep, String(shotId));
+                else { this.loadRenderShots(); }
+              })
+              .catch((e) => alert("保存失败: " + e.message));
+          };
+          $("dbg-save").addEventListener("click", () => save(false));
+          $("dbg-save-run").addEventListener("click", () => save(true));
+          $("dbg-reset").addEventListener("click", () => {
+            post("/api/manju/shot/override", { config: this.project, episode: ep, shot: shotId, override: {} })
+              .then(() => { this.closeModal(); this.loadRenderShots(); })
+              .catch((e) => alert("重置失败: " + e.message));
+          });
+          $("dbg-close").addEventListener("click", () => this.closeModal());
+        })
+        .catch((e) => { this.closeModal(); alert("加载调试面板失败: " + e.message); });
     },
 
     /* 弹窗公共按钮的执行载体:only 空=该集全量,非空=指定镜 */

@@ -5201,3 +5201,28 @@ select option { text-align: center; }
   transform: none; filter: none;
 }
 .manju-modal-head .mj-hi-fixall.mj-hi-done:hover { transform: none; filter: none; box-shadow: none; }
+
+/* ---- 镜头调试面板(2026-09-01 二合一阶段一) ---- */
+.dbg-wrap { max-width: 1280px; }
+.dbg-sec-title { font-size: 12px; color: var(--muted); margin: 14px 0 8px; letter-spacing: .05em; }
+.dbg-cache { font-size: 11px; color: var(--muted); margin: 8px 0; word-break: break-all; }
+.dbg-cache code { background: var(--chip-bg); padding: 1px 6px; border-radius: 4px; }
+.wf-flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; background: var(--surface-2); border: 1px solid var(--panel-border); border-radius: 10px; padding: 12px; }
+.wf-node { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px; padding: 8px 10px; min-width: 132px; max-width: 190px; }
+.wf-name { font-size: 12px; font-weight: 600; color: var(--accent); }
+.wf-class { font-size: 10px; color: var(--muted); margin: 2px 0 6px; word-break: break-all; }
+.wf-params { display: flex; flex-direction: column; gap: 2px; }
+.wf-p { display: flex; justify-content: space-between; gap: 6px; font-size: 10px; }
+.wf-pk { color: var(--muted); }
+.wf-pv { color: var(--text); word-break: break-all; text-align: right; max-width: 110px; }
+.wf-arrow { align-self: center; color: var(--accent-2); font-size: 14px; }
+.dbg-refs { display: flex; flex-wrap: wrap; gap: 8px; }
+.dbg-ref { width: 92px; text-align: center; }
+.dbg-ref img { width: 92px; height: 92px; object-fit: cover; border-radius: 8px; border: 1px solid var(--panel-border); background: var(--surface-2); }
+.dbg-ref span { font-size: 10px; color: var(--muted); display: block; margin-top: 3px; word-break: break-all; }
+.dbg-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: var(--surface-2); border: 1px solid var(--panel-border); border-radius: 10px; padding: 12px; }
+.dbg-row { display: flex; flex-direction: column; gap: 4px; }
+.dbg-row label { font-size: 11px; color: var(--muted); }
+.dbg-row input, .dbg-row select, .dbg-row textarea { width: 100%; box-sizing: border-box; }
+.dbg-ov { color: #ffb020; font-weight: 700; }
+.rs-dbg { font-size: 12px; padding: 4px 10px; }

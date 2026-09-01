@@ -493,6 +493,10 @@ func (ctx *manjuCtx) latentNS() string {
 // 重试策略:fixed=恒定基线(重渲 attempt>0 时 seed+attempt,否则同 seed 同画面质检死循环);
 // increment=第 N 次重试 seed+N;random=重试换新随机(首渲仍用基线)。
 func (ctx *manjuCtx) seedFor(shotID, attempt int) int {
+	// 2026-09-01 二合一:按镜覆盖 seed 优先(镜头调试面板用户显式指定,重渲不漂移)
+	if ov := ctx.shotOverrideFor(shotID); ov.Seed != nil {
+		return *ov.Seed + attempt // 重试 attempt 仍递增(质检重渲需换 seed 破死循环)
+	}
 	base := ctx.seed + shotID
 	switch ctx.seedPolicy {
 	case "increment":
@@ -6356,8 +6360,37 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 		ctx.applySageToR(rCopy)
 		ctx.pddGuard(lg) // PDD 节点探测(每 run 一次)
 		ctx.applyPddToR(rCopy)
+		// 2026-09-01 二合一:按镜覆盖参数优先(镜头调试面板)——steps/sampler/lora/
+		// pdd/sage 覆盖全局,条件缓存名按最终参数指纹隔离(覆盖变化→该镜自动重渲)
+		steps := ctx.steps
+		if ov := ctx.shotOverrideFor(s.ID); ov.Steps != nil && *ov.Steps > 0 {
+			steps = *ov.Steps
+			rCopy["steps"] = steps
+		}
+		if ov := ctx.shotOverrideFor(s.ID); ov.Sampler != "" {
+			rCopy["sampler"] = ov.Sampler
+		}
+		if ov := ctx.shotOverrideFor(s.ID); ov.TurboLora != "" {
+			if ov.TurboLora == "-" {
+				// 「-」=禁用引擎:清 turbo/r2v,回退全步数默认
+				rCopy["turbo_lora"] = ""
+				rCopy["turbo_lora_r2v"] = ""
+			} else {
+				rCopy["turbo_lora"] = ov.TurboLora
+				rCopy["turbo_lora_r2v"] = ov.TurboLora // R2V 角色镜同步(引擎切换必须双侧一致)
+			}
+		}
+		if ov := ctx.shotOverrideFor(s.ID); ov.PDD != nil {
+			rCopy["pdd_acc"] = *ov.PDD
+		}
+		if ov := ctx.shotOverrideFor(s.ID); ov.Sage != nil {
+			rCopy["sage_attn"] = *ov.Sage
+		}
+		if ov := ctx.shotOverrideFor(s.ID); ov.NegPrompt != "" {
+			rCopy["neg_prompt"] = ov.NegPrompt
+		}
 		wf := h3RenderWorkflow(rCopy, seed, w, h, h3Length(s.Duration, ctx.fps),
-			ctx.steps, cacheName, len(s.Characters) > 0, chained, idx-1, idx)
+			steps, cacheName, len(s.Characters) > 0, chained, idx-1, idx)
 		return ctx.comfy.submit(wf)
 	}
 	pid, err := submit()

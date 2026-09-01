@@ -349,3 +349,31 @@ Q 版形象只有正角(女主/男主/正角)渲染,配角/群演不生成 Q 版
 - ComfyUI 0.34.0 启动加载:核心插件全部 OK,1245 节点在线;
   MiniMaxH3ReferenceToVideo/SigmaShift/ImageToVideo/PDDAccApply/Easy 全部 ✓
 - 回滚点:PDD-Acc 83353308 / Easy 33b6a795 / rgthree 35c9f1e1 / KJNodes 3f200542
+
+---
+
+# 二合一(管线+画布)阶段一:镜头级可视化调试面板(2026-09-01)
+
+## 用户需求
+「实现二合一吧,目前我测试就是麻烦」——管线为主+画布为辅:点开任一镜头看到工作流节点图,参数可改(seed/步数/采样器/引擎/负面词),保存后只重渲该镜。
+
+## 后端
+1. **按镜参数覆盖机制**(internal/api/manju_shot_override.go):`analysis/<ep>_shot_overrides.json`(seed/steps/sampler/turbo_lora/pdd/sage/neg_prompt/note);空覆盖=清除;「-」=禁用引擎
+2. **读取点改造**:seedFor override.seed 优先(重试仍递增);renderShotTo 参数注入(steps/sampler/turbo_lora/r2v/neg override 优先);**shotRenderFingerprint 纳入覆盖指纹**——覆盖变化→该镜 stale→自动重渲,其它镜不动
+3. **新 API**(manju_shot_debug.go):
+   - `GET /api/manju/shot/workflow` → 节点链(UNETLoader→引擎分支→采样→输出)+参数(当前生效)+参考图清单+缓存名+接缝标记
+   - `POST /api/manju/shot/override` → 保存/清空覆盖
+   - `GET /api/manju/shot/overrides`、`GET /api/manju/shot/asset`(参考图)
+4. 单测:TestShotOverride*(指纹/存取/seedFor)+TestShotWorkflowAPI(httptest 集成:节点链/参考图/覆盖生效/指纹变化)
+
+## 前端(web/kb)
+5. 镜头管理弹窗每镜卡片加「🎛 调试」按钮 → 镜头调试弹窗:工作流节点图(横向节点块+箭头+参数)+参考图缩略图+参数表单(●=镜级覆盖)+「保存参数/保存并重渲此镜/重置默认」
+6. app.css 新增 .dbg-*/.wf-* 样式(复用 themes.css 变量)
+
+## 验证
+- JS node --check ✓、go 全量单测 ✓、deliver_check PASS、exe 已重编译
+- 手动验证步骤:替换 exe → 镜头管理 → 调试 → 改 seed/步数 → 保存并重渲此镜 → 仅该镜重渲(指纹变化自动 stale)
+
+## 后续批次
+- 二期:节点图可交互(点节点改参数)+中间产物预览(首帧/条件缓存状态)
+- 三期:拖拽连线/换节点(Easy 接入)+工作流模板保存
