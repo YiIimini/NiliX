@@ -662,3 +662,123 @@ non_diegetic_music: N/A.
 		t.Fatalf("镜2 风格列未保留: %q", shots[1].Style)
 	}
 }
+
+// TestScriptDedupShotLines 跨镜串句/镜内重复去重(2026-09-01 配音重复根治):
+//  ① 总览镜串句:镜1 h3 写完整对话(含镜2/3 台词)→ 删除镜1 中属镜2/3 的 <d> 句,
+//     连带引导语,不残留悬空英文;
+//  ② 本镜权威台词保留(镜1 自己的台词不误删);
+//  ③ 即兴台词(任何镜台词列都没有)→ 保留;
+//  ④ 镜内半角/全角双版本 → 只留第一处;
+//  ⑤ 短词「无」(归一化后 1 字)→ 不参与判定,保留;
+//  ⑥ 幂等:二次执行无变化。
+func TestScriptDedupShotLines(t *testing.T) {
+	manjuState.mu.Lock()
+	manjuState.log = ""
+	manjuState.mu.Unlock()
+	lg := &manjuLogger{state: manjuState}
+	raws := []scriptShotRaw{
+		{ID: 1, Dialogue: "(S1)老赵:\"今儿大比,你磨它干啥。\"",
+			H3Prompt: "detailed_description: Old Zhao speaks, his voice rough and low: <d>[Chinese]今儿大比,你磨它干啥。</d> Jiang Que does not pause his sharpening. He replies without looking up, his tone flat: <d>[Chinese]测完灵,下午还有三十捆柴。</d> He then stops the whetstone, lifts his head, and adds calmly: <d>[Chinese]天塌下来,柴还是要劈的。</d> Old Zhao's bowl pauses mid-air."},
+		{ID: 2, Dialogue: "(S2)姜缺:\"测完灵,下午还有三十捆柴。\"",
+			H3Prompt: "detailed_description: <d>[Chinese]测完灵,下午还有三十捆柴。</d>"},
+		{ID: 3, Dialogue: "(S2)姜缺:\"天塌下来,柴还是要劈的。\"",
+			H3Prompt: "detailed_description: He adds calmly: <d>[Chinese]天塌下来,柴还是要劈的。</d>"},
+	}
+	scriptDedupShotLines(raws, lg)
+	// ① 镜1 串句删除(两句都删)
+	if strings.Contains(raws[0].H3Prompt, "测完灵") {
+		t.Fatalf("镜1 应删除属镜2 的串句, got: %s", raws[0].H3Prompt)
+	}
+	if strings.Contains(raws[0].H3Prompt, "天塌下来") {
+		t.Fatalf("镜1 应删除属镜3 的串句, got: %s", raws[0].H3Prompt)
+	}
+	// ② 镜1 自己的台词保留
+	if !strings.Contains(raws[0].H3Prompt, "今儿大比") {
+		t.Fatalf("镜1 自己的台词应保留, got: %s", raws[0].H3Prompt)
+	}
+	// 引导语不残留("He replies" 应随串句一起删)
+	if strings.Contains(raws[0].H3Prompt, "He replies without looking up") {
+		t.Fatalf("串句引导语应一并删除, got: %s", raws[0].H3Prompt)
+	}
+	// ② 镜2/3 自己的台词保留
+	if !strings.Contains(raws[1].H3Prompt, "测完灵") || !strings.Contains(raws[2].H3Prompt, "天塌下来") {
+		t.Fatalf("镜2/3 权威台词应保留")
+	}
+	// 日志有串句删除记录
+	manjuState.mu.Lock()
+	logged := manjuState.log
+	manjuState.mu.Unlock()
+	if !strings.Contains(logged, "配音去重") {
+		t.Fatalf("应有去重日志, log: %s", logged)
+	}
+}
+
+func TestScriptDedupShotLinesEdge(t *testing.T) {
+	manjuState.mu.Lock()
+	manjuState.log = ""
+	manjuState.mu.Unlock()
+	lg := &manjuLogger{state: manjuState}
+	// ④ 镜内半角/全角双版本 + ⑤ 短词「无」保留 + ⑥ 幂等
+	raws := []scriptShotRaw{
+		{ID: 1, Dialogue: "(S1)解说:\"壹万号一拳!\"",
+			H3Prompt: "detailed_description: 解说喊: <d>[Chinese]壹万号一拳!</d> 全场欢呼: <d>[Chinese]壹万号一拳!</d> 又喊 <d>[Chinese]壹万号一拳!</d>"},
+		{ID: 2, Dialogue: "(S1)姜缺:\"无\"\n(S1)姜缺:\"无\"",
+			H3Prompt: "detailed_description: 姜缺答: <d>[Chinese]无</d> <d>[Chinese]无</d>"},
+		{ID: 3, Dialogue: "",
+			H3Prompt: "detailed_description: 群众呼喊: <d>[Chinese]哎哟…疼…</d>"},
+	}
+	scriptDedupShotLines(raws, lg)
+	// ④ 镜内重复只留第一处
+	if n := strings.Count(raws[0].H3Prompt, "壹万号一拳"); n != 1 {
+		t.Fatalf("镜1 同镜重复应只留 1 处, got %d: %s", n, raws[0].H3Prompt)
+	}
+	// ⑤ 短词「无」:台词列声明过 → 镜内去重只留第一处(dialogue 有两行「无」,h3 两处
+	// 都算本镜权威,但镜内重复仍去重);归一化 1 字不参与跨镜,不会误删其它镜
+	if n := strings.Count(raws[1].H3Prompt, "<d>[Chinese]无</d>"); n != 1 {
+		t.Fatalf("镜2 同镜重复「无」应只留 1 处, got %d: %s", n, raws[1].H3Prompt)
+	}
+	// ③ 即兴台词保留
+	if !strings.Contains(raws[2].H3Prompt, "哎哟") {
+		t.Fatalf("即兴台词不应删除, got: %s", raws[2].H3Prompt)
+	}
+	// ⑥ 幂等:再次执行无变化(与首次执行后的结果一致)
+	first := append([]scriptShotRaw{}, raws...)
+	scriptDedupShotLines(raws, lg)
+	for i := range raws {
+		if raws[i].H3Prompt != first[i].H3Prompt {
+			t.Fatalf("幂等失败(镜 %d): %q != %q", i+1, raws[i].H3Prompt, first[i].H3Prompt)
+		}
+	}
+}
+
+// TestParseInnerMultiLine 内心段多行延续(2026-09-02 王牌三岁半镜11 实锤):
+// 「内心·棠棠:"豆豆…,"\n"怎么只有一个冰凉的环。"」→ 两行都归 narration,
+// 不把无前缀延续行错拆进 dialogue。
+func TestParseInnerMultiLine(t *testing.T) {
+	text := `{
+  "book":"王牌三岁半","episode":1,"chapter_title":"第1章","global_style":"s",
+  "shots":[{
+    "shot_id":11,"shot_size":"中景","camera":"固定","action":"棠棠站在台上",
+    "dialogue":"内心·棠棠：\"豆豆明明说测试台上有糖发，\"\n\"怎么只有一个冰凉的环。\"",
+    "light":"","sound":"","duration":6,"characters":["棠棠"],
+    "h3_prompt":"subject_definitions:\n<Subject 1> is Tangtang in <Picture 1>.\n\ndetailed_description:\nX\n"
+  }]
+}`
+	raws, err := parseScriptJSON(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raws) != 1 {
+		t.Fatalf("应 1 镜, got %d", len(raws))
+	}
+	r := raws[0]
+	if !strings.Contains(r.Narration, "豆豆明明说") || !strings.Contains(r.Narration, "怎么只有一个冰凉的环") {
+		t.Fatalf("内心两行都应进 narration: %q", r.Narration)
+	}
+	if strings.Contains(r.Narration, "内心·棠棠：\n\"怎么") {
+		// 允许:两行各自保留,但都必须带内心语义(前缀只在首行)
+	}
+	if r.Dialogue != "" {
+		t.Fatalf("内心延续行不应进 dialogue: %q", r.Dialogue)
+	}
+}

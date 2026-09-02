@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // scriptShotRaw 分镜表一行解析出的镜头(未绑定角色/场景卡)
@@ -80,7 +81,10 @@ var (
 	// 素材代码块(英文提示词)
 	reMdCodeBlock = regexp.MustCompile("(?s)```[^\\n]*\\n(.*?)\\n```")
 	// 台词:(S1)沈玉衡:"晚老板..."(非贪婪到闭合引号,多句逐条匹配;兼容无引号句)
-	reDialogue = regexp.MustCompile(`\(S\d\)\s*([^：:]+?)\s*[：:]\s*["“]([^"”]+?)["”]|\(S\d\)\s*([^：:]+?)\s*[：:]\s*([^"”]+)`)
+	// 2026-09-01 S\d+ 修复:原 (S\d) 只匹配 1 位编号,S10-S12(第173章写名之战
+	// 群像,多角色喊同一句)整行匹配失败 → 权威集缺句 → 跨镜归属判定失效。
+	// 同批:引号字符类加「」『』(第73章凶水会用「」包裹台词,漏匹配=权威集缺句)。
+	reDialogue = regexp.MustCompile(`\(S\d+\)\s*([^：:]+?)\s*[：:]\s*["“「『]([^"”」』]+?)["”」』]|\(S\d+\)\s*([^：:]+?)\s*[：:]\s*([^"”」』]+)`)
 	// 群演轻量卡(2026-08-27):分镜表说话人带 S 声线编号提取((S2)周管事: → 2,周管事)
 	reSpeakerTag = regexp.MustCompile(`\(S(\d+)\)\s*([^：:"“]+?)\s*[：:]`)
 	// 六段式主体定义行:"<Subject 2> is the white-haired steward in <Picture 1>, kneeling..."
@@ -280,7 +284,19 @@ func knownKeys(m map[string]bool) []string {
 //    (杳杳/主持人/小汤)归一到素材卡全名(涂山杳杳/天才榜主持人/孟小汤),精确匹配
 //    不上=无参考图=主次混乱/形象漂移(杂毛杳杳×108、影子主持人×6 实锤);
 //    scriptMinorCast 建卡前置归一,有素材卡不建重复自动卡。
-const manjuScriptParseVer = 17
+// 18=2026-09-01 配音重复根治(scriptDedupShotLines):跨镜串句删除(总览镜把
+//    整段对话写进第一镜,后续分解镜各带一句 → 同一句台词多镜重复念两遍,
+//    EP01 镜1 三句 vs 镜2/3 实锤)+ 同镜半角/全角双版本去重;以台词列为
+//    权威逐句归属,即兴台词/口号/连环「无」不误删。
+// 19=2026-09-02 内心段多行延续修复(王牌三岁半镜11 实锤):「内心·棠棠:"豆豆…,"
+//    \n"怎么只有一个冰凉的环。"」后续引号延续行无前缀 → 旧逻辑错拆进 Dialogue
+//    (无说话人,渲染对不上脚本);延续行归 narration。
+// 20=2026-09-02 配音重复三连根治(王牌三岁半 EP01 镜15 实锤):①manjuOffscreenDescs
+//    提取画外声线描述跨台词块(同一长句两句画外音,desc 含 <d> 台词 → Audio 定义行
+//    内嵌台词 → H3 念两遍);②alignAudioDefsReg @offscreen 重写剥掉幂等锚前缀 → 每轮
+//    finalize 重复注入叠加;③补写判定 key 剥引号(带引号台词与六段式 <d> 无引号形态
+//    匹配不上 → 误补写重复 <d>)。bump 强制存量 plan 重解析。
+const manjuScriptParseVer = 20
 
 // scriptParsePlan 脚本直出程序化解析入口。
 // 解析出 characters/scenes/shots/directing/episode_title/chapters=script。
@@ -407,7 +423,10 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 			}
 			if k > 0 {
 				name := strings.TrimSpace(inner[:k])
-				content := strings.TrimSpace(inner[k+1:])
+				// 2026-09-01 全角冒号字节修复(同 stripNarrationPrefix):
+				// 内容从完整 rune 后取,防 \xbc\x9a 残留进 narration。
+				_, size := utf8.DecodeRuneInString(inner[k:])
+				content := strings.TrimSpace(inner[k+size:])
 				content = strings.Trim(content, "。！？.!? ")
 				if name != "" && content != "" {
 					line := "内心·" + name + ":" + content + "。"
@@ -533,7 +552,13 @@ func parseScriptJSON(text string) ([]scriptShotRaw, error) {
 			H3Prompt:  strings.TrimSpace(s.H3Prompt),
 			JSONChars: s.Characters,
 		}
-		// 台词列逐行拆分:内心·/旁白 → Narration(前缀保留),其余 → Dialogue
+		// 台词列逐行拆分:内心·/旁白 → Narration(前缀保留),其余 → Dialogue。
+		// 2026-09-02 内心段多行延续修复(王牌三岁半镜11 实锤):内心段常写成
+		// 「内心·棠棠:"豆豆明明说…,"\n"怎么只有一个冰凉的环。"」——第一行带
+		// 内心·前缀,后续引号延续行无前缀 → 旧逻辑把延续行错拆进 Dialogue
+		// (无说话人=对不上脚本/渲染端误当角色台词)。引号开头/上一行是内心的
+		// 延续行继续归 narration(前缀只在段首保留一次)。
+		inNarr := false // 上一行是否内心/旁白段(延续行判定)
 		for _, line := range strings.Split(s.Dialogue, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
@@ -544,6 +569,7 @@ func parseScriptJSON(text string) ([]scriptShotRaw, error) {
 					raw.Narration += "\n"
 				}
 				raw.Narration += strings.TrimSpace(line[i:])
+				inNarr = true
 				continue
 			}
 			if strings.HasPrefix(line, "旁白") {
@@ -551,8 +577,18 @@ func parseScriptJSON(text string) ([]scriptShotRaw, error) {
 					raw.Narration += "\n"
 				}
 				raw.Narration += line
+				inNarr = true
 				continue
 			}
+			// 内心/旁白段的引号延续行(无前缀):归 narration 并补「内心·」段标记
+			if inNarr && (strings.HasPrefix(line, "\"") || strings.HasPrefix(line, "“") || strings.HasPrefix(line, "「")) {
+				if raw.Narration != "" {
+					raw.Narration += "\n"
+				}
+				raw.Narration += line
+				continue
+			}
+			inNarr = false
 			if raw.Dialogue != "" {
 				raw.Dialogue += "\n"
 			}
@@ -597,6 +633,14 @@ func (ctx *manjuCtx) buildPlanFromRaws(raws []scriptShotRaw, text string, lg *ma
 	// 2026-08-26 分镜机械质检(对齐爽文技能 storyboard_check 六项中管线侧此前缺失的三项):
 	// 时间戳递增 / 时长多样性 / 台词-六段式同步。机械能查的不烧 GPU 不耗视觉模型,导入期发现导入期修。
 	scriptValidateShots(raws, lg)
+	// 2026-09-01 配音重复根治:跨镜/镜内台词去重(总览镜串句)——
+	// LLM 生成 h3_prompt 时习惯把「整段对话」写进场景第一镜(总览镜)的
+	// detailed_description,后续分解镜又各带一句 → 同一句台词在多个镜的
+	// <d> 中重复,H3 每镜独立配音 → 同一句被念多遍(EP01 镜1 三句 vs 镜2/3
+	// 各重复一句实锤;用户反馈「镜头变多后配音重复更厉害」)。
+	// 规则见 scriptDedupShotLines 注释;必须在 Validate(补写)之后执行,
+	// 否则补写会把已删串句重新补回。
+	scriptDedupShotLines(raws, lg)
 
 	// 3) 角色/场景卡:素材(workdir/素材/ 优先,其次 novel 素材目录)
 	charCards, sceneCards := ctx.parseScriptAssetCards(lg)
@@ -923,6 +967,19 @@ func scriptValidateShots(raws []scriptShotRaw, lg *manjuLogger) {
 			if ci >= 0 {
 				line = strings.TrimSpace(string(rs[ci+1:]))
 			}
+			// 2026-09-02 剥首尾引号(王牌三岁半 EP01 镜15 实锤):台词列「(S25)画外·
+			// 观众乙:"联邦史上最低！"」剥前缀后仍带引号 → key 带引号与六段式 <d> 内
+			// 无引号台词比对恒 miss → 每次导入误补写一条带引号的重复 <d>(run.log
+			// 「镜头 15 检出 2 句未同步已补写」即此)→ 配音重复。仅剥首尾成对引号,
+			// 台词正文不变。
+			rs = []rune(line)
+			if len(rs) >= 2 {
+				q0, q1 := rs[0], rs[len(rs)-1]
+				if (q0 == '"' && q1 == '"') || (q0 == '“' && q1 == '”') ||
+					(q0 == '「' && q1 == '」') || (q0 == '『' && q1 == '』') {
+					line = string(rs[1 : len(rs)-1])
+				}
+			}
 			key := string([]rune(line)[:minInt(8, len([]rune(line)))])
 			if len([]rune(key)) < 4 || strings.Contains(r.H3Prompt, key) {
 				continue
@@ -1047,6 +1104,254 @@ func scriptValidateShots(raws []scriptShotRaw, lg *manjuLogger) {
 // reOffscreenD 画外音句式 <d> 内容提取(去重保留集)
 var reOffscreenD = regexp.MustCompile(`in an off-?screen voiceover:.*?<d>(?:\[Chinese\]|\[中文\])?([^<]+)</d>`)
 
+// scriptDedupShotLines 跨镜/镜内台词去重(2026-09-01 配音重复根治,用户反馈
+// 「配音不对,老是重复;镜头变多后更厉害」的渲染端兜底)。实证形态:
+//   - EP01 镜1(总览镜)detailed_description 写「老赵问 + 姜缺两答」三句,
+//     镜2/3 又各重复一句 → 同一句台词被 H3 念两遍;
+//   - 第23章镜4/5/17 同镜内半角/全角标点双版本各写一遍 → 镜内重复。
+// 规则(以分镜表台词列为权威,逐句归属):
+//   ① 每镜权威集 = 该镜 dialogue 引号内台词 + narration(剥前缀)归一化;
+//   ② <d> 台词归在本镜权威集(精确相等或本镜权威是其子串——合并句形态,
+//      第10章镜11 h3 一句=台词列 4 句合并)→ 保留(本镜该念);
+//   ③ 不在本镜权威集、但与其它镜权威集**整句精确相等** → 判定「总览镜串句」,
+//      删除该 <d> 句(连同引导语,如 "He replies without looking up, his tone
+//      flat:"——回溯到最近句号/换行,不残留悬空引导语);
+//   ④ 任何镜权威集都不在(LLM 自由发挥的群众呼喊/即兴台词,如第10章镜13
+//      「哎哟…疼…」)→ 保留,绝不误删;
+//   ⑤ 同镜内同一句出现 ≥2 次(半角/全角双版本)→ 只保留第一处;
+//   ⑥ 极短词(归一化后 <2 字,如「无」「吃」「…」)→ 不参与任何判定,保留
+//      ——避免误删刻意呼应(第42章 16-21 镜连环「无」是剧情设计)。
+// 跨镜判定只用整句精确相等(不用子串):跨镜串句形态是「整句重复」,子串包含
+// 在跨镜场景误删风险高(短句撞长句)、收益低。删除后清理残留空行;幂等。
+func scriptDedupShotLines(raws []scriptShotRaw, lg *manjuLogger) {
+	if len(raws) < 2 {
+		return
+	}
+	// 每镜权威集:本镜台词列(引号内)+ 旁白/内心(剥前缀)归一化。
+	// dialogue 按行拆再提取:无引号台词形态 `(Sx)角色:内容` 的 [^"”]+ 字符类
+	// 含换行,不拆行会把多句台词吞成一句合并 norm(第50章镜15 实锤)→ 精确
+	// 归属判定失败,跨镜重复漏删。
+	dialogueLines := func(d string) []string {
+		var out []string
+		for _, l := range strings.Split(d, "\n") {
+			l = strings.TrimSpace(l)
+			if l != "" {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	auths := make([]map[string]bool, len(raws))
+	for i := range raws {
+		set := map[string]bool{}
+		for _, line := range dialogueLines(raws[i].Dialogue) {
+			for _, seg := range manjuDialogueContents(line) {
+				if n := manjuNormText(seg); len([]rune(n)) >= 2 {
+					set[n] = true
+				}
+			}
+		}
+		for _, seg := range strings.Split(raws[i].Narration, "\n") {
+			body := stripNarrationPrefix(strings.TrimSpace(seg))
+			if n := manjuNormText(body); len([]rune(n)) >= 2 {
+				set[n] = true
+			}
+		}
+		auths[i] = set
+	}
+	// 每镜 h3_prompt 中所有 <d> 台词(含 [Chinese]/[中文] 语言标签变体)
+	reD := regexp.MustCompile(`<d>(?:\[Chinese\]|\[中文\])?([^<]+)</d>`)
+	for i := range raws {
+		hp := raws[i].H3Prompt
+		if hp == "" || !strings.Contains(hp, "<d>") {
+			continue
+		}
+		seenInShot := map[string]bool{} // 镜内去重
+		changed := false
+		var kept []string
+		pos := 0
+		for _, m := range reD.FindAllStringSubmatchIndex(hp, -1) {
+			raw := hp[m[2]:m[3]]
+			n := manjuNormText(raw)
+			seg := hp[pos:m[0]] // 本段台词前的原文(含引导语)
+			// ⑥ 极短词不参与**跨镜**判定(避免误删刻意呼应,第42章 16-21 镜
+			// 连环「无」是剧情设计);但同镜内重复念两遍仍是真重复,照常去重。
+			if len([]rune(n)) < 2 {
+				if seenInShot[n] {
+					lg.logf(fmt.Sprintf("  🎙 配音去重: 镜头 %d 同镜重复台词「%s」已删(保留第一处)", raws[i].ID, firstN(raw, 20)))
+					changed = true
+					pos = m[1]
+					continue
+				}
+				seenInShot[n] = true
+				kept = append(kept, seg, hp[m[0]:m[1]])
+				pos = m[1]
+				continue
+			}
+			// ① 本镜权威(精确或合并句包含)→ 保留
+			if auths[i][n] || authContains(auths[i], n) {
+				if seenInShot[n] {
+					// ⑤ 镜内重复:同镜已保留过此句,删后续(连同引导语)
+					lg.logf(fmt.Sprintf("  🎙 配音去重: 镜头 %d 同镜重复台词「%s」已删(保留第一处)", raws[i].ID, firstN(raw, 20)))
+					changed = true
+					pos = m[1]
+					continue
+				}
+				seenInShot[n] = true
+				kept = append(kept, seg, hp[m[0]:m[1]])
+				pos = m[1]
+				continue
+			}
+			// ②③ 不在本镜权威 → 与其它镜权威集整句精确比对(总览镜串句形态)
+			owner := manjuShotOwnerOf(raws, raw, n, i)
+			if owner == 0 {
+				// ④ 任何镜都不在 → 即兴台词,保留
+				kept = append(kept, seg, hp[m[0]:m[1]])
+				pos = m[1]
+				continue
+			}
+			// 串句:删引导语(回溯最近句号/换行,防悬空)+ <d> 句
+			leadStart := m[0]
+			for k := m[0] - 1; k >= pos-1 && m[0]-k <= 200; k-- {
+				if k < 0 || hp[k] == '.' || hp[k] == '\n' {
+					leadStart = k + 1
+					break
+				}
+			}
+			if leadStart < pos {
+				leadStart = pos
+			}
+			kept = append(kept, hp[pos:leadStart])
+			lg.logf(fmt.Sprintf("  🎙 配音去重: 镜头 %d 串句「%s」已删(该句属镜 %d 台词,防跨镜重复配音)", raws[i].ID, firstN(raw, 20), owner))
+			changed = true
+			pos = m[1]
+		}
+		if !changed {
+			continue
+		}
+		kept = append(kept, hp[pos:])
+		out := strings.Join(kept, "")
+		out = regexp.MustCompile(`\n{3,}`).ReplaceAllString(out, "\n\n")
+		out = strings.TrimSpace(out)
+		raws[i].H3Prompt = out
+	}
+}
+
+// manjuDialogueContents 单行台词列 → 台词内容列表(去说话人前缀/引号)。
+// reDialogue 主路径之外兜底两种畸形形态(2026-09-01 实测):
+//   - `(S1)白泽·小白:""可账册…"` 空引号占位+内容(第155章镜9):reDialogue
+//     只匹配到空引号 → 内容落空 → 权威集缺句 → 跨镜归属判定失败;
+//   - 无引号句 `(S1)老赵:今儿大比` 的引号残留。
+// 主路径(引号内+无引号)优先,兜底取剥前缀后剩余非空段。
+func manjuDialogueContents(line string) []string {
+	line = strings.TrimSpace(line)
+	var out []string
+	seen := map[string]bool{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		s = strings.Trim(s, "\"“”'‘’ ")
+		if s == "" || seen[s] {
+			return
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	// 主路径:reDialogue 引号内(m[2])/无引号(m[4])
+	for _, m := range reDialogue.FindAllStringSubmatch(line, -1) {
+		seg := strings.TrimSpace(m[2])
+		if seg == "" {
+			seg = strings.TrimSpace(m[4])
+		}
+		add(seg)
+	}
+	if len(out) > 0 {
+		return out
+	}
+	// 兜底:剥 (Sx)说话人: 前缀后取剩余(空引号占位形态)
+	if i := strings.Index(line, "("); i >= 0 {
+		if j := strings.IndexAny(line[i:], "：:"); j >= 0 {
+			rest := line[i+j:]
+			_, size := utf8.DecodeRuneInString(rest)
+			add(strings.TrimSpace(rest[size:]))
+			if len(out) > 0 {
+				return out
+			}
+		}
+	}
+	// 最终兜底:整行剥引号(无说话人前缀的裸台词行)
+	add(line)
+	return out
+}
+
+// authContains 权威集包含判定:本镜权威条目是台词 n 的子串(处理 h3 中台词
+// 被合并的形态——第10章镜11 h3 一句「杂役听令!…逐出宗门!」= 台词列 4 句合并)。
+func authContains(set map[string]bool, n string) bool {
+	for a := range set {
+		if len([]rune(a)) >= 4 && strings.Contains(n, a) {
+			return true
+		}
+		if len([]rune(n)) >= 4 && strings.Contains(a, n) {
+			return true
+		}
+	}
+	return false
+}
+
+// manjuShotOwnerOf 查台词 n 精确归属于哪一镜(串句删除判定/日志;无归属返回 0)。
+// dialogue 按行拆再提取(同 scriptDedupShotLines 注释:无引号台词跨行吞句会
+// 使合并 norm 无法精确命中,串句漏删)。
+func manjuShotOwnerOf(raws []scriptShotRaw, raw, n string, skip int) int {
+	for j := range raws {
+		if j == skip {
+			continue
+		}
+		for _, line := range strings.Split(raws[j].Dialogue, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			for _, seg := range manjuDialogueContents(line) {
+				if manjuNormText(seg) == n {
+					return raws[j].ID
+				}
+			}
+		}
+		for _, seg := range strings.Split(raws[j].Narration, "\n") {
+			if manjuNormText(stripNarrationPrefix(strings.TrimSpace(seg))) == n {
+				return raws[j].ID
+			}
+		}
+		// 合并句归属(2026-09-01):h3 中一句台词可能是该镜台词列多行合并
+		// (第40章夜枭镜18 内心三行合并成一句、镜19 整句重复)——整句 norm 与
+		// 任一行都不等 → 精确命中失败 → 串句漏删。用原始文本按句末标点拆
+		// 子句,每一子句都能在该镜权威行中精确找到 → 归属该镜。
+		if len([]rune(raw)) >= 8 {
+			clauses := splitNarrationSentences(raw)
+			if len(clauses) >= 2 {
+				all := true
+				for _, c := range clauses {
+					cn := manjuNormText(c)
+					found := false
+					for _, seg := range strings.Split(raws[j].Narration, "\n") {
+						if manjuNormText(stripNarrationPrefix(strings.TrimSpace(seg))) == cn {
+							found = true
+							break
+						}
+					}
+					if !found {
+						all = false
+						break
+					}
+				}
+				if all {
+					return raws[j].ID
+				}
+			}
+		}
+	}
+	return 0
+}
+
 // manjuNormText 台词/提示词片段归一(去空白与常见标点,去重比对用)
 func manjuNormText(s string) string {
 	return regexp.MustCompile(`[\s,，。.．!！?？\-—·、:；:;"'‘’“”()\[\]{}<>《》【】~～…]+`).ReplaceAllString(s, "")
@@ -1060,8 +1365,13 @@ func stripNarrationPrefix(line string) string {
 	// 1) 「内心·角色名:」前缀:取角色名后第一个冒号之后为内容
 	if i := strings.Index(line, "内心·"); i >= 0 {
 		rest := line[i+len("内心·"):]
+		// 2026-09-01 全角冒号字节修复:strings.IndexAny 返回字节索引,「：」是
+		// 3 字节 UTF-8(EF BC 9A),j+1 只跳 1 字节会把 \xbc\x9a 尾字节残留进
+		// 内容(第102章镜24 实锤:auth key 变 \xbc\x9a本狐偷东西吃… → 与 h3
+		// <d> 台词 norm 失配 → 跨镜去重/归属判定全失效)。按 rune 完整跳过。
 		if j := strings.IndexAny(rest, "：:"); j >= 0 {
-			rest = rest[j+1:]
+			_, size := utf8.DecodeRuneInString(rest[j:])
+			rest = rest[j+size:]
 		}
 		line = rest
 	}

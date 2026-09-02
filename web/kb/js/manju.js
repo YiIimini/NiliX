@@ -568,6 +568,8 @@
       $("manju-create").addEventListener("click", () => this.openCreate());
       $("manju-note").addEventListener("click", () => this.openNotes());
       $("manju-guide").addEventListener("click", () => this.openGuide());
+      // 2026-09-02 角色资产库全局入口(跨项目统一管理)
+      $("manju-charlib").addEventListener("click", () => this.openCharLib());
 
       // 通知配置(设置弹窗)
       $("manju-settings").addEventListener("click", () => this.openSettings());
@@ -2262,11 +2264,170 @@
           <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
             <button id="rs-run" class="hrs-btn hrs-btn-primary">▶ 开始渲染</button>
             <button id="rs-redo" class="hrs-btn">♻️ 全部重做</button>
+            <button id="rs-charlib" class="hrs-btn" title="跨项目角色资产库(已定妆角色直接复用,零渲染)">🎭 资产库</button>
           </div>
         </div>`, true, () => this.loadRenderShots());
       $("rs-run").addEventListener("click", () => this._startRenderFromShots());
       $("rs-redo").addEventListener("click", () => this._redoAllShots());
+      $("rs-charlib").addEventListener("click", () => this.openCharLib());
       this.loadRenderShots();
+    },
+
+    /* 2026-09-02 角色资产库弹窗:跨项目已定妆角色清单(直接复用,零渲染) */
+    /* 2026-09-02 角色资产库统一管理(跨项目全局):
+       卡片网格(主图缩略图/名字/资产数/指纹/入库时间) → 点击卡片预览详情
+       (完整角色卡+image_prompt/q_form 提示词+全部视图缩略图) → 删除 */
+    openCharLib() {
+      get("/api/manju/char-lib/list")
+        .then((d) => {
+          const chars = (d && d.chars) || [];
+          const rows = chars.map((c) => {
+            const files = (c.files || []).length;
+            const created = c.created_at ? new Date(c.created_at * 1000).toLocaleDateString() : "—";
+            const thumb = c.main
+              ? `<img class="clib-thumb" src="/api/manju/char-lib/asset?name=${encodeURIComponent(c.name)}&file=${encodeURIComponent(c.main)}" onerror="this.style.display='none'" loading="lazy">`
+              : "";
+            return `<div class="clib-card" data-name="${esc(c.name)}">
+              ${thumb}
+              <div class="clib-card-body">
+                <div class="clib-name">${esc(c.name)}</div>
+                <div class="clib-meta">${files} 张资产 · ${created}</div>
+                <div class="clib-meta" title="形象指纹(提示词变更后自动重渲覆盖)">指纹 ${esc(c.fingerprint || "—")}</div>
+                <div class="manju-row" style="gap:6px;margin-top:6px">
+                  <button class="hrs-btn clib-view" data-name="${esc(c.name)}" title="点击卡片或此按钮预览详情">👁 详情</button>
+                  <button class="hrs-btn rs-lib-del" data-name="${esc(c.name)}">🗑 删除</button>
+                </div>
+              </div>
+            </div>`;
+          }).join("");
+          this.openModal("🎭 角色资产库(跨项目统一管理)",
+            `<div class="manju-confirm">
+              <p class="mc-d">已定妆角色保存在独立资产库 <code>char_lib/</code>,<b>所有项目共用</b>。新项目遇到同名同形象角色(提示词一致)自动复制复用,<b>零渲染成本</b>且跨项目形象锁定。点击卡片预览该角色详情(含完整提示词);提示词变更后自动重渲并覆盖入库。</p>
+              <div class="clib-grid">
+                ${rows || '<div class="mc-d" style="padding:16px;text-align:center;grid-column:1/-1">资产库为空——渲染过角色后自动入库</div>'}
+              </div>
+            </div>`, true);
+          // 点击卡片 → 详情
+          document.querySelectorAll(".clib-card, .clib-view").forEach((el) => {
+            el.addEventListener("click", (e) => {
+              if (e.target.closest(".rs-lib-del")) return; // 删除按钮不触发详情
+              const name = el.dataset.name;
+              this.openCharLibDetail(name);
+            });
+          });
+          document.querySelectorAll(".rs-lib-del").forEach((b) => {
+            b.addEventListener("click", (e) => {
+              e.stopPropagation();
+              const name = b.dataset.name;
+              if (!confirm(`确认从资产库删除「${name}」?删除后新项目需重新渲染该角色。`)) return;
+              post("/api/manju/char-lib/delete", { name }).then(() => {
+                this.closeModal();
+                this.openCharLib();
+              }).catch((err) => alert("删除失败: " + err.message));
+            });
+          });
+        })
+        .catch((e) => alert("加载资产库失败: " + e.message));
+    },
+
+    /* 角色详情弹窗:完整角色卡 + 提示词 + 全部视图缩略图
+       2026-09-02 用户反馈:①详情弹窗叠在资产库弹窗上出现两个 → 先关库弹窗再开详情,
+       详情内给「返回资产库」按钮;②详情图片可点击预览大图(previewImage 复用)。 */
+    openCharLibDetail(name) {
+      get("/api/manju/char-lib/detail?name=" + encodeURIComponent(name))
+        .then((d) => {
+          const card = d.card || {};
+          const fields = [
+            ["角色", d.name], ["性别", card.gender], ["年龄", card.age],
+            ["物种", card.species], ["身份", card.appearance], ["服装", card.costume],
+            ["音色", card.voice], ["角色位", card.role], ["记忆点", card.memories],
+          ].filter(([, v]) => v).map(([k, v]) =>
+            `<div class="clib-f"><span class="clib-fk">${esc(k)}</span><span class="clib-fv">${esc(String(v))}</span></div>`).join("");
+          const assetUrl = (f) => "/api/manju/char-lib/asset?name=" + encodeURIComponent(name) + "&file=" + encodeURIComponent(f);
+          const imgs = (d.files || []).map((f) =>
+            `<div class="clib-shot"><img class="clib-shot-img" data-img="${esc(assetUrl(f))}" data-name="${esc(f)}" src="${esc(assetUrl(f))}" loading="lazy" title="点击预览大图" onerror="this.style.display='none'"><span>${esc(f)}</span></div>`).join("");
+          const prompts = [
+            ["主形象提示词 image_prompt", card.image_prompt],
+            ["Q版提示词 q_form", card.q_form],
+            ["真身提示词 second_form", card.second_form],
+          ].filter(([, v]) => v).map(([k, v]) =>
+            `<div class="clib-sec-title">${esc(k)}</div><div class="clib-prompt"><pre>${esc(String(v))}</pre></div>`).join("");
+          // 先关资产库弹窗(否则两层弹窗叠着,用户看到"两个弹窗")
+          this.closeModal();
+          this.openModal(`🎭 ${esc(d.name)} · 角色详情`,
+            `<div class="clib-detail">
+              <div class="clib-detail-left">
+                ${fields ? `<div class="clib-sec-title">角色卡</div><div class="clib-fields">${fields}</div>` : ""}
+                ${prompts}
+              </div>
+              <div class="clib-detail-right">
+                <div class="clib-sec-title">资产视图(${(d.files || []).length})</div>
+                <div class="clib-shots">${imgs || '<div class="mc-d">无资产图片</div>'}</div>
+              </div>
+            </div>
+            <div class="manju-row" style="justify-content:center;gap:10px;margin-top:12px">
+              <button id="clib-back" class="hrs-btn">← 返回资产库</button>
+            </div>`, true);
+          document.querySelectorAll(".clib-shot-img").forEach((img) => {
+            img.addEventListener("click", () => this.previewImage(img.dataset.img, img.dataset.name));
+          });
+          const back = $("clib-back");
+          if (back) back.addEventListener("click", () => this.openCharLib());
+        })
+        .catch((e) => alert("加载角色详情失败: " + e.message));
+    },
+
+    /* 2026-09-02 从资产库导入角色到当前项目(角色管理弹窗内):
+       选择弹窗列出库中已定妆角色 → 点「导入」→ 复制资产+合并角色卡,零渲染 */
+    openCharLibPick() {
+      if (this.denyNoProject()) return;
+      get("/api/manju/char-lib/list")
+        .then((d) => {
+          const chars = (d && d.chars) || [];
+          if (!chars.length) {
+            alert("资产库为空——请先在其他项目渲染过角色(自动入库),或到右上角 🎭 资产库查看。");
+            return;
+          }
+          const rows = chars.map((c) => {
+            const thumb = c.main
+              ? `<img class="clib-pick-thumb" src="/api/manju/char-lib/asset?name=${encodeURIComponent(c.name)}&file=${encodeURIComponent(c.main)}" onerror="this.style.display='none'" loading="lazy">`
+              : "";
+            return `<div class="clib-card" style="cursor:default">
+              ${thumb}
+              <div class="clib-card-body">
+                <div class="clib-name">${esc(c.name)}</div>
+                <div class="clib-meta">${(c.files || []).length} 张资产 · ${c.created_at ? new Date(c.created_at * 1000).toLocaleDateString() : "—"}</div>
+                <div class="manju-row" style="gap:6px;margin-top:6px">
+                  <button class="hrs-btn hrs-btn-primary clib-import" data-name="${esc(c.name)}" title="导入此角色到当前项目(复制资产+角色卡,零渲染)">📥 导入此角色</button>
+                </div>
+              </div>
+            </div>`;
+          }).join("");
+          this.openModal("📥 从资产库导入角色到当前项目",
+            `<div class="manju-confirm">
+              <p class="mc-d">选择资产库中<b>已定妆</b>的角色导入当前项目(复制全部资产+角色卡,<b>零渲染成本</b>)。已存在的同名角色将被资产库版本替换。</p>
+              <div class="clib-grid">${rows}</div>
+            </div>`, true);
+          document.querySelectorAll(".clib-import").forEach((b) => {
+            b.addEventListener("click", () => {
+              const name = b.dataset.name;
+              const btn = b;
+              btn.disabled = true;
+              btn.textContent = "导入中…";
+              post("/api/manju/char-lib/import", { config: this.project, name })
+                .then((r) => {
+                  if (!r.ok) throw new Error(r.error || "导入失败");
+                  this.closeModal();
+                  this.setErr("");
+                  this.logNote(`(📥 已从资产库导入角色「${name}」, ${r.files || 0} 张资产,零渲染)`);
+                  // 刷新角色管理(新角色卡+资产就绪)
+                  this.loadPlan(() => this.renderGachaModal());
+                })
+                .catch((e) => { btn.disabled = false; btn.textContent = "📥 导入此角色"; alert("导入失败: " + e.message); });
+            });
+          });
+        })
+        .catch((e) => alert("加载资产库失败: " + e.message));
     },
 
     /* 加载镜头列表(按集分项)并渲染到弹窗 */
@@ -2284,16 +2445,24 @@
           }
           listEl.innerHTML = eps.map((ep) => {
             const shots = ep.shots || [];
+            const q = "config=" + encodeURIComponent(this.project) + "&episode=" + encodeURIComponent(ep.episode);
             const rows = shots.map((s) => {
               const st = s.rendered
                 ? (s.stale ? '<span class="rs-badge rs-stale" title="提示词/定妆照已变,重渲时自动替换">⚠️ 已过期</span>' : '<span class="rs-badge rs-ok">✅ 已渲染</span>')
                 : '<span class="rs-badge rs-todo">未渲染</span>';
               const dl = s.has_dialogue ? '<span class="rs-dl" title="含台词">🎙</span>' : '';
+              // 2026-09-02 二期:覆盖标记 + 质检失败标记 + 视频预览
+              const ovBadge = s.override ? '<span class="rs-badge rs-ov" title="镜级参数覆盖(调试面板设置)">⚙ 覆盖</span>' : '';
+              const qcBadge = s.qc_failed ? '<span class="rs-badge rs-qcf" title="质检未通过(重渲时自动替换)">❌ 质检</span>' : '';
+              const videoHtml = s.video
+                ? `<div class="rs-video"><video controls preload="metadata" src="/api/manju/shot/video?${q}&shot=${s.id}" onerror="this.closest('.rs-video').style.display='none'"></video></div>`
+                : "";
               return `<div class="rs-card">
                 <div class="rs-card-top">
                   <span class="rs-id">${String(s.id).padStart(2, "0")}</span>
-                  ${st}${dl}
+                  ${st}${ovBadge}${qcBadge}${dl}
                 </div>
+                ${videoHtml}
                 <div class="rs-card-body" title="${esc(s.camera || "")}">
                   <div class="rs-scene">${esc(s.scene || "—")}</div>
                   <div class="rs-meta">${esc(s.shot_size || "")} · ${s.duration || 5}s${s.camera ? " · " + esc(s.camera) : ""}</div>
@@ -2381,14 +2550,23 @@
               <span>${esc(label)}</span>
             </div>`;
           }).join("");
-          // 节点图
+          // 节点图(2026-09-02 二期:节点参数可折叠,点节点名展开)
           const nodes = (d.nodes || []).map((nd) => {
             const ps = Object.entries(nd.params || {}).map(([k, v]) =>
               `<div class="wf-p"><span class="wf-pk">${esc(k)}</span><span class="wf-pv">${esc(String(v))}</span></div>`).join("");
-            return `<div class="wf-node"><div class="wf-name">${esc(nd.name)}</div><div class="wf-class">${esc(nd.class)}</div>${ps ? '<div class="wf-params">' + ps + "</div>" : ""}</div>`;
+            return `<div class="wf-node"${ps ? ' onclick="this.classList.toggle(\'wf-open\')"' : ""}><div class="wf-name">${esc(nd.name)}</div><div class="wf-class">${esc(nd.class)}</div>${ps ? '<div class="wf-params">' + ps + "</div>" : ""}</div>`;
           }).join("");
           const wfHtml = nodes ? nodes.split("</div></div>").map((seg, i, arr) =>
             i < arr.length - 1 ? seg + "</div></div><div class='wf-arrow'>→</div>" : seg).join("") : '<div class="mc-d">无节点数据</div>';
+          // 最终提示词(2026-09-02 二期:排查提示词问题直接看渲染输入)
+          const promptHtml = d.prompt
+            ? `<div class="dbg-sec-title">最终 H3 提示词(渲染输入)</div>
+               <div class="dbg-prompt"><pre>${esc(d.prompt)}</pre></div>
+               <div class="manju-row" style="gap:6px;margin-top:6px">
+                 <button id="dbg-copy" class="hrs-btn">📋 复制提示词</button>
+                 <button id="dbg-pp" class="hrs-btn">↕ 展开/收起</button>
+               </div>`
+            : "";
           // 参数表单(覆盖标记:有覆盖显示 ●)
           const ovMark = (k) => isOverride(k) ? ' <span class="dbg-ov" title="镜级覆盖">●</span>' : "";
           const engineOpts = ["", ...(d.engines || [])].map((en) => {
@@ -2423,6 +2601,7 @@
                 <button id="dbg-reset" class="hrs-btn">↺ 重置默认</button>
                 <button id="dbg-close" class="hrs-btn">关闭</button>
               </div>
+              ${promptHtml}
             </div>`, true);
           const collect = () => {
             const o = {};
@@ -2453,6 +2632,26 @@
               .catch((e) => alert("重置失败: " + e.message));
           });
           $("dbg-close").addEventListener("click", () => this.closeModal());
+          // 2026-09-02 二期:提示词复制/展开收起
+          if ($("dbg-copy")) {
+            $("dbg-copy").addEventListener("click", () => {
+              const pre = document.querySelector(".dbg-prompt pre");
+              if (!pre) return;
+              const ta = document.createElement("textarea");
+              ta.value = pre.textContent;
+              document.body.appendChild(ta);
+              ta.select();
+              try { document.execCommand("copy"); } catch (_e) { /* 忽略 */ }
+              document.body.removeChild(ta);
+              $("dbg-copy").textContent = "✅ 已复制";
+            });
+          }
+          if ($("dbg-pp")) {
+            $("dbg-pp").addEventListener("click", () => {
+              const pre = document.querySelector(".dbg-prompt pre");
+              if (pre) pre.classList.toggle("dbg-prompt-open");
+            });
+          }
         })
         .catch((e) => { this.closeModal(); alert("加载调试面板失败: " + e.message); });
     },
@@ -3445,6 +3644,7 @@
               <span class="manju-meta">每次</span>
               <select id="mg-count">${[1, 2, 4, 6].map((n) => `<option value="${n}"${String(n) === cntSaved ? " selected" : ""}>${n} 张</option>`).join("")}</select>
               <button id="mg-draw-all" class="hrs-btn"${pending.length ? "" : " disabled"}>🎲 全员抽卡${pending.length ? `（${pending.length} 位未定妆）` : ""}</button>
+              <button id="mg-charlib" class="hrs-btn" title="从跨项目角色资产库选择已定妆角色导入当前项目(零渲染复用)">🎭 从资产库导入</button>
               <button id="mg-voice-prepare" class="hrs-btn" title="预生成全部风格音色参考音频(首次使用或音色库缺失时点一次;渲染时也会按需自动补齐)">🎙 预生成音色库</button>
               <span class="manju-meta" style="margin-left:auto">多视图独立抽卡 · 采纳当前选中</span>
             </div>
@@ -3519,6 +3719,9 @@
       if (cnt) cnt.addEventListener("change", () => ls("gachaCount", cnt.value));
       const da = $("mg-draw-all");
       if (da) da.addEventListener("click", () => this.drawAllGacha());
+      // 2026-09-02 从资产库导入已定妆角色到当前项目(零渲染复用)
+      const mcl = $("mg-charlib");
+      if (mcl) mcl.addEventListener("click", () => this.openCharLibPick());
       // 预生成风格音色库(2026-08-27):缺失的音色参考音频一键补齐(edge-tts)
       const vp = $("mg-voice-prepare");
       if (vp) vp.addEventListener("click", () => {
@@ -3946,6 +4149,7 @@
           <p class="mc-d">文件:${esc(fname)}${isFinal ? "(成片)" : isShot ? "(镜头)" : ""}${ep ? "<br>集:" + esc(ep) : ""}</p>
           <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px;flex-wrap:wrap">
             ${isShot ? '<button id="up-2k" class="hrs-btn hrs-btn-primary" title="此镜提交 MiniMax 云端升 2K(需设置里填 Key)">☁️ 此镜云端 2K</button>' : ""}
+            ${isShot ? `<button id="shot-canvas" class="hrs-btn hrs-btn-primary" title="单镜画布调整:打开该镜的镜头调试画布(节点链可视化+按镜参数覆盖 seed/steps/引擎+保存并重渲此镜)">🎛 单镜画布调整</button>` : ""}
             <button id="del-file" class="hrs-btn">删除此文件</button>
             <button id="del-ep" class="hrs-btn hrs-btn-danger">删除本集全部</button>
             <button id="del-cancel" class="hrs-btn">取消</button>
@@ -3958,6 +4162,12 @@
       if (upBtn) upBtn.addEventListener("click", () => {
         this.closeModal();
         this.startUpscale(ep || this.episode, String(parseInt(fname, 10) || ""));
+      });
+      // 2026-09-02 用户需求:产物视频 ⋮ 菜单直达单镜画布调整(镜头调试面板)
+      const canvasBtn = $("shot-canvas");
+      if (canvasBtn) canvasBtn.addEventListener("click", () => {
+        this.closeModal();
+        this.openShotDebug(ep || this.episode, parseInt(fname, 10) || 0);
       });
     },
 

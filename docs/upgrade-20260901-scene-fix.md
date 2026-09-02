@@ -422,3 +422,39 @@ Q 版形象只有正角(女主/男主/正角)渲染,配角/群演不生成 Q 版
 
 ## 验证
 - 全库 62 正角 62 q_form 全覆盖;单测/交付检查 PASS;exe 已重编译
+
+---
+
+# 二合一(管线+画布)阶段二:画布完善(2026-09-02)
+
+## 用户需求
+「继续做完善画布功能」——阶段一(镜头调试面板)基础上增强调试/审片体验。
+
+## 后端
+1. **镜头列表 API 增强**(manjuShots):每镜补 `override`(镜级覆盖标记)、
+   `qc_failed`(质检未通过标记,报告读一次缓存)、`video`(已渲染视频相对路径);
+   `GET /api/manju/shot/video?config=&episode=&shot=N` 新增镜头视频流
+   (http.ServeContent 支持 Range 拖动,浏览器内嵌播放;未渲染 404)。
+2. **workflow API 增强**:响应补 `prompt` = 该镜**最终化后** h3_prompt
+   (与渲染输入一致)——排查提示词问题直接看/复制,不必翻 plan JSON。
+
+## 前端(web/kb)
+3. **镜头卡片**:已渲染镜内嵌视频播放器(preload=metadata,加载失败自动隐藏);
+   「⚙ 覆盖」紫色徽章(镜级参数覆盖)、「❌ 质检」红色徽章(质检未通过)。
+4. **调试弹窗**:
+   - 节点图可交互——有参数的节点点名称展开/收起参数(默认收起,展开高亮边框);
+   - 新增「最终 H3 提示词(渲染输入)」区:默认收起(160px 滚动),「📋 复制提示词」
+     一键复制、「↕ 展开/收起」切换(480px)。
+5. app.css 新增 .rs-ov/.rs-qcf/.rs-video/.dbg-prompt/.wf-open 样式(复用主题变量);
+   index.html ?v= 缓存戳 bump。
+
+## 验证
+- 单测:TestShotWorkflowPromptField(prompt 字段)、TestShotVideoRoute(200/404)、
+  TestShotsOverrideVideoFields(override/qc/video 字段)、既有 TestShotWorkflowAPI 回归。
+- 全量 go test PASS;node --check PASS;enc_guard 体检正常;NiliX.exe 已重编译。
+- 手动:镜头管理 → 卡片直接播放已渲染视频 → 调试 → 点节点展开参数 →
+  底部查看/复制最终提示词。
+
+## 后续(三期规划)
+- 拖拽连线/换节点(Easy 接入)+ 工作流模板保存;
+- 中间产物预览(条件缓存状态/首帧抽帧)。

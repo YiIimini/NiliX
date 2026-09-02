@@ -122,6 +122,11 @@ func manjuAlignShotPromptReg(hp string, c manjuRefContract, durationSec int, dia
 	hp = alignAudioDefsReg(hp, c, dialogue, reg)
 	hp = alignDialogueLangTags(hp)
 	hp = alignShotTimecodes(hp, durationSec)
+	// 2026-09-02 分镜脚本内容级兜底(我的影子会咬人渲染异常实锤):
+	// ①chibi Subject 空引用清理(非内心戏镜删行防 Q版乱入/内心戏镜保句清悬空);
+	// ②画外·说话人台词强制 off-screen(镜6 spectator shouts 画面开口实锤)。
+	// 纯函数,指纹/渲染共用;幂等。
+	hp = fixShotPromptContent(hp, c, dialogue)
 	return hp
 }
 
@@ -715,8 +720,13 @@ func alignAudioDefsReg(hp string, c manjuRefContract, dialogue string, reg map[s
 	for _, d := range defs {
 		if strings.HasPrefix(d.target, "@offscreen:") {
 			newNo++
+			// 2026-09-02 幂等锚保留(王牌三岁半 EP01 镜15 实锤):@offscreen 重写
+			// 必须保留 "the off-screen voice described as" 前缀——injectOffscreen
+			// VoiceBindings 的幂等锚就是该前缀,剥掉后同一镜每次 finalize 都会
+			// 重新注入并叠加(plan 镜15 三行畸形 Audio 定义实锤:desc 还嵌了台词
+			// <d> 块 → H3 把同一句念两遍)。
 			rewrite[d.lineNo] = fmt.Sprintf(
-				"<Audio %d> is the voice-timbre reference for %s, containing a spoken voiceover.",
+				"<Audio %d> is the voice-timbre reference for the off-screen voice described as %s, containing a spoken voiceover.",
 				newNo, strings.TrimPrefix(d.target, "@offscreen:"))
 			continue
 		}
@@ -1085,6 +1095,177 @@ func markOffscreenSays(hp string) string {
 		ins := segStart + strings.LastIndex(seg, "</d>") + len("</d>")
 		out = out[:ins] + clause + out[ins:]
 		offset += len(clause)
+	}
+	return out
+}
+
+
+// fixShotPromptContent 分镜脚本内容级兜底(2026-09-02,我的影子会咬人渲染异常实锤):
+// 技能侧 LLM 直出的 h3_prompt 存在脚本内容缺陷,渲染端逐字保留导致渲染异常,
+// 这里机械修正(纯函数,指纹/渲染共用,幂等):
+//   ①chibi/miniature Subject 空引用清理:LLM 自编号 "in <Picture 3>" 经
+//     alignPictureRefs 按角色挂载槽重排后变 "in ;" 悬空 → H3 拿到无参考图
+//     Subject=Q版乱入/形象飘逸(镜12 非内心戏镜 chibi Aying 乱入实锤)。
+//     内心戏镜(对话列含 内心·)保留 Q 版 Subject 并清悬空引用;非内心戏镜
+//     整行删除(画面不需要 Q 版,删掉防乱入)。
+//   ②画外·说话人台词强制 off-screen:台词列 (S3)画外·路人 在 detailed_description
+//     被 LLM 写成 "The spectator shouts: <d>..."(画面角色开口)→ H3 让画面人物
+//     动嘴(镜6 群众配音主角动嘴实锤)。凡对话列 画外· 前缀的说话句,其 <d> 在
+//     detailed_description 中若以普通 says/shouts/speaks 引导(非 <Subject N>),
+//     改写为 off-screen voiceover 句式 + lips closed。
+func fixShotPromptContent(hp string, c manjuRefContract, dialogue string) string {
+	if hp == "" {
+		return hp
+	}
+	hp = fixChibiEmptyRefs(hp, dialogue)
+	hp = fixOffscreenDialogueSays(hp, dialogue)
+	return hp
+}
+
+// fixChibiEmptyRefs 清理 chibi Subject 空引用(2026-09-02):
+// 行内含 chibi/miniature 且 "in ;" / "in ," 悬空引用(对齐层剥除后残留)→
+// 内心戏镜保留(清悬空引用保句,形态/动作自述仍在),非内心戏镜删行防乱入。
+func fixChibiEmptyRefs(hp string, dialogue string) string {
+	if !strings.Contains(hp, "chibi") && !strings.Contains(hp, "miniature") {
+		return hp
+	}
+	innerShot := strings.Contains(dialogue, "内心·")
+	var out []string
+	changed := false
+	for _, line := range strings.Split(hp, "\n") {
+		low := strings.ToLower(line)
+		isChibi := strings.Contains(low, "chibi") || strings.Contains(low, "miniature")
+		emptyRef := strings.Contains(line, "in ;") || strings.Contains(line, "in ,") ||
+			strings.Contains(line, "in  ;")
+		if !isChibi || !strings.Contains(line, "<Subject") || !strings.Contains(line, "<Audio") {
+			out = append(out, line)
+			continue
+		}
+		if !emptyRef {
+			out = append(out, line)
+			continue
+		}
+		if innerShot {
+			// 内心戏镜:保留 Q 版主体但去掉悬空引用(防无图 Subject 乱画);
+			// 引用清理后仍是有效 chibi 描述(形态/动作自述),H3 按文本演绎
+			fixed := regexp.MustCompile(`in\s*[;,]+`).ReplaceAllString(line, "")
+			fixed = regexp.MustCompile(`\s{2,}`).ReplaceAllString(fixed, " ")
+			out = append(out, fixed)
+			if fixed != line {
+				changed = true
+			}
+		} else {
+			// 非内心戏镜:Q 版 Subject 属乱入(镜12 实锤),整行删除
+			changed = true
+			continue
+		}
+	}
+	if !changed {
+		return hp
+	}
+	res := strings.Join(out, "\n")
+	res = regexp.MustCompile(`\n{3,}`).ReplaceAllString(res, "\n\n")
+	return strings.TrimSpace(res)
+}
+
+// fixOffscreenDialogueSays 画外说话句强制 off-screen(2026-09-02,镜6 实锤):
+// 对话列 "画外·路人:台词" → detailed_description 若把该句写成普通开口句
+// ("The spectator shouts: <d>...")→ 改写 "in an off-screen voiceover" +
+// lips-closed。判定:对话列存在画外·前缀说话人,且详细描述中该 <d> 前
+// 引导语含开口动词且无 <Subject N> 主语且无 off-screen 标记 → 机械标注。
+func fixOffscreenDialogueSays(hp string, dialogue string) string {
+	// 对话列是否有画外说话人
+	hasOff := false
+	for _, m := range reDialogue.FindAllStringSubmatch(dialogue, -1) {
+		speaker := strings.TrimSpace(m[1])
+		if speaker == "" {
+			speaker = strings.TrimSpace(m[3])
+		}
+		if strings.HasPrefix(speaker, "画外") {
+			hasOff = true
+			break
+		}
+	}
+	if !hasOff || !strings.Contains(hp, "<d>") {
+		return hp
+	}
+	idx := strings.Index(hp, "detailed_description:")
+	if idx < 0 {
+		return hp
+	}
+	reD := regexp.MustCompile(`<d>(?:\[Chinese\]|\[中文\])?[^<]*</d>`)
+	out := hp
+	offset := 0
+	prevDEnd := idx // 上个 </d> 之后(引导语窗口下界,防跨句误判)
+	for _, m := range reD.FindAllStringIndex(hp, -1) {
+		start := m[0] + offset
+		end := m[1] + offset
+		// 2026-09-02 崩溃修复(王牌三岁半实锤:slice bounds [1326:573]):
+		// detailed_description 之前的 <d>(subject_definitions/summary 段残留)
+		// 不参与画外标注——只处理画面段内的台词句。旧代码 segStart clamp 到
+		// idx 后仍可能 > start(该 <d> 在 detailed_description 之前)→ 越界。
+		if m[0] < idx {
+			continue
+		}
+		// 引导语窗口:上界=上一句 </d> 之后(多句连续台词时,窗口跨过上一句
+		// 会把已插入的 off-screen 标注误判为「已标注」而跳过本句——2026-09-02
+		// 王牌三岁半/多句画外实锤,第二句永不标注);下界=detailed_description 段首。
+		segStart := start - 140
+		if segStart < prevDEnd {
+			segStart = prevDEnd
+		}
+		if segStart < idx {
+			segStart = idx
+		}
+		if segStart > start {
+			continue // 防御:引导语窗口无效
+		}
+		lead := out[segStart:start]
+		if i := strings.LastIndex(lead, ". "); i >= 0 {
+			lead = lead[i+2:]
+		}
+		low := strings.ToLower(lead)
+		if strings.Contains(low, "off-screen") || strings.Contains(low, "offscreen") ||
+			strings.Contains(low, "<subject") {
+			prevDEnd = end
+			continue // 已标注画外 或 画面角色开口
+		}
+		// 引导语含开口动词 → 画外说话句(无主语=LLM 把画外台词安给了画面描述)
+		verbIdx := -1
+		verbLen := 0
+		for _, v := range []string{"calls out", "announces", "shouts", "speaks", "yells", "says", "asks"} {
+			if i := strings.LastIndex(low, v); i > verbIdx {
+				verbIdx = i
+				verbLen = len(v)
+			}
+		}
+		if verbIdx < 0 {
+			prevDEnd = end
+			continue
+		}
+		// 动词在 lead 内起点 → 全局位置
+		insAt := start - (len(lead) - verbIdx)
+		if insAt < segStart || insAt > start {
+			prevDEnd = end
+			continue
+		}
+		insert := " in an off-screen voiceover"
+		out = out[:insAt+verbLen] + insert + out[insAt+verbLen:]
+		offset += len(insert)
+		end += len(insert)
+		// lips-closed 从句补在 </d> 后(边界保护:句尾时 end2 可能接近/等于 len)
+		clause := " while the on-screen characters' lips remain completely closed"
+		end2 := end
+		probeEnd := end2 + len(clause) + 2
+		if probeEnd > len(out) {
+			probeEnd = len(out)
+		}
+		if !strings.Contains(out[end2:probeEnd], "lips remain") {
+			out = out[:end2] + clause + out[end2:]
+			offset += len(clause)
+			end += len(clause)
+		}
+		prevDEnd = end
 	}
 	return out
 }

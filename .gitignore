@@ -46,3 +46,6 @@ internal/api/analysis/
 
 # ZCode 会话临时文件(探针/词典/生成器脚本)
 .zcode/
+
+# 跨项目角色资产库(运行时生成的二进制图像资产,勿入库)
+char_lib/

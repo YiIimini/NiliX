@@ -366,3 +366,63 @@ func TestParseCharCardsVoiceField(t *testing.T) {
 		t.Fatalf("玄经理 voice = %q", byID["玄经理"])
 	}
 }
+
+// TestInnerVoiceAssignedFixed 内心配音音色固定(2026-09-01 用户反馈「内心音色不能随机」):
+// ① 内心 key 必须与角色对白同源同变体(assignedVoiceFor)——此前 autoVoiceFor 恒基底
+//    (male_sun)而描述短语 voiceTimbrePhrase 走变体(male_sun_2):音频挂基底、prompt
+//    描述变体,描述与参考音频打架=随机漂移;同档角色内心挤同一基底声、内心与对白
+//    不同声;
+// ② 同一角色内心音色跨镜恒定(两次调用结果一致);
+// ③ 挂载侧 offscreenVoiceKeyFor 解析「quiet inner voice of X」与注入侧 innerVoiceFor 同源。
+func TestInnerVoiceAssignedFixed(t *testing.T) {
+	ctx := &manjuCtx{charInfo: map[string]map[string]any{
+		"阿影": {"gender": "男", "age": "22岁"},
+		"小白": {"gender": "女", "age": "18岁"},
+	}}
+	// voiceAssign 模拟:阿影=变体 2、小白=变体 2(差异化分配后)
+	ctx.voiceAssign = map[string]string{"阿影": "male_sun_2", "小白": "girl_lively_2"}
+	shot := manjuShot{Characters: []string{"阿影", "小白"}, Narration: "内心·阿影：他竟敢这样看我。"}
+	cid, key := ctx.innerVoiceFor(shot)
+	if cid != "阿影" || key != "male_sun_2" {
+		t.Fatalf("内心音色应与对白同源变体: cid=%s key=%s, want 阿影/male_sun_2", cid, key)
+	}
+	// 跨镜恒定:再次调用结果一致
+	cid2, key2 := ctx.innerVoiceFor(shot)
+	if cid2 != cid || key2 != key {
+		t.Fatalf("内心音色跨镜漂移: (%s,%s) → (%s,%s)", cid, key, cid2, key2)
+	}
+	// 挂载侧与注入侧同源:offscreenVoiceKeyFor 解析注入的 desc 得到同一变体 key
+	hp := "subject_definitions:\n<Subject 1> is 阿影.\n\nsummary:\n.\n\ndetailed_description:\nThe narrator says in an off-screen voiceover: <d>他竟敢这样看我。</d> while the on-screen characters' lips remain completely closed."
+	obs := ctx.manjuOffscreenBindings(hp, cid, key)
+	found := false
+	for _, ob := range obs {
+		if strings.Contains(ob.Desc, "quiet inner voice of 阿影") {
+			found = true
+			// 挂载侧解析 desc → key 必须与注入 key 一致(否则音频与描述错配)
+			if got := ctx.offscreenVoiceKeyFor(ob.Desc, ctx.refContractFor(shot)); got != key {
+				t.Fatalf("挂载侧内心音色 %s != 注入侧 %s(描述/音频错配=随机漂移)", got, key)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("内心戏镜应绑定角色内心音色, obs=%+v", obs)
+	}
+	// 描述短语与变体一致:voiceTimbrePhrase(阿影)应含变体短语
+	phrase := ctx.voiceTimbrePhrase("阿影")
+	if phrase != manjuVoicePhraseFor("male_sun_2") {
+		t.Fatalf("内心描述短语应走 assignedVoiceFor 变体: %q", phrase)
+	}
+}
+
+// TestInnerVoiceFallbackAuto 无 voiceAssign(懒构建未跑/角色无卡)时内心回退
+// autoVoiceFor 档位——仍与角色对白 autoVoiceFor 同源(不会随机到别档)。
+func TestInnerVoiceFallbackAuto(t *testing.T) {
+	ctx := &manjuCtx{charInfo: map[string]map[string]any{
+		"阿影": {"gender": "男", "age": "22岁"},
+	}}
+	shot := manjuShot{Characters: []string{"阿影"}, Narration: "内心·阿影：他竟敢这样看我。"}
+	_, key := ctx.innerVoiceFor(shot)
+	if key != "male_sun" {
+		t.Fatalf("无分配时内心应回退档位基底 male_sun, got %s", key)
+	}
+}

@@ -52,3 +52,34 @@ func TestOffscreenVoiceBindings(t *testing.T) {
 		t.Error("默认男声应 male_mag:", k)
 	}
 }
+
+// TestOffscreenDescsNoDialogue 2026-09-02 配音重复根治(王牌三岁半 EP01 镜15 实锤):
+// 同一长句内两句画外音连写时,第二锚点向前回溯会把前一句的 <d> 台词块卷进
+// "声线描述" → 注入 Audio 定义行 → 同一句台词在 h3 出现两处 → H3 念两遍。
+func TestOffscreenDescsNoDialogue(t *testing.T) {
+	hp := "detailed_description:\n[Shot 15] At 01:08.000 the clip opens. " +
+		"Two voices cut through the roar: a middle-aged man's voice off-screen in the stands (S25), jeering and loud, says in an off-screen voiceover: <d>联邦史上最低！</d> " +
+		"and a woman's voice off-screen (S26), spiteful and shrill, adds in an off-screen voiceover: <d>绝缘体！上辈子造了孽！</d> while no on-screen character's lips move."
+	for _, d := range manjuOffscreenDescs(hp) {
+		if strings.Contains(d, "<d") || strings.Contains(d, "联邦史上最低") || strings.Contains(d, "绝缘体") {
+			t.Errorf("声线描述混入台词: %q", d)
+		}
+	}
+	obs := []offscreenVoice{}
+	descs := manjuOffscreenDescs(hp)
+	seen := map[string]bool{}
+	for _, d := range descs {
+		k := manjuOffscreenKey(d)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		obs = append(obs, offscreenVoice{Desc: d, Key: k})
+	}
+	out := injectOffscreenVoiceBindings(hp, obs, 2)
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.Contains(ln, "<Audio ") && strings.Contains(ln, "<d") {
+			t.Errorf("Audio 定义行内嵌台词: %s", ln)
+		}
+	}
+}

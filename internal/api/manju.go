@@ -2731,6 +2731,11 @@ func manjuShots(w http.ResponseWriter, r *http.Request) {
 		if mctx != nil {
 			mctx.episode = epEp
 		}
+		// 2026-09-02 二期:质检失败集读一次(逐镜读文件太浪费)
+		qcFailedSet := map[int]bool{}
+		if mctx != nil {
+			qcFailedSet = mctx.qcFailedShots()
+		}
 		for _, x := range shotsArr {
 			m, ok := x.(map[string]any)
 			if !ok {
@@ -2756,6 +2761,19 @@ func manjuShots(w http.ResponseWriter, r *http.Request) {
 			if stale {
 				staleN++
 			}
+			// 2026-09-02 二期:镜头卡片补覆盖标记 + 视频预览 URL + 质检失败标记
+			ov := manjuShotOverride{}
+			if mctx != nil {
+				mctx.episode = epEp
+				ov = mctx.shotOverrideFor(id)
+			}
+			hasOv := ov.Seed != nil || ov.Steps != nil || ov.Sampler != "" ||
+				ov.TurboLora != "" || ov.NegPrompt != "" || ov.PDD != nil || ov.Sage != nil
+			qcFailed := qcFailedSet[id] && rendered
+			video := ""
+			if rendered {
+				video = "clips/" + epEp + "/" + fmt.Sprintf("%02d.mp4", id)
+			}
 			shots = append(shots, map[string]any{
 				"id":          id,
 				"scene":       str(m["scene"]),
@@ -2765,6 +2783,9 @@ func manjuShots(w http.ResponseWriter, r *http.Request) {
 				"has_dialogue": str(m["dialogue"]) != "" || strings.Contains(str(m["h3_prompt"]), "<d>"),
 				"rendered":    rendered,
 				"stale":       stale,
+				"override":    hasOv,
+				"qc_failed":   qcFailed,
+				"video":       video,
 			})
 		}
 		episodes = append(episodes, map[string]any{
@@ -3566,6 +3587,13 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/manju/shot/override", manjuShotOverrideHandler)
 	mux.HandleFunc("GET /api/manju/shot/overrides", manjuShotOverridesHandler)
 	mux.HandleFunc("GET /api/manju/shot/asset", manjuShotDebugStatic)
+	mux.HandleFunc("GET /api/manju/shot/video", manjuShotVideoHandler)
+	// 2026-09-02 角色资产库(跨项目复用)
+	mux.HandleFunc("GET /api/manju/char-lib/list", manjuCharLibHandler)
+	mux.HandleFunc("GET /api/manju/char-lib/detail", manjuCharLibDetailHandler)
+	mux.HandleFunc("GET /api/manju/char-lib/asset", manjuCharLibAssetHandler)
+	mux.HandleFunc("POST /api/manju/char-lib/import", manjuCharLibImportHandler)
+	mux.HandleFunc("POST /api/manju/char-lib/delete", manjuCharLibDeleteHandler)
 	mux.HandleFunc("GET /api/manju/notes", manjuNotesGet)
 	mux.HandleFunc("POST /api/manju/notes", manjuNotesPost)
 	mux.HandleFunc("GET /api/manju/paths", manjuPathsGet)

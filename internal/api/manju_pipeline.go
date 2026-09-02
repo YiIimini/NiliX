@@ -703,6 +703,21 @@ const manjuNoRefGuard = "REFERENCE NOTE: no reference picture is attached to thi
 // [中文]/[chinese] 统一改写为官方英文写法 [Chinese],裸中文开标签自动补标,
 // 指纹走同一条对齐链,改词即缓存失效。
 
+// manjuGuardNames 全部纪律行锚(旧版 9 条 + 2026-09-02 合并版),供存量 plan
+// 自愈剥除:先删干净再按新结构注入,幂等。
+var manjuGuardStrip = regexp.MustCompile(`(?m)^\s*(?:FRAME DISCIPLINE|REFERENCE NOTE|AUDIO DISCIPLINE|AUDIO & LIP DISCIPLINE|MOTION DISCIPLINE|MOTION & SEAM DISCIPLINE|EXECUTION DISCIPLINE|LIP DISCIPLINE|CHAIN DISCIPLINE|IDENTITY CONSISTENCY|CAMERA DISCIPLINE|POSITION DISCIPLINE):[^\r\n]*\r?\n?`)
+
+// manjuAudioLipGuard 台词+唇动合并纪律(2026-09-02 瘦身:AUDIO/LIP 两条合一;配音
+// 重复+画外对口型两个历史实锤问题合并承载,语义不减只压字数)。
+const manjuAudioLipGuard = "AUDIO & LIP DISCIPLINE: every spoken line in this clip comes ONLY from the text inside <d> tags - never voice, paraphrase, repeat or invent any other dialogue, and nothing outside <d> tags is ever spoken aloud; when a line comes from an off-screen voice, a narrator or an inner monologue, every on-screen character's lips remain completely closed - they may react with head turns, glances and expressions, but never mouth the words"
+
+// manjuMotionSeamGuard 运动+执行+接缝合并纪律(2026-09-02 瘦身:MOTION/EXECUTION/
+// CHAIN 三条合一;冻结/动作缩水/并集多脸三个历史实锤问题合并承载)。
+const manjuMotionSeamGuard = "MOTION & SEAM DISCIPLINE: keep continuous visible motion through every second until the final frame - camera movement, character action or environmental motion must never fully stop and no scripted action may be reduced to a static pose; if this clip opens on pinned continuation frames, hold that exact closing composition for about one second with the same people in the same places - a contradicting arrangement renders as a union and puts extra people and faces into the frame - then develop into this clip's own content, keeping small visible motion alive during any held beat"
+
+// manjuFrameGuardCompact 多余人脸紧凑版(2026-09-02 瘦身:语义保留,字数 -40%)。
+const manjuFrameGuardCompact = "FRAME DISCIPLINE: this shot contains ONLY the characters listed in subject_definitions - no other people, no extra faces, no bystanders, no background figures with visible faces; never show the same character twice or reuse another character's look for an extra person"
+
 // manjuFinalizePromptPure 渲染提示词最终化纯函数(指纹/编码/渲染三处一致)。
 // picSlots:本镜实际提交的参考图槽位数(人物视图数+场景图 0/1)——2026-08-28 Picture
 // 引用对齐:h3(脚本直出)按叙述写 <Picture N>,与渲染端实际提交顺序(人物图前+场景图
@@ -710,6 +725,15 @@ const manjuNoRefGuard = "REFERENCE NOTE: no reference picture is attached to thi
 // 无人物图镜(picSlots<=1 且 hasChars=false)的人物主体句 Picture 引用同样剥除——
 // 唯一槽位是场景图,人物句引用它=拿场景图当人脸参考(EP01 镜3 实锤:城市夜景图被当
 // 陈默长相,<Picture 1> is Chen Mo 完全错位)。
+// 2026-09-02 纪律瘦身重排(我的影子会咬人 EP01 实证:提交全文 8453 字符中 6770 字符
+// =80% 是 soundscape 之后的 9 条纪律墙,CAMERA/POSITION 排最后,H3 注意力稀释,
+// 运镜/站位纪律实测无效——镜4 横移 0.00px、镜7 center→x0.32):
+//   ① 先剥除存量纪律行(旧 9 条+合并版,先删后插自愈,幂等);
+//   ② 队尾 ≤4 条紧凑版:AUDIO&LIP 合并 + MOTION&SEAM 合并 + FRAME 紧凑 + IDENTITY
+//      (有参考图才注入)+ REFERENCE NOTE(无卡人物镜才注入);
+//   ③ CAMERA/POSITION 移到 detailed_description 段标题前(高服从位,与 CROWD/
+//      SCREEN/OFF-SCREEN TASK 同槽)——由 injectCameraDiscipline/injectPosition
+//      Discipline 在 finalizeAlignedPrompt 链上完成,本函数不再追加。
 func manjuFinalizePromptPure(hp string, hasChars bool, picSlots int) string {
 	if hp == "" {
 		return hp
@@ -718,44 +742,33 @@ func manjuFinalizePromptPure(hp string, hasChars bool, picSlots int) string {
 		hp = out
 	}
 	hp = manjuStripDanglingPictureRefs(hp, hasChars, picSlots)
+	// ① 剥除存量纪律行(存量 plan 已固化 9 条墙,先删后插自愈到新结构)
+	hp = manjuGuardStrip.ReplaceAllString(hp, "")
+	hp = regexp.MustCompile(`\n{3,}`).ReplaceAllString(hp, "\n\n")
+	hp = strings.TrimRight(hp, " \n")
 	// 人物纪律覆盖面(2026-08-27 修复):frameGuard 旧条件是 hasChars(登场角色非空),
 	// 群像无卡镜(subject_definitions 定义了牢头/牢卒等群演,但 characters 为空)整段漏掉
 	// ——无参考图+无纪律,链上白发形象被复制给每个主体 = 周管事入画多次。有主体即约束。
-	// 判定用带冒号的段首标记:纪律文本会引用 "subject_definitions" 一词(EXECUTION/
-	// FRAME guard),无冒号判定会被自身注入的纪律文本二次触发,破坏幂等(2026-08-29)。
 	hasSubjects := strings.Contains(hp, "subject_definitions:")
-	if (hasChars || hasSubjects) && !strings.Contains(hp, "no extra faces") {
-		hp = strings.TrimRight(hp, " \n") + "\n" + manjuFrameGuard
+	// ② 尾部紧凑纪律(≤4 条;顺序=重要性:台词→身份→人脸→运动接缝)
+	hp += "\n" + manjuAudioLipGuard
+	// 身份一致性(有人物参考图才注入;无参考图镜注入反而约束文字自由成型)
+	if strings.Contains(hp, "<Picture ") {
+		hp += "\n" + manjuConsistencyGuard
 	}
+	if hasChars || hasSubjects {
+		hp += "\n" + manjuFrameGuardCompact
+	}
+	hp += "\n" + manjuMotionSeamGuard
 	// 无人物参考图的人物镜:声明按文字各自成型、禁止形象互抄。有场景图时(picSlots>=1)
 	// 明示唯一挂图是环境参考而非人脸参考(EP01 镜3:城市夜景图被 <Picture 1> is Chen Mo
-	// 错位引用,H3 拿场景图当人物长相)。幂等锚=REFERENCE NOTE 开头串,两种变体共用。
-	if !hasChars && hasSubjects && !strings.Contains(hp, "REFERENCE NOTE:") {
-		guard := manjuNoRefGuard
+	// 错位引用,H3 拿场景图当人物长相)。
+	if !hasChars && hasSubjects {
 		if picSlots >= 1 {
-			guard = "REFERENCE NOTE: the only attached picture is a scene/environment reference, NOT a person; ignore any <Picture N> mention on human subjects and render every person strictly as described in subject_definitions, with each person clearly distinct from the others (different age, build, hairstyle and clothing as described); never copy any face, hairstyle or clothing from the attached scene picture onto any person"
+			hp += "\n" + "REFERENCE NOTE: the only attached picture is a scene/environment reference, NOT a person; ignore any <Picture N> mention on human subjects and render every person strictly as described in subject_definitions, with each person clearly distinct from the others; never copy any face, hairstyle or clothing from the attached scene picture onto any person"
+		} else {
+			hp += "\n" + manjuNoRefGuard
 		}
-		hp = strings.TrimRight(hp, " \n") + "\n" + guard
-	}
-	if !strings.Contains(hp, "AUDIO DISCIPLINE") {
-		hp = strings.TrimRight(hp, " \n") + "\n" + manjuAudioGuard
-	}
-	if !strings.Contains(hp, "MOTION DISCIPLINE") {
-		hp = strings.TrimRight(hp, " \n") + "\n" + manjuMotionGuard
-	}
-	if !strings.Contains(hp, "EXECUTION DISCIPLINE") {
-		hp = strings.TrimRight(hp, " \n") + "\n" + manjuExecutionGuard
-	}
-	if !strings.Contains(hp, "LIP DISCIPLINE") {
-		hp = strings.TrimRight(hp, " \n") + "\n" + manjuLipGuard
-	}
-	if !strings.Contains(hp, "CHAIN DISCIPLINE") {
-		hp = strings.TrimRight(hp, " \n") + "\n" + manjuChainGuard
-	}
-	// 2026-09-01 身份一致性纪律(知识库五步导演法):有人物参考图(<Picture N> 引用)
-	// 才注入——无参考图镜注入反而约束文字自由成型;幂等锚=IDENTITY CONSISTENCY
-	if strings.Contains(hp, "<Picture ") && !strings.Contains(hp, "IDENTITY CONSISTENCY") {
-		hp = strings.TrimRight(hp, " \n") + "\n" + manjuConsistencyGuard
 	}
 	return hp
 }
@@ -839,6 +852,12 @@ func (ctx *manjuCtx) finalizeAlignedPrompt(hp string, s manjuShot, picSlots int)
 	// 对齐层把画面角色写成 <Subject N> (Sx) says,裸 (Sx) says: 即画外说话者,
 	// 未标 off-screen 时 H3 会把台词安给画面角色动嘴。纯函数,指纹/渲染共用。
 	out = markOffscreenSays(out)
+	// 2026-09-02 分镜脚本发色校正(我的影子会咬人镜7/19 沈照 black hair 实锤):
+	// 技能侧 LLM 直出 subject_definitions 的角色描述发色与角色卡 image_prompt
+	// 不一致(卡=platinum-white,LLM 写 black)→ H3 按描述白发变黑。角色卡是
+	// 形象权威,此处按卡校正(纯函数;幂等:校正后不再命中)。需要角色卡信息,
+	// 故放在 ctx 层(对齐层为纯函数无卡数据)。
+	out = ctx.fixSubjectHairColor(out, s)
 	// 2026-08-30 五问整改(问题④运镜垃圾):分镜运镜列三要素机械注入——
 	// LLM 软规则可忽略,纪律句是渲染前硬兜底;「固定」镜与 MOTION DISCIPLINE
 	// 不冲突(static camera + 画面动作/环境动效持续,官方三选一)。
@@ -847,6 +866,15 @@ func (ctx *manjuCtx) finalizeAlignedPrompt(hp string, s manjuShot, picSlots int)
 	// 站位稀疏(EP01 14 镜 8 镜零位置词)且「脚本即权威」无人补,纪律句强制
 	// 每个登场角色带屏幕位置+朝向,新渲染即生效。
 	out = injectPositionDiscipline(out)
+	// 2026-09-02 远景人海纪律(王牌三岁半镜1 实锤):空镜/远景镜无登场角色但描述
+	// 含 crowd/spectators 时,H3 把远景人海具象化为几个清晰个体面孔(拟人先验偏
+	// 西方面孔=「三个外国人」)。强制人群保持远景剪影无个体面孔。
+	out = injectCrowdDiscipline(out, len(s.Characters) > 0)
+	// 2026-09-02 全库统一(用户指令「所有小说统一排查处理」):屏内容兜底纪律——
+	// 显示型屏(全息/悬浮/巨幕/手机/监控)在提示词内无任何内容说明时,H3 把屏
+	// 默认渲染成人像特写屏(王牌三岁半镜1「屏上三个外国人」实锤;渲染端人群
+	// 纪律管不到屏幕内画面)。源侧 7b 契约管新章,此 guard 管全库存量,双层。
+	out = injectScreenDiscipline(out)
 	return ctx.injectAudioTimbrePhrases(out, c)
 }
 
@@ -917,34 +945,209 @@ func manjuCameraPhrase(camera string) string {
 	return ""
 }
 
-// injectCameraDiscipline 运镜必达纪律注入(2026-08-30 五问整改,问题④):队尾追加
-// CAMERA DISCIPLINE(幂等锚),机械保证运镜列三要素进入渲染输入。
+// injectCameraDiscipline 运镜必达纪律注入(2026-08-30 五问整改问题④;2026-09-02
+// 位置重排:队尾→detailed_description 段标题前——我的影子会咬人 EP01 实证,队尾
+// 9 条纪律墙稀释注意力,运镜纪律排最后实测无效(镜4 横移 0.00px)。先删后插自愈
+// 存量 plan 的队尾旧句,幂等;纯固定镜(解析不出短语)不注入。
 func injectCameraDiscipline(hp, camera string) string {
-	if strings.Contains(hp, "CAMERA DISCIPLINE") {
-		return hp
-	}
+	reGuard := regexp.MustCompile(`(?m)^\s*CAMERA DISCIPLINE:[^\r\n]*\r?\n?`)
+	hp = reGuard.ReplaceAllString(hp, "")
+	hp = regexp.MustCompile(`\n{3,}`).ReplaceAllString(hp, "\n\n")
+	hp = strings.TrimPrefix(hp, "\n")
 	ph := manjuCameraPhrase(camera)
 	if ph == "" {
-		return hp
+		return strings.TrimRight(hp, " \n")
 	}
 	guard := "CAMERA DISCIPLINE: this shot's camera performs " + ph
 	if strings.Contains(ph, "static") {
-		guard += "; the camera stays locked but on-screen character action or environmental motion (light flicker, moving fabric and hair, drifting particles) must keep every second of the frame alive"
+		guard += "; the camera stays locked but on-screen character action or environmental motion must keep every second of the frame alive"
 	} else {
 		guard += "; keep that camera movement visible from the first frame to the last frame - never settle into a static locked-off frame"
 	}
-	return strings.TrimRight(hp, " \n") + "\n" + guard
+	di := strings.Index(hp, "detailed_description:")
+	if di < 0 {
+		di = strings.Index(hp, "integrated_multimodal_description:")
+	}
+	if di < 0 {
+		return strings.TrimRight(hp, " \n") + "\n" + guard
+	}
+	return hp[:di] + guard + "\n\n" + hp[di:]
 }
 
-// injectPositionDiscipline 站位纪律注入(2026-08-30 五问整改,问题③):队尾追加
-// POSITION DISCIPLINE(幂等锚)——存量脚本 detailed_description 站位稀疏且
-// 「脚本即权威」逐字保留无人补,纪律句强制每个登场角色带屏幕位置+朝向。
+// injectPositionDiscipline 站位纪律注入(2026-08-30 五问整改问题③;2026-09-02
+// 位置重排:队尾→detailed_description 段标题前,同 CAMERA 理由——镜7 脚本 center
+// 成片 x=0.32 实测站位纪律在队尾无效。先删后插自愈,幂等;无人物镜不注入)。
 func injectPositionDiscipline(hp string) string {
-	if strings.Contains(hp, "POSITION DISCIPLINE") {
+	reGuard := regexp.MustCompile(`(?m)^\s*POSITION DISCIPLINE:[^\r\n]*\r?\n?`)
+	hp = reGuard.ReplaceAllString(hp, "")
+	hp = regexp.MustCompile(`\n{3,}`).ReplaceAllString(hp, "\n\n")
+	hp = strings.TrimPrefix(hp, "\n")
+	if !strings.Contains(hp, "subject_definitions:") {
+		return strings.TrimRight(hp, " \n")
+	}
+	guard := "POSITION DISCIPLINE: every on-screen character must appear at a specific screen position - left/center/right third of the frame combined with foreground/midground/background depth - with a clear facing direction; no character may float without a position, and once the relative arrangement of characters is set it must not flip within the shot"
+	di := strings.Index(hp, "detailed_description:")
+	if di < 0 {
+		di = strings.Index(hp, "integrated_multimodal_description:")
+	}
+	if di < 0 {
+		return strings.TrimRight(hp, " \n") + "\n" + guard
+	}
+	return hp[:di] + guard + "\n\n" + hp[di:]
+}
+
+// injectCrowdDiscipline 远景人海纪律注入(2026-09-02,王牌三岁半镜1「三个外国人」
+// 实锤;2026-09-02 二次修正按知识库《H3群演与Q版角色质量控制实战》标尺):
+// 未定义 Subject 的人物 = 模型自由发挥 = 复制参考图最显眼形象 / 拟人先验西方脸。
+// 人群/观众/看台属于「氛围群演」(无名无台词)→ 不出卡,文字纪律兜底。
+// 纪律判定:①只要 detailed_description 出现人群词(crowd/spectators/audience/
+// grandstand/stands/tens of thousands/看台/观众…)就注入——**不看 characters
+// 是否非空**(知识库原文:「FRAME 纪律的判定条件必须是'提示词有 subject_definitions
+// (有人物)'而非'characters 非空'——群像无卡镜最需要纪律却最容易被漏」;镜15
+// chars=[棠棠] 但观众席无卡,H3 照样自由发挥个体);②纪律句按官方「远景避脸」
+// 正向写法(社区最佳实践):人群给**背影/后侧 3/4/剪影**,不写纯否定句(知识库:
+// 「写在正向里的否定句对高重绘模型基本无效」);③位置在 detailed_description 段
+// 标题前(队尾纪律 H3 注意力弱,实测无效);存量 plan 队尾旧句先删后插自愈;
+// ④脚本侧已内嵌同款纪律句(no individual face, no recognizable person 等契约句)
+// → 不重复注入。
+func injectCrowdDiscipline(hp string, hasChars bool) string {
+	// ① 先剥除既有纪律句(队尾旧版/任意位置,自愈迁移)
+	reGuard := regexp.MustCompile(`(?m)^\s*CROWD DISTANCE:[^\r\n]*(?:\r?\n)?`)
+	hp = reGuard.ReplaceAllString(hp, "")
+	hp = regexp.MustCompile(`\n{3,}`).ReplaceAllString(hp, "\n\n")
+	hp = strings.TrimPrefix(hp, "\n")
+	hp = strings.TrimSuffix(hp, "\n")
+	low := strings.ToLower(hp)
+	crowd := strings.Contains(low, "crowd") || strings.Contains(low, "spectator") ||
+		strings.Contains(low, "audience") || strings.Contains(low, "grandstand") ||
+		strings.Contains(low, "stands ") || strings.Contains(low, "thousands of people") ||
+		strings.Contains(low, "人海") || strings.Contains(low, "看台") || strings.Contains(low, "观众")
+	if !crowd {
 		return hp
 	}
-	guard := "POSITION DISCIPLINE: every on-screen character must appear at a specific screen position - left/center/right third of the frame combined with foreground/midground/background depth - with a clear facing direction (facing camera, facing left, facing right, or turned away); no character may float without a position, and once the relative arrangement of characters is set it must not flip within the shot"
-	return strings.TrimRight(hp, " \n") + "\n" + guard
+	// ② 脚本侧已内嵌纪律句(2026-09-02 技能侧契约:正向剪影写法,知识库标尺
+	// 「否定句对高重绘模型基本无效」→ 契约用 anonymous backs/silhouettes 正向措辞,
+	// 渲染端以同款正向锚判定)→ 不重复注入
+	if strings.Contains(hp, "silhouettes") && (strings.Contains(hp, "anonymous backs") || strings.Contains(hp, "seen from behind") || strings.Contains(hp, "no individual face, no recognizable person")) {
+		return hp
+	}
+	// ③ 正向写法纪律(远景避脸:背影/后侧 3/4/剪影;知识库:纯否定句对高重绘无效)
+	guard := "CROWD DISTANCE: any crowd, audience or spectator mass in this shot stays far in the deep background as blurred silhouettes seen from behind or in rear three-quarter view, out of focus and featureless - tiny indistinct shapes with no visible faces, no frontal views, no recognizable individuals, and no crowd member ever stepping forward or becoming a foreground subject\n\n"
+	di := strings.Index(hp, "detailed_description:")
+	if di < 0 {
+		di = strings.Index(hp, "integrated_multimodal_description:")
+	}
+	if di < 0 {
+		return strings.TrimRight(hp, " \n") + "\n" + strings.TrimSpace(guard) // 兜底:无画面段标题,队尾
+	}
+	return hp[:di] + guard + hp[di:]
+}
+
+// manjuScreenSentences 逐句切分画面段(detailed_description 起),供屏纪律判定
+func manjuScreenSentences(hp string) []string {
+	dd := hp
+	if i := strings.Index(hp, "detailed_description:"); i >= 0 {
+		dd = hp[i:]
+	} else if i := strings.Index(hp, "integrated_multimodal_description:"); i >= 0 {
+		dd = hp[i:]
+	}
+	if j := strings.Index(dd, "overall_soundscape:"); j >= 0 {
+		dd = dd[:j]
+	}
+	var out []string
+	for _, ln := range strings.Split(dd, "\n") {
+		out = append(out, strings.Split(ln, ". ")...)
+	}
+	return out
+}
+
+var (
+	// reScreenFrameSent "screen"=画面框本身/家具屏/展柜的句式(非显示设备,不触发)
+	reScreenFrameSent = regexp.MustCompile(`(?i)on-screen|wooden|paper\s+screen|silk|folding|screen\s+wall|display\s+case|fills?\s+the\s+screen|filling\s+the\s+screen|fills?\s+the\s+(?:left|right|whole|entire|top|bottom)\s+(?:half|third)?\s*of\s+the\s+screen|across\s+the\s+screen|off-screen`)
+	// reScreenCapable 显示型设备限定词(句内出现即认定该屏可成像)
+	reScreenCapable = regexp.MustCompile(`(?i)holographic|floating|giant|massive|glowing|monitor|television|\btv\b|smartphone|phone|tablet|hologram|electronic|digital|projected|screen\s+glow`)
+	// reScreenPinned 屏内容已说明词(任一句命中即视为已钉死,不注入)
+	reScreenPinned = regexp.MustCompile(`(?i)numeral|number|the words|reading|reads|displaying|displays|shows|showing|broadcast|footage|replay|recording|image|portrait|live\s?stream|screenshot|data|text|countdown|title|logo|map|grid|chart|photograph|blank|empty|dark|black`)
+	// reScreenWord 句内 screen/display 实词
+	reScreenWord = regexp.MustCompile(`(?i)\bscreens?\b|\bdisplays?\b`)
+)
+
+// injectScreenDiscipline 屏内容兜底纪律(2026-09-02 全库统一,王牌三岁半镜1
+// 「屏上三个外国人」实锤):显示型屏(全息/悬浮/巨幕/手机/监控)在提示词内
+// 无任何内容说明时,H3 会把屏默认渲染成**人像特写屏**(拟人先验偏西方面孔)。
+// 源侧技能契约(7b:屏内容必须钉死)管新章节;此 guard 在渲染汇点兜底全库存量。
+// 判定(句级,宁缺勿滥):
+//   ① 画面段存在含 screen/display 实词的句子;
+//   ② 该句非「画面框/家具屏/展柜/画外音」句式(reScreenFrameSent);
+//   ③ 该句含显示设备限定词(reScreenCapable)——"the screen" 裸词不定性,防误伤;
+//   ④ 钉死判定双层合并:全镜任一屏句含内容说明词(reScreenPinned)→ 已钉死;
+//      否则能力屏句的 ±1 邻句含内容词(内容写在相邻非屏句也合法)→ 该屏已钉死。
+// 全部屏句均未钉死才注入,插 detailed_description 段标题前(高服从位,同 CROWD
+// DISTANCE);幂等锚 SCREEN CONTENT;措辞正向优先(知识库:「正向里的否定句对
+// 高重绘模型基本无效」——先说屏上放什么,再补禁人脸)。
+func injectScreenDiscipline(hp string) string {
+	if strings.Contains(hp, "SCREEN CONTENT") {
+		return hp
+	}
+	sents := manjuScreenSentences(hp)
+	// 钉死判定(双层合并,防与合法已写内容冲突):
+	//   ① 全镜级:任一「屏句(非画面框句式)+内容说明词」→ 整镜已钉死
+	//     (内容写在远处句——镜44 实锤:屏句在前、"showing the home screen" 在后);
+	//   ② 邻句级:能力屏句的 ±1 邻句含内容词 → 该屏已钉死(内容写在相邻
+	//     非屏句也合法,如 "The replay overhead shows …")。
+	unpinned := false
+	for _, sent := range sents {
+		if !reScreenWord.MatchString(sent) {
+			continue
+		}
+		if reScreenFrameSent.MatchString(sent) {
+			continue
+		}
+		if reScreenPinned.MatchString(sent) {
+			return hp // ① 全镜已钉死
+		}
+	}
+	for i, sent := range sents {
+		if !reScreenWord.MatchString(sent) {
+			continue
+		}
+		if reScreenFrameSent.MatchString(sent) {
+			continue
+		}
+		if !reScreenCapable.MatchString(sent) {
+			continue
+		}
+		lo, hi := i-1, i+1
+		if lo < 0 {
+			lo = 0
+		}
+		if hi >= len(sents) {
+			hi = len(sents) - 1
+		}
+		ok := false
+		for j := lo; j <= hi; j++ {
+			if reScreenPinned.MatchString(sents[j]) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			unpinned = true
+			break
+		}
+	}
+	if !unpinned {
+		return hp
+	}
+	guard := "SCREEN CONTENT: every display screen, monitor or holographic surface in this shot shows only abstract data patterns, glowing text or numerals relevant to the scene, staying in the background as a soft light source - screens never display a close-up human face, a portrait or any person not already listed in subject_definitions, and never become the main subject of the frame\n\n"
+	di := strings.Index(hp, "detailed_description:")
+	if di < 0 {
+		di = strings.Index(hp, "integrated_multimodal_description:")
+	}
+	if di < 0 {
+		return strings.TrimRight(hp, " \n") + "\n" + strings.TrimSpace(guard)
+	}
+	return hp[:di] + guard + hp[di:]
 }
 
 // reAudioDefPhrase 规范化后的 Audio 定义行(alignAudioDefs 输出格式,稳定可匹配;
@@ -1044,6 +1247,141 @@ func (ctx *manjuCtx) voiceTimbrePhrase(cid string) string {
 	}
 	return manjuVoicePhraseFor(key)
 }
+
+// reSubjectHairWord 描述行发色词(常见发色,用于一致性校正;容忍中间形容词:
+// "short black hair" / "neatly combed silver hair";含 hair 词尾)
+var reSubjectHairWord = regexp.MustCompile(`(?i)\b(?:platinum[- ]white|silver[- ]white|snow[- ]white|platinum|silver|white|blond|blonde|golden|black|brown|auburn|red|grey|gray|raven|chestnut|dark)[^,.;]{0,12}?\bhair\b`)
+
+// reCardHairPhrase 卡面发色词组(容忍中间形容词:platinum-white short hair /
+// silver-grey wavy hair 等;捕获组 1=发色词,含连字符形态)
+var reCardHairPhrase = regexp.MustCompile(`(?i)(platinum[- ]white|silver[- ]white|snow[- ]white|platinum|silver|golden|blonde|blond|white|black|brown|auburn|chestnut|raven|grey|gray|red)[^,.;]{0,12}?\bhair\b`)
+
+// manjuCardHairWord 角色卡 image_prompt/appearance 的明确发色词(首个命中;
+// 无发色词返回空)。角色卡是形象权威——subject_definitions 发色与卡不一致时
+// 以卡为准(2026-09-02 我的影子会咬人镜7/19 沈照 black hair 实锤)。
+func manjuCardHairWord(card map[string]any) string {
+	src := str(card["image_prompt"]) + " " + str(card["appearance"]) + " " + str(card["costume"])
+	m := reCardHairPhrase.FindStringSubmatch(src)
+	if m == nil {
+		return ""
+	}
+	orig := m[1]
+	if i := strings.Index(src, m[0]); i >= 0 {
+		for _, o := range []string{"platinum-white", "platinum white", "silver-white", "silver white",
+			"snow-white", "snow white", "platinum", "silver", "golden", "blonde", "blond",
+			"white", "black", "brown", "auburn", "chestnut", "raven", "grey", "gray", "red"} {
+			if strings.Contains(strings.ToLower(m[0]), strings.ToLower(o)) {
+				return o
+			}
+		}
+	}
+	return orig
+}
+
+// fixSubjectHairColor 分镜脚本 Subject 描述发色与角色卡校正(2026-09-02,我的影子
+// 会咬人镜7/19 实锤:沈照卡 platinum-white 白金发,技能侧 LLM 直出 subject_definitions
+// 写 "short black hair" → H3 白发变黑,形象一致性第一特征崩)。遍历 subject_definitions
+// 中 <Subject N> 角色描述行:行含发色词且该 Subject 对应角色卡有明确发色、不一致
+// → 按卡替换(幂等:替换后发色一致不再命中)。
+// 角色归属用「英文特征词重叠」匹配(镜7 实锤:subject 行 "Shen Zhao, ... platinum-white
+// hair" 与卡 image_prompt 共享 platinum/hair/young 等词;Subject 编号不可靠——
+// 镜7 characters=[阿影, 沈照] 但 Subject 1=沈照 2=阿影,编号与登场序反转)。
+// 每张登场角色卡的 image_prompt 特征词与 subject 行词集重叠计数,最高且>0 的
+// 卡即该行角色。放 ctx 层(需角色卡),指纹/渲染共用。
+func (ctx *manjuCtx) fixSubjectHairColor(hp string, s manjuShot) string {
+	if !strings.Contains(hp, "hair") || len(s.Characters) == 0 {
+		return hp
+	}
+	start := strings.Index(hp, "subject_definitions:")
+	if start < 0 {
+		return hp
+	}
+	segEnd := len(hp)
+	if i := strings.Index(hp[start:], "\nsummary:"); i >= 0 {
+		segEnd = start + i
+	}
+	seg := hp[start:segEnd]
+	type cardFeat struct {
+		cid   string
+		hair  string
+		words map[string]bool
+	}
+	var cards []cardFeat
+	for _, cid := range s.Characters {
+		card := ctx.charInfoFor(cid)
+		if card == nil {
+			continue
+		}
+		hair := manjuCardHairWord(card)
+		if hair == "" {
+			continue
+		}
+		words := map[string]bool{}
+		for _, w := range manjuEnFeatureWords(str(card["image_prompt"])) {
+			if len(w) >= 4 {
+				words[w] = true
+			}
+		}
+		cards = append(cards, cardFeat{cid: cid, hair: hair, words: words})
+	}
+	if len(cards) == 0 {
+		return hp
+	}
+	for _, line := range strings.Split(seg, "\n") {
+		if !strings.Contains(line, "hair") || !strings.Contains(line, "<Subject") ||
+			!strings.Contains(line, "is ") {
+			continue
+		}
+		if strings.Contains(strings.ToLower(line), "reference attachment") ||
+			strings.Contains(strings.ToLower(line), "multiple views of") {
+			continue
+		}
+		m := reSubjectHairWord.FindString(line)
+		if m == "" {
+			continue
+		}
+		lineWords := map[string]bool{}
+		for _, w := range manjuEnFeatureWords(line) {
+			if len(w) >= 4 {
+				lineWords[w] = true
+			}
+		}
+		best := -1
+		bestN := 0
+		for i := range cards {
+			n := 0
+			for w := range lineWords {
+				if cards[i].words[w] {
+					n++
+				}
+			}
+			if n > bestN {
+				best, bestN = i, n
+			}
+		}
+		if best < 0 || bestN == 0 {
+			continue
+		}
+		cardHair := cards[best].hair
+		if manjuHairNorm(m) == manjuHairNorm(cardHair) {
+			continue
+		}
+		repl := cardHair + " hair"
+		newLine := strings.Replace(line, m, repl, 1)
+		hp = strings.Replace(hp, line, newLine, 1)
+	}
+	return hp
+}
+
+// manjuHairNorm 发色词归一(去大小写/空格/连字符,比较用)
+func manjuHairNorm(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "-", "")
+	return s
+}
+
+
 
 // buildSpeakerRegistry 全局说话人注册表(2026-08-30 ver14,H3 官方契约
 // "A speaker keeps the same ID across shots"):按全集首次发声顺序为每个有音色绑定
@@ -3328,6 +3666,15 @@ func manjuPortraitPrompt(prompt, appearance string) string {
 	if appearance != "" && !strings.Contains(p, appearance) {
 		p = p + ", distinct unique face with: " + appearance
 	}
+	// 独特面容锚:角色卡 appearance 逐字引用(防不同角色撞脸、视图串脸)
+	// 2026-08-24 用户反馈:不同角色生成相同的脸——必须带每个角色的独有面容特征。
+	if appearance != "" && !strings.Contains(p, appearance) {
+		p = p + ", distinct unique face with: " + appearance
+	}
+	// 2026-09-01 单角色硬锚(墨千秋 full 双人实锤):image_prompt 常带 "wisps of
+	// darkness at feet" 等氛围副体,主定妆无单角色约束时模型把黑雾缕画成第二个人
+	// (full/side 视图以主图为 img2img 底图,主图双人=全部视图双人)。
+	p = p + ", one single character only, no second figure, no duplicate, no mirror image, no shadow figure, no twin"
 	return p
 }
 
@@ -3863,6 +4210,18 @@ func (ctx *manjuCtx) charFullRef(cid string) string {
 // 2026-08-28 兽类分流(用户反馈灵宠 full 出人形):兽类用兽形锚+兽类身份锚+剥人元素,
 // 人形着装/未成年人护栏不参与。
 func manjuViewPromptBuild(p string, view string, m map[string]any) string {
+	// 2026-09-01 判定顺序修复(阿影 side 上下双体实锤):无脸剪影类角色(影子/雾/剪影,
+	// species=影灵 等非人)必须**先于** isBeast 判定——阿影 species=影灵 被 isBeast 判成
+	// 四足兽形锚("purely animal creature form on four paws"),而它实际是"人形黑雾剪影",
+	// 兽形锚与人形剪影互相矛盾,Krea-2 把黑雾人形拆成上下两个体/双人。剪影类=无脸人形,
+	// 不是四足兽,先走剪影锚。
+	if manjuFacelessChar(m) {
+		if view == "side" {
+			return "SILHOUETTE PROFILE view, the single continuous dark figure seen from the side, pure outline and shadow mass with no facial features, no face, no eyes, no nose, no mouth, no limbs separated from the body, one continuous figure only, no duplication, no mirror image, no two figures stacked or split" + ", " + manjuViewStrip(p) + manjuIdentityAnchor + manjuMinorGuard(m)
+		}
+		// 剪影类 full/detail:无脸人形剪影锚(禁四足兽/禁人脸/禁五官)
+		return manjuFacelessViewAnchors[view] + ", " + manjuViewStrip(p) + manjuIdentityAnchor + manjuMinorGuard(m)
+	}
 	if manjuIsBeast(m) {
 		return manjuBeastViewAnchors[view] + ", " + manjuBeastStrip(manjuViewStrip(p)) + manjuBeastIdentityAnchor
 	}
@@ -3883,6 +4242,15 @@ func manjuViewPromptBuild(p string, view string, m map[string]any) string {
 
 // manjuFacelessChar 无脸/剪影类角色判定(2026-09-01):非人且形象描述为影子/雾/
 // 剪影/无五官——侧面视图必须用剪影锚,人形面部锚会诱导模型乱画(阿影 side 上下双体)
+// manjuFacelessViewAnchors 无脸/剪影类角色视图锚(2026-09-01):影子/雾/剪影形态
+// 角色的 full/side/detail——人形锚的 face/nose/chin/着装语义对无脸角色是乱画邀请,
+// 兽形锚的四足兽语义同样矛盾(阿影=人形黑雾剪影,不是四足兽)。纯剪影轮廓锚。
+var manjuFacelessViewAnchors = map[string]string{
+	"full":   "FULL BODY view, the single continuous shadow figure standing from head to toe, pure dark outline and shadow mass with no facial features, no face, no eyes, no nose, no mouth, no hair, no clothes seams, smooth flowing shadow body, one continuous figure only, no duplication, no mirror image, no two figures stacked or side by side, no limbs separated from the body",
+	"side":   "SILHOUETTE PROFILE view, the single continuous dark figure seen from the side, pure outline and shadow mass with no facial features, no face, no eyes, no nose, no mouth, no limbs separated from the body, one continuous figure only, no duplication, no mirror image, no two figures stacked or split",
+	"detail": "EXTREME CLOSE-UP detail shot of the shadow figure's single most distinctive feature (glowing eye dots / wispy edges / flowing smoke trail), large detailed close-up composition, macro framing, no face, no facial features",
+}
+
 func manjuFacelessChar(m map[string]any) bool {
 	if m == nil {
 		return false
@@ -4118,7 +4486,11 @@ func manjuFeatureAnchor(m map[string]any) string {
 // Q 版不套人类着装锁,走发光数据精灵形态。
 func manjuIsNonPhysical(m map[string]any) bool {
 	src := str(m["image_prompt"]) + " " + str(m["appearance"])
-	return regexp.MustCompile(`(?i)no solid body|holographic entity|pure data-light|data-light|data spirit|wisp|ghostly|immaterial|ethereal (?:being|entity|spirit)`).MatchString(src)
+	// 2026-09-01 误判根治(墨千秋实锤):image_prompt 常写 "wisps of darkness curling
+	// at his feet"(暗影系角色的脚边黑雾装饰),裸 wisp 无词边界把 wisps 命中 →
+	// 人类角色被判成"发光数据精灵",Q版走完全无关的光精灵分支(头/手/脚全不对)。
+	// 只认确凿的非实体语义:数据/光/全息/幽灵体,排除 darkness/shadow/mist 语境。
+	return regexp.MustCompile(`(?i)no solid body|holographic entity|pure data-light|data-light|data spirit|(?:light|energy)\s*wisp|ghostly presence|immaterial (?:being|entity|spirit)|ethereal (?:being|entity|spirit)`).MatchString(src)
 }
 
 // manjuQPrompt 构建 Q 版提示词(2026-08-25 用户规则;2026-08-26 修正:Q版=定妆照同一
@@ -4262,6 +4634,7 @@ func manjuQIdentityPrompt(m map[string]any) string {
 	p += ", same character as the reference portrait (identical hairstyle, hair color, outfit colors and design)"
 	p += ", keeping the character's original age, NOT aged down, no baby face, body build strictly follows the original character, NOT chubby"
 	p += ", fully clothed head to toe, no nudity, no exposed skin except face and hands"
+	p += ", one single chibi character only, filling the frame, no second figure, no miniature version, no person beside or behind it, no size contrast, no duplication"
 	return p + manjuMinorGuard(m) + manjuBeardEnforce(m)
 }
 
@@ -4341,6 +4714,23 @@ func manjuQPrompt(m map[string]any) string {
 	// chibi prompt 会强化敞袍先验,与着装锁提取子句同款清洗
 	img = manjuLooseClean.ReplaceAllString(img, "")
 	ap := str(m["appearance"]); _ = ap
+	// 2026-09-01 无脸/剪影类角色 Q 版(阿影实锤):影灵=人形黑雾剪影,此前 species=影灵
+	// 走兽形分支("same beast creature ... FUR COLOR LOCK: black fur"),黑雾剪影被套
+	// 毛茸茸兽形=形象全错。剪影 Q 版=黑雾团子/剪影萌化,保留蓝点眼/雾缕特征,禁人脸
+	// 禁兽形禁毛。
+	if manjuFacelessChar(m) {
+		p := "3D rendered cute chibi collectible toy figure, a small adorable round shadow blob with a cute chibi silhouette, smooth dark mist and shadow body with soft flowing wisps, two faint glowing dot eyes, no facial features, no face, no nose, no mouth, no fur, no hair, tiny stubby shadow arms and legs, cute rounded chibi proportions, plain white background"
+		if base != "" {
+			p += ", " + base
+		}
+		if ap != "" && !strings.Contains(p, ap) {
+			p += ", " + ap
+		}
+		if fa := manjuFeatureAnchor(m); fa != "" {
+			p += ", " + fa
+		}
+		return p + ", NOT a human face, no facial features, NOT a furry animal, no fur, no paws, one single chibi figure only, no second figure, no duplication"
+	}
 	if manjuIsBeast(m) {
 		// 2026-08-28 修(用户实测老猫Q版"机械零件拼凑感/结构混乱"):①默认 plush 毛绒构成与
 		// 机械兽物种打架——特征含 robotic/mechanical/metallic 时构成换光滑金属版;
@@ -4397,7 +4787,7 @@ func manjuQPrompt(m map[string]any) string {
 	// 2026-08-28 非实体角色(用户实测:管理员=纯数据光生命,Q版被套实体衣服做成普通娃娃,
 	// 与写实全息体差距巨大):不套人类着装锁/chibi手办构成,走发光数据精灵形态。
 	if manjuIsNonPhysical(m) {
-		p := "3D rendered cute chibi collectible toy figure, a palm-size adorable glowing holographic data spirit, exactly 2-head-tall super-deformed chibi proportions, oversized round head takes up half of the body height, translucent luminous body made of flowing cyan and gold light streams with floating data particles, big sparkling light-point eyes, tiny stubby arms and legs made of soft glowing code ribbons, gentle ethereal majestic aura, semi-transparent non-solid appearance"
+		p := "3D rendered cute chibi collectible toy figure, a single adorable glowing holographic data spirit filling the frame, exactly 2-head-tall super-deformed chibi proportions, oversized round head takes up half of the body height, translucent luminous body made of flowing cyan and gold light streams with floating data particles, big sparkling light-point eyes, tiny stubby arms and legs made of soft glowing code ribbons, gentle ethereal majestic aura, semi-transparent non-solid appearance"
 		if base != "" {
 			p += ", " + base
 		}
@@ -4456,7 +4846,7 @@ func manjuQPrompt(m map[string]any) string {
 	// 缺头部占比/短手脚/大眼细节,覆盖模板构成后比例被稀释成正常人物——q_form 非空时
 	// 也统一追加构成锚(身份内容以 q_form 为准,形态以构成锚为准,双管齐下)
 	if base != "" && str(m["q_form"]) != "" {
-		p += ", a tiny palm-sized chibi figure about 3-head-tall, oversized round head occupying about one third of the total figure height, tiny stubby arms and legs, small round hands, big sparkling eyes, soft round face with a small cute mouth"
+		p += ", a single 3-head-tall chibi figure filling the frame, oversized round head occupying about one third of the total figure height, tiny stubby arms and legs, small round hands, big sparkling eyes, soft round face with a small cute mouth, one single chibi character only, no second figure, no miniature version beside it, no size contrast"
 	}
 	// 2026-08-28 标志性特征锁前置(用户实测:韩天枢Q版丢眼镜/屠夫丢眼罩+液压钳——特征锁排
 	// 在 identity 锚前仍不够,Krea-2 0.93 高重绘下后置文本权重被 chibi 构成+着装锁稀释;
@@ -4518,6 +4908,10 @@ func manjuQPrompt(m map[string]any) string {
 	}
 	// 未成年人护栏(2026-08-27 小男孩全身图下半身裸露同源风险:手办/chibi 素体自带光腿
 	// 娃体先验,儿童角色 Q 版同样必须全身完整着装)
+	// 2026-09-01 单角色硬锚(沈照/夜枭/沈伯/王胖子「一大一小两个」实锤):img2img
+	// 底图是正常比例主图,提示词无单角色约束时模型保留底图人物+新画 chibi=双人。
+	// 所有 Q 版 prompt 统一收尾显式单角色。
+	p += ", one single chibi character only, filling the frame, no second figure, no miniature version, no person beside or behind it, no size contrast, no duplication"
 	return p + manjuMinorGuard(m) + manjuBeardEnforce(m)
 }
 
@@ -4662,6 +5056,10 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 		if cid == "" {
 			continue
 		}
+		// 2026-09-02 角色资产库复用:同名同形象(提示词指纹一致)直接从
+		// char_lib 复制全部资产,跳过 Krea-2 渲染(零成本+跨项目形象锁定)。
+		// 后续生成逻辑按"文件已存在"自动跳过。
+		ctx.manjuCharLibReuse(m, cmap, lg)
 		dst := filepath.Join(ctx.assetsDir, "characters", cid+".png")
 		if !fileExists(dst) {
 			lg.logf("🎨 角色定妆照: " + cid + " ...")
@@ -4805,6 +5203,11 @@ func stageAssets(ctx *manjuCtx, lg *manjuLogger) error {
 				}
 				cmap[cid+"_"+view] = "characters/" + cid + "_" + view + ".png"
 			}
+		// 2026-09-02 角色资产入库:本角色资产齐全后写入 char_lib(跨项目复用)。
+		// 复用路径跳过渲染的也会走到这里(资产已复制,重复入库幂等覆盖)。
+		if err := ctx.manjuCharLibStore(m); err != nil {
+			lg.logf("  ⚠️ 角色 " + cid + " 资产入库失败: " + err.Error())
+		}
 		}
 		scenes, _ := plan["scenes"].([]any)
 	for i, sc := range scenes {
@@ -5876,6 +6279,15 @@ func manjuOffscreenDescs(hp string) []string {
 	var out []string
 	for _, a := range anchors {
 		seg := hp[:a[0]]
+		// 2026-09-02 配音重复根治(王牌三岁半 EP01 镜15 实锤):同一长句内连写
+		// 两句画外音时(「…says in an off-screen voiceover: <d>联邦史上最低！</d>
+		// and a woman's voice … adds in an off-screen voiceover:」),第二锚点向前
+		// 回溯会把前一句的台词块 <d>…</d> 一起收进"声线描述"→ 注入 Audio 定义行
+		// 后同一句台词出现在 h3 两处 → H3 念两遍。台词块不是声线描述:从最后
+		// 一个 </d> 之后开始取段。
+		if k := strings.LastIndex(seg, "</d>"); k >= 0 {
+			seg = seg[k+len("</d>"):]
+		}
 		if i := strings.LastIndex(seg, ". "); i >= 0 {
 			seg = seg[i+2:]
 		}
@@ -5885,6 +6297,10 @@ func manjuOffscreenDescs(hp string) []string {
 		}
 		desc := strings.TrimSpace(seg)
 		desc = strings.TrimSuffix(desc, ",")
+		// 兜底:仍残留台词块(异常嵌套/换行变体)直接剥除,台词永不进声线描述
+		if i := strings.Index(desc, "<d"); i >= 0 {
+			desc = strings.TrimSpace(desc[:i])
+		}
 		if len(desc) > 140 {
 			desc = desc[len(desc)-140:]
 		}
@@ -5956,7 +6372,7 @@ func (ctx *manjuCtx) offscreenVoiceKeyFor(offDesc string, c manjuRefContract) st
 			name = name[:j]
 		}
 		if cid := charIDMatch(name, c); cid != "" {
-			if k := ctx.autoVoiceFor(cid); k != "" {
+			if k := ctx.assignedVoiceFor(cid); k != "" {
 				return k
 			}
 		}
@@ -6071,12 +6487,12 @@ func (ctx *manjuCtx) innerVoiceFor(s manjuShot) (string, string) {
 		name := strings.TrimSpace(rest[:j])
 		for _, cid := range s.Characters {
 			if cid == name || strings.HasSuffix(cid, "·"+name) || strings.HasSuffix(name, "·"+cid) {
-				if k := ctx.autoVoiceFor(cid); k != "" {
+				if k := ctx.assignedVoiceFor(cid); k != "" {
 					return cid, k
 				}
 			}
 		}
-		if k := ctx.autoVoiceFor(name); k != "" {
+		if k := ctx.assignedVoiceFor(name); k != "" {
 			return name, k
 		}
 	}
@@ -6344,6 +6760,16 @@ func (ctx *manjuCtx) renderSingleShot(s manjuShot, idx int, fresh bool, lg *manj
 // 草稿预审(半分辨率草稿)与 seed 重试策略(非 fixed 策略按 attempt 换 seed)。
 // fresh=true 时独立生成不接缝(返工重渲镜:其首渲的接缝 latent 已被本次覆盖,
 // 且下游镜基于旧 latent,再接缝只会放大跳变)。
+// manjuCameraIsStatic 运镜列是否固定镜(2026-09-02 运动镜断链判定):「固定
+// （Static）」类不接缝断链;推/拉/摇/移/跟/环绕等运动镜返回 false。
+func manjuCameraIsStatic(camera string) bool {
+	c := strings.TrimSpace(camera)
+	if c == "" {
+		return true // 无运镜列视为固定
+	}
+	return strings.Contains(c, "固定") || strings.Contains(strings.ToLower(c), "static")
+}
+
 func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir string, w, h, attempt int, lg *manjuLogger) error {
 	// 2026-08-25 用户规则:渲染输入最终化(违规词同义/谐音替换 + 多余人脸硬约束),
 	// 先于缓存指纹与预编码——指纹/编码/渲染三处用同一份最终化文本保持一致
@@ -6384,6 +6810,15 @@ func (ctx *manjuCtx) renderShotTo(s manjuShot, idx int, fresh bool, dstDir strin
 		ctx.renderCKClear(ckKey)
 	}
 	chained := !fresh && idx > 1 && fileExists(h3ContextLatentPath(ctx.comfyOutput, ctx.latentNS(), idx-1))
+	// 2026-09-02 运动镜断链(我的影子会咬人 EP01 镜4 实锤:横移 Pan 镜 pin 上一镜
+	// 尾帧续写,提交文本内联 pan 句×2 仍被无视,实测背景位移 0.00px——pin 链式下
+	// H3 强锚定上一镜收尾构图,与 pinned 帧矛盾的运镜指令按官方「矛盾=并集」逻辑
+	// 被丢弃;首镜无 pin 时推近 +6.8% 正常生效)。非固定运镜镜不加载 MotionContext,
+	// 断链直出新构图——运动镜要运镜,衔接处允许硬切。
+	if chained && !manjuCameraIsStatic(s.Camera) {
+		chained = false
+		lg.logf("  🎥 镜头 " + strconv.Itoa(s.ID) + " 运动镜断链直出(" + strings.TrimSpace(strings.SplitN(s.Camera, "（", 2)[0]) + ")——不接缝,保证运镜执行")
+	}
 	if fresh {
 		lg.logf("  ♻️ 镜头 " + strconv.Itoa(s.ID) + " 返工重渲:独立生成(不接缝)")
 	}

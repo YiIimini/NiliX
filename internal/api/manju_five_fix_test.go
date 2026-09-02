@@ -174,8 +174,10 @@ func TestManjuCameraPhrase(t *testing.T) {
 }
 
 // injectCameraDiscipline/injectPositionDiscipline:注入 + 幂等锚
+// 2026-09-02 语义更新:站位纪律按「有 subject_definitions(有人物)」判定注入,
+// fixture 带主体;运镜/站位纪律插 detailed_description 段前(先删后插自愈)。
 func TestInjectDisciplines(t *testing.T) {
-	hp := "detailed_description:\n[Shot 1] Shen Zhao stands.\n\noverall_soundscape:\nquiet."
+	hp := "subject_definitions:\n<Subject 1> is Shen Zhao.\n\ndetailed_description:\n[Shot 1] Shen Zhao stands.\n\noverall_soundscape:\nquiet."
 	out := injectCameraDiscipline(hp, "缓推（Push In, small, slow）")
 	if !strings.Contains(out, "CAMERA DISCIPLINE: this shot's camera performs Push In, small, slow") {
 		t.Fatalf("应注入运镜纪律: %s", out)

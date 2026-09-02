@@ -65,11 +65,11 @@ func TestManjuFinalizePromptPureIdempotent(t *testing.T) {
 		}
 	}
 	full := manjuFinalizePromptPure(hp, true, 3)
-	if !strings.Contains(full, "FRAME DISCIPLINE") || !strings.Contains(full, "MOTION DISCIPLINE") {
+	if !strings.Contains(full, "FRAME DISCIPLINE") || !strings.Contains(full, "MOTION & SEAM DISCIPLINE") {
 		t.Fatalf("有角色镜应同时含人脸纪律与运动纪律: %q", full)
 	}
-	if !strings.Contains(full, "CHAIN DISCIPLINE") {
-		t.Fatalf("所有镜头应含链式衔接纪律(恒定注入保指纹稳定): %q", full)
+	if !strings.Contains(full, "renders as a union") {
+		t.Fatalf("所有镜头应含接缝并集纪律(2026-09-02 并入 MOTION & SEAM,恒定注入保指纹稳定): %q", full)
 	}
 	noChar := manjuFinalizePromptPure(hp, false, 0)
 	// 2026-08-27 语义更新:人物纪律按"提示词有无 subject_definitions"判定,不再只看
@@ -81,7 +81,7 @@ func TestManjuFinalizePromptPureIdempotent(t *testing.T) {
 	if !strings.Contains(noChar, "no reference picture is attached") {
 		t.Fatalf("有人物镜(characters 空)应注入无参考图纪律: %q", noChar)
 	}
-	if !strings.Contains(noChar, "MOTION DISCIPLINE") || !strings.Contains(noChar, "CHAIN DISCIPLINE") || !strings.Contains(noChar, "AUDIO DISCIPLINE") {
+	if !strings.Contains(noChar, "MOTION & SEAM DISCIPLINE") || !strings.Contains(noChar, "renders as a union") || !strings.Contains(noChar, "AUDIO & LIP DISCIPLINE") {
 		t.Fatalf("有人物镜(characters 空)也应注入运动/链式/台词纪律: %q", noChar)
 	}
 	// 真空镜(无 subject_definitions)不注入人物纪律,但运动/链式/台词纪律恒定
@@ -90,7 +90,7 @@ func TestManjuFinalizePromptPureIdempotent(t *testing.T) {
 	if strings.Contains(noSub, "FRAME DISCIPLINE") || strings.Contains(noSub, "no reference picture is attached") {
 		t.Fatalf("空镜不应注入人物纪律: %q", noSub)
 	}
-	if !strings.Contains(noSub, "MOTION DISCIPLINE") || !strings.Contains(noSub, "CHAIN DISCIPLINE") || !strings.Contains(noSub, "AUDIO DISCIPLINE") {
+	if !strings.Contains(noSub, "MOTION & SEAM DISCIPLINE") || !strings.Contains(noSub, "renders as a union") || !strings.Contains(noSub, "AUDIO & LIP DISCIPLINE") {
 		t.Fatalf("空镜也应注入运动/链式/台词纪律: %q", noSub)
 	}
 	if manjuFinalizePromptPure("", true, 0) != "" {

@@ -20,6 +20,7 @@ var (
 	ComfySharedDir string // ComfyUI 共享目录(models/input/output)
 	NovelSkillDir  string // 小说续作技能目录(词库/写作规范/qa 脚本)
 	VoiceLibDir    string // 配音音色库权威目录(自包含根/voice_lib,跨项目共享)
+	CharLibDir     string // 角色资产库权威目录(自包含根/char_lib,跨项目共享,2026-09-02)
 )
 
 // 旧硬编码路径(老安装的默认位置;新安装优先自包含目录)
@@ -41,6 +42,9 @@ func InitPaths(exeDir string, manjuRoot, novelRoot, comfyRoot, comfyShared, nove
 	// 音色库权威目录固定收在自包含根(与 ComfyUI input 解耦,防清理/重建误删;
 	// 2026-08-29 用户要求「音色保存到稳定位置」)。换电脑整体拷贝即随迁。
 	VoiceLibDir = filepath.Join(exeDir, "voice_lib")
+	// 角色资产库权威目录(2026-09-02 用户需求:技能侧角色输出可直接复用已有角色,
+	// 不再每次重新渲染)。跨项目共享,与 voice_lib 同级稳定位置。
+	CharLibDir = filepath.Join(exeDir, "char_lib")
 }
 
 // pickPath 显式配置优先;否则自包含目录存在时用之;否则回退旧路径。

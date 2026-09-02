@@ -23,7 +23,7 @@ func TestFinalizePromptGuards(t *testing.T) {
 	if !strings.Contains(out, "no reference picture is attached") {
 		t.Error("群像无卡镜缺无参考图纪律(禁止形象互抄)")
 	}
-	if !strings.Contains(out, "AUDIO DISCIPLINE") {
+	if !strings.Contains(out, "AUDIO & LIP DISCIPLINE") {
 		t.Error("群像无卡镜缺台词纪律")
 	}
 	outSceneOnly := manjuFinalizePromptPure(subjectShot, false, 1)
@@ -39,7 +39,7 @@ func TestFinalizePromptGuards(t *testing.T) {
 	if strings.Contains(out, "no reference picture is attached") {
 		t.Error("角色镜不应有无参考图纪律")
 	}
-	if !strings.Contains(out, "AUDIO DISCIPLINE") {
+	if !strings.Contains(out, "AUDIO & LIP DISCIPLINE") {
 		t.Error("角色镜缺台词纪律")
 	}
 
@@ -51,13 +51,13 @@ func TestFinalizePromptGuards(t *testing.T) {
 	if strings.Contains(out, "no reference picture is attached") {
 		t.Error("空镜不应有无参考图纪律")
 	}
-	if !strings.Contains(out, "AUDIO DISCIPLINE") || !strings.Contains(out, "MOTION DISCIPLINE") {
+	if !strings.Contains(out, "AUDIO & LIP DISCIPLINE") || !strings.Contains(out, "MOTION & SEAM DISCIPLINE") {
 		t.Error("空镜缺台词/运动纪律")
 	}
 
 	// ④ 幂等:重复 finalize 不重复追加
 	out2 := manjuFinalizePromptPure(out, false, 3)
-	if strings.Count(out2, "AUDIO DISCIPLINE") != 1 || strings.Count(out2, "MOTION DISCIPLINE") != 1 {
+	if strings.Count(out2, "AUDIO & LIP DISCIPLINE") != 1 || strings.Count(out2, "MOTION & SEAM DISCIPLINE") != 1 {
 		t.Error("纪律重复追加")
 	}
 	if out2 != out {

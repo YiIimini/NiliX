@@ -99,3 +99,73 @@ func TestShotWorkflowAPI(t *testing.T) {
 	}
 }
 
+
+// TestShotWorkflowPromptField 二期:workflow 响应带最终 h3_prompt(渲染输入),
+// 便于前端直接查看/复制排查提示词问题。
+func TestShotWorkflowPromptField(t *testing.T) {
+	dir := t.TempDir()
+	analysis := filepath.Join(dir, "analysis")
+	assets := filepath.Join(dir, "assets")
+	_ = os.MkdirAll(assets, 0o755)
+	_ = os.MkdirAll(analysis, 0o755)
+	plan := map[string]any{
+		"chapters": "script", "script_parse_ver": manjuScriptParseVer,
+		"characters": []any{},
+		"scenes":     []any{},
+		"shots": []any{map[string]any{
+			"shot_id": 3, "scene": "", "characters": []any{}, "shot_size": "中景",
+			"camera": "固定", "action": "空镜", "dialogue": "", "narration": "", "duration": 5,
+			"h3_prompt": "subject_definitions:\n<Subject 1> is the plaza in <Picture 1>.\n\ndetailed_description:\nAn empty plaza at night.\n",
+		}},
+	}
+	b, _ := json.Marshal(plan)
+	_ = os.WriteFile(filepath.Join(analysis, "EP01_direct_plan.json"), b, 0o644)
+	cfg := `{"style":"real","paths":{"workdir":"` + filepath.ToSlash(dir) + `","analysis":"` + filepath.ToSlash(analysis) + `","assets":"` + filepath.ToSlash(assets) + `"},"render":{"steps":8}}`
+	cfgPath := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(cfgPath, []byte(cfg), 0o644)
+	req := httptest.NewRequest(http.MethodGet, "/api/manju/shot/workflow?config="+filepath.ToSlash(cfgPath)+"&episode=EP01&shot=3", nil)
+	rr := httptest.NewRecorder()
+	manjuShotWorkflowHandler(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("workflow API 状态 %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp manjuShotWorkflowResp
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Prompt == "" {
+		t.Fatal("二期:workflow 应带最终 h3_prompt 字段")
+	}
+	if !strings.Contains(resp.Prompt, "detailed_description:") {
+		t.Fatalf("prompt 应为最终化后完整六段式, got: %s", resp.Prompt[:120])
+	}
+}
+
+// TestShotVideoRoute 二期:镜头视频流(已渲染返回 200 视频,未渲染 404)
+func TestShotVideoRoute(t *testing.T) {
+	dir := t.TempDir()
+	clips := filepath.Join(dir, "clips", "EP01")
+	_ = os.MkdirAll(clips, 0o755)
+	// 假 mp4(仅验证路由与存在性判断)
+	_ = os.WriteFile(filepath.Join(clips, "05.mp4"), []byte("fake-mp4-bytes"), 0o644)
+	cfg := `{"style":"real","paths":{"workdir":"` + filepath.ToSlash(dir) + `","clips":"` + filepath.ToSlash(filepath.Join(dir, "clips")) + `"},"render":{"steps":8}}`
+	cfgPath := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(cfgPath, []byte(cfg), 0o644)
+	// 存在 → 200
+	req := httptest.NewRequest(http.MethodGet, "/api/manju/shot/video?config="+filepath.ToSlash(cfgPath)+"&episode=EP01&shot=5", nil)
+	rr := httptest.NewRecorder()
+	manjuShotVideoHandler(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("已渲染镜头视频应 200, got %d", rr.Code)
+	}
+	if rr.Body.String() != "fake-mp4-bytes" {
+		t.Fatalf("视频内容不符")
+	}
+	// 不存在 → 404
+	req2 := httptest.NewRequest(http.MethodGet, "/api/manju/shot/video?config="+filepath.ToSlash(cfgPath)+"&episode=EP01&shot=9", nil)
+	rr2 := httptest.NewRecorder()
+	manjuShotVideoHandler(rr2, req2)
+	if rr2.Code != 404 {
+		t.Fatalf("未渲染镜头视频应 404, got %d", rr2.Code)
+	}
+}

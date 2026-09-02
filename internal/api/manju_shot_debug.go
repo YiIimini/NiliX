@@ -37,6 +37,7 @@ type manjuShotWorkflowResp struct {
 	Cache    string                   `json:"cache_name"`        // 条件缓存名(当前生效)
 	Chained  bool                     `json:"chained"`           // 是否接缝镜
 	EngineMap map[string]string       `json:"engine_map"`        // 引擎名→lora 文件名(前端选择器用)
+	Prompt   string                   `json:"prompt"`            // 最终 h3_prompt(最终化后,2026-09-02 二期:调试查看/复制)
 }
 
 type manjuShotWorkflowRef struct {
@@ -124,6 +125,8 @@ func manjuShotWorkflowHandler(w http.ResponseWriter, r *http.Request) {
 	resp.Refs = ctx.shotWorkflowRefs(*target, plan)
 	// 节点链(展示:按 h3RenderWorkflow 结构推导)
 	resp.Nodes = ctx.shotWorkflowNodes(*target, plan, resp)
+	// 最终 h3_prompt(最终化后,与渲染输入一致;2026-09-02 二期:提示词排查/复制)
+	resp.Prompt = ctx.finalizeShotPrompt(target.H3Prompt, *target, nil)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -280,6 +283,36 @@ func manjuShotOverridesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ctx.loadShotOverrides())
+}
+
+// manjuShotVideoHandler 镜头视频流(2026-09-02 二期:镜头卡片/调试面板内嵌播放)
+// GET /api/manju/shot/video?config=&episode=&shot=N
+func manjuShotVideoHandler(w http.ResponseWriter, r *http.Request) {
+	configPath := strings.TrimSpace(r.URL.Query().Get("config"))
+	episode := strings.TrimSpace(r.URL.Query().Get("episode"))
+	shotN, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("shot")))
+	ctx, err := newManjuCtx(configPath, "", "", "", "")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if episode == "" {
+		episode = ctx.episode
+	}
+	p := filepath.Join(ctx.clipsDir, episode, fmt.Sprintf("%02d.mp4", shotN))
+	if !fileExists(p) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "镜头视频不存在"})
+		return
+	}
+	// 视频流(支持 Range 拖动,浏览器内嵌播放)
+	f, err := os.Open(p)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	defer f.Close()
+	st, _ := f.Stat()
+	http.ServeContent(w, r, filepath.Base(p), st.ModTime(), f)
 }
 
 // manjuShotDebugStatic 前端静态引用辅助(调试面板 assets 图 URL)

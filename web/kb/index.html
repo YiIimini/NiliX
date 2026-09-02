@@ -7,10 +7,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=202609011901">
-<link rel="stylesheet" href="/css/themes.css?v=202609011901">
-<link rel="stylesheet" href="/css/materials.css?v=202609011901">
-<link rel="stylesheet" href="/css/app.css?v=202609011901">
+<link rel="icon" type="image/png" href="/icon.png?v=202609022030">
+<link rel="stylesheet" href="/css/themes.css?v=202609022030">
+<link rel="stylesheet" href="/css/materials.css?v=202609022030">
+<link rel="stylesheet" href="/css/app.css?v=202609022030">
 </head>
 <body>
   <!-- 首帧启动加载层(2026-08-29):样式全部内联——不依赖外部 CSS/JS,HTML 解析到此处
@@ -127,7 +127,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=202609011901" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=202609022030" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -275,6 +275,10 @@
           </button>
           <button id="manju-guide" class="hrs-btn hrs-btn-icon" title="使用说明" aria-label="Guide">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+          </button>
+          <!-- 2026-09-02 角色资产库全局入口(跨项目统一管理:卡片网格+点击预览详情) -->
+          <button id="manju-charlib" class="hrs-btn hrs-btn-icon" title="角色资产库(跨项目统一管理,已定妆角色直接复用)" aria-label="Char library">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
           </button>
           <!-- 2026-08-26 用户要求:清理按钮从导航栏迁到视频管理右上角(使用说明与设置之间)。
                一键清理旧缓存(方案 JSON/镜头 mp4/条件缓存/接缝 latent);高级清理额外清
@@ -831,12 +835,12 @@
   </div>
   <!-- 实际根路径由服务端注入(自包含部署后 manju/novel 在 exe 目录旁,dirview 勿再硬编码) -->
   <script>window.NILIX_PATHS = { manjuRoot: /*__NILIX_MANJU_ROOT__*/, novelRoot: /*__NILIX_NOVEL_ROOT__*/ };</script>
-  <script src="/js/i18n.js?v=202609011901"></script>
-  <script src="/js/markdown.js?v=202609011901"></script>
-  <script src="/js/winctl.js?v=202609011901"></script>
-  <script src="/js/app.js?v=202609011901"></script>
-  <script src="/js/comfy.js?v=202609011901"></script>
-  <script src="/js/dirview.js?v=202609011901"></script>
-  <script src="/js/manju.js?v=202609011901"></script>
+  <script src="/js/i18n.js?v=202609022030"></script>
+  <script src="/js/markdown.js?v=202609022030"></script>
+  <script src="/js/winctl.js?v=202609022030"></script>
+  <script src="/js/app.js?v=202609022030"></script>
+  <script src="/js/comfy.js?v=202609022030"></script>
+  <script src="/js/dirview.js?v=202609022030"></script>
+  <script src="/js/manju.js?v=202609022030"></script>
 </body>
 </html>
