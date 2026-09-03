@@ -1,6 +1,9 @@
 ﻿package main
 
 import (
+	"nilix/internal/paths"
+	"nilix/internal/manju"
+	"nilix/internal/comfy"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -607,28 +610,29 @@ func main() {
 	// 自包含部署路径解�?settings 显式�?�?exe 目录自包含子目录(存在) �?旧硬编码�?
 	// 必须在任�?api 路径使用前调�?ComfyUI 启动/manju 项目/技能目�?fs 白名�?�?
 	exeDir, _ := filepath.Abs(".")
-	api.InitPaths(exeDir, cfg.Paths.ManjuRoot, cfg.Paths.NovelRoot, cfg.Paths.ComfyRoot, cfg.Paths.ComfyShared, cfg.Paths.NovelSkill)
+	paths.InitPaths(exeDir, cfg.Paths.ManjuRoot, cfg.Paths.NovelRoot, cfg.Paths.ComfyRoot, cfg.Paths.ComfyShared, cfg.Paths.NovelSkill)
 	// ComfyUI 输入/输出目录:显式配置优先,缺省跟随共享目录(随自包含迁移)
 	comfyIn := cfg.Paths.ComfyInput
 	if strings.TrimSpace(comfyIn) == "" {
-		comfyIn = filepath.Join(api.ComfySharedDir, "input")
+		comfyIn = filepath.Join(paths.ComfySharedDir, "input")
 	}
 	comfyOut := cfg.Paths.ComfyOutput
 	if strings.TrimSpace(comfyOut) == "" {
-		comfyOut = filepath.Join(api.ComfySharedDir, "output")
+		comfyOut = filepath.Join(paths.ComfySharedDir, "output")
 	}
 	// ComfyUI 启动参数单一数据�?settings.json �?HUD 卡片 / Comfy 页面 / 实际启动命令共用�?
-	api.SetComfyParams(cfg.Render.ComfyURL, comfyIn, comfyOut)
-	api.SetComfyLanAccess(cfg.Render.LanAccess) // 审计 2026-08-28:默认仅本机,设置项开启局域网
+	comfy.SetComfyParams(cfg.Render.ComfyURL, comfyIn, comfyOut)
+	comfy.SetComfyLanAccess(cfg.Render.LanAccess) // 审计 2026-08-28:默认仅本机,设置项开启局域网
 	// 自包含自愈(2026-08-26):整个 NiliX 目录拷到新电脑后,开机自启注册表里的旧
 	// 绝对路径自动更新到当前 exe;每日 00:00 清空共享 input/output(内置,接替旧计划任务)
 	if exe, err := os.Executable(); err == nil {
 		autostart.SelfHeal(exe)
 	}
-	cleanup.Start(cfg.Cleanup.DailyEnabled(), comfyIn, comfyOut, api.ComfyBusy)
+	cleanup.Start(cfg.Cleanup.DailyEnabled(), comfyIn, comfyOut, comfy.ComfyBusy)
 	// 智能体全局默认(settings.json agent �?�?全项目共�?与全局设置读写入口�?
-	api.SetGlobalAgentCfg(cfg)
-	api.SetManjuSettingsStore(store)
+	manju.SetSettings(cfg)
+	manju.SetGlobalAgentCfg(cfg)
+	manju.SetManjuSettingsStore(store)
 
 	// 渲染任务管理器（ComfyUI 客户�?+ 本地产物目录）�?
 	outDir := "clips"
@@ -648,7 +652,7 @@ func main() {
 	if _, rerr := rand.Read(tok); rerr == nil {
 		api.SetSessionToken(hex.EncodeToString(tok))
 	}
-	api.SetFSRoots(*kbRoot, api.NovelRootDir, comfyIn, comfyOut)
+	manju.SetFSRoots(*kbRoot, paths.NovelRootDir, comfyIn, comfyOut)
 	srv := api.NewServer(store, cfg, []byte(indexHTML), renderMgr, sysmonCol, kbStore, *kbRoot, kbSub, islandSub, outDir)
 	addr := "127.0.0.1:" + *port
 	url := "http://" + addr
@@ -680,7 +684,7 @@ func main() {
 	// 2026-08-24 实测发现此前从未被调用,强杀/崩溃后任务静默停摆——这里补上接入。
 	go func() {
 		time.Sleep(3 * time.Second) // 等 HTTP 服务就绪;ComfyUI 由上方自动拉起 goroutine 负责
-		api.AutoRecoverRendering()
+		manju.AutoRecoverRendering()
 	}()
 
 	// ========== wails 应用(单进�?主窗�?+ 灵动岛胶�?+ 托盘,一�?exe) ==========
@@ -721,11 +725,11 @@ func main() {
 	// 渲染/资产/编码前另�?ensureComfyReady 兜底)。在线则跳过,零打扰�?
 	go func() {
 		time.Sleep(1200 * time.Millisecond) // 等服务与主窗口就绪
-		if api.ComfyOnline() {
+		if comfy.ComfyOnline() {
 			return
 		}
 		log.Println("ComfyUI 未运行,自动启动…")
-		if err := api.ComfyStart(); err != nil {
+		if err := comfy.ComfyStart(); err != nil {
 			log.Printf("ComfyUI 自动启动失败: %v(可到灵动岛/ComfyUI 页手动启动)", err)
 		}
 	}()
@@ -1286,15 +1290,15 @@ func buildTray(app *application.App, url string) {
 	mComfy := menu.FindByLabel("ComfyUI")
 	mComfy.SetBitmap(dotIcon(235, 70, 60))
 	mComfySub.Add("打开面板").OnClick(func(*application.Context) {
-		openBrowser(api.ComfyURL())
+		openBrowser(comfy.ComfyURL())
 	})
 	mComfySub.Add("启动 ComfyUI").OnClick(func(*application.Context) {
-		if err := api.ComfyStart(); err != nil {
+		if err := comfy.ComfyStart(); err != nil {
 			log.Printf("托盘启动 ComfyUI 失败: %v", err)
 		}
 	})
 	mComfySub.Add("停止 ComfyUI").OnClick(func(*application.Context) {
-		api.ComfyStop()
+		comfy.ComfyStop()
 	})
 	menu.AddSeparator()
 
@@ -1371,13 +1375,13 @@ type comfyState struct {
 // �?已停�?离线无进�? �?启动�?离线但端口有进程,转圈动画)
 // �?运行�?在线且队列有任务,脉冲) �?闲置�?在线空闲,脉冲)
 func comfyProbeState() comfyState {
-	if api.ComfyOnline() {
-		if api.ComfyBusy() {
+	if comfy.ComfyOnline() {
+		if comfy.ComfyBusy() {
 			return comfyState{70, 200, 100, "pulse", "运行中"}
 		}
 		return comfyState{80, 150, 240, "pulse", "闲置中"}
 	}
-	if api.ComfyPortPID() > 0 {
+	if comfy.ComfyPortPID() > 0 {
 		return comfyState{255, 190, 30, "spin", "启动中"}
 	}
 	return comfyState{235, 70, 60, "static", "已停止"}
@@ -1567,7 +1571,7 @@ func onExit() {
 	if gSysmon != nil {
 		gSysmon.LHM().Kill() // lhmsensor 主动回收(Job 兜底之外,正常退出 100% 覆盖)
 	}
-	if err := api.ComfyStop(); err != nil {
+	if err := comfy.ComfyStop(); err != nil {
 		log.Printf("onExit: 停止 ComfyUI: %v", err)
 	}
 	log.Println("NiliX 已退出")

@@ -3228,7 +3228,8 @@
         .catch((e) => alert("分镜列表加载失败: " + e.message));
     },
 
-    /* 单镜编辑表单(视频管理子弹窗):中文字段 + 可折叠 H3 提示词;
+    /* 单镜编辑表单(视频管理子弹窗,2026-09-03 重构两栏):左中文字段(卡片网格)
+       + 右 H3 提示词常驻编辑器(不再折叠,改台词时可直接对照)——加宽弹窗;
        保存写回方案——台词变化自动逐句同步进提示词,时长/场景/角色/提示词变化
        纳入渲染指纹→该镜下次渲染自动重出 */
     openShotEditForm(ep, shotId) {
@@ -3237,28 +3238,42 @@
       if (!s) { alert("镜头数据缺失,请刷新"); return; }
       const chars = Array.isArray(s.characters) ? s.characters.join(",") : "";
       const nn = String(shotId).padStart(2, "0");
+      const fld = (id, label, inner) =>
+        `<div class="sef2-field"><label for="${id}">${label}</label>${inner}</div>`;
       this.openModal(`✏️ 编辑分镜 ${ep} · 镜 ${nn}`,
-        `<div class="sef-wrap">
-          <div class="dbg-form">
-            <div class="dbg-row"><label>场景</label><input id="sef-scene" type="text" value="${esc(s.scene || "")}"></div>
-            <div class="dbg-row"><label>景别</label><input id="sef-size" type="text" value="${esc(s.shot_size || "")}"></div>
-            <div class="dbg-row"><label>运镜</label><input id="sef-camera" type="text" value="${esc(s.camera || "")}"></div>
-            <div class="dbg-row"><label>登场角色(逗号分隔)</label><input id="sef-chars" type="text" value="${esc(chars)}"></div>
-            <div class="dbg-row"><label>时长(秒 1-60)</label><input id="sef-dur" type="number" min="1" max="60" value="${esc(String(s.duration || 5))}"></div>
-            <div class="dbg-row"><label>动作描述</label><textarea id="sef-action" rows="3">${esc(s.action || "")}</textarea></div>
-            <div class="dbg-row"><label>台词(每行「角色:台词」)</label><textarea id="sef-dlg" rows="3">${esc(s.dialogue || "")}</textarea></div>
-            <div class="dbg-row"><label>旁白</label><textarea id="sef-nar" rows="2">${esc(s.narration || "")}</textarea></div>
+        `<div class="sef2">
+          <div class="sef2-left">
+            <div class="sef2-grid">
+              ${fld("sef-scene", "场景", `<input id="sef-scene" class="manju-input" type="text" value="${esc(s.scene || "")}">`)}
+              ${fld("sef-size", "景别", `<input id="sef-size" class="manju-input" type="text" value="${esc(s.shot_size || "")}">`)}
+              ${fld("sef-camera", "运镜", `<input id="sef-camera" class="manju-input" type="text" value="${esc(s.camera || "")}">`)}
+              ${fld("sef-dur", "时长(秒 1-60)", `<input id="sef-dur" class="manju-input" type="number" min="1" max="60" value="${esc(String(s.duration || 5))}">`)}
+              ${fld("sef-chars", "登场角色(逗号分隔)", `<input id="sef-chars" class="manju-input" type="text" value="${esc(chars)}">`)}
+            </div>
+            ${fld("sef-action", "动作描述", `<textarea id="sef-action" rows="4">${esc(s.action || "")}</textarea>`)}
+            ${fld("sef-dlg", "台词(每行「角色:台词」)", `<textarea id="sef-dlg" rows="4">${esc(s.dialogue || "")}</textarea>`)}
+            ${fld("sef-nar", "旁白", `<textarea id="sef-nar" rows="3">${esc(s.narration || "")}</textarea>`)}
           </div>
-          <details class="sef-prompt">
-            <summary>H3 提示词(高级,默认收起)——改台词会自动逐句同步;增删台词句数/改动作旁白请手动编辑此处</summary>
-            <textarea id="sef-prompt" rows="10" spellcheck="false">${esc(s.h3_prompt || "")}</textarea>
-          </details>
-          <div class="manju-row" style="justify-content:center;gap:10px;margin-top:12px">
-            <button id="sef-save" class="hrs-btn hrs-btn-primary">💾 保存</button>
-            <button id="sef-cancel" class="hrs-btn">取消</button>
+          <div class="sef2-right">
+            <div class="sef2-ph-head">
+              <span class="sef2-ph-title">H3 提示词(渲染输入)</span>
+              <span id="sef-ph-count" class="sef2-ph-count"></span>
+            </div>
+            <textarea id="sef-prompt" spellcheck="false">${esc(s.h3_prompt || "")}</textarea>
+            <div class="sef2-actions">
+              <button id="sef-save" class="hrs-btn hrs-btn-primary">💾 保存</button>
+              <button id="sef-cancel" class="hrs-btn">取消</button>
+            </div>
+            <p class="sef2-hint">改台词会自动逐句同步进提示词;增删台词句数/改动作旁白请直接编辑上方提示词。保存后该镜在镜头列表会标 ⚠️ 过期,下次渲染自动重出。</p>
           </div>
-          <p class="mc-d" style="font-size:11px">保存即写回该集分镜方案;时长/场景/角色/提示词变化纳入渲染指纹,该镜在镜头列表会标 ⚠️ 过期,下次渲染自动重出。</p>
         </div>`, true);
+      const panel = this._modalEl && this._modalEl.querySelector(".manju-modal-panel");
+      if (panel) panel.classList.add("sef-panel");
+      const ta = $("sef-prompt");
+      const cnt = $("sef-ph-count");
+      const updCnt = () => { cnt.textContent = (ta.value.length || 0).toLocaleString() + " 字符"; };
+      ta.addEventListener("input", updCnt);
+      updCnt();
       $("sef-cancel").addEventListener("click", () => this.closeModal());
       $("sef-save").addEventListener("click", () => {
         const fields = {

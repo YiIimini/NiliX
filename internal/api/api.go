@@ -2,6 +2,10 @@
 package api
 
 import (
+	"nilix/internal/comfy"
+	"nilix/internal/manju"
+	"nilix/internal/paths"
+	"nilix/internal/util"
 	"bytes"
 	"context"
 	"crypto/subtle"
@@ -66,14 +70,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/hwctl", s.handleHWCtl)
 	mux.HandleFunc("GET /api/page", s.handleKBPage)
 	mux.HandleFunc("GET /api/asset", s.handleKBAsset)
-	mux.HandleFunc("GET /api/comfy", s.handleComfy)
-	mux.HandleFunc("POST /api/comfy/start", s.handleComfyStart)
-	mux.HandleFunc("POST /api/comfy/stop", s.handleComfyStop)
-	mux.HandleFunc("POST /api/comfy/install", comfyInstallStart)
-	mux.HandleFunc("GET /api/comfy/install/status", comfyInstallStatus)
-	mux.HandleFunc("POST /api/comfy/install/stop", comfyInstallStop)
-	mux.HandleFunc("GET /api/comfy/versions", handleComfyVersions)
-	mux.HandleFunc("POST /api/comfy/plugins/check", handleComfyPluginsCheck)
+	mux.HandleFunc("POST /api/comfy/install", comfy.ComfyInstallStart)
 	// DeepSeek Harness 服务(监控/启动/重启,灵动岛 + 应用内嵌窗口共用)
 	mux.HandleFunc("GET /api/harness", s.handleHarness)
 	mux.HandleFunc("POST /api/harness/start", s.handleHarnessStart)
@@ -81,33 +78,26 @@ func (s *Server) Routes() http.Handler {
 	// 灵动岛配置(系统设置弹窗开关 ↔ settings.json;灵动岛轮询自身显隐)
 	mux.HandleFunc("GET /api/island", s.handleIslandGet)
 	mux.HandleFunc("POST /api/island", s.handleIslandPost)
-	mux.HandleFunc("GET /api/fs/list", s.handleFSList)
-	mux.HandleFunc("GET /api/fs/analyze", s.handleFSAnalyze)
+	
+	
 	// 审计 M12:选目录弹系统对话框改 POST——GET 未鉴权且会启动阻塞式 STA 对话框,
 	// 恶意网页 <img src=".../fs/select"> 即可在用户桌面弹窗骚扰/诱导选择目录
-	mux.HandleFunc("POST /api/fs/select", s.handleFSSelect)
-	mux.HandleFunc("GET /api/fs/read", s.handleFSRead)
-	mux.HandleFunc("GET /api/fs/file", s.handleFSFile)
-	mux.HandleFunc("GET /api/fs/media", s.handleFSMedia)
+	
+	
+	
+	
 	mux.HandleFunc("POST /api/script/generate", s.handleGenerateScript)
 	// 网页版爽文小说创作(NiliX-Novel 技能流程固化,原 shuangwen-novel)
-	mux.HandleFunc("POST /api/novel/create", s.handleNovelCreate)
-	mux.HandleFunc("POST /api/novel/analyze", s.handleNovelAnalyze)
-	mux.HandleFunc("POST /api/novel/review", s.handleNovelReview)
-	mux.HandleFunc("POST /api/novel/chapter", s.handleNovelChapter)
-	mux.HandleFunc("POST /api/novel/delete", s.handleNovelDelete)
-	mux.HandleFunc("GET /api/novel/progress", s.handleNovelProgress)
-	mux.HandleFunc("POST /api/novel/auto", s.handleNovelAuto)
-	mux.HandleFunc("POST /api/novel/auto/stop", s.handleNovelAutoStop)
-	mux.HandleFunc("GET /api/novel/auto/status", s.handleNovelAutoStatus)
-	mux.HandleFunc("GET /api/novel/status/all", s.handleNovelStatusAll)
+	mux.HandleFunc("GET /api/novel/status/all", manju.HandleNovelStatusAll)
 	mux.HandleFunc("GET /api/script/styles", s.handleScriptStyles)
 	mux.HandleFunc("POST /api/render", s.handleRender)
 	mux.HandleFunc("GET /api/render/jobs", s.handleListJobs)
 	mux.HandleFunc("GET /api/render/jobs/{id}", s.handleJobStatus)
 	mux.HandleFunc("GET /api/outputs", s.handleOutputs)
 	mux.HandleFunc("GET /clips/{file}", s.handleClipFile)
-	registerManjuRoutes(mux)
+	manju.RegisterRoutes(mux)
+	comfy.RegisterRoutes(mux)
+	manju.RegisterFsRoutes(mux)
 	s.registerZcodeRoutes(mux) // 胶囊服务按钮:ZCode 启停/Bot 停止(原 Go 绑定 HTTP 化)
 	if s.islandFS != nil {
 		// 灵动岛页面同样注入会话令牌(占位符 /*__NILIX_TOKEN__*/ → 真实 token):
@@ -215,10 +205,10 @@ func (s *Server) tokenInject(next http.Handler) http.Handler {
 			body = bytes.Replace(body, []byte("/*__NILIX_TOKEN__*/"), []byte(sessionToken), 1)
 			// 实际根路径注入(JSON 编码转义反斜杠):前端 dirview 不再硬编码 C:\Mi\Ai\WorkBench\manju,
 			// 自包含部署后 manju/novel 在 exe 目录旁,硬编码路径不存在 → /api/fs/analyze 非 2xx → "load failed"
-			if mj, err := json.Marshal(ManjuRootDir); err == nil {
+			if mj, err := json.Marshal(paths.ManjuRootDir); err == nil {
 				body = bytes.Replace(body, []byte("/*__NILIX_MANJU_ROOT__*/"), mj, 1)
 			}
-			if nv, err := json.Marshal(NovelRootDir); err == nil {
+			if nv, err := json.Marshal(paths.NovelRootDir); err == nil {
 				body = bytes.Replace(body, []byte("/*__NILIX_NOVEL_ROOT__*/"), nv, 1)
 			}
 		}
@@ -300,10 +290,10 @@ func (s *Server) handleManage(w http.ResponseWriter, r *http.Request) {
 		out = bytes.Replace(out, []byte("/*__NILIX_TOKEN__*/"), []byte(sessionToken), 1)
 	}
 	// 实际根路径注入(与 tokenInject 同步):前端 dirview 读取真实 manju/novel 根
-	if mj, err := json.Marshal(ManjuRootDir); err == nil {
+	if mj, err := json.Marshal(paths.ManjuRootDir); err == nil {
 		out = bytes.Replace(out, []byte("/*__NILIX_MANJU_ROOT__*/"), mj, 1)
 	}
-	if nv, err := json.Marshal(NovelRootDir); err == nil {
+	if nv, err := json.Marshal(paths.NovelRootDir); err == nil {
 		out = bytes.Replace(out, []byte("/*__NILIX_NOVEL_ROOT__*/"), nv, 1)
 	}
 	_, _ = w.Write(out)
@@ -349,11 +339,11 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 
 	// ComfyUI 启动参数单一数据源同步:改 comfy_url / input / output 立即生效
 	// (否则 start 用新参数、stop/probe 用旧参数,自相矛盾)
-	SetComfyParams(in.Render.ComfyURL, in.Paths.ComfyInput, in.Paths.ComfyOutput)
-	SetComfyLanAccess(in.Render.LanAccess) // 局域网开关同步(下次启动 ComfyUI 生效)
+	comfy.SetComfyParams(in.Render.ComfyURL, in.Paths.ComfyInput, in.Paths.ComfyOutput)
+	comfy.SetComfyLanAccess(in.Render.LanAccess) // 局域网开关同步(下次启动 ComfyUI 生效)
 	s.renderMgr.SetComfyURL(in.Render.ComfyURL)
 	// 全局智能体默认同步(settings 表单不带 agent 字段时保留旧值,指针+omitempty 已保证)
-	SetGlobalAgentCfg(&in)
+	manju.SetGlobalAgentCfg(&in)
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -390,15 +380,7 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-func maskKey(k string) string {
-	if k == "" {
-		return ""
-	}
-	if len(k) <= 8 {
-		return "****"
-	}
-	return k[:4] + "****" + k[len(k)-4:]
-}
+func maskKey(k string) string { return util.MaskKey(k) }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	// 全部 API 响应禁缓存:设置/agent 等配置接口若被 WebView2 启发式缓存,

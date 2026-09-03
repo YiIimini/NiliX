@@ -1,6 +1,7 @@
 package api
 
 import (
+	"nilix/internal/manju"
 	"bytes"
 	"encoding/json"
 	"net/http/httptest"
@@ -16,9 +17,9 @@ func TestIslandConfig(t *testing.T) {
 	// 用临时 settings 存储
 	dir := t.TempDir()
 	store := config.NewStore(filepath.Join(dir, "settings.json"))
-	old := manjuSettingsStore
-	manjuSettingsStore = store
-	defer func() { manjuSettingsStore = old }()
+	old := manju.SettingsStore()
+	manju.SetSettingsStore(store)
+	defer manju.SetSettingsStore(old)
 
 	s := &Server{}
 	// 默认启用(nil → true)

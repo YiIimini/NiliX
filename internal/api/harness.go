@@ -6,6 +6,7 @@ package api
 //   node <DSH>/node_modules/@deepseek-ai/dsh/lib/bin.js web --no-open  (cwd: <DSH>)
 
 import (
+	"nilix/internal/comfy"
 	"errors"
 	"io"
 	"net/http"
@@ -73,17 +74,17 @@ func probeHarness() HarnessStatus {
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	st.Online = true
-	if m := harnessTitleRe.FindSubmatch(body); len(m) > 1 {
+	if m := comfy.HarnessTitleRe.FindSubmatch(body); len(m) > 1 {
 		st.Version = strings.TrimSpace(string(m[1]))
 	}
-	st.Pid = findPortPID("3080")
+	st.Pid = comfy.FindPortPID("3080")
 	st.LogPath = harnessLogPath
 	st.LogTail = harnessLogTail()
 	return st
 }
 
 func harnessLogTail() string {
-	return ansiRe.ReplaceAllString(tailFile(harnessLogPath), "")
+	return comfy.AnsiRe.ReplaceAllString(comfy.TailFile(harnessLogPath), "")
 }
 
 // startHarness 启动 Harness 服务(静默后台,日志落 harness.log)
@@ -123,7 +124,7 @@ func stopHarness() error {
 			return nil
 		}
 	}
-	pid := findPortPID("3080")
+	pid := comfy.FindPortPID("3080")
 	if pid == 0 {
 		return errors.New("harness not running")
 	}

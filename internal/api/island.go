@@ -4,14 +4,15 @@ package api
 // 灵动岛 WebView 轮询此接口决定自身显示/隐藏(禁用后隐藏悬浮胶囊)。
 
 import (
+	"nilix/internal/manju"
 	"encoding/json"
 	"net/http"
 )
 
 // islandEnabled 读取灵动岛启用状态(默认启用)
 func islandEnabled() bool {
-	if manjuSettingsStore != nil {
-		if cfg, err := manjuSettingsStore.Load(); err == nil {
+	if manju.SettingsStore() != nil {
+		if cfg, err := manju.SettingsStore().Load(); err == nil {
 			if cfg.Island.Enabled != nil {
 				return *cfg.Island.Enabled
 			}
@@ -36,17 +37,17 @@ func (s *Server) handleIslandPost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "缺少 enabled")
 		return
 	}
-	if manjuSettingsStore == nil {
+	if manju.SettingsStore() == nil {
 		writeErr(w, http.StatusInternalServerError, "设置存储未就绪")
 		return
 	}
-	cfg, err := manjuSettingsStore.Load()
+	cfg, err := manju.SettingsStore().Load()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "读取设置失败: "+err.Error())
 		return
 	}
 	cfg.Island.Enabled = body.Enabled
-	if err := manjuSettingsStore.Save(cfg); err != nil {
+	if err := manju.SettingsStore().Save(cfg); err != nil {
 		writeErr(w, http.StatusInternalServerError, "保存设置失败: "+err.Error())
 		return
 	}

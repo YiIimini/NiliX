@@ -5314,11 +5314,52 @@ select option { text-align: center; }
 .vwm-line { font-size: 12px; color: var(--text); line-height: 1.6; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .vwm-k { color: var(--muted); font-size: 10.5px; flex: none; background: var(--chip-bg); border-radius: 4px; padding: 0 5px; }
 .vwm-say { color: var(--text); }
-/* 单镜编辑表单 */
+/* 单镜编辑表单(2026-09-03 重构两栏,替换旧 sef-wrap 单列) */
 .sef-wrap { min-width: min(680px, 88vw); }
 .sef-prompt { margin-top: 10px; }
 .sef-prompt summary { font-size: 11.5px; color: var(--muted); cursor: pointer; user-select: none; }
 .sef-prompt textarea { width: 100%; box-sizing: border-box; margin-top: 6px; font-size: 11px; font-family: var(--mono, monospace); line-height: 1.5; }
+/* ===== 2026-09-03 单镜编辑两栏(左中文字段/右 H3 提示词常驻)+ 弹窗入场动画(修闪黑) ===== */
+.manju-modal-panel.sef-panel { width: min(1180px, 95vw); }
+.sef2 { display: flex; gap: 16px; align-items: stretch; }
+.sef2-left { flex: 1 1 46%; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.sef2-right { flex: 1 1 54%; min-width: 0; display: flex; flex-direction: column; gap: 8px;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  border: 1px solid var(--panel-border); border-radius: 12px; padding: 10px 12px 12px; }
+.sef2-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sef2-field { display: flex; flex-direction: column; gap: 5px; background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  border: 1px solid var(--panel-border); border-radius: 10px; padding: 8px 10px 9px;
+  transition: border-color .18s, box-shadow .18s; }
+.sef2-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent); }
+.sef2-field label { font-size: 11.5px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+.sef2-field .manju-input { min-height: 32px; padding: 6px 9px; font-size: 12px; }
+.sef2-field textarea { width: 100%; box-sizing: border-box; font-size: 12px; line-height: 1.6;
+  background: var(--chip-bg); border: 1px solid var(--panel-border); border-radius: 8px;
+  color: var(--text); padding: 7px 10px; min-height: 34px; outline: none; resize: vertical; }
+.sef2-field textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
+.sef2-ph-head { display: flex; align-items: baseline; gap: 8px; }
+.sef2-ph-title { font-size: 12px; font-weight: 700; color: var(--accent); }
+.sef2-ph-count { font-size: 10.5px; color: var(--muted); margin-left: auto; }
+.sef2-right textarea#sef-prompt { flex: 1 1 auto; width: 100%; box-sizing: border-box; min-height: 300px; max-height: 56vh;
+  font-size: 11px; font-family: var(--mono, monospace); line-height: 1.55; white-space: pre-wrap;
+  background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px;
+  color: var(--text); padding: 10px; outline: none; resize: vertical; }
+.sef2-right textarea#sef-prompt:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent); }
+.sef2-actions { display: flex; gap: 8px; }
+.sef2-actions .hrs-btn { flex: 1; }
+.sef2-hint { margin: 0; font-size: 10.5px; color: var(--muted); line-height: 1.6; }
+@media (max-width: 980px) {
+  .sef2 { flex-direction: column; }
+  .sef2-left, .sef2-right { flex-basis: auto; }
+}
+/* 弹窗入场动画(2026-09-03 修闪黑框):overlay 渐显 + panel 轻缩放入场,
+   替代裸 append 的瞬现黑遮罩;uic-panel 等已有专属动画不受影响 */
+.manju-modal { animation: mmFade .14s ease; }
+.manju-modal-panel { animation: mmPop .16s ease; }
+@keyframes mmFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes mmPop { from { transform: scale(.965) translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+/* 画布(镜头调试)弹窗加宽:1500→1720,两栏侧栏同步微调 */
+.manju-modal-panel.dbg-modal-panel { width: min(1720px, 96vw); }
 /* 场景管理弹窗 */
 .scm-wrap { min-width: min(680px, 88vw); }
 .scm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 8px; max-height: 64vh; overflow: auto; padding-right: 4px; }
