@@ -364,3 +364,58 @@ func TestManjuVoicePhraseFor(t *testing.T) {
 		}
 	}
 }
+
+// 2026-09-03 行级替换根治换脸(递了三千年 EP01 镜8 实锤):两人物行同写
+// <Picture 2>,第一行(甲)需重排到槽 1,第二行(乙)本来就正确(槽 2)。
+// 旧实现按 remap 全文替换 → 乙的 2 也被改成 1 → 两角色同指一张定妆照=换脸。
+func TestAlignPictureRefsLineLocalNoCrossover(t *testing.T) {
+	c := manjuRefContract{
+		Chars: []manjuCharSlot{
+			{ID: "甲", PicStart: 1, PicEnd: 1},
+			{ID: "乙", PicStart: 2, PicEnd: 2},
+		},
+		SceneName: "柴院", SceneSlot: 3, PicSlots: 3,
+	}
+	in := `subject_definitions:
+<Subject 1> is Jia, the man in <Picture 2>, wearing grey.
+<Subject 2> is Yi, the woman in <Picture 2>, wearing red.
+
+summary:
+[reference generation] test`
+	out := alignPictureRefs(in, c)
+	if !strings.Contains(out, "Jia, the man in <Picture 1>") {
+		t.Errorf("甲行应重排到槽 1, got: %s", stringCut(out, "<Subject 1>", "\n"))
+	}
+	if !strings.Contains(out, "Yi, the woman in <Picture 2>") {
+		t.Errorf("乙行本就正确应保持槽 2(行级替换根治换脸), got: %s", stringCut(out, "<Subject 2>", "\n"))
+	}
+	if again := alignPictureRefs(out, c); again != out {
+		t.Errorf("alignPictureRefs 应幂等")
+	}
+}
+
+// 2026-09-03 retention 段保护:retention_analysis 的 [Shot N] 是跨镜引用,
+// 不参与镜内切点重编号——detailed 段首段不得被顶成 [Shot 2]。
+func TestAlignShotTimecodesRetentionProtected(t *testing.T) {
+	in := `subject_definitions:
+<Subject 1> is Xiao Man in <Picture 1>.
+
+summary:
+[reference generation] test
+
+retention_analysis:
+Xiao Man (appears in [Shot 1]) - keep identical face/hair/outfit.
+
+detailed_description:
+[Shot 1] The girl hugs the gourd in the rain.`
+	out := alignShotTimecodes(in, 5)
+	if !strings.Contains(out, "retention_analysis:\nXiao Man (appears in [Shot 1])") {
+		t.Errorf("retention 段的 [Shot 1] 引用应原样保留, got: %s", stringCut(out, "retention_analysis:", "\n\n"))
+	}
+	if !strings.Contains(out, "detailed_description:\n[Shot 1] The girl hugs") {
+		t.Errorf("detailed 首段应仍为 [Shot 1](不被 retention 标签吃序号), got: %s", stringCut(out, "detailed_description:", "\n"))
+	}
+	if again := alignShotTimecodes(out, 5); again != out {
+		t.Errorf("alignShotTimecodes 应幂等")
+	}
+}

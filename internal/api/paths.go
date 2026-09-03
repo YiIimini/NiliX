@@ -19,8 +19,9 @@ var (
 	ComfyRootDir   string // ComfyUI 安装目录(含 main.py / .venv)
 	ComfySharedDir string // ComfyUI 共享目录(models/input/output)
 	NovelSkillDir  string // 小说续作技能目录(词库/写作规范/qa 脚本)
-	VoiceLibDir    string // 配音音色库权威目录(自包含根/voice_lib,跨项目共享)
-	CharLibDir     string // 角色资产库权威目录(自包含根/char_lib,跨项目共享,2026-09-02)
+	VoiceLibDir    string // 配音音色库权威目录(asset_lib/voices,跨项目共享)
+	CharLibDir     string // 角色资产库权威目录(asset_lib/characters,跨项目共享,2026-09-02)
+	AssetLibDir    string // 资产统一根(asset_lib:角色+音色,2026-09-03 用户规则)
 )
 
 // 旧硬编码路径(老安装的默认位置;新安装优先自包含目录)
@@ -39,12 +40,45 @@ func InitPaths(exeDir string, manjuRoot, novelRoot, comfyRoot, comfyShared, nove
 	ComfyRootDir = pickPath(comfyRoot, filepath.Join(exeDir, "comfyui", "ComfyUI"), legacyComfyRoot)
 	ComfySharedDir = pickPath(comfyShared, filepath.Join(exeDir, "comfyui", "shared"), legacyComfyShared)
 	NovelSkillDir = pickPath(novelSkill, filepath.Join(exeDir, "skills", "NiliX-Novel"), legacyNovelSkill)
-	// 音色库权威目录固定收在自包含根(与 ComfyUI input 解耦,防清理/重建误删;
-	// 2026-08-29 用户要求「音色保存到稳定位置」)。换电脑整体拷贝即随迁。
-	VoiceLibDir = filepath.Join(exeDir, "voice_lib")
-	// 角色资产库权威目录(2026-09-02 用户需求:技能侧角色输出可直接复用已有角色,
-	// 不再每次重新渲染)。跨项目共享,与 voice_lib 同级稳定位置。
-	CharLibDir = filepath.Join(exeDir, "char_lib")
+	// 资产统一目录(2026-09-03 用户规则:角色与语音同属资产,统一 asset_lib 管理):
+	// asset_lib/characters=角色资产库(2026-09-02 需求,跨项目形象指纹复用),
+	// asset_lib/voices=音色库(2026-08-29「音色保存到稳定位置」,与 ComfyUI input
+	// 解耦防误删)。换电脑整体拷贝即随迁;旧分立 char_lib/voice_lib 启动时自动迁入。
+	AssetLibDir = filepath.Join(exeDir, "asset_lib")
+	VoiceLibDir = filepath.Join(AssetLibDir, "voices")
+	CharLibDir = filepath.Join(AssetLibDir, "characters")
+	migrateAssetLibs(exeDir)
+	// 汇总索引启动重建(2026-09-03:平台/技能侧单文件直读;写操作另有实时同步)
+	_ = rebuildCharLibIndex()
+	_ = rebuildVoiceLibIndex()
+}
+
+// migrateAssetLibs 旧分立资产库统一迁入 asset_lib(2026-09-03)。幂等:旧目录不
+// 存在无事;目标已有同名项跳过(不覆盖已有资产);旧目录移空后移除,仍有残留
+// (重名跳过)则保留原位不删。
+func migrateAssetLibs(exeDir string) {
+	merge := func(oldRoot, newRoot string) {
+		if !dirExists(oldRoot) {
+			return
+		}
+		_ = os.MkdirAll(newRoot, 0755)
+		entries, err := os.ReadDir(oldRoot)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			dst := filepath.Join(newRoot, e.Name())
+			if _, err := os.Stat(dst); err == nil {
+				continue
+			}
+			_ = os.Rename(filepath.Join(oldRoot, e.Name()), dst)
+		}
+		if left, _ := os.ReadDir(oldRoot); len(left) == 0 {
+			_ = os.Remove(oldRoot)
+		}
+	}
+	merge(filepath.Join(exeDir, "char_lib"), filepath.Join(exeDir, "asset_lib", "characters"))
+	merge(filepath.Join(exeDir, "voice_lib"), filepath.Join(exeDir, "asset_lib", "voices"))
 }
 
 // pickPath 显式配置优先;否则自包含目录存在时用之;否则回退旧路径。
@@ -68,6 +102,7 @@ func manjuPathsGet(w http.ResponseWriter, r *http.Request) {
 		"comfy_root":   ComfyRootDir,
 		"comfy_shared": ComfySharedDir,
 		"novel_skill":  NovelSkillDir,
+		"asset_lib":    AssetLibDir,
 	}
 	cfgd := map[string]any{}
 	if manjuSettingsStore != nil {

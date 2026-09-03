@@ -57,12 +57,31 @@ func TestShotWorkflowAPI(t *testing.T) {
 	if len(resp.Nodes) < 10 {
 		t.Fatalf("节点链不完整: %d 个", len(resp.Nodes))
 	}
-	if resp.Nodes[0].Name != "UNETLoader" {
+	if resp.Nodes[0].Name != "UNETLoader" || resp.Nodes[0].ID != "unet" {
 		t.Fatalf("首节点应为 UNETLoader: %s", resp.Nodes[0].Name)
 	}
-	last := resp.Nodes[len(resp.Nodes)-1]
-	if last.Name != "SaveVideo" {
-		t.Fatalf("末节点应为 SaveVideo: %s", last.Name)
+	names := map[string]bool{}
+	for _, n := range resp.Nodes {
+		names[n.Name] = true
+	}
+	if !names["SaveVideo"] || !names["BasicGuider"] || !names["SamplerCustomAdvanced"] {
+		t.Fatalf("节点链缺关键节点: %v", names)
+	}
+	// 三期:连线闭合(两端都存在)+ 布局坐标就绪
+	if len(resp.Links) < 8 {
+		t.Fatalf("三期:连线过少: %d", len(resp.Links))
+	}
+	ids := map[string]bool{}
+	for _, n := range resp.Nodes {
+		ids[n.ID] = true
+		if n.X == 0 && n.Y == 0 && n.In == 0 && n.Out == 0 {
+			t.Fatalf("三期:节点 %s 布局/端口未填", n.ID)
+		}
+	}
+	for _, l := range resp.Links {
+		if !ids[l.From] || !ids[l.To] {
+			t.Fatalf("三期:悬空连线 %+v", l)
+		}
 	}
 	if len(resp.Refs) < 2 {
 		t.Fatalf("参考图应含角色+场景: %d", len(resp.Refs))

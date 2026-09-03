@@ -203,7 +203,8 @@ func alignPictureRefs(hp string, c manjuRefContract) string {
 	}
 	seg := hp[start:segEnd]
 
-	remap := map[int]int{}
+	remap := map[string]bool{}       // 需要重排的行原文(行级替换,2026-09-03 换脸根治)
+	lineMaps := map[string]map[int]int{} // 行原文 → 该行的旧号→新槽位映射
 	stripLines := map[string]bool{} // 行原文 → 剥除标记(低置信行错指人物槽)
 	personLine := 0
 	charPicTop := 0 // 人物槽区间上界(全部人物视图总数)
@@ -211,6 +212,19 @@ func alignPictureRefs(hp string, c manjuRefContract) string {
 		if cs.PicEnd > charPicTop {
 			charPicTop = cs.PicEnd
 		}
+	}
+	recordLine := func(line string, oldN, newN int) {
+		if oldN == newN {
+			return // 已正确:无需登记(也避免占位替换空转)
+		}
+		if lineMaps[line] == nil {
+			lineMaps[line] = map[int]int{}
+		}
+		if prev, dup := lineMaps[line][oldN]; dup && prev != newN {
+			return // 行内冲突:放弃(同 recordPicRemap 语义)
+		}
+		lineMaps[line][oldN] = newN
+		remap[line] = true
 	}
 	for _, line := range strings.Split(seg, "\n") {
 		// 权威挂载清单是机器注入的确定性事实,不参与行归属判定(它一行内并列声明
@@ -232,7 +246,7 @@ func alignPictureRefs(hp string, c manjuRefContract) string {
 		switch {
 		case isScene:
 			for _, r := range refs {
-				recordPicRemap(remap, mustAtoi(r[1]), c.SceneSlot)
+				recordLine(line, mustAtoi(r[1]), c.SceneSlot)
 			}
 		case isPerson && personLine < len(c.Chars):
 			cs := c.Chars[personLine]
@@ -245,7 +259,7 @@ func alignPictureRefs(hp string, c manjuRefContract) string {
 				if slot > cs.PicEnd {
 					break // 行内引用数超过该角色视图数:多余不映射
 				}
-				recordPicRemap(remap, mustAtoi(r[1]), slot)
+				recordLine(line, mustAtoi(r[1]), slot)
 			}
 		default:
 			// 低置信行(人物行收满后的场景/Q版/道具行,无 environment 锚):
@@ -262,7 +276,7 @@ func alignPictureRefs(hp string, c manjuRefContract) string {
 	if len(remap) == 0 && len(stripLines) == 0 {
 		return hp
 	}
-	// 先剥(基于原行号判定)后重排(剥后行已无标签,不受全文替换影响)
+	// 先剥(基于原行号判定)后重排(剥后行已无标签,不受替换影响)
 	for line := range stripLines {
 		stripped := rePicInLine.ReplaceAllString(line, "")
 		stripped = strings.ReplaceAll(stripped, " in ,", ",")
@@ -270,10 +284,21 @@ func alignPictureRefs(hp string, c manjuRefContract) string {
 		stripped = regexp.MustCompile(`\s{2,}`).ReplaceAllString(stripped, " ")
 		hp = strings.ReplaceAll(hp, line, stripped)
 	}
-	return replacePictureTags(hp, remap)
+	// 2026-09-03 行级替换根治换脸(递了三千年 EP01 镜8 实锤):旧实现按 remap 全文
+	// 替换 <Picture N>,前提假设"同一旧号全 prompt 同义"——但多主体错位场景下
+	// Subject 1 的 <Picture 4> 需改 1、Subject 2 的 <Picture 4> 本就正确(4→4 不登记),
+	// 全文替换把 Subject 2 正确的 4 也改成 1 → 两角色同指一张定妆照 = 换脸。
+	// 改为只对"判定需要重排的行"做行内替换(两阶段占位防链式串换),其余行
+	// (含已正确行/挂载清单/retention/summary)一概不动。漏改(少数同号异义引用)
+	// 远轻于错改(换脸),挂载清单的权威声明继续兜底。
+	for line, m := range lineMaps {
+		hp = strings.ReplaceAll(hp, line, replacePictureTags(line, m))
+	}
+	return hp
 }
 
 // recordPicRemap 登记旧号→新槽位映射;旧号已被映射到不同新号(行间冲突)时放弃。
+// 2026-09-03 行级替换后仅单测沿用(生产路径走 alignPictureRefs 内 recordLine)。
 func recordPicRemap(remap map[int]int, oldN, newN int) {
 	if oldN == newN {
 		return // 已正确:无需登记(也避免占位替换空转)
@@ -1013,9 +1038,22 @@ func alignShotTimecodes(hp string, durationSec int) string {
 	if !strings.Contains(hp, "[Shot ") {
 		return hp
 	}
+	// 2026-09-03 retention 段保护:retention_analysis 里的 [Shot N] 是「该角色曾出现
+	// 在全片镜 N」的跨镜引用(如 "(appears in [Shot 1])"),不是本镜切点——旧实现
+	// 全文统一重编号会把它计入序号,把 detailed_description 的首段顶成 [Shot 2]/[Shot 3],
+	// 排查对账时镜号对不上(递了三千年 EP01 单段镜实锤)。切段保护:段外重编号,段内原样。
+	keep := ""
+	if i := strings.Index(hp, "retention_analysis:"); i >= 0 {
+		end := len(hp)
+		if j := strings.Index(hp[i:], "\ndetailed_description:"); j >= 0 {
+			end = i + j
+		}
+		keep = hp[i:end]
+		hp = hp[:i] + "\x00RETENTION\x00" + hp[end:]
+	}
 	marks := reShotCut.FindAllStringSubmatch(hp, -1)
 	if len(marks) == 0 {
-		return hp
+		return strings.ReplaceAll(hp, "\x00RETENTION\x00", keep)
 	}
 	offset := 0.0
 	// 全片轴残留特征=首个 Shot 段就带时码(官方:镜内首段无时码);后续段带码属正常
@@ -1028,7 +1066,7 @@ func alignShotTimecodes(hp string, durationSec int) string {
 	}
 	shotNo := 0
 	dur := float64(durationSec) + 0.5
-	return reShotCut.ReplaceAllStringFunc(hp, func(m string) string {
+	out := reShotCut.ReplaceAllStringFunc(hp, func(m string) string {
 		sub := reShotCut.FindStringSubmatch(m)
 		shotNo++
 		if sub[2] == "" {
@@ -1048,6 +1086,7 @@ func alignShotTimecodes(hp string, durationSec int) string {
 		total := int(t * 1000)
 		return fmt.Sprintf("[Shot %d] At %02d:%02d.%03d", shotNo, total/60000, (total/1000)%60, total%1000)
 	})
+	return strings.ReplaceAll(out, "\x00RETENTION\x00", keep)
 }
 
 // reBareSays 裸 (Sx) says: 形态(捕获组 1 为空=画外说话者;<Subject N> 前缀=画面角色)。

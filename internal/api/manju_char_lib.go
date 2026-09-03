@@ -45,14 +45,15 @@ func manjuCharLibDir() string {
 	if CharLibDir != "" {
 		return CharLibDir
 	}
-	return filepath.Join(ManjuRootDir, "char_lib")
+	return filepath.Join(ManjuRootDir, "asset_lib", "characters")
 }
 
 // manjuCharLibCard 库内角色卡(原角色卡 + 形象指纹)
 type manjuCharLibCard struct {
-	Card        map[string]any `json:"card"`        // 原角色卡(plan.characters 条目)
-	Fingerprint string         `json:"fingerprint"` // 形象指纹(定妆相关字段哈希)
-	CreatedAt   int64          `json:"created_at"`  // 入库时间(unix)
+	Card         map[string]any `json:"card"`                    // 原角色卡(plan.characters 条目)
+	Fingerprint  string         `json:"fingerprint"`             // 形象指纹(定妆相关字段哈希)
+	CreatedAt    int64          `json:"created_at"`              // 入库时间(unix)
+	SourceProject string        `json:"source_project,omitempty"` // 来源项目(2026-09-02:管理弹窗展示;老条目无此字段=—)
 }
 
 // charLibCardSuffixes 库内资产文件名后缀(与项目 assets/characters 命名一致)
@@ -179,71 +180,23 @@ func (ctx *manjuCtx) manjuCharLibStore(m map[string]any) error {
 		return nil // 无资产可入库
 	}
 	card := manjuCharLibCard{
-		Card:        m,
-		Fingerprint: manjuCharFingerprint(m),
-		CreatedAt:   nowUnix(),
+		Card:          m,
+		Fingerprint:   manjuCharFingerprint(m),
+		CreatedAt:     nowUnix(),
+		SourceProject: ctx.project,
 	}
 	b, _ := json.MarshalIndent(card, "", "  ")
 	_ = os.WriteFile(manjuCharLibCardPath(cid), b, 0o644)
+	_ = rebuildCharLibIndex() // 汇总索引实时同步(2026-09-03)
 	return nil
 }
 
 // manjuCharLibList 资产库清单(前端角色资产库弹窗数据源):
 // [{name, files:[...], fingerprint 前8, created_at}] 按名字排序。
 func manjuCharLibList() []map[string]any {
-	root := manjuCharLibDir()
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return []map[string]any{}
-	}
-	var out []map[string]any
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		cardPath := filepath.Join(root, name, "card.json")
-		card := manjuCharLibCard{}
-		if b, err := os.ReadFile(cardPath); err == nil {
-			_ = json.Unmarshal(b, &card)
-		}
-		var files []string
-		if fe, err := os.ReadDir(filepath.Join(root, name)); err == nil {
-			for _, f := range fe {
-				if !f.IsDir() && strings.HasSuffix(f.Name(), ".png") {
-					files = append(files, f.Name())
-				}
-			}
-		}
-		sort.Strings(files)
-		fp := ""
-		if len(card.Fingerprint) >= 8 {
-			fp = card.Fingerprint[:8]
-		}
-		// 主图缩略图(卡片封面;无主图取首个文件)
-		main := ""
-		for _, f := range files {
-			if f == name+".png" {
-				main = f
-				break
-			}
-		}
-		if main == "" && len(files) > 0 {
-			main = files[0]
-		}
-		out = append(out, map[string]any{
-			"name":       name,
-			"files":      files,
-			"fingerprint": fp,
-			"created_at": card.CreatedAt,
-			"id":         str(card.Card["id"]),
-			"main":       main,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return str(out[i]["name"]) < str(out[j]["name"])
-	})
-	return out
+	// 2026-09-03 汇总索引版:读 asset_lib/characters/index.json 单文件(缺失惰性
+	// 重建),免逐目录遍历;输出字段与旧遍历版兼容并扩充七字段摘要。
+	return manjuCharLibListFromIndex()
 }
 
 // manjuCharLibDelete 删除库中角色(2026-09-02 前端「从资产库删除」)
@@ -255,7 +208,9 @@ func manjuCharLibDelete(cid string) error {
 	if !fileExists(filepath.Join(libDir, "card.json")) {
 		return fmt.Errorf("资产库无此角色: %s", cid)
 	}
-	return os.RemoveAll(libDir)
+	err := os.RemoveAll(libDir)
+	_ = rebuildCharLibIndex() // 汇总索引实时同步(2026-09-03)
+	return err
 }
 
 // manjuCharLibDetail 单角色详情(2026-09-02 独立资产库管理:点击卡片预览详情):
@@ -355,6 +310,39 @@ func manjuCharLibDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// manjuCharLibDeleteBatchHandler POST /api/manju/char-lib/delete-batch
+// {names:[...]} 批量删除;{all:true} 清空全部(2026-09-02 资产管理批量清理)。
+// 逐个走 manjuCharLibDelete(同名校验/护栏同款),失败项不阻断其余,结果逐条透出。
+func manjuCharLibDeleteBatchHandler(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Names []string `json:"names"`
+		All   bool     `json:"all"`
+	}
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	names := body.Names
+	if body.All {
+		names = nil
+		for _, c := range manjuCharLibList() {
+			names = append(names, str(c["name"]))
+		}
+	}
+	if len(names) == 0 {
+		writeErr(w, http.StatusBadRequest, "missing names(或 all=true 清空全部)")
+		return
+	}
+	deleted, failed := []string{}, []map[string]string{}
+	for _, n := range names {
+		if err := manjuCharLibDelete(n); err != nil {
+			failed = append(failed, map[string]string{"name": n, "error": err.Error()})
+			continue
+		}
+		deleted = append(deleted, n)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": deleted, "failed": failed})
 }
 
 // manjuCharLibImportHandler POST /api/manju/char-lib/import

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // manjuHealthItem 一条体检项
@@ -148,17 +149,27 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 		items = append(items, ok("agent", "视觉模型就绪"))
 	}
 	// 8. 审片状态/学习记忆(agent_state.json):损坏或缺失会拖累审片报告面板
+	// 2026-09-02:损坏项改可一键修复(原 FixHint 要求手动删文件,与「一键修复」定位不符)
 	stPath := manjuAgentStatePath(ctx.project)
+	running := manjuStateRunningFor(ctx.configPath)
 	if b, err := os.ReadFile(stPath); err == nil {
 		var st manjuAgentState
 		if json.Unmarshal(b, &st) != nil {
-			items = append(items, manjuHealthItem{Key: "agent_state", Label: "审片状态文件", Status: "bad", Detail: "agent_state.json 损坏", FixHint: "删除该文件后重跑 AI 一条龙(审片记忆将重置)"})
+			items = append(items, manjuHealthItem{Key: "agent_state", Label: "审片状态文件", Status: "bad", Detail: "agent_state.json 损坏",
+				Fixable: !running, FixHint: "一键删除损坏文件(审片记忆重置,重跑 AI 一条龙自动重建)"})
 		} else {
 			items = append(items, ok("agent_state", fmt.Sprintf("记忆 %d 次运行 / %d 镜判分 / %d 次返工", st.Memory.RunCount, st.Memory.JudgedShots, st.Memory.ReworkCount)))
 		}
 	} else {
 		items = append(items, manjuHealthItem{Key: "agent_state", Label: "审片状态文件", Status: "warn", Detail: "尚无审片记录", FixHint: "跑一次「AI 一条龙」后自动生成"})
 	}
+	// 8.5 运行状态残留(2026-09-02 用户要求:一键修复带自动清理残留配置与日志):
+	// 非运行态下 run_state.json 是崩溃/中断/完成残留——不清会让页面继续弹「检测到已有
+	// 任务」横幅、或磁盘 running 挂假渲染中(与高级清理 2b 同口径)。
+	items = append(items, manjuRunStateHealthItem(ctx, running)...)
+	// 8.6 日志残留:run.log(自动截断上限 512KB)+ 平台 crash.log(panic 追加无上限)。
+	// 超阈值 → 可一键清空(顺带删本项目诊断快照,下次任务结束自动重建)。
+	items = append(items, manjuLogsHealthItem(ctx, running)...)
 	// 9. 渲染升级参数联动检查(草稿预审/转场/BGM/SageAttention/长镜)
 	if dj, _ := R["draft_judge"].(bool); dj {
 		if loadAgentCfg(ctx).VisionModel == "" {
@@ -349,6 +360,80 @@ func (ctx *manjuCtx) missingModels() []string {
 	return missing
 }
 
+// manjuRunStateHealthItem 运行状态残留体检项(2026-09-02):运行中 = 活状态不算残留;
+// 非运行态下 run_state.json 存在即为残留——Running 崩溃残留(bad,页面挂假渲染中)、
+// Stopped/Done 中断与完成残留(warn,「检测到已有任务」横幅源头)、JSON 损坏(bad)。
+// 全部可一键清理;清 Running 残留 = 放弃自动续跑(渲染检查点保留,重跑幂等跳过已完成镜头)。
+func manjuRunStateHealthItem(ctx *manjuCtx, running bool) []manjuHealthItem {
+	if running {
+		return []manjuHealthItem{{Key: "run_state", Label: "运行状态文件", Status: "ok", Detail: "任务运行中(活状态,不算残留)"}}
+	}
+	sp := manjuRunStatePath(ctx.project)
+	if !fileExists(sp) {
+		return []manjuHealthItem{{Key: "run_state", Label: "运行状态文件", Status: "ok", Detail: "空闲,无状态残留"}}
+	}
+	if ds := loadManjuDiskState(ctx.project); ds != nil {
+		switch {
+		case ds.Running:
+			return []manjuHealthItem{{Key: "run_state", Label: "运行状态文件", Status: "bad",
+				Detail: "run_state.json 崩溃残留(显示渲染中,实际无任务在跑)", Fixable: true,
+				FixHint: "一键清理残留状态;将放弃自动续跑(渲染检查点保留,重跑自动跳过已完成镜头)"}}
+		case ds.Stopped:
+			return []manjuHealthItem{{Key: "run_state", Label: "运行状态文件", Status: "warn",
+				Detail: fmt.Sprintf("上次任务被手动停止(%s),状态文件残留会弹「检测到已有任务」横幅", diskStateAge(ds.UpdatedAt)), Fixable: true,
+				FixHint: "一键清理残留状态文件(不影响任何渲染产物)"}}
+		default:
+			return []manjuHealthItem{{Key: "run_state", Label: "运行状态文件", Status: "warn",
+				Detail: fmt.Sprintf("上次任务已结束(%s),状态文件残留会弹「检测到已有任务」横幅", diskStateAge(ds.UpdatedAt)), Fixable: true,
+				FixHint: "一键清理残留状态文件(不影响任何渲染产物)"}}
+		}
+	}
+	return []manjuHealthItem{{Key: "run_state", Label: "运行状态文件", Status: "bad",
+		Detail: "run_state.json 损坏(非合法 JSON)", Fixable: true,
+		FixHint: "一键删除损坏的状态文件(下次任务自动重建)"}}
+}
+
+// manjuLogsHealthItem 日志残留体检项(2026-09-02):run.log 超 256KB(自动截断上限的一半)
+// 或 crash.log 超 64KB(panic 追加无上限)→ 可一键清空,顺带删本项目诊断快照。
+func manjuLogsHealthItem(ctx *manjuCtx, running bool) []manjuHealthItem {
+	fsize := func(p string) int64 {
+		if fi, err := os.Stat(p); err == nil {
+			return fi.Size()
+		}
+		return 0
+	}
+	kb := func(n int64) string { return fmt.Sprintf("%d KB", (n+1023)>>10) }
+	runLog, crashLog := fsize(manjuRunLogPath(ctx.project)), fsize(filepath.Join(ManjuRootDir, "logs", "crash.log"))
+	if running {
+		return []manjuHealthItem{{Key: "logs", Label: "运行日志", Status: "ok", Detail: fmt.Sprintf("运行日志 %s + 崩溃日志 %s(任务运行中,结束后可清理)", kb(runLog), kb(crashLog))}}
+	}
+	if runLog > 256<<10 || crashLog > 64<<10 {
+		return []manjuHealthItem{{Key: "logs", Label: "运行日志", Status: "warn",
+			Detail:    fmt.Sprintf("运行日志 %s + 崩溃日志 %s 堆积超阈值", kb(runLog), kb(crashLog)),
+			Fixable:   true,
+			FixHint:   "一键清空运行日志/崩溃日志,并删除本项目诊断快照(下次任务自动重建,不影响产物)"}}
+	}
+	return []manjuHealthItem{{Key: "logs", Label: "运行日志", Status: "ok", Detail: fmt.Sprintf("运行日志 %s + 崩溃日志 %s", kb(runLog), kb(crashLog))}}
+}
+
+// diskStateAge 状态文件 UpdatedAt → 人话时长(未知/刚刚/N 分钟前/N 小时前/N 天前)
+func diskStateAge(ts int64) string {
+	if ts <= 0 {
+		return "时间未知"
+	}
+	d := time.Since(time.Unix(ts, 0))
+	switch {
+	case d < time.Minute:
+		return "刚刚"
+	case d < time.Hour:
+		return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d 小时前", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%d 天前", int(d.Hours()/24))
+	}
+}
+
 // manjuHealth 体检接口:返回全项清单 + ok/warn/bad 汇总
 func manjuHealth(w http.ResponseWriter, r *http.Request) {
 	configPath := r.URL.Query().Get("config")
@@ -410,6 +495,70 @@ func manjuApplyHealthFix(configPath, key string) (bool, error) {
 	case "long_take":
 		// 2026-08-30:脚本直出模式配置了 N 镜/组但渲染层恒单镜——改回 1 对齐实际行为
 		R["shots_per_take"] = 1
+	case "agent_state":
+		// 2026-09-02:删除损坏的审片状态文件(只删「确认损坏」的,完好记忆不动);
+		// 运行中审片链路会写该文件,拒绝清理
+		if manjuStateRunningFor(configPath) {
+			return false, fmt.Errorf("项目正在渲染中,请停止后再清理")
+		}
+		sp := manjuAgentStatePath(ctx.project)
+		if b, err := os.ReadFile(sp); err == nil {
+			var st manjuAgentState
+			if json.Unmarshal(b, &st) == nil {
+				return false, nil // 文件完好:体检项不应再报损坏,幂等无改动
+			}
+			if err := os.Remove(sp); err != nil {
+				return false, fmt.Errorf("删除失败: %v", err)
+			}
+			return true, nil
+		}
+		return false, nil
+	case "run_state":
+		// 2026-09-02:清理非运行态下的 run_state.json 残留(崩溃/中断/完成态,与高级清理 2b 同口径);
+		// 运行中该文件是活状态,拒绝(AutoRecoverRendering 崩溃续跑也依赖它)
+		if manjuStateRunningFor(configPath) {
+			return false, fmt.Errorf("项目正在渲染中,请停止后再清理")
+		}
+		sp := manjuRunStatePath(ctx.project)
+		if !fileExists(sp) {
+			return false, nil // 无残留:幂等无改动
+		}
+		if err := os.Remove(sp); err != nil {
+			return false, fmt.Errorf("删除失败: %v", err)
+		}
+		return true, nil
+	case "logs":
+		// 2026-09-02:清空运行日志/崩溃日志 + 删本项目诊断快照(下次任务结束自动重建);
+		// 运行中 run.log 正在被写,拒绝。媒体工具目录(logs/media)与平台其它日志不动。
+		if manjuStateRunningFor(configPath) {
+			return false, fmt.Errorf("项目正在渲染中,请停止后再清理")
+		}
+		changed := false
+		for _, p := range []string{
+			manjuRunLogPath(ctx.project),
+			filepath.Join(ManjuRootDir, "logs", "crash.log"),
+			manjuDiagnosePath(ctx.project), // 删除而非截断:快照整体重生成
+		} {
+			if !fileExists(p) {
+				continue
+			}
+			if strings.HasSuffix(p, ".json") {
+				if os.Remove(p) == nil {
+					changed = true
+				}
+				continue
+			}
+			if fi, serr := os.Stat(p); serr != nil || fi.Size() == 0 {
+				continue // 空文件无需截断(幂等:重复修复不误报改动)
+			}
+			if os.Truncate(p, 0) == nil {
+				changed = true
+			}
+		}
+		manjuState.mu.Lock()
+		manjuState.log = "" // 内存日志同步清空(高级清理同款),防空闲轮询从内存回弹
+		manjuState.mu.Unlock()
+		return changed, nil
 	default:
 		return false, fmt.Errorf("该检查项不可自动修复")
 	}

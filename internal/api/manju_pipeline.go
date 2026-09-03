@@ -521,6 +521,10 @@ func (ctx *manjuCtx) seedFor(shotID, attempt int) int {
 // 相同词意或谐音词,避免 H3/云端内容审核拒绝或渲染异常——分镜 2/6 未正常渲染的根因排查项)。
 // 覆盖技能违规词库的[慎用]暴力血腥/迷信邪教高频词 + [硬禁]常见词(理论上小说 QA 已拦截,兜底)。
 var manjuRenderWordReplace = map[string]string{
+	// 2026-09-03 镜15 飘逸实锤:「A thumb-edge of another hand's smudge ghosts
+	// beside it」——文学动词 ghosts(悄然浮现)被 H3 视觉化为半透明虚影/重影
+	// (人物边缘飘逸)。换成无虚影语义的 lingers。
+	"ghosts beside": "lingers beside",
 	// [慎用]暴力血腥 → 同义柔和(仙侠化间接表达)
 	"碎尸": "残躯", "分尸": "遗体分离", "肢解": "身躯碎裂", "剖腹": "腹部重创",
 	"挖眼": "双目重创", "剥皮": "皮开肉绽", "凌迟": "酷刑加身", "酷刑": "严刑",
@@ -711,6 +715,13 @@ var manjuGuardStrip = regexp.MustCompile(`(?m)^\s*(?:FRAME DISCIPLINE|REFERENCE 
 // 重复+画外对口型两个历史实锤问题合并承载,语义不减只压字数)。
 const manjuAudioLipGuard = "AUDIO & LIP DISCIPLINE: every spoken line in this clip comes ONLY from the text inside <d> tags - never voice, paraphrase, repeat or invent any other dialogue, and nothing outside <d> tags is ever spoken aloud; when a line comes from an off-screen voice, a narrator or an inner monologue, every on-screen character's lips remain completely closed - they may react with head turns, glances and expressions, but never mouth the words"
 
+// manjuSilentShotGuard 无台词镜静音契约(2026-09-03 幽灵人声根治):ASR 实证 H3 在
+// 无 <d> 台词时仍自发生成人声(修仙界镜1:whisper 转写出 0-4.32s 连续中文人声,
+// avg_logprob -0.56 高置信,而 h3 无任何台词/画外音)——旧否定式「只有 <d> 才能
+// 念」对零台词镜没提供正向音频目标,模型自由发挥补画外独白。换正向声明:本镜
+// 完全无人声,唯一音频=环境音+器乐;顺带禁唇动(无人说话却动嘴=观感异常)。
+const manjuSilentShotGuard = "AUDIO & LIP DISCIPLINE: this clip is a silent-acting shot - it contains NO dialogue and NO human voice of any kind: nobody speaks, nobody murmurs, nobody whispers, nobody mutters, there is no off-screen voice and no narrator in this clip; the only audio is the ambient soundscape and the instrumental background music described above - absolutely no words, no speech, no vocals, no talking; every on-screen face keeps its lips completely closed and at rest"
+
 // manjuMotionSeamGuard 运动+执行+接缝合并纪律(2026-09-02 瘦身:MOTION/EXECUTION/
 // CHAIN 三条合一;冻结/动作缩水/并集多脸三个历史实锤问题合并承载)。
 const manjuMotionSeamGuard = "MOTION & SEAM DISCIPLINE: keep continuous visible motion through every second until the final frame - camera movement, character action or environmental motion must never fully stop and no scripted action may be reduced to a static pose; if this clip opens on pinned continuation frames, hold that exact closing composition for about one second with the same people in the same places - a contradicting arrangement renders as a union and puts extra people and faces into the frame - then develop into this clip's own content, keeping small visible motion alive during any held beat"
@@ -751,7 +762,14 @@ func manjuFinalizePromptPure(hp string, hasChars bool, picSlots int) string {
 	// ——无参考图+无纪律,链上白发形象被复制给每个主体 = 周管事入画多次。有主体即约束。
 	hasSubjects := strings.Contains(hp, "subject_definitions:")
 	// ② 尾部紧凑纪律(≤4 条;顺序=重要性:台词→身份→人脸→运动接缝)
-	hp += "\n" + manjuAudioLipGuard
+	// 2026-09-03 幽灵人声根治:按本镜有无 <d> 台词分流——有台词走台词纪律,
+	// 无台词走静音契约(h3 正文此时已剥过纪律行,残留 <d> 即真实台词标记,
+	// 与 ghostVoiceEligible 同口径)。
+	if strings.Contains(hp, "<d>") {
+		hp += "\n" + manjuAudioLipGuard
+	} else {
+		hp += "\n" + manjuSilentShotGuard
+	}
 	// 身份一致性(有人物参考图才注入;无参考图镜注入反而约束文字自由成型)
 	if strings.Contains(hp, "<Picture ") {
 		hp += "\n" + manjuConsistencyGuard
@@ -800,7 +818,11 @@ func (ctx *manjuCtx) finalizeShotPromptSlots(hp string, s manjuShot, picSlots in
 	vbs := ctx.voiceBindingsFor(s)
 	hp = ensureVoiceBindings(hp, vbs, ctx.refContractFor(s))
 	innerCid, innerKey := ctx.innerVoiceFor(s) // 内心戏角色音色(2026-08-30 ver14,问题⑥)
-	obs := ctx.manjuOffscreenBindings(hp, innerCid, innerKey)
+	// 2026-09-03 内心独白 narrator 定义行改绑角色音色:源头 h3_prompt 自带的
+	// narrator 定义行会命中下方 injectOffscreenVoiceBindings 的幂等锚,改绑逻辑
+	// 整体跳过(镜17/18/20 实锤)——必须在幂等锚判定之前先改写定义行本身。
+	hp = ctx.fixInnerVoiceDefLine(hp, innerCid, innerKey, s.Narration)
+	obs := ctx.manjuOffscreenBindings(hp, innerCid, innerKey, s.Narration)
 	// 画外编号从补写后最大 <Audio N> 接续(2026-08-30 五问整改:ensureVoiceBindings
 	// 逐角色补写后编号可能超过 len(vbs),再按 len(vbs) 起步会与补写定义编号冲突)
 	hp = injectOffscreenVoiceBindings(hp, obs, maxAudioNum(hp))
@@ -858,6 +880,8 @@ func (ctx *manjuCtx) finalizeAlignedPrompt(hp string, s manjuShot, picSlots int)
 	// 形象权威,此处按卡校正(纯函数;幂等:校正后不再命中)。需要角色卡信息,
 	// 故放在 ctx 层(对齐层为纯函数无卡数据)。
 	out = ctx.fixSubjectHairColor(out, s)
+	// 2026-09-03 内心 Q 版表情随剧情:chibi 行无表情词时按 narration 情绪注入
+	out = ctx.fixChibiEmotion(out, s)
 	// 2026-08-30 五问整改(问题④运镜垃圾):分镜运镜列三要素机械注入——
 	// LLM 软规则可忽略,纪律句是渲染前硬兜底;「固定」镜与 MOTION DISCIPLINE
 	// 不冲突(static camera + 画面动作/环境动效持续,官方三选一)。
@@ -870,6 +894,10 @@ func (ctx *manjuCtx) finalizeAlignedPrompt(hp string, s manjuShot, picSlots int)
 	// 含 crowd/spectators 时,H3 把远景人海具象化为几个清晰个体面孔(拟人先验偏
 	// 西方面孔=「三个外国人」)。强制人群保持远景剪影无个体面孔。
 	out = injectCrowdDiscipline(out, len(s.Characters) > 0)
+	// 2026-09-03 写实电影级(用户主诉「没有写实电影级画面,很有AI味」):写实向
+	// 镜注入电影摄影纪律——自然动机光/真实材质/浅景深电影镜头/胶片颗粒/胶片级
+	// 调色/物理可信的运动重量,并显式否定 anime/cartoon/CGI/风格化渲染。
+	out = injectCinematographyDiscipline(out)
 	// 2026-09-02 全库统一(用户指令「所有小说统一排查处理」):屏内容兜底纪律——
 	// 显示型屏(全息/悬浮/巨幕/手机/监控)在提示词内无任何内容说明时,H3 把屏
 	// 默认渲染成人像特写屏(王牌三岁半镜1「屏上三个外国人」实锤;渲染端人群
@@ -882,6 +910,11 @@ func (ctx *manjuCtx) finalizeAlignedPrompt(hp string, s manjuShot, picSlots int)
 // ①括号内英文直取(「缓推（Push In, small, slow）」→ Push In, small, slow);
 // ②「固定」→ static locked-off camera;③中文词走映射表兜底;④解析不出返回空
 // (不注入,信任既有提示词文本)。
+// 2026-09-03 电影级升级:①静态归一——括号直取的纯静态词(「固定（Static）」直取
+// "Static")不再原样返回,归一为 static locked-off camera(下游 static 判定/
+// 运镜纪律分支依赖该短语);②映射表扩充——方向性 pan/truck(左/右)、变焦、手持、
+// 倾斜、中幅档与电影术语(dolly/tracking/orbital),已实证有效的三要素结构
+// (幅度+速度)保留不动。
 func manjuCameraPhrase(camera string) string {
 	cm := strings.TrimSpace(camera)
 	if cm == "" {
@@ -900,7 +933,7 @@ func manjuCameraPhrase(camera string) string {
 				}
 				en := strings.TrimSpace(string(rest[:m]))
 				if len([]rune(en)) >= 3 && !strings.ContainsAny(en, "《<>") {
-					return en
+					return manjuNormalizeStaticPhrase(en)
 				}
 				break
 			}
@@ -911,38 +944,71 @@ func manjuCameraPhrase(camera string) string {
 	if strings.Contains(cm, "固定") {
 		return "static locked-off camera"
 	}
-	// ③中文映射表(注意顺序:复合词在前,单字在后)
+	// ③中文映射表(注意顺序:复合词在前,单字在后;方向词在泛词前)
 	table := []struct{ zh, en string }{
 		{"低机位", "low-angle shot"},
 		{"贴地", "ground-level shot"},
 		{"过肩", "over-the-shoulder shot"},
 		{"俯拍", "high-angle shot"},
 		{"仰拍", "low-angle shot"},
-		{"缓推", "push in with small amplitude at slow speed"},
-		{"急推", "push in with large amplitude at fast speed"},
-		{"缓拉", "pull back with small amplitude at slow speed"},
-		{"急拉", "pull back with large amplitude at fast speed"},
-		{"横移", "lateral truck with medium amplitude"},
-		{"跟移", "tracking shot following the subject"},
-		{"甩镜", "whip pan"},
-		{"环绕", "arc move around the subject"},
-		{"环摇", "arc move around the subject"},
-		{"慢升", "slow crane rise"},
+		{"左横移", "cinematic dolly truck to the left with medium amplitude"},
+		{"右横移", "cinematic dolly truck to the right with medium amplitude"},
+		{"左移", "cinematic dolly truck to the left with medium amplitude"},
+		{"右移", "cinematic dolly truck to the right with medium amplitude"},
+		{"向左横移", "cinematic dolly truck to the left with medium amplitude"},
+		{"向右横移", "cinematic dolly truck to the right with medium amplitude"},
+		{"缓推", "slow cinematic dolly push-in with small amplitude"},
+		{"急推", "fast dolly push-in with large amplitude"},
+		{"缓拉", "slow dolly pull-back with small amplitude"},
+		{"急拉", "fast dolly pull-back with large amplitude"},
+		{"横移", "cinematic lateral dolly truck with medium amplitude"},
+		{"跟移", "steady cinematic tracking shot following the subject at matching speed"},
+		{"跟拍", "steady cinematic tracking shot following the subject at matching speed"},
+		{"跟踪", "steady cinematic tracking shot following the subject at matching speed"},
+		{"甩镜", "fast whip pan"},
+		{"环绕", "slow orbital arc around the subject"},
+		{"环摇", "slow orbital arc around the subject"},
+		{"慢升", "slow cinematic crane rise"},
 		{"快升", "fast crane rise"},
-		{"缓摇", "slow pan"},
-		{"推", "push in"},
-		{"拉", "pull back"},
+		{"慢降", "slow crane drop"},
+		{"左摇", "smooth pan to the left"},
+		{"右摇", "smooth pan to the right"},
+		{"摇左", "smooth pan to the left"},
+		{"摇右", "smooth pan to the right"},
+		{"缓摇", "smooth slow pan"},
+		{"变焦推", "slow cinematic zoom-in"},
+		{"变焦拉", "slow cinematic zoom-out"},
+		{"变焦", "slow cinematic zoom"},
+		{"手持", "handheld camera with subtle organic sway"},
+		{"微移", "subtle drift with small amplitude at slow speed"},
+		{"推", "cinematic dolly push-in"},
+		{"拉", "dolly pull-back"},
 		{"摇", "pan"},
-		{"移", "lateral truck"},
+		{"移", "lateral dolly truck"},
 		{"升", "crane rise"},
 		{"降", "crane drop"},
 	}
 	for _, t := range table {
 		if strings.Contains(cm, t.zh) {
-			return t.en
+			return manjuNormalizeStaticPhrase(t.en)
 		}
 	}
 	return ""
+}
+
+// manjuNormalizeStaticPhrase 静态类短语归一:裸 Static/static camera/locked-off 等
+// 归一为 canonical "static locked-off camera"(2026-09-03「固定(Static)」镜被注入
+// "never settle into a static locked-off frame" 运动纪律实锤——大小写导致 static
+// 判定漏过,静态镜被要求运镜=自相矛盾)。非静态短语原样返回。
+func manjuNormalizeStaticPhrase(en string) string {
+	low := strings.ToLower(strings.TrimSpace(en))
+	low = strings.TrimSuffix(low, ".")
+	switch low {
+	case "static", "static camera", "static shot", "locked-off", "locked-off camera",
+		"static locked-off", "static locked-off camera", "fixed", "fixed camera":
+		return "static locked-off camera"
+	}
+	return en
 }
 
 // injectCameraDiscipline 运镜必达纪律注入(2026-08-30 五问整改问题④;2026-09-02
@@ -959,7 +1025,9 @@ func injectCameraDiscipline(hp, camera string) string {
 		return strings.TrimRight(hp, " \n")
 	}
 	guard := "CAMERA DISCIPLINE: this shot's camera performs " + ph
-	if strings.Contains(ph, "static") {
+	// 2026-09-03 大小写修复:「固定(Static)」括号直取的 "Static" 旧判定 Contains(ph,"static")
+	// 漏过 → 静态镜被注入"运镜必须可见、不许定机"的运动分支,自相矛盾(镜8/13/18 实锤)
+	if strings.Contains(strings.ToLower(ph), "static") {
 		guard += "; the camera stays locked but on-screen character action or environmental motion must keep every second of the frame alive"
 	} else {
 		guard += "; keep that camera movement visible from the first frame to the last frame - never settle into a static locked-off frame"
@@ -994,6 +1062,47 @@ func injectPositionDiscipline(hp string) string {
 		return strings.TrimRight(hp, " \n") + "\n" + guard
 	}
 	return hp[:di] + guard + "\n\n" + hp[di:]
+}
+
+// manjuCinematographyGuard 写实电影级摄影纪律(2026-09-03,用户主诉「没有写实
+// 电影级运镜及画面,很有AI味」):与 manjuRealizeStyle 的词级替换互补——词替换只
+// 管风格句措辞,此纪律在高服从位(detailed_description 前)以任务句式强制电影
+// 摄影观感:自然动机光、真实皮肤/材质纹理、电影镜头浅景深、细微胶片颗粒、
+// 胶片级低饱和调色、物理可信的运动重量,并显式否定 anime/cartoon/CGI/风格化。
+const manjuCinematographyGuard = "CINEMATOGRAPHY: photorealistic cinematic film look - natural motivated lighting with realistic falloff, true-to-life skin tones and material textures, shallow depth of field through a cinematic lens, subtle film grain, muted filmic color grading, and physically grounded weight and inertia in every motion; absolutely no anime, cartoon, CGI or over-stylized rendering."
+
+// injectCinematographyDiscipline 电影级纪律注入(纯函数,幂等:先删后插)。
+// 条件是文本级写实判定:提示词含 photorealistic/realistic(写实书的风格句/
+// manjuRealizeStyle 替换产物)且不含动漫/3D 向锚词(anime/cartoon/3D render/
+// stylized/pixar/chibi 主体镜)——动漫书与 3D 书(用户规则「3D 就出 3D」)不注。
+func injectCinematographyDiscipline(hp string) string {
+	reGuard := regexp.MustCompile(`(?m)^\s*CINEMATOGRAPHY:[^\r\n]*\r?\n?`)
+	hp = reGuard.ReplaceAllString(hp, "")
+	hp = regexp.MustCompile(`\n{3,}`).ReplaceAllString(hp, "\n\n")
+	hp = strings.TrimPrefix(hp, "\n")
+	low := strings.ToLower(hp)
+	if !(strings.Contains(low, "photorealistic") || strings.Contains(low, "realistic")) {
+		return strings.TrimRight(hp, " \n")
+	}
+	for _, anime := range []string{"anime", "cartoon", "manga", "3d render", "3d style",
+		"stylized", "illustration", "pixar", "low-poly", "low poly"} {
+		if strings.Contains(low, anime) {
+			// chibi 内心戏镜(写实主体+Q版小人)整体是写实画风,Q 版主体行
+			// 命中 "stylized" 类词不阻断——只有动漫向书的整镜措辞才跳过
+			if anime == "stylized" && strings.Contains(low, "chibi") {
+				continue
+			}
+			return strings.TrimRight(hp, " \n")
+		}
+	}
+	di := strings.Index(hp, "detailed_description:")
+	if di < 0 {
+		di = strings.Index(hp, "integrated_multimodal_description:")
+	}
+	if di < 0 {
+		return strings.TrimRight(hp, " \n") + "\n" + manjuCinematographyGuard
+	}
+	return hp[:di] + manjuCinematographyGuard + "\n\n" + hp[di:]
 }
 
 // injectCrowdDiscipline 远景人海纪律注入(2026-09-02,王牌三岁半镜1「三个外国人」
@@ -1178,6 +1287,13 @@ func (ctx *manjuCtx) injectAudioTimbrePhrases(hp string, c manjuRefContract) str
 		if phr == "" {
 			return m
 		}
+		// 2026-09-03 配音僵硬:对白 Audio 行同样拼角色卡 voice 风格行(声线短语
+		// 只有音色,「谄媚发飘/吐槽位重音」这类角色念白风格来自卡)
+		if card := ctx.charInfoFor(c.Chars[no-1].ID); card != nil {
+			if v := str(card["voice"]); v != "" {
+				phr += ", voice style: " + v
+			}
+		}
 		return fmt.Sprintf("<Audio %s> is the voice-timbre reference for <Subject %s> (S%s), with %s, %s",
 			sm[2], sm[3], sm[4], phr, sm[5])
 	})
@@ -1249,19 +1365,43 @@ func (ctx *manjuCtx) voiceTimbrePhrase(cid string) string {
 }
 
 // reSubjectHairWord 描述行发色词(常见发色,用于一致性校正;容忍中间形容词:
-// "short black hair" / "neatly combed silver hair";含 hair 词尾)
-var reSubjectHairWord = regexp.MustCompile(`(?i)\b(?:platinum[- ]white|silver[- ]white|snow[- ]white|platinum|silver|white|blond|blonde|golden|black|brown|auburn|red|grey|gray|raven|chestnut|dark)[^,.;]{0,12}?\bhair\b`)
+// "short black hair" / "neatly combed silver hair";含 hair 词尾)。
+// 2026-09-03 窗口 12→24:真实卡面长修饰链 "black textured fringe hair" 色词与
+// hair 隔 16 字符,窄窗口会漏提取(配合 reCardHairPhrase 词边界修复)。
+// 同日排除发饰词:hair 后紧跟 ornament/pin/ribbon/tie 等是发饰(白玉发簪
+// "white jade hair ornament" 被当白发,葫芦书 21 处误报实锤)。Go RE2 无负向
+// 前瞻,发饰后缀吞进匹配、由 manjuHairSubmatch 按尾部词排除。
+var reSubjectHairWord = regexp.MustCompile(`(?i)\b(?:platinum[- ]white|silver[- ]white|snow[- ]white|platinum|silver|white|blond|blonde|golden|black|brown|auburn|red|grey|gray|raven|chestnut|dark)\b[^,.;]{0,24}?\bhair(?:[- ](?:ornaments?|pins?|clips?|ribbons?|bands?|ties|strings?|sticks?|combs?|brushes?))?`)
 
 // reCardHairPhrase 卡面发色词组(容忍中间形容词:platinum-white short hair /
-// silver-grey wavy hair 等;捕获组 1=发色词,含连字符形态)
-var reCardHairPhrase = regexp.MustCompile(`(?i)(platinum[- ]white|silver[- ]white|snow[- ]white|platinum|silver|golden|blonde|blond|white|black|brown|auburn|chestnut|raven|grey|gray|red)[^,.;]{0,12}?\bhair\b`)
+// silver-grey wavy hair 等;捕获组 1=发色词,含连字符形态)。
+// 2026-09-03 根治(修仙界季一星 red hair 实锤):①色词前必须 \b 词边界——旧正则
+// 裸开,"neat short black textuRED fringe hair" 里 textured 的子串 "red" 先于
+// black 之后的位置命中(textured 与 hair 只隔 8 字符,black 与 hair 隔 16 字符),
+// 卡「权威发色」被劫持成 red → 镜内 red hair 与"卡 red"错错一致 → fixSubjectHair
+// Color 跳过替换,主角黑发全程渲染成红发;②窗口 12→24 容纳长修饰链。
+var reCardHairPhrase = regexp.MustCompile(`(?i)\b(platinum[- ]white|silver[- ]white|snow[- ]white|platinum|silver|golden|blonde|blond|white|black|brown|auburn|chestnut|raven|grey|gray|red)\b[^,.;]{0,24}?\bhair(?:[- ](?:ornaments?|pins?|clips?|ribbons?|bands?|ties|strings?|sticks?|combs?|brushes?))?`)
+
+// manjuHairAccessorySuffix 匹配串以 hair+发饰词结尾(发簪/发带,非发色)
+var manjuHairAccessorySuffix = regexp.MustCompile(`(?i)\bhair[- ](?:ornaments?|pins?|clips?|ribbons?|bands?|ties|strings?|sticks?|combs?|brushes?)$`)
+
+// manjuHairSubmatch 第一个非发饰后缀的 hair 匹配(白玉发簪 "white jade hair
+// ornament" 不是白发;RE2 无 (?!),吞进匹配后按尾部排除)
+func manjuHairSubmatch(re *regexp.Regexp, s string) []string {
+	for _, m := range re.FindAllStringSubmatch(s, -1) {
+		if m[0] != "" && !manjuHairAccessorySuffix.MatchString(m[0]) {
+			return m
+		}
+	}
+	return nil
+}
 
 // manjuCardHairWord 角色卡 image_prompt/appearance 的明确发色词(首个命中;
 // 无发色词返回空)。角色卡是形象权威——subject_definitions 发色与卡不一致时
 // 以卡为准(2026-09-02 我的影子会咬人镜7/19 沈照 black hair 实锤)。
 func manjuCardHairWord(card map[string]any) string {
 	src := str(card["image_prompt"]) + " " + str(card["appearance"]) + " " + str(card["costume"])
-	m := reCardHairPhrase.FindStringSubmatch(src)
+	m := manjuHairSubmatch(reCardHairPhrase, src)
 	if m == nil {
 		return ""
 	}
@@ -1336,10 +1476,11 @@ func (ctx *manjuCtx) fixSubjectHairColor(hp string, s manjuShot) string {
 			strings.Contains(strings.ToLower(line), "multiple views of") {
 			continue
 		}
-		m := reSubjectHairWord.FindString(line)
-		if m == "" {
-			continue
+		mm := manjuHairSubmatch(reSubjectHairWord, line)
+		if mm == nil || mm[0] == "" {
+			continue // 无发色匹配/全是发饰词(白玉发簪类)
 		}
+		m := mm[0]
 		lineWords := map[string]bool{}
 		for _, w := range manjuEnFeatureWords(line) {
 			if len(w) >= 4 {
@@ -1379,6 +1520,80 @@ func manjuHairNorm(s string) string {
 	s = strings.ReplaceAll(s, " ", "")
 	s = strings.ReplaceAll(s, "-", "")
 	return s
+}
+
+// ---- 2026-09-03 配音僵硬 + 内心 Q 版表情不符剧情(修仙界 EP01 用户实锤) ----
+// 声线短语(voiceTimbrePhrase)只描述音色(音高/音质),不含情绪——悲情独白被
+// 「clear and steady」平板念出;chibi Subject 只写姿态不写表情,呆萌脸配悲情剧情。
+
+// manjuMoodOf 中文叙述情绪归类(内心镜 narration/dialogue 确定性映射;无命中返回空)
+type manjuMood struct {
+	words []string // 中文情绪关键词(任一命中即归该类)
+}
+
+var manjuMoodRules = []struct {
+	kind     string
+	words    []string
+	delivery string // Audio 行 delivery(怎么念)
+	face     string // chibi 表情(脸上什么样)
+}{
+	{"anger", []string{"怒", "愤", "气", "恼", "狠", "咬牙", "喝道", "恨"},
+		"with rising indignation, voice tightening", "an angry frown, brows knotted"},
+	{"grief", []string{"悲", "泪", "哀", "凄", "呜", "亡", "孤", "苦", "悔", "痛"},
+		"low and heavy with grief, slower pacing", "a sorrowful drooping look, eyes downcast"},
+	{"shock", []string{"惊", "愕", "愣", "骇", "呆", "怔"},
+		"sharp and startled, with a brief stunned pause", "wide startled eyes, mouth agape"},
+	{"fear", []string{"怕", "惧", "颤", "惶", "慌", "急"},
+		"tight and trembling, hushed", "a trembling worried expression"},
+	{"joy", []string{"喜", "甜", "暖", "开心", "得意"},
+		"bright and softly delighted", "a bright delighted grin"},
+	{"worry", []string{"愁", "叹", "无奈", "沉重", "压抑", "犹豫", "烦", "闷", "羞", "愧", "酸", "涩"},
+		"slow and sorrowful, weighed down", "a bitter heavy-hearted expression"},
+}
+
+// manjuMoodOf 从中文文本(内心 narration/台词)归情绪类;先到先得按规则序(怒>悲>惊>惧>喜>愁)
+func manjuMoodOf(text string) *struct {
+	delivery, face string
+} {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	for i := range manjuMoodRules {
+		for _, w := range manjuMoodRules[i].words {
+			if strings.Contains(text, w) {
+				r := manjuMoodRules[i]
+				return &struct {
+					delivery, face string
+				}{r.delivery, r.face}
+			}
+		}
+	}
+	return nil
+}
+
+// reChibiFaceWord chibi 行已有表情词(有则不注入,防覆盖分镜师原文)
+var reChibiFaceWord = regexp.MustCompile(`(?i)\b(grin|smil|frown|scowl|glare|grit|wide-eyed|tear|pout|smirk|wince|panic|angry|furious|sad|sorrow|happy|delight|shock|startl|worried|trembl|grief|indignan|mood:)`)
+
+// fixChibiEmotion 内心镜 chibi Subject 表情随剧情(2026-09-03):chibi 行无表情词时
+// 按 narration 情绪注入英文表情短语(有表情词/无情绪词不动,幂等锚 mood:)。
+func (ctx *manjuCtx) fixChibiEmotion(hp string, s manjuShot) string {
+	if !strings.Contains(hp, "chibi version of") {
+		return hp
+	}
+	// 清理存量注入的句号衔接瑕疵(chin., its face → chin, its face;源稿返工首轮产物)
+	hp = regexp.MustCompile(`[.;], its face showing`).ReplaceAllString(hp, ", its face showing")
+	mood := manjuMoodOf(s.Narration + " " + s.Dialogue)
+	if mood == nil || mood.face == "" {
+		return hp
+	}
+	for _, line := range strings.Split(hp, "\n") {
+		if !strings.Contains(line, "is the chibi version of") || reChibiFaceWord.MatchString(line) {
+			continue
+		}
+		newLine := strings.TrimRight(strings.TrimRight(line, " \r"), ".;") + ", its face showing the current mood: " + mood.face
+		return strings.Replace(hp, line, newLine, 1)
+	}
+	return hp
 }
 
 
@@ -3767,6 +3982,23 @@ const manjuItemBoardLayout = ", item reference board (object info sheet): a clea
 // manjuIsBeast 角色是否非人形兽类/生灵:①species 字段权威(非空且非人 → 非人形);
 // ②role/id 含 灵宠/宠物/坐骑/妖兽/神兽;③appearance/image_prompt 命中兽形身体强特征兜底。
 // 物品类(manjuIsItem)不判兽形——走物品本体渲染链(2026-08-29 用户硬性规则)。
+// manjuHumanoidRaceSpecies 人形非人种族 species 词(2026-09-03 小天天实锤):
+// species=系统精灵/光精灵/仙女/机器人 这类「人形种族」不是四足兽形,不得因
+// 「非人 species」无条件走兽形锚——正面链不判种族所以一直正常,视图/Q版链的
+// species 权威层 return true 会把人形精灵少女按四足兽渲染。词表只收词面确定
+// 人形的(裸「神」「仙」「魔」不收:神兽/仙鹤/魔物是真兽形,靠词面组合区分)。
+var manjuHumanoidRaceSpecies = []string{"精灵", "仙女", "仙子", "仙娥", "神明", "女神", "男神", "机器人", "机械人", "仿生人", "人偶", "智能生命"}
+
+// manjuHumanoidRaceHit species 是否人形非人种族(2026-09-03)
+func manjuHumanoidRaceHit(s string) bool {
+	for _, k := range manjuHumanoidRaceSpecies {
+		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	return false
+}
+
 func manjuIsBeast(m map[string]any) bool {
 	if m == nil || manjuIsItem(m) {
 		return false
@@ -3775,7 +4007,12 @@ func manjuIsBeast(m map[string]any) bool {
 		if s == "人" || s == "人类" || s == "人族" || strings.Contains(s, "人形") || strings.Contains(s, "拟人") {
 			return false
 		}
-		return true
+		// 2026-09-03 人形非人种族不按 species 无条件判兽,掉到下方③兜底:
+		// 真兽形态的 image_prompt 必含兽形强特征词(creature/fur/paws/兽形…),
+		// 兜底照判兽形;人形精灵无兽词 → 人形管线。
+		if !manjuHumanoidRaceHit(s) {
+			return true
+		}
 	}
 	for _, f := range []string{"role", "id"} {
 		t := str(m[f])
@@ -4231,12 +4468,6 @@ func manjuViewPromptBuild(p string, view string, m map[string]any) string {
 	if manjuIsItem(m) {
 		return manjuItemViewAnchors[view] + ", " + manjuViewStrip(p) + manjuItemIdentityAnchor
 	}
-	// 无脸/剪影类角色(影子/雾/剪影形态,2026-09-01 阿影 side 上下双体实锤):
-	// 人形 side 锚的 face/nose/chin/one eye 语义对无脸角色是乱画邀请(Krea2 img2img
-	// 依锚尝试画脸与五官,黑雾人形被拆成上下两个体)。用剪影侧锚:纯轮廓单一体。
-	if view == "side" && manjuFacelessChar(m) {
-		return "SILHOUETTE PROFILE view, the single continuous dark figure seen from the side, pure outline and shadow mass with no facial features, no face, no eyes, no nose, no mouth, no limbs separated from the body, one continuous figure only, no duplication, no mirror image, no two figures stacked or split" + ", " + manjuViewStrip(p) + manjuIdentityAnchor + manjuMinorGuard(m)
-	}
 	return manjuViewAnchors[view] + ", " + manjuViewStrip(p) + manjuIdentityAnchor + manjuMinorGuard(m)
 }
 
@@ -4251,18 +4482,33 @@ var manjuFacelessViewAnchors = map[string]string{
 	"detail": "EXTREME CLOSE-UP detail shot of the shadow figure's single most distinctive feature (glowing eye dots / wispy edges / flowing smoke trail), large detailed close-up composition, macro framing, no face, no facial features",
 }
 
+// manjuFacelessFormRe 英文形态签名(2026-09-03 收紧):shadow/mist 仅当直接修饰角色
+// 本体才命中(shadow figure / living shadow / made of mist / humanoid black mist /
+// mist in the shape of …),部位与装饰措辞(under-eye shadows / eye shadow /
+// shadows of exhaustion / mist curling at the shoulders)不命中。
+// faceless/no face/silhouette 是形态词直接命中。
+var manjuFacelessFormRe = regexp.MustCompile(`(?i)\b(?:faceless|no\s+face|without\s+a\s+face|no\s+facial\s+features|silhouette|(?:living|humanoid)\s+(?:black\s+|dark\s+|grey\s+|gray\s+)?(?:shadow|mist)s?|made\s+of\s+(?:black\s+|dark\s+)?(?:shadows?|mist)|(?:black\s+|dark\s+|grey\s+|gray\s+)?(?:shadow|mist|smoke)\s+in\s+the\s+shape\s+of|(?:shadow|mist|smoke)[- ]shaped|shaped\s+like\s+(?:a\s+)?(?:black\s+|dark\s+)?(?:mist|shadow|smoke)|shadow\s+(?:figure|being|body|form|entity|creature|man|woman|girl|boy|person)|mist\s+(?:figure|being|body|form|entity|creature|man|woman|girl|boy|person)|figure\s+of\s+(?:black\s+|dark\s+)?(?:shadows?|mist))`)
+
 func manjuFacelessChar(m map[string]any) bool {
 	if m == nil {
 		return false
 	}
 	species := str(m["species"])
-	if species != "" && species != "人" {
-		low := strings.ToLower(str(m["image_prompt"]) + " " + species)
-		return strings.Contains(low, "shadow") || strings.Contains(low, "mist") ||
-			strings.Contains(low, "silhouette") || strings.Contains(low, "无脸") ||
-			strings.Contains(low, "no facial") || strings.Contains(low, "影子")
+	if species == "" || species == "人" {
+		return false
 	}
-	return false
+	low := strings.ToLower(str(m["image_prompt"]) + " " + str(m["appearance"]) + " " + species)
+	// 2026-09-03 根治(小天天实锤):旧版裸 Contains("shadow"/"mist") 把部位词
+	// "dark under-eye shadows of exhaustion"(眼下乌青)误判成影子形态,正常彩色少女
+	// 被套剪影锚——full/side/q 全渲染成黑剪影/双体/影子人。收紧为形态签名匹配;
+	// 中文形态词(影灵=阿影 species;雾气=黑雾 appearance「一团黑色雾气」)直接命中,
+	// appearance 并入判定源(形态信息常写在形象字段,与 isBeast 兜底同源)。
+	for _, w := range []string{"无脸", "影子", "影灵", "黑雾", "雾体", "剪影", "雾气"} {
+		if strings.Contains(low, w) {
+			return true
+		}
+	}
+	return manjuFacelessFormRe.MatchString(low)
 }
 
 // manjuCharImagePrompt 角色<视图>形态图的最终生图提示词(2026-08-27 角色管理「复制提示词」用;
@@ -6272,8 +6518,11 @@ type offscreenVoice struct {
 var reOffscreenAnchor = regexp.MustCompile(`(?i)in an off-?screen voiceover`)
 
 // manjuOffscreenDescs 提取 h3_prompt 中所有 off-screen voiceover 说话者描述段
-// (锚点向前取上一个句号后的片段);narrator 旁白跳过(旁白不换音色,2026-08-29
-// 用户反馈「路人配音和主角配音都是主角在说话」的修复输入)。
+// (锚点向前取上一个句号后的片段);narrator/内心独白跳过(旁白与内心走独立
+// 绑定链,2026-08-29 用户反馈「路人配音和主角配音都是主角在说话」的修复输入)。
+// 2026-09-03 同步源头返工:源头分镜已把内心独白写成 "the quiet inner voice of X
+// says in an off-screen voiceover"(rework_inner_voice.py),该句式同样不走通用
+// 声线猜测,归 inner/narrator 绑定链。
 func manjuOffscreenDescs(hp string) []string {
 	anchors := reOffscreenAnchor.FindAllStringIndex(hp, -1)
 	var out []string
@@ -6292,8 +6541,8 @@ func manjuOffscreenDescs(hp string) []string {
 			seg = seg[i+2:]
 		}
 		low := strings.ToLower(seg)
-		if strings.Contains(low, "narrator") {
-			continue // 旁白:保持默认叙述音色,不参与差异化
+		if strings.Contains(low, "narrator") || strings.Contains(low, "inner voice of") {
+			continue // 旁白/内心独白:走独立绑定链,不参与通用声线差异化
 		}
 		desc := strings.TrimSpace(seg)
 		desc = strings.TrimSuffix(desc, ",")
@@ -6389,7 +6638,7 @@ func (ctx *manjuCtx) offscreenVoiceKeyFor(offDesc string, c manjuRefContract) st
 // 内心戏音色):内心戏镜(innerCid 非空)的 narrator 画外音句不再跳过——绑定该角色
 // 音色库 key,desc 改写为「角色内心声线」描述(H3 按描述区分内心戏与客观旁白/
 // 对白:内心=角色声线基底 + quiet inner voice 语气,对白=同源声线+场上语气)。
-func (ctx *manjuCtx) manjuOffscreenBindings(hp string, innerCid, innerKey string) []offscreenVoice {
+func (ctx *manjuCtx) manjuOffscreenBindings(hp string, innerCid, innerKey, narr string) []offscreenVoice {
 	descs := manjuOffscreenDescs(hp)
 	narrDescs := manjuNarratorDescs(hp)
 	if innerKey != "" {
@@ -6410,17 +6659,10 @@ func (ctx *manjuCtx) manjuOffscreenBindings(hp string, innerCid, innerKey string
 	}
 	out := make([]offscreenVoice, 0, len(descs))
 	seen := map[string]bool{}
-	phrase := ""
-	if innerCid != "" {
-		phrase = ctx.voiceTimbrePhrase(innerCid)
-	}
 	for _, d := range descs {
 		var key, desc string
 		if strings.HasPrefix(d, "inner:") {
-			desc = "the quiet inner voice of " + innerCid
-			if phrase != "" {
-				desc += ", " + phrase
-			}
+			desc = ctx.innerVoiceDesc(innerCid, narr)
 			key = innerKey
 		} else if strings.HasPrefix(d, "narr:") {
 			desc = "the narrator with a calm, neutral storytelling voice"
@@ -6439,11 +6681,56 @@ func (ctx *manjuCtx) manjuOffscreenBindings(hp string, innerCid, innerKey string
 	return out
 }
 
+// innerVoiceDesc 内心独白音色描述(注入侧 fixInnerVoiceDefLine 与 manjuOffscreenBindings
+// 共用单一事实源,2026-09-03 抽取):角色 id + 音色短语 + 角色卡 voice 风格行(中文原样,
+// H3 台词是中文语境)+ narration 情绪 delivery(修仙界 EP01 配音僵硬实锤)。
+func (ctx *manjuCtx) innerVoiceDesc(innerCid, narr string) string {
+	desc := "the quiet inner voice of " + innerCid
+	if phrase := ctx.voiceTimbrePhrase(innerCid); phrase != "" {
+		desc += ", " + phrase
+	}
+	if card := ctx.charInfoFor(innerCid); card != nil {
+		if v := str(card["voice"]); v != "" {
+			desc += ", voice style: " + v
+		}
+	}
+	if mood := manjuMoodOf(narr); mood != nil && mood.delivery != "" {
+		desc += ", delivered " + mood.delivery
+	}
+	return desc
+}
+
+// fixInnerVoiceDefLine 内心独白镜 narrator 定义行改绑角色音色(2026-09-03 换根治,
+// 递了三千年 EP01 镜17/18/20 实锤):技能侧生成的 h3_prompt 把内心独白写成
+// "<Audio 1> ... for the off-screen voice described as the narrator ..."——源头的
+// 错误 narrator 定义行命中 injectOffscreenVoiceBindings 的幂等锚,渲染端内心戏
+// 改绑逻辑(innerVoiceFor→角色音色)整体被跳过,角色内心话被旁白音色念出
+// (用户感知"内容跑偏"的来源之一)。此处机械改写:内心戏镜中绑 narrator 的
+// <Audio N> 定义行,desc 换成 innerVoiceDesc(编号保留,挂载侧 offscreenVoiceKeyFor
+// 按 "the quiet inner voice of X" 单一事实源自动跟角色音色)。幂等:改后不含
+// narrator 行,二次调用无操作;客观旁白镜(innerCid 为空)不进此函数。
+func (ctx *manjuCtx) fixInnerVoiceDefLine(hp, innerCid, innerKey, narr string) string {
+	if innerCid == "" || innerKey == "" || !strings.Contains(hp, "narrator") {
+		return hp
+	}
+	desc := ctx.innerVoiceDesc(innerCid, narr)
+	if desc == "" {
+		return hp
+	}
+	return reAudioDefLine.ReplaceAllStringFunc(hp, func(m string) string {
+		sm := reAudioDefLine.FindStringSubmatch(m)
+		if sm == nil || !strings.Contains(strings.ToLower(sm[2]), "narrator") {
+			return m
+		}
+		return fmt.Sprintf("<Audio %s> is the voice-timbre reference for %s, containing a spoken voiceover.", sm[1], desc)
+	})
+}
+
 // manjuNarratorDescs 提取 narrator 画外音句描述(off-screen voiceover 句中带
 // narrator 的):内心戏与客观旁白都由 narrator 句式念出(脚本直出/LLM 规则),
 // 渲染端区分处理——内心戏绑定角色音色(ver14)、客观旁白绑定叙述音色(ver15)。
 func manjuNarratorDescs(hp string) []string {
-	if !strings.Contains(hp, "narrator") {
+	if !strings.Contains(hp, "narrator") && !strings.Contains(strings.ToLower(hp), "inner voice of") {
 		return nil
 	}
 	anchors := reOffscreenAnchor.FindAllStringIndex(hp, -1)
@@ -6454,7 +6741,9 @@ func manjuNarratorDescs(hp string) []string {
 			seg = seg[i+2:]
 		}
 		low := strings.ToLower(seg)
-		if !strings.Contains(low, "narrator") {
+		// 2026-09-03:源头返工后的内心独白句式 "the quiet inner voice of X says in an
+		// off-screen voiceover" 同样归此链——innerVoiceFor 命中时绑角色音色,否则当旁白
+		if !strings.Contains(low, "narrator") && !strings.Contains(low, "inner voice of") {
 			continue
 		}
 		desc := strings.TrimSpace(seg)
@@ -7059,6 +7348,8 @@ func stageQC(ctx *manjuCtx, lg *manjuLogger) error {
 	}
 	// 2026-08-26 升级:视觉抽检——对通过镜头抽帧判画面崩坏,命中追加 QC 报告触发重渲
 	ctx.qcVisualCheck(lg, reportPath, failed)
+	// 2026-09-03 幽灵人声检测:无台词镜检出疑似人声(H3 自发画外音)追加 QC 报告触发重渲
+	ctx.qcGhostVoiceCheck(lg, reportPath, failed)
 	failed = ctx.qcFailedShots()
 	if len(failed) > 0 {
 		ids := make([]string, 0, len(failed))

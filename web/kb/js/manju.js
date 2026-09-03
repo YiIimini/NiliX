@@ -98,9 +98,11 @@
       "抽卡 = 按角色 image_prompt + 随机 seed 连抽多张候选定妆照，候选累积保留可对比点选，采纳最佳（支持全员抽卡批量出卡）",
       "「采纳」把候选设为正式定妆照（覆盖旧图 → 缓存指纹失效 → 自动重新预编码/渲染）",
       "采纳后右侧栏「产物」的人物缩略图自动刷新",
+      "<b>🗑 删除资产</b>（2026-09-02）：角色卡「🗑 删除」或产物区缩略图悬浮 ✕ 一键删除该角色全部资产图（定妆照/视图/Q版/正脸/抽卡候选；<b>角色卡保留</b>，可重新抽卡或从资产库导入）；场景缩略图 ✕ 同样可删（主图+尾帧）；渲染中不可删",
       "正脸参考 <code>_face.png</code> 从定妆照切「完整头部+肩部」用于 R2V 锁脸",
       "<b>多视图</b>：每个角色支持 正面/全身/侧面/细节 四个视图 tab，各视图独立抽卡/采纳；渲染时同一角色多视图全部作为 H3 参考图传入，人物更统一",
       "定妆照固定 <b>1024×1024</b> 标准尺寸（与项目画幅/分辨率档位无关）：同一角色在横屏/竖屏/不同档位项目里形象一致；场景图仍按项目画幅生成",
+      "<b>🎭 资产库批量清理</b>（2026-09-02）：右上角「资产库」弹窗勾选卡片可批量删除 / 一键清空全部（卡片标注来源项目）；项目内已复制的资产不受影响",
     ] },
     { ic: "🎬", t: "执行管线", ps: [
       "阶段按钮带序号：⓪项目体检 ①方案 ②资产 ③编码 ④渲染 ⑤质检 ⑥合成（顺序执行）",
@@ -327,7 +329,14 @@
       $("manju-episode").value = this.episode;
       $("manju-only").value = this.only;
       $("manju-novel").value = this.novel;
-      this.loadProjects(ls("project"));
+      // 2026-09-03 画布三期+:独立窗口工作台直达(#shotstudio=项目/集/镜,由 ⛶ 独立窗口按钮打开)
+      const studio = this._parseStudioHash();
+      if (studio) {
+        this._studioPending = studio;
+        this.loadProjects(studio.cfg); // 直接选中 hash 里的项目,列表就绪后自动开工作台
+      } else {
+        this.loadProjects(ls("project"));
+      }
       this.poll();
       if (this.timer) clearInterval(this.timer);
       this.timer = setInterval(() => this.poll(), 2000);
@@ -803,30 +812,21 @@
       const btn = $("nav-cache-clear");
       $("cc-cancel").addEventListener("click", () => this.closeModal());
       $("cc-confirm").addEventListener("click", () => { this.closeModal(); this._runCacheClear(btn, false); });
-      $("cc-advanced").addEventListener("click", () => {
-        // 应用内危险确认弹窗(2026-08-26 美化:弃原生 confirm 白框,与主题统一)
-        this.openModal("⚠️ 确认彻底清场?",
-          `<div class="cc-confirm">
-            <div class="cc-confirm-ic">🔥</div>
-            <p class="cc-confirm-q">即将删除以下内容,且<b>不可恢复</b>:</p>
-            <ul class="cc-confirm-list">
-              <li>ComfyUI input / output <b>全部产物</b>(含其他项目的图片/视频)</li>
-              <li>成片 / 预告片 · 角色定妆照(characters 全部)</li>
-              <li>运行日志数据 · 项目诊断文件(logs/diagnose)</li>
-              <li>普通清理的全部内容(方案 / 镜头 / 缓存)</li>
-            </ul>
-            <p class="cc-confirm-warn">请确认 ComfyUI 未在运行关键任务</p>
-            <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
-              <button id="ccx-cancel" class="hrs-btn">取消</button>
-              <button id="ccx-go" class="hrs-btn cc-btn-danger">我已确认,清场</button>
-            </div>
-          </div>`);
-        $("ccx-cancel").addEventListener("click", () => this.closeModal());
-        $("ccx-go").addEventListener("click", () => {
-          this.closeModal(); // 确认弹窗
-          this.closeModal(); // 清理选择弹窗
-          this._runCacheClear(btn, true);
-        });
+      $("cc-advanced").addEventListener("click", async () => {
+        // 应用内危险确认弹窗(2026-09-03 统一 uiConfirm 组件)
+        if (!(await this.uiConfirm({
+          title: "确认彻底清场?", confirmText: "我已确认,清场",
+          message: "即将删除以下内容,且<b>不可恢复</b>:",
+          list: [
+            "ComfyUI input / output <b>全部产物</b>(含其他项目的图片/视频)",
+            "成片 / 预告片 · 角色定妆照(characters 全部)",
+            "运行日志数据 · 项目诊断文件(logs/diagnose)",
+            "普通清理的全部内容(方案 / 镜头 / 缓存)",
+          ],
+          warn: "请确认 ComfyUI 未在运行关键任务",
+        }))) return;
+        this.closeModal(); // 清理选择弹窗
+        this._runCacheClear(btn, true);
       });
     },
     _runCacheClear(btn, advanced) {
@@ -983,6 +983,13 @@
         ls("project", this.project); // 始终同步,项目被删后清掉旧值
         if (this.project) { this.loadProject(); }
         else { this.resetProjectData(); }
+        // 独立窗口直达:项目列表就绪且已选中 hash 项目 → 打开全屏工作台(一次性,防刷新重复弹)
+        if (this._studioPending) {
+          const st = this._studioPending;
+          this._studioPending = null;
+          if (this.project) setTimeout(() => this.openShotStudio(st.ep, st.shot), 60);
+          else this.setErr("工作台打开失败:未找到项目");
+        }
       }).catch((e) => this.setErr("项目列表失败: " + e.message));
     },
 
@@ -2275,56 +2282,141 @@
 
     /* 2026-09-02 角色资产库弹窗:跨项目已定妆角色清单(直接复用,零渲染) */
     /* 2026-09-02 角色资产库统一管理(跨项目全局):
-       卡片网格(主图缩略图/名字/资产数/指纹/入库时间) → 点击卡片预览详情
-       (完整角色卡+image_prompt/q_form 提示词+全部视图缩略图) → 删除 */
-    openCharLib() {
+       卡片网格(主图缩略图/名字/资产数/来源项目/指纹/入库时间) → 点击卡片预览详情
+       (完整角色卡+image_prompt/q_form 提示词+全部视图缩略图)。
+       删除清理(2026-09-02 用户需求):卡片多选 → 批量删除/一键清空(单删=勾一个删);
+       删除走 delete-batch,失败项逐条透出不阻断其余。 */
+    openCharLib(inPlace) {
       get("/api/manju/char-lib/list")
         .then((d) => {
           const chars = (d && d.chars) || [];
+          if (!this._clibSel) this._clibSel = new Set();
+          const selCount = () => chars.filter((c) => this._clibSel.has(c.name)).length;
           const rows = chars.map((c) => {
             const files = (c.files || []).length;
             const created = c.created_at ? new Date(c.created_at * 1000).toLocaleDateString() : "—";
             const thumb = c.main
               ? `<img class="clib-thumb" src="/api/manju/char-lib/asset?name=${encodeURIComponent(c.name)}&file=${encodeURIComponent(c.main)}" onerror="this.style.display='none'" loading="lazy">`
               : "";
-            return `<div class="clib-card" data-name="${esc(c.name)}">
+            const sel = this._clibSel.has(c.name);
+            return `<div class="clib-card${sel ? " is-sel" : ""}" data-name="${esc(c.name)}" title="点击查看角色详情(角色卡+完整提示词+全部视图)">
+              <label class="clib-check" title="勾选后可批量删除"><input type="checkbox" data-clibsel="${esc(c.name)}"${sel ? " checked" : ""}></label>
               ${thumb}
               <div class="clib-card-body">
-                <div class="clib-name">${esc(c.name)}</div>
-                <div class="clib-meta">${files} 张资产 · ${created}</div>
-                <div class="clib-meta" title="形象指纹(提示词变更后自动重渲覆盖)">指纹 ${esc(c.fingerprint || "—")}</div>
-                <div class="manju-row" style="gap:6px;margin-top:6px">
-                  <button class="hrs-btn clib-view" data-name="${esc(c.name)}" title="点击卡片或此按钮预览详情">👁 详情</button>
-                  <button class="hrs-btn rs-lib-del" data-name="${esc(c.name)}">🗑 删除</button>
-                </div>
+                <div class="clib-name">${esc(c.name)}<span class="clib-view-hint">详情 ›</span></div>
+                <div class="clib-meta">${files} 张资产 · ${created}${c.source_project ? " · 来源 " + esc(c.source_project) : ""}</div>
+                <div class="clib-meta" title="形象指纹(提示词变更后自动重渲覆盖入库)">指纹 ${esc(c.fingerprint || "—")}</div>
               </div>
             </div>`;
           }).join("");
-          this.openModal("🎭 角色资产库(跨项目统一管理)",
-            `<div class="manju-confirm">
-              <p class="mc-d">已定妆角色保存在独立资产库 <code>char_lib/</code>,<b>所有项目共用</b>。新项目遇到同名同形象角色(提示词一致)自动复制复用,<b>零渲染成本</b>且跨项目形象锁定。点击卡片预览该角色详情(含完整提示词);提示词变更后自动重渲并覆盖入库。</p>
+          const nSel = selCount();
+          const html = `<div class="manju-confirm">
+              <p class="mc-d">已定妆角色保存在统一资产库 <code>asset_lib/characters/</code>(音色同库 <code>asset_lib/voices/</code>),<b>所有项目共用</b>。新项目遇到同名同形象角色(提示词一致)自动复制复用,<b>零渲染成本</b>且跨项目形象锁定。点击卡片预览该角色详情(含完整提示词);提示词变更后自动重渲并覆盖入库。勾选卡片后可批量删除。</p>
+              <div class="clib-toolbar">
+                <button class="hrs-btn" id="clib-all" title="全选/全不选切换">${nSel === chars.length && chars.length ? "☑️ 取消全选" : "☑️ 全选"}</button>
+                <button class="hrs-btn hrs-btn-danger" id="clib-del"${nSel ? "" : " disabled"}>🗑 删除选中 (${nSel})</button>
+                <button class="hrs-btn hrs-btn-danger" id="clib-clear"${chars.length ? "" : " disabled"} title="删除库内全部角色(项目内已复制的资产不受影响)">🧹 清空全部 (${chars.length})</button>
+                <span class="manju-meta" style="margin-left:auto">${chars.length} 个角色</span>
+              </div>
               <div class="clib-grid">
                 ${rows || '<div class="mc-d" style="padding:16px;text-align:center;grid-column:1/-1">资产库为空——渲染过角色后自动入库</div>'}
               </div>
-            </div>`, true);
-          // 点击卡片 → 详情
-          document.querySelectorAll(".clib-card, .clib-view").forEach((el) => {
+            </div>`;
+          // 2026-09-02 用户要求:关闭按钮前加「刷新」(openModal 第 4 参 refresh 回调,
+          // 与角色抽卡弹窗同款);刷新走 inPlace=true → rerenderModal 原地换 body 重绑,不压新层
+          const libTitle = "🎭 角色资产库(跨项目统一管理)";
+          if (inPlace && this._modalEl && document.body.contains(this._modalEl)) {
+            this.rerenderModal(libTitle, html, true);
+          } else {
+            this.openModal(libTitle, html, true, () => this.openCharLib(true));
+          }
+          // 点击卡片 → 详情(2026-09-02 UI 精简:详情按钮移除,卡片即入口)
+          document.querySelectorAll(".clib-card").forEach((el) => {
             el.addEventListener("click", (e) => {
-              if (e.target.closest(".rs-lib-del")) return; // 删除按钮不触发详情
-              const name = el.dataset.name;
-              this.openCharLibDetail(name);
+              if (e.target.closest(".clib-check")) return; // 勾选框不触发详情
+              this.openCharLibDetail(el.dataset.name);
             });
           });
-          document.querySelectorAll(".rs-lib-del").forEach((b) => {
-            b.addEventListener("click", (e) => {
+          // 勾选(2026-09-02 批量删除):原地更新选中集合与工具条计数,不重开弹窗
+          document.querySelectorAll("[data-clibsel]").forEach((cb) => {
+            cb.addEventListener("click", (e) => {
               e.stopPropagation();
-              const name = b.dataset.name;
-              if (!confirm(`确认从资产库删除「${name}」?删除后新项目需重新渲染该角色。`)) return;
-              post("/api/manju/char-lib/delete", { name }).then(() => {
+              if (cb.checked) this._clibSel.add(cb.dataset.clibsel);
+              else this._clibSel.delete(cb.dataset.clibsel);
+              const card = cb.closest(".clib-card");
+              if (card) card.classList.toggle("is-sel", cb.checked);
+              const delBtn = document.querySelector("#clib-del");
+              if (delBtn) {
+                const n = selCount();
+                delBtn.disabled = !n;
+                delBtn.textContent = `🗑 删除选中 (${n})`;
+              }
+            });
+          });
+          // 全选/取消全选:同步勾选态+选中集合,不重开弹窗
+          const allBtn = document.querySelector("#clib-all");
+          if (allBtn) allBtn.addEventListener("click", () => {
+            const toAll = selCount() < chars.length;
+            chars.forEach((c) => { if (toAll) this._clibSel.add(c.name); else this._clibSel.delete(c.name); });
+            document.querySelectorAll("[data-clibsel]").forEach((cb) => {
+              cb.checked = toAll;
+              const card = cb.closest(".clib-card");
+              if (card) card.classList.toggle("is-sel", toAll);
+            });
+            const delBtn = document.querySelector("#clib-del");
+            if (delBtn) {
+              delBtn.disabled = !toAll;
+              delBtn.textContent = `🗑 删除选中 (${toAll ? chars.length : 0})`;
+            }
+            allBtn.textContent = toAll ? "☑️ 取消全选" : "☑️ 全选";
+          });
+          // 删除选中(2026-09-02 批量):单删=勾一个;失败项逐条透出
+          const delBtn2 = document.querySelector("#clib-del");
+          if (delBtn2) delBtn2.addEventListener("click", async () => {
+            const names = chars.filter((c) => this._clibSel.has(c.name)).map((c) => c.name);
+            if (!names.length) return;
+            if (!(await this.uiConfirm({
+              title: "从资产库删除角色", confirmText: `删除 ${names.length} 个`,
+              message: `确认从资产库删除选中的 <b>${names.length}</b> 个角色?`,
+              list: [
+                names.slice(0, 8).join("、") + (names.length > 8 ? " 等" : ""),
+                "删除后新项目需重新渲染这些角色",
+                "项目内已复制的资产不受影响",
+              ],
+            }))) return;
+            delBtn2.disabled = true; delBtn2.textContent = "删除中…";
+            post("/api/manju/char-lib/delete-batch", { names })
+              .then((r) => {
+                this._clibSel.clear();
+                const failed = (r.failed) || [];
+                this.logNote(`(🗑 资产库已删除 ${(r.deleted || []).length} 个角色${failed.length ? ";失败 " + failed.length + " 个" : ""})`);
+                this.closeModal();
+                this.openCharLib(); // 重新拉清单刷新
+              })
+              .catch((err) => { delBtn2.disabled = false; delBtn2.textContent = `🗑 删除选中 (${names.length})`; alert("批量删除失败: " + err.message); });
+          });
+          // 清空全部(2026-09-02):强确认后走 delete-batch all
+          const clearBtn = document.querySelector("#clib-clear");
+          if (clearBtn) clearBtn.addEventListener("click", async () => {
+            if (!chars.length) return;
+            if (!(await this.uiConfirm({
+              title: "清空资产库", confirmText: "清空全部",
+              message: `确认清空资产库全部 <b>${chars.length}</b> 个角色?`,
+              list: [
+                "此操作<b>不可撤销</b>",
+                "项目内已复制的资产不受影响",
+                "新项目不能再零渲染复用",
+              ],
+            }))) return;
+            clearBtn.disabled = true; clearBtn.textContent = "清空中…";
+            post("/api/manju/char-lib/delete-batch", { all: true })
+              .then((r) => {
+                this._clibSel.clear();
+                this.logNote(`(🧹 资产库已清空: 删除 ${(r.deleted || []).length} 个角色)`);
                 this.closeModal();
                 this.openCharLib();
-              }).catch((err) => alert("删除失败: " + err.message));
-            });
+              })
+              .catch((err) => { clearBtn.disabled = false; clearBtn.textContent = "🧹 清空全部"; alert("清空失败: " + err.message); });
           });
         })
         .catch((e) => alert("加载资产库失败: " + e.message));
@@ -2333,7 +2425,7 @@
     /* 角色详情弹窗:完整角色卡 + 提示词 + 全部视图缩略图
        2026-09-02 用户反馈:①详情弹窗叠在资产库弹窗上出现两个 → 先关库弹窗再开详情,
        详情内给「返回资产库」按钮;②详情图片可点击预览大图(previewImage 复用)。 */
-    openCharLibDetail(name) {
+    openCharLibDetail(name, inPlace) {
       get("/api/manju/char-lib/detail?name=" + encodeURIComponent(name))
         .then((d) => {
           const card = d.card || {};
@@ -2352,10 +2444,10 @@
             ["真身提示词 second_form", card.second_form],
           ].filter(([, v]) => v).map(([k, v]) =>
             `<div class="clib-sec-title">${esc(k)}</div><div class="clib-prompt"><pre>${esc(String(v))}</pre></div>`).join("");
-          // 先关资产库弹窗(否则两层弹窗叠着,用户看到"两个弹窗")
-          this.closeModal();
-          this.openModal(`🎭 ${esc(d.name)} · 角色详情`,
-            `<div class="clib-detail">
+          // 首次打开:先关资产库弹窗(否则两层弹窗叠着,用户看到"两个弹窗");
+          // 刷新(refresh 回调,inPlace=true):rerenderModal 原地换 body,不关不叠层
+          const detTitle = `🎭 ${esc(d.name)} · 角色详情`;
+          const detHtml = `<div class="clib-detail">
               <div class="clib-detail-left">
                 ${fields ? `<div class="clib-sec-title">角色卡</div><div class="clib-fields">${fields}</div>` : ""}
                 ${prompts}
@@ -2367,19 +2459,27 @@
             </div>
             <div class="manju-row" style="justify-content:center;gap:10px;margin-top:12px">
               <button id="clib-back" class="hrs-btn">← 返回资产库</button>
-            </div>`, true);
+            </div>`;
+          if (inPlace && this._modalEl && document.body.contains(this._modalEl)) {
+            this.rerenderModal(detTitle, detHtml, true);
+          } else {
+            this.closeModal();
+            this.openModal(detTitle, detHtml, true, () => this.openCharLibDetail(name, true));
+          }
           document.querySelectorAll(".clib-shot-img").forEach((img) => {
             img.addEventListener("click", () => this.previewImage(img.dataset.img, img.dataset.name));
           });
+          // 2026-09-02 修复:返回前先关详情弹窗(直接 openCharLib 只会压新层,
+          // 详情弹窗留在栈里——关掉资产库后又露出来,像"弹窗关不掉")
           const back = $("clib-back");
-          if (back) back.addEventListener("click", () => this.openCharLib());
+          if (back) back.addEventListener("click", () => { this.closeModal(); this.openCharLib(); });
         })
         .catch((e) => alert("加载角色详情失败: " + e.message));
     },
 
     /* 2026-09-02 从资产库导入角色到当前项目(角色管理弹窗内):
        选择弹窗列出库中已定妆角色 → 点「导入」→ 复制资产+合并角色卡,零渲染 */
-    openCharLibPick() {
+    openCharLibPick(inPlace) {
       if (this.denyNoProject()) return;
       get("/api/manju/char-lib/list")
         .then((d) => {
@@ -2403,11 +2503,17 @@
               </div>
             </div>`;
           }).join("");
-          this.openModal("📥 从资产库导入角色到当前项目",
-            `<div class="manju-confirm">
+          const pickTitle = "📥 从资产库导入角色到当前项目";
+          const pickHtml = `<div class="manju-confirm">
               <p class="mc-d">选择资产库中<b>已定妆</b>的角色导入当前项目(复制全部资产+角色卡,<b>零渲染成本</b>)。已存在的同名角色将被资产库版本替换。</p>
               <div class="clib-grid">${rows}</div>
-            </div>`, true);
+            </div>`;
+          // 同款刷新按钮(2026-09-02 与资产库/详情弹窗统一):原地 rerender 不压新层
+          if (inPlace && this._modalEl && document.body.contains(this._modalEl)) {
+            this.rerenderModal(pickTitle, pickHtml, true);
+          } else {
+            this.openModal(pickTitle, pickHtml, true, () => this.openCharLibPick(true));
+          }
           document.querySelectorAll(".clib-import").forEach((b) => {
             b.addEventListener("click", () => {
               const name = b.dataset.name;
@@ -2533,127 +2639,709 @@
         .catch((e) => { listEl.innerHTML = `<div class="mc-d" style="color:#c33">加载失败：${esc(e.message)}</div>`; });
     },
 
-    /* 2026-09-01 二合一阶段一:镜头调试弹窗(工作流可视化+参数覆盖+单镜重渲) */
+    /* 2026-09-01 二合一阶段一:镜头调试弹窗(工作流可视化+参数覆盖+单镜重渲)
+       2026-09-03 画布三期+:重构为两栏布局(左画布/右参数侧栏),弹窗与独立窗口工作台
+       共用 _shotDebugHTML/_shotDebugWire;openShotDebug=弹窗模式,openShotStudio=工作台模式 */
+    _parseStudioHash() {
+      const m = (location.hash || "").match(/^#shotstudio=([^/]+)\/([^/]+)\/(\d+)$/);
+      return m ? { cfg: decodeURIComponent(m[1]), ep: decodeURIComponent(m[2]), shot: parseInt(m[3], 10) } : null;
+    },
+
+    /* 独立窗口 URL(#shotstudio=项目/集/镜;应用加载后自动进入全屏工作台) */
+    _studioURL(ep, shotId) {
+      return location.pathname + "#shotstudio=" +
+        encodeURIComponent(this.project) + "/" + encodeURIComponent(ep) + "/" + shotId;
+    },
+
+    /* 在独立浏览器窗口打开工作台(命名窗口防重复;已被打开时浏览器自动聚焦) */
+    popShotStudio(ep, shotId) {
+      const w = window.open(this._studioURL(ep, shotId), "nilix_shotstudio", "width=1560,height=940");
+      if (w) { try { w.focus(); } catch (_e) { /* 跨页焦点忽略 */ } }
+      else this.setErr("浏览器拦截了弹窗,请允许本站弹出窗口后重试");
+    },
+
+    /* 镜头调试·弹窗模式(两栏:左画布/中间产物/提示词,右参考图+参数+模板) */
     openShotDebug(ep, shotId) {
       const q = "?config=" + encodeURIComponent(this.project) + "&episode=" + encodeURIComponent(ep) + "&shot=" + shotId;
       get("/api/manju/shot/workflow" + q)
         .then((d) => {
-          const ov = d.override || {};
-          const g = d.globals || {};
-          const isOverride = (k) => ov[k] !== undefined && ov[k] !== null && ov[k] !== "";
-          // 参考图区
-          const refs = (d.refs || []).map((rf) => {
-            const label = rf.view ? rf.name + "·" + rf.view : rf.name;
-            return `<div class="dbg-ref" title="${esc(rf.kind)} ${esc(label)}">
-              <img src="/api/manju/shot/asset?config=${encodeURIComponent(this.project)}&file=${encodeURIComponent(rf.file)}"
-                   onerror="this.style.display='none'" loading="lazy">
-              <span>${esc(label)}</span>
-            </div>`;
-          }).join("");
-          // 节点图(2026-09-02 二期:节点参数可折叠,点节点名展开)
-          const nodes = (d.nodes || []).map((nd) => {
-            const ps = Object.entries(nd.params || {}).map(([k, v]) =>
-              `<div class="wf-p"><span class="wf-pk">${esc(k)}</span><span class="wf-pv">${esc(String(v))}</span></div>`).join("");
-            return `<div class="wf-node"${ps ? ' onclick="this.classList.toggle(\'wf-open\')"' : ""}><div class="wf-name">${esc(nd.name)}</div><div class="wf-class">${esc(nd.class)}</div>${ps ? '<div class="wf-params">' + ps + "</div>" : ""}</div>`;
-          }).join("");
-          const wfHtml = nodes ? nodes.split("</div></div>").map((seg, i, arr) =>
-            i < arr.length - 1 ? seg + "</div></div><div class='wf-arrow'>→</div>" : seg).join("") : '<div class="mc-d">无节点数据</div>';
-          // 最终提示词(2026-09-02 二期:排查提示词问题直接看渲染输入)
-          const promptHtml = d.prompt
-            ? `<div class="dbg-sec-title">最终 H3 提示词(渲染输入)</div>
-               <div class="dbg-prompt"><pre>${esc(d.prompt)}</pre></div>
-               <div class="manju-row" style="gap:6px;margin-top:6px">
-                 <button id="dbg-copy" class="hrs-btn">📋 复制提示词</button>
-                 <button id="dbg-pp" class="hrs-btn">↕ 展开/收起</button>
-               </div>`
-            : "";
-          // 参数表单(覆盖标记:有覆盖显示 ●)
-          const ovMark = (k) => isOverride(k) ? ' <span class="dbg-ov" title="镜级覆盖">●</span>' : "";
-          const engineOpts = ["", ...(d.engines || [])].map((en) => {
-            const label = en ? en : "(全局默认)";
-            const sel = ov.turbo_lora === en ? " selected" : "";
-            return `<option value="${esc(en)}"${sel}>${esc(label)}</option>`;
-          }).join("");
-          const samplerOpts = ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "uni_pc", "heun", "ddim"].map((s) =>
-            `<option value="${s}"${(ov.sampler || g.sampler || "euler") === s ? " selected" : ""}>${esc(s)}</option>`).join("");
           this.openModal(`🎛 镜头调试 ${ep} · 镜 ${String(shotId).padStart(2, "0")}${d.scene ? " · " + esc(d.scene) : ""}`,
-            `<div class="dbg-wrap">
-              <div class="dbg-sec-title">工作流节点(当前生效)</div>
-              <div class="wf-flow">${wfHtml}</div>
-              <div class="dbg-cache">条件缓存: <code>${esc(d.cache || "—")}</code>${d.chained ? ' <span class="rs-badge rs-stale">接缝镜</span>' : ""}</div>
-              ${refs ? `<div class="dbg-sec-title">参考图(${(d.refs || []).length})</div><div class="dbg-refs">${refs}</div>` : ""}
-              <div class="dbg-sec-title">参数(●=镜级覆盖)</div>
-              <div class="dbg-form">
-                <div class="dbg-row"><label>Seed${ovMark("seed")}</label><input id="dbg-seed" type="number" placeholder="全局 ${g.seed || ""} (${esc(g.seed_policy || "fixed")})" value="${ov.seed !== undefined ? ov.seed : ""}"></div>
-                <div class="dbg-row"><label>步数${ovMark("steps")}</label><input id="dbg-steps" type="number" min="1" max="40" placeholder="全局 ${g.steps || ""}" value="${ov.steps !== undefined ? ov.steps : ""}"></div>
-                <div class="dbg-row"><label>采样器${ovMark("sampler")}</label><select id="dbg-sampler">${samplerOpts}</select></div>
-                <div class="dbg-row"><label>引擎${ovMark("turbo_lora")}</label><select id="dbg-engine">
-                  <option value="">(全局默认)</option>
-                  <option value="-"${ov.turbo_lora === "-" ? " selected" : ""}>🚫 禁用引擎(全步数)</option>
-                  ${(d.engines || []).map((en) => `<option value="${esc(en)}"${ov.turbo_lora === en ? " selected" : ""}>${esc(en)}</option>`).join("")}
-                </select></div>
-                <div class="dbg-row"><label>负面词${ovMark("neg_prompt")}</label><input id="dbg-neg" type="text" placeholder="全局默认" value="${esc(ov.neg_prompt || "")}"></div>
-                <div class="dbg-row"><label>备注</label><input id="dbg-note" type="text" placeholder="为什么覆盖(可选)" value="${esc(ov.note || "")}"></div>
-              </div>
-              <div class="manju-row" style="justify-content:center;gap:10px;margin-top:14px">
-                <button id="dbg-save" class="hrs-btn">💾 保存参数</button>
-                <button id="dbg-save-run" class="hrs-btn hrs-btn-primary">🎬 保存并重渲此镜</button>
-                <button id="dbg-reset" class="hrs-btn">↺ 重置默认</button>
-                <button id="dbg-close" class="hrs-btn">关闭</button>
-              </div>
-              ${promptHtml}
-            </div>`, true);
-          const collect = () => {
-            const o = {};
-            const num = (id) => { const v = $(id).value.trim(); return v === "" ? null : parseInt(v, 10); };
-            const seed = num("dbg-seed"); if (seed !== null && !isNaN(seed)) o.seed = seed;
-            const steps = num("dbg-steps"); if (steps !== null && !isNaN(steps) && steps > 0) o.steps = steps;
-            if ($("dbg-sampler").value) o.sampler = $("dbg-sampler").value;
-            if ($("dbg-engine").value) o.turbo_lora = $("dbg-engine").value;
-            if ($("dbg-neg").value.trim()) o.neg_prompt = $("dbg-neg").value.trim();
-            if ($("dbg-note").value.trim()) o.note = $("dbg-note").value.trim();
-            return o;
-          };
-          const save = (run) => {
-            const o = collect();
-            post("/api/manju/shot/override", { config: this.project, episode: ep, shot: shotId, override: o })
-              .then(() => {
-                this.closeModal();
-                if (run) this._runShotsRender(ep, String(shotId));
-                else { this.loadRenderShots(); }
-              })
-              .catch((e) => alert("保存失败: " + e.message));
-          };
-          $("dbg-save").addEventListener("click", () => save(false));
-          $("dbg-save-run").addEventListener("click", () => save(true));
-          $("dbg-reset").addEventListener("click", () => {
-            post("/api/manju/shot/override", { config: this.project, episode: ep, shot: shotId, override: {} })
-              .then(() => { this.closeModal(); this.loadRenderShots(); })
-              .catch((e) => alert("重置失败: " + e.message));
-          });
-          $("dbg-close").addEventListener("click", () => this.closeModal());
-          // 2026-09-02 二期:提示词复制/展开收起
-          if ($("dbg-copy")) {
-            $("dbg-copy").addEventListener("click", () => {
-              const pre = document.querySelector(".dbg-prompt pre");
-              if (!pre) return;
-              const ta = document.createElement("textarea");
-              ta.value = pre.textContent;
-              document.body.appendChild(ta);
-              ta.select();
-              try { document.execCommand("copy"); } catch (_e) { /* 忽略 */ }
-              document.body.removeChild(ta);
-              $("dbg-copy").textContent = "✅ 已复制";
-            });
-          }
-          if ($("dbg-pp")) {
-            $("dbg-pp").addEventListener("click", () => {
-              const pre = document.querySelector(".dbg-prompt pre");
-              if (pre) pre.classList.toggle("dbg-prompt-open");
-            });
-          }
+            this._shotDebugHTML(d, ep, shotId), true);
+          if (this._modalEl) this._modalEl.querySelector(".manju-modal-panel").classList.add("dbg-modal-panel");
+          this._shotDebugWire(d, ep, shotId, { studio: false });
         })
         .catch((e) => { this.closeModal(); alert("加载调试面板失败: " + e.message); });
+    },
+
+    /* 镜头调试·独立窗口工作台模式(全幅画布+右侧参数栏;由 ⤢ 独立窗口按钮/URL hash 直达) */
+    openShotStudio(ep, shotId) {
+      const q = "?config=" + encodeURIComponent(this.project) + "&episode=" + encodeURIComponent(ep) + "&shot=" + shotId;
+      this.openModal("🎛 单镜工作台 · 加载中…", '<div class="mc-d">正在拉取工作流…</div>', true);
+      get("/api/manju/shot/workflow" + q)
+        .then((d) => {
+          const panel = this._modalEl && this._modalEl.querySelector(".manju-modal-panel");
+          if (!panel) return; // 加载期间已被关闭
+          panel.classList.add("dbg-studio-panel");
+          this._modalEl.querySelector(".manju-modal-title").textContent =
+            `🎛 单镜工作台 · ${this.projName()} · ${ep} · 镜 ${String(shotId).padStart(2, "0")}${d.scene ? " · " + esc(d.scene) : ""}`;
+          this._modalEl.querySelector(".manju-modal-body").innerHTML = this._shotDebugHTML(d, ep, shotId);
+          this._shotDebugWire(d, ep, shotId, { studio: true });
+        })
+        .catch((e) => { this.closeModal(); alert("加载工作台失败: " + e.message); });
+    },
+
+    /* 调试面板 body(两栏布局;studio=true 时容器加 dbg-studio 类放大画布) */
+    _shotDebugHTML(d, ep, shotId) {
+      const ov = d.override || {};
+      const g = d.globals || {};
+      const isOverride = (k) => ov[k] !== undefined && ov[k] !== null && ov[k] !== "";
+      // 参考图(侧栏顶部横排)
+      const refs = (d.refs || []).map((rf) => {
+        const label = rf.view ? rf.name + "·" + rf.view : rf.name;
+        return `<div class="dbg-ref" title="${esc(rf.kind)} ${esc(label)}">
+          <img src="/api/manju/shot/asset?config=${encodeURIComponent(this.project)}&file=${encodeURIComponent(rf.file)}"
+               onerror="this.style.display='none'" loading="lazy">
+          <span>${esc(label)}</span>
+        </div>`;
+      }).join("");
+      // 参数字段(图标+覆盖徽章+全局值提示;有镜级覆盖的字段高亮)
+      const fld = (id, icon, label, key, inner, hint) =>
+        `<div class="dbg2-field${isOverride(key) ? " is-ov" : ""}">
+           <label for="${id}"><span class="dbg2-fic">${icon}</span>${label}${isOverride(key) ? '<span class="dbg2-ovb">镜级覆盖</span>' : ""}</label>
+           ${inner}
+           ${hint ? `<span class="dbg2-hint">${hint}</span>` : ""}
+         </div>`;
+      const numIn = (id, val, ph, extra) =>
+        `<input id="${id}" class="manju-input" type="number" placeholder="${esc(ph)}" value="${val !== undefined ? val : ""}" ${extra || ""}>`;
+      const samplerOpts = ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "uni_pc", "heun", "ddim"].map((s) =>
+        `<option value="${s}"${(ov.sampler || g.sampler || "euler") === s ? " selected" : ""}>${esc(s)}</option>`).join("");
+      const icSeed = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3c-4.97 0-9 1.34-9 3s4.03 3 9 3 9-1.34 9-3-4.03-3-9-3z"/><path d="M21 12c0 1.66-4.03 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/></svg>';
+      const icSteps = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20h16M6 16l4-6 4 4 4-8"/></svg>';
+      const icSamp = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 3.6"/></svg>';
+      const icEng = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>';
+      const icNeg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M5.5 5.5l13 13"/></svg>';
+      const icNote = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
+      const fields =
+        fld("dbg-seed", icSeed, "Seed", "seed",
+          numIn("dbg-seed", ov.seed, "全局 " + (g.seed || "—")),
+          "策略 " + esc(g.seed_policy || "fixed")) +
+        fld("dbg-steps", icSteps, "步数", "steps",
+          numIn("dbg-steps", ov.steps, "全局 " + (g.steps || "—"), 'min="1" max="40"'),
+          "留空=随全局") +
+        fld("dbg-sampler", icSamp, "采样器", "sampler",
+          `<select id="dbg-sampler" class="manju-input">${samplerOpts}</select>`, "") +
+        fld("dbg-engine", icEng, "引擎", "turbo_lora",
+          `<select id="dbg-engine" class="manju-input"><option value="">(全局默认)</option><option value="-"${ov.turbo_lora === "-" ? " selected" : ""}>🚫 禁用引擎(全步数)</option>${(d.engines || []).map((en) => `<option value="${esc(en)}"${ov.turbo_lora === en ? " selected" : ""}>${esc(en)}</option>`).join("")}</select>`, "") +
+        fld("dbg-neg", icNeg, "负面词", "neg_prompt",
+          `<input id="dbg-neg" class="manju-input" type="text" placeholder="全局默认" value="${esc(ov.neg_prompt || "")}">`, "镜级追加负面提示词") +
+        fld("dbg-note", icNote, "备注", "note",
+          `<input id="dbg-note" class="manju-input" type="text" placeholder="为什么覆盖(可选)" value="${esc(ov.note || "")}">`, "");
+      // 最终提示词(主栏底部,默认收起)
+      const promptHtml = d.prompt
+        ? `<div class="dbg-sec-title">最终 H3 提示词(渲染输入)</div>
+           <div class="dbg-prompt"><pre>${esc(d.prompt)}</pre></div>
+           <div class="manju-row" style="gap:6px;margin-top:6px">
+             <button id="dbg-copy" class="hrs-btn">📋 复制提示词</button>
+             <button id="dbg-pp" class="hrs-btn">↕ 展开/收起</button>
+           </div>`
+        : "";
+      return `<div class="dbg2">
+        <div class="dbg2-main">
+          <div id="dbg-canvas"></div>
+          <div class="dbg-cache">条件缓存: <code>${esc(d.cache || "—")}</code>${d.chained ? ' <span class="rs-badge rs-stale">接缝镜</span>' : ""}</div>
+          <div class="dbg-sec-title">中间产物(缓存/接缝 latent/抽帧)</div>
+          <div id="dbg-inter"></div>
+          ${promptHtml}
+        </div>
+        <div class="dbg2-side">
+          ${refs ? `<div class="dbg2-side-sec"><div class="dbg-sec-title">参考图(${(d.refs || []).length})</div><div class="dbg-refs">${refs}</div></div>` : ""}
+          <div class="dbg2-side-sec"><div class="dbg-sec-title">参数(<span class="dbg2-ovb dbg2-ovb-inline">镜级覆盖</span>=优先于全局)</div>
+            <div class="dbg2-fields">${fields}</div>
+          </div>
+          <div class="dbg2-side-sec"><div class="dbg-sec-title">模板(项目级,跨集复用)</div>
+            <div class="manju-row" style="gap:6px;flex-wrap:wrap">
+              <input id="dbg-tpl-name" class="manju-input" type="text" placeholder="模板名(如:夜景打斗)" style="flex:1;min-width:130px">
+              <button id="dbg-tpl-save" class="hrs-btn">💾 存为模板</button>
+              <button id="dbg-tpl-open" class="hrs-btn">📚 模板库</button>
+            </div>
+          </div>
+          <div class="dbg2-actions">
+            <button id="dbg-save-run" class="hrs-btn hrs-btn-primary dbg2-act-main">🎬 保存并重渲此镜</button>
+            <button id="dbg-save" class="hrs-btn">💾 保存参数</button>
+            <button id="dbg-reset" class="hrs-btn dbg2-act-danger">↺ 重置默认</button>
+            <button id="dbg-close" class="hrs-btn">关闭</button>
+          </div>
+        </div>
+      </div>`;
+    },
+
+    /* 调试面板事件绑定(两模式共用;studio=true 为独立窗口工作台) */
+    _shotDebugWire(d, ep, shotId, opts) {
+      // 2026-09-03 三期:节点画布(拖拽+SVG连线+缩放平移)+ 中间产物区
+      this.mountWorkflowCanvas($("dbg-canvas"), d, ep, shotId);
+      this.loadShotIntermediates(ep, shotId);
+      const collect = () => {
+        const o = {};
+        const num = (id) => { const v = $(id).value.trim(); return v === "" ? null : parseInt(v, 10); };
+        const seed = num("dbg-seed"); if (seed !== null && !isNaN(seed)) o.seed = seed;
+        const steps = num("dbg-steps"); if (steps !== null && !isNaN(steps) && steps > 0) o.steps = steps;
+        if ($("dbg-sampler").value) o.sampler = $("dbg-sampler").value;
+        if ($("dbg-engine").value) o.turbo_lora = $("dbg-engine").value;
+        if ($("dbg-neg").value.trim()) o.neg_prompt = $("dbg-neg").value.trim();
+        if ($("dbg-note").value.trim()) o.note = $("dbg-note").value.trim();
+        return o;
+      };
+      const save = (run) => {
+        const o = collect();
+        post("/api/manju/shot/override", { config: this.project, episode: ep, shot: shotId, override: o })
+          .then(() => {
+            if (run) this._runShotsRender(ep, String(shotId)); // 内部关弹窗+触发渲染
+            else if (opts.studio) { this.closeModal(); this.setNote("已保存镜级参数"); this.openShotStudio(ep, shotId); } // 工作台原地重开刷新覆盖徽章
+            else {
+              this.closeModal();
+              this.setNote("已保存镜级参数");
+              this.loadRenderShots();
+            }
+          })
+          .catch((e) => alert("保存失败: " + e.message));
+      };
+      $("dbg-save").addEventListener("click", () => save(false));
+      $("dbg-save-run").addEventListener("click", () => save(true));
+      $("dbg-reset").addEventListener("click", async () => {
+        if (!(await this.uiConfirm({
+          title: "重置此镜参数?",
+          message: "清除该镜的全部镜级覆盖(seed/steps/采样器/引擎/负面词/备注),恢复跟随全局参数。",
+          confirmText: "确认重置",
+        }))) return;
+        try {
+          await post("/api/manju/shot/override", { config: this.project, episode: ep, shot: shotId, override: {} });
+          this.closeModal();
+          this.setNote("已重置为全局参数");
+          this.loadRenderShots();
+        } catch (e) { alert("重置失败: " + e.message); }
+      });
+      $("dbg-close").addEventListener("click", () => this.closeModal());
+      // 2026-09-03 三期:模板存/开(存=当前表单参数快照;库=列表+批量应用;应用后按模式重开)
+      $("dbg-tpl-save").addEventListener("click", () => {
+        const name = ($("dbg-tpl-name").value || "").trim();
+        const o = collect();
+        const hasParam = ["seed", "steps", "sampler", "turbo_lora", "neg_prompt"].some((k) => o[k] !== undefined);
+        if (!name) { alert("请先填写模板名"); return; }
+        if (!hasParam) { alert("当前表单无可存参数(全为空,仅备注不算模板)"); return; }
+        post("/api/manju/shot/template/save", { config: this.project, name, note: o.note || "", override: o })
+          .then(() => { $("dbg-tpl-save").textContent = "✅ 已存"; })
+          .catch((e) => alert("存模板失败: " + e.message));
+      });
+      const reopen = opts.studio
+        ? () => this.openShotStudio(ep, shotId)
+        : () => this.openShotDebug(ep, shotId);
+      $("dbg-tpl-open").addEventListener("click", () => this.openTplLibrary(ep, shotId, reopen));
+      // 2026-09-02 二期:提示词复制/展开收起
+      if ($("dbg-copy")) {
+        $("dbg-copy").addEventListener("click", () => {
+          const pre = document.querySelector(".dbg-prompt pre");
+          if (!pre) return;
+          const ta = document.createElement("textarea");
+          ta.value = pre.textContent;
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand("copy"); } catch (_e) { /* 忽略 */ }
+          document.body.removeChild(ta);
+          $("dbg-copy").textContent = "✅ 已复制";
+        });
+      }
+      if ($("dbg-pp")) {
+        $("dbg-pp").addEventListener("click", () => {
+          const pre = document.querySelector(".dbg-prompt pre");
+          if (pre) pre.classList.toggle("dbg-prompt-open");
+        });
+      }
+    },
+
+    /* 2026-09-03 画布三期:工作流节点画布(节点拖拽+SVG贝塞尔连线+滚轮缩放+空白平移+
+       双击适配+一键重排)。节点坐标默认用后端自动布局,拖动后存 localStorage 按(项目/集/镜)记忆 */
+    mountWorkflowCanvas(host, d, ep, shotId) {
+      if (!host) return;
+      const nodes = d.nodes || [], links = d.links || [];
+      if (!nodes.length) { host.innerHTML = '<div class="mc-d">无节点数据</div>'; return; }
+      // 兼容降级:旧版 API 无 x/y 坐标(重启 exe 前)→ 网格布局兜底,无连线不阻塞
+      if (!nodes.some((n) => typeof n.x === "number" && typeof n.y === "number")) {
+        nodes.forEach((n, i) => { n.x = (i % 4) * 300; n.y = Math.floor(i / 4) * 150; });
+        links.length = 0;
+      }
+      const key = "wfc_" + (this.project || "") + "_" + ep + "_" + shotId;
+      let saved = {};
+      try { saved = JSON.parse(localStorage.getItem(key) || "{}") || {}; } catch (_e) { saved = {}; }
+      const pos = {}, byId = {};
+      nodes.forEach((n) => { byId[n.id] = n; pos[n.id] = saved[n.id] || { x: n.x, y: n.y }; });
+      const view = { x: 16, y: 16, k: 1 };
+      host.innerHTML =
+        `<div class="wfc-bar">
+           <span class="wfc-hint">🖱 拖节点标题移动 · 空白拖平移 · 滚轮缩放 · 双击适配 · 点节点名展开参数</span>
+           <span class="wfc-zoom">100%</span>
+           <button type="button" class="wfc-btn wfc-pop" data-act="pop" title="在独立浏览器窗口展开工作台(大画布+参数栏,可拖到副屏)">⛶ 独立窗口</button>
+           <button type="button" class="wfc-btn" data-act="fit">⤢ 适配</button>
+           <button type="button" class="wfc-btn" data-act="relayout">⊞ 重排</button>
+           <button type="button" class="wfc-btn" data-act="one">1:1</button>
+         </div>
+         <div class="wfc-canvas"><div class="wfc-view"><svg class="wfc-svg"></svg></div></div>`;
+      const canvasEl = host.querySelector(".wfc-canvas");
+      const viewEl = host.querySelector(".wfc-view");
+      const svgEl = host.querySelector(".wfc-svg");
+      const zoomEl = host.querySelector(".wfc-zoom");
+      // 独立窗口工作台内不再提供「⛶ 独立窗口」(本窗已是工作台,防套娃开窗)
+      if (this._parseStudioHash()) host.querySelector(".wfc-pop").style.display = "none";
+      const nodeEl = (id) => viewEl.querySelector('.wfc-node[data-id="' + id + '"]');
+      // 节点 DOM(卡片结构沿用二期 wf-*:标题/类名/参数折叠;两侧端口点与连线公式同源均分)
+      const dots = (n) => Array.from({ length: n }, (_, i) =>
+        `<i style="top:${Math.round(((i + 1) / (n + 1)) * 100)}%"></i>`).join("");
+      nodes.forEach((nd) => {
+        const el = document.createElement("div");
+        el.className = "wfc-node";
+        el.dataset.id = nd.id;
+        el.dataset.out = String(nd.out || 0);
+        const ps = Object.entries(nd.params || {}).map(([k, v]) =>
+          `<div class="wf-p"><span class="wf-pk">${esc(k)}</span><span class="wf-pv">${esc(String(v))}</span></div>`).join("");
+        el.innerHTML =
+          `<div class="wf-name" title="${esc(nd.name)}">${esc(nd.name)}</div>
+           <div class="wf-class">${esc(nd.class)}</div>
+           ${ps ? '<div class="wf-params">' + ps + "</div>" : ""}
+           ${nd.in ? '<span class="wfc-dots wfc-in">' + dots(nd.in) + "</span>" : ""}
+           ${nd.out ? '<span class="wfc-dots wfc-out">' + dots(nd.out) + "</span>" : ""}`;
+        const nameEl = el.querySelector(".wf-name");
+        if (ps) nameEl.addEventListener("click", () => { el.classList.toggle("wf-open"); renderLinks(); });
+        nameEl.addEventListener("mousedown", (e) => startDrag(e, nd.id));
+        viewEl.appendChild(el);
+      });
+      const renderLinks = () => {
+        let html = "";
+        links.forEach((l) => {
+          const fa = byId[l.from], tb = byId[l.to];
+          const a = nodeEl(l.from), b = nodeEl(l.to);
+          if (!fa || !tb || !a || !b) return;
+          const outN = Math.max(fa.out, 1), inN = Math.max(tb.in, 1);
+          const x1 = pos[l.from].x + a.offsetWidth;
+          const y1 = pos[l.from].y + (a.offsetHeight * (l.from_port + 1)) / (outN + 1);
+          const x2 = pos[l.to].x;
+          const y2 = pos[l.to].y + (b.offsetHeight * (l.to_port + 1)) / (inN + 1);
+          const dx = Math.max(36, Math.abs(x2 - x1) / 2);
+          html += `<path d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}"></path>`;
+        });
+        svgEl.innerHTML = html;
+      };
+      const render = () => {
+        viewEl.style.transform = "translate(" + view.x + "px," + view.y + "px) scale(" + view.k + ")";
+        zoomEl.textContent = Math.round(view.k * 100) + "%";
+        nodes.forEach((nd) => {
+          const el = nodeEl(nd.id);
+          el.style.left = pos[nd.id].x + "px";
+          el.style.top = pos[nd.id].y + "px";
+        });
+        renderLinks();
+      };
+      const savePos = () => { try { localStorage.setItem(key, JSON.stringify(pos)); } catch (_e) { /* 满/隐私模式忽略 */ } };
+      const startDrag = (e, id) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const sx = e.clientX, sy = e.clientY, ox = pos[id].x, oy = pos[id].y;
+        const move = (ev) => {
+          pos[id] = { x: ox + (ev.clientX - sx) / view.k, y: oy + (ev.clientY - sy) / view.k };
+          const el = nodeEl(id);
+          el.style.left = pos[id].x + "px";
+          el.style.top = pos[id].y + "px";
+          renderLinks();
+        };
+        const up = () => {
+          document.removeEventListener("mousemove", move);
+          document.removeEventListener("mouseup", up);
+          savePos();
+        };
+        document.addEventListener("mousemove", move);
+        document.addEventListener("mouseup", up);
+      };
+      // 空白拖=平移
+      canvasEl.addEventListener("mousedown", (e) => {
+        if (e.button !== 0 || e.target.closest(".wfc-node")) return;
+        const sx = e.clientX, sy = e.clientY, ox = view.x, oy = view.y;
+        canvasEl.classList.add("wfc-grabbing");
+        const move = (ev) => { view.x = ox + ev.clientX - sx; view.y = oy + ev.clientY - sy; render(); };
+        const up = () => {
+          canvasEl.classList.remove("wfc-grabbing");
+          document.removeEventListener("mousemove", move);
+          document.removeEventListener("mouseup", up);
+        };
+        document.addEventListener("mousemove", move);
+        document.addEventListener("mouseup", up);
+      });
+      // 滚轮=缩放(以指针为锚)
+      canvasEl.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const rect = canvasEl.getBoundingClientRect();
+        const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+        const k2 = Math.min(2, Math.max(0.35, view.k * (e.deltaY < 0 ? 1.12 : 0.89)));
+        view.x = mx - (mx - view.x) * (k2 / view.k);
+        view.y = my - (my - view.y) * (k2 / view.k);
+        view.k = k2;
+        render();
+      }, { passive: false });
+      const fit = () => {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        nodes.forEach((nd) => {
+          const el = nodeEl(nd.id);
+          if (!el) return;
+          minX = Math.min(minX, pos[nd.id].x); minY = Math.min(minY, pos[nd.id].y);
+          maxX = Math.max(maxX, pos[nd.id].x + el.offsetWidth);
+          maxY = Math.max(maxY, pos[nd.id].y + el.offsetHeight);
+        });
+        const cw = canvasEl.clientWidth - 24, ch = canvasEl.clientHeight - 24;
+        const k = Math.min(1.15, cw / (maxX - minX), ch / (maxY - minY));
+        view.k = Math.max(0.35, k);
+        view.x = (cw - (maxX - minX) * view.k) / 2 - minX * view.k + 12;
+        view.y = (ch - (maxY - minY) * view.k) / 2 - minY * view.k + 12;
+        render();
+      };
+      host.querySelector(".wfc-bar").addEventListener("click", (e) => {
+        const act = e.target.dataset && e.target.dataset.act;
+        if (!act) return;
+        if (act === "pop") this.popShotStudio(ep, shotId);
+        else if (act === "fit") fit();
+        else if (act === "relayout") {
+          try { localStorage.removeItem(key); } catch (_e) { /* 忽略 */ }
+          nodes.forEach((nd) => { pos[nd.id] = { x: nd.x, y: nd.y }; });
+          render();
+          fit();
+        } else if (act === "one") { view.k = 1; view.x = 16; view.y = 16; render(); }
+      });
+      canvasEl.addEventListener("dblclick", (e) => { if (!e.target.closest(".wfc-node")) fit(); });
+      requestAnimationFrame(() => { render(); fit(); });
+    },
+
+    /* 2026-09-03 画布三期:中间产物区(条件缓存级别/接缝 latent 态/成片抽帧带) */
+    loadShotIntermediates(ep, shotId) {
+      const host = $("dbg-inter");
+      if (!host) return;
+      const q = "?config=" + encodeURIComponent(this.project) + "&episode=" + encodeURIComponent(ep) + "&shot=" + shotId;
+      get("/api/manju/shot/intermediates" + q).then((im) => {
+        const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+        const state = (x) => x.exists
+          ? '<span class="itmd-ok">✓ ' + fmtSize(x.size) + " · " + esc(x.mtime) + "</span>"
+          : '<span class="itmd-miss">✗ 缺失</span>';
+        let html =
+          `<div class="itmd-row"><span class="itmd-k">条件缓存</span><code class="itmd-code">${esc(im.cache.name)}</code>`;
+        if (im.cache.info.exists) {
+          html += '<span class="itmd-badge ' + (im.cache.level === "rich" ? "itmd-rich" : "itmd-warn") + '">' +
+            (im.cache.level === "rich" ? "含参考图编码" : "纯文本") + "</span>";
+        }
+        html += state(im.cache.info) + "</div>";
+        html +=
+          `<div class="itmd-row"><span class="itmd-k">接缝 latent</span><span class="itmd-lab">上一镜</span>${state(im.latent.prev)}` +
+          `<span class="itmd-lab">本镜</span>${state(im.latent.current)}<code class="itmd-code">${esc(im.latent.ns)}</code></div>`;
+        if (im.clip.exists) {
+          const frames = (im.frames || []).map((t, i) =>
+            `<img class="itmd-frame" loading="lazy" data-t="${t}" title="t=${t}s 点击放大" ` +
+            `src="/api/manju/shot/frame${q}&t=${t}&i=${i}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'itmd-frame-err',textContent:'抽帧失败'}))">`).join("");
+          html += `<div class="itmd-frames">${frames}</div>`;
+        } else {
+          html += '<div class="itmd-none">成片未渲染,抽帧带在渲染后可用</div>';
+        }
+        host.innerHTML = html;
+        host.querySelectorAll(".itmd-frame").forEach((img) => {
+          img.addEventListener("click", () => {
+            this.openModal(`🖼 ${ep} · 镜 ${shotId} · t=${img.dataset.t}s`,
+              '<img style="max-width:100%;border-radius:10px;display:block;margin:0 auto" src="' + img.src + '">');
+          });
+        });
+      }).catch(() => { host.innerHTML = ""; });
+    },
+
+    /* 2026-09-03 画布三期:模板库弹窗(列表+应用此镜/整集+删除;应用后重开调试面板刷新)
+       reopen=应用后的重开回调(弹窗模式重开弹窗/工作台模式重开工作台,2026-09-03 三期+) */
+    openTplLibrary(ep, shotId, reopen) {
+      get("/api/manju/shot/templates?config=" + encodeURIComponent(this.project)).then((d) => {
+        const list = d.templates || [];
+        const items = list.length ? list.map((t) => {
+          const ov = t.override || {};
+          const parts = [];
+          if (ov.seed !== undefined && ov.seed !== null) parts.push("seed=" + ov.seed);
+          if (ov.steps) parts.push("steps=" + ov.steps);
+          if (ov.sampler) parts.push(ov.sampler);
+          if (ov.turbo_lora === "-") parts.push("禁用引擎");
+          else if (ov.turbo_lora) parts.push(String(ov.turbo_lora));
+          if (ov.neg_prompt) parts.push("负面词");
+          return `<div class="tpl-item">
+            <div class="tpl-info">
+              <div class="tpl-name">${esc(t.name)}</div>
+              <div class="tpl-desc">${esc(parts.join(" · ") || "—")}${t.note ? " · " + esc(t.note) : ""} · ${(t.updated || "").slice(5, 16).replace("T", " ")}</div>
+            </div>
+            <div class="tpl-btns">
+              <button class="hrs-btn tpl-btn" data-act="one" data-name="${esc(t.name)}">应用此镜</button>
+              <button class="hrs-btn tpl-btn" data-act="all" data-name="${esc(t.name)}">应用整集</button>
+              <button class="hrs-btn tpl-btn" data-act="del" data-name="${esc(t.name)}">删除</button>
+            </div>
+          </div>`;
+        }).join("") : '<div class="mc-d">暂无模板:调好参数后「💾 存为模板」</div>';
+        this.openModal("📚 参数模板(项目级,跨集复用)", `<div class="tpl-list">${items}</div>`);
+        const top = this._modalEl;
+        if (!top) return;
+        top.querySelectorAll(".tpl-btn").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const name = btn.dataset.name, act = btn.dataset.act;
+            if (act === "del") {
+              post("/api/manju/shot/template/delete", { config: this.project, name })
+                .then(() => { this.closeModal(); this.openTplLibrary(ep, shotId); })
+                .catch((e) => alert("删除失败: " + e.message));
+              return;
+            }
+            const tpl = list.find((x) => x.name === name);
+            if (!tpl) return;
+            const applyAll = act === "all";
+            this.openModal(
+              applyAll ? `📚 模板「${esc(name)}」→ 整集 ${ep}` : `📚 模板「${esc(name)}」→ 镜 ${shotId}`,
+              `<div class="manju-confirm">
+                 <p class="mc-q">${applyAll ? "应用到本集全部镜头?" : "应用到当前镜头?"}</p>
+                 <p class="mc-d">模板参数写入镜级覆盖(已有其它覆盖字段保留);覆盖变化纳入指纹,相关镜下次渲染自动按新参数生效。</p>
+                 <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
+                   <button id="tpl-yes" class="hrs-btn hrs-btn-primary">确认应用</button>
+                   <button id="tpl-no" class="hrs-btn">取消</button>
+                 </div>
+               </div>`);
+            $("tpl-yes").addEventListener("click", () => {
+              post("/api/manju/shot/template/apply", {
+                config: this.project, episode: ep,
+                shots: applyAll ? [] : [shotId],
+                override: tpl.override,
+              }).then((r) => {
+                this.closeModal();           // 关确认弹窗
+                this.closeModal();           // 关模板库
+                this.logNote(`(📚 模板「${name}」已应用 ${r.applied} 镜,下次渲染生效)`);
+                (reopen ? reopen() : this.openShotDebug(ep, shotId)); // 重开调试面板/工作台,覆盖状态即时可见
+              }).catch((e) => alert("应用失败: " + e.message));
+            });
+            $("tpl-no").addEventListener("click", () => this.closeModal());
+          });
+        });
+      }).catch((e) => alert("模板列表加载失败: " + e.message));
+    },
+
+    /* ============ 2026-09-03 视频管理三弹窗(成品列表封面 ⋮ 菜单) ============ */
+
+    /* 当前项目显示名(configPath 尾段目录名) */
+    projName() {
+      const seg = String(this.project || "").replace(/\\/g, "/").split("/").filter(Boolean);
+      return seg.length ? seg[seg.length - 1].replace(/\.json$/i, "") : "—";
+    },
+
+    /* 封面单击/菜单入口:切换当前项目(成品列表 ↔ 工作台联动) */
+    activateProject(cfgPath) {
+      if (!cfgPath) return false;
+      if (this.project === cfgPath) return true; // 已是当前项目
+      this.loadProjects(cfgPath); // 拉列表+选中+加载该项目(方案/产物/状态全链刷新)
+      return true;
+    },
+
+    /* 视频管理(独立弹窗):按集浏览分镜中文详情 + 单镜编辑/调试/播放。
+       inPlace=true 时原地刷新顶层弹窗(刷新按钮/保存后联动),不压新层 */
+    openVideoManager(inPlace) {
+      if (this.denyNoProject()) return;
+      const ep = this._vmEp || (this.episode && this.episode !== "0" ? this.episode : "");
+      get("/api/manju/shots?config=" + encodeURIComponent(this.project) +
+        "&episode=" + encodeURIComponent(ep))
+        .then((d) => {
+          const episodes = d.episodes || [];
+          if (!episodes.length) {
+            const emptyHtml = '<div class="mc-d" style="padding:20px;text-align:center">暂无分镜方案——先跑「1 方案」生成分镜</div>';
+            if (inPlace) this.rerenderModal("🎬 视频管理 · " + this.projName(), emptyHtml, true);
+            else this.openModal("🎬 视频管理 · " + this.projName(), emptyHtml, true, () => this.openVideoManager(true));
+            return;
+          }
+          this._vmData = d;
+          let cur = episodes.find((x) => x.episode === ep);
+          if (!cur) cur = episodes[0];
+          this._vmEp = cur.episode;
+          // 集下拉 + 汇总
+          const opts = episodes.map((x) =>
+            `<option value="${esc(x.episode)}"${x.episode === cur.episode ? " selected" : ""}>${esc(x.episode)} · ${x.total} 镜 / 已渲 ${x.rendered}</option>`).join("");
+          const badges = (s) => {
+            let h = "";
+            if (s.rendered) h += '<span class="itmd-badge itmd-rich">已渲染</span>';
+            else h += '<span class="itmd-badge itmd-warn">未渲染</span>';
+            if (s.stale) h += '<span class="itmd-badge rs-qcf-b">⚠️ 过期</span>';
+            if (s.override) h += '<span class="itmd-badge" style="color:#8a6dff;border-color:#8a6dff66">⚙ 覆盖</span>';
+            if (s.qc_failed) h += '<span class="itmd-badge rs-qcf-b">质检失败</span>';
+            return h;
+          };
+          const charsOf = (s) => Array.isArray(s.characters) && s.characters.length ? esc(s.characters.join("、")) : '<span class="manju-meta">无角色</span>';
+          const cards = (cur.shots || []).map((s) => `
+            <div class="vwm-card" data-id="${s.id}">
+              <div class="vwm-head">
+                <span class="vwm-no">${String(s.id).padStart(2, "0")}</span>
+                <span class="vwm-badges">${badges(s)}</span>
+                <span class="vwm-actions">
+                  ${s.rendered ? `<button class="hrs-btn vwm-btn" data-vmplay="${s.id}" title="播放该镜视频">▶</button>` : ""}
+                  <button class="hrs-btn vwm-btn" data-vmdbg="${s.id}" title="镜头调试画布(节点图/参数覆盖/中间产物)">🎛</button>
+                  <button class="hrs-btn vwm-btn hrs-btn-primary" data-vmedit="${s.id}" title="编辑本镜分镜(中文内容+提示词)">✏️ 编辑</button>
+                </span>
+              </div>
+              <div class="vwm-detail">
+                <div class="vwm-line"><span class="vwm-k">场景</span>${esc(s.scene || "—")}<span class="vwm-k" style="margin-left:10px">景别</span>${esc(s.shot_size || "—")}<span class="vwm-k" style="margin-left:10px">运镜</span>${esc(s.camera || "—")}<span class="vwm-k" style="margin-left:10px">时长</span>${esc(String(s.duration || 5))}s</div>
+                <div class="vwm-line"><span class="vwm-k">角色</span>${charsOf(s)}</div>
+                ${s.action ? `<div class="vwm-line"><span class="vwm-k">动作</span>${esc(s.action)}</div>` : ""}
+                ${s.dialogue ? `<div class="vwm-line"><span class="vwm-k">台词</span><span class="vwm-say">${esc(s.dialogue).replace(/\n/g, "<br>")}</span></div>` : ""}
+                ${s.narration ? `<div class="vwm-line"><span class="vwm-k">旁白</span>${esc(s.narration)}</div>` : ""}
+              </div>
+            </div>`).join("");
+          const html = `<div class="vwm-wrap">
+            <div class="manju-row" style="gap:8px;align-items:center">
+              <label class="manju-meta">分集</label>
+              <select id="vwm-ep" class="manju-select" style="flex:1">${opts}</select>
+              <span class="manju-meta">${cur.rendered}/${cur.total} 已渲染${cur.stale ? " · ⚠️ " + cur.stale + " 镜过期" : ""}</span>
+            </div>
+            <div class="vwm-list">${cards || '<div class="mc-d">该集无镜头</div>'}</div>
+          </div>`;
+          const title = "🎬 视频管理 · " + this.projName();
+          if (inPlace && this._modalEl && document.body.contains(this._modalEl)) {
+            this.rerenderModal(title, html, true);
+          } else {
+            this.openModal(title, html, true, () => this.openVideoManager(true));
+          }
+          const top = this._modalEl;
+          if (!top) return;
+          const epSel = top.querySelector("#vwm-ep");
+          if (epSel) epSel.addEventListener("change", () => {
+            this._vmEp = epSel.value;
+            this.openVideoManager(true);
+          });
+          top.querySelectorAll("[data-vmplay]").forEach((btn) =>
+            btn.addEventListener("click", () => {
+              const id = btn.dataset.vmplay;
+              this.openModal(`▶ ${this._vmEp} · 镜 ${String(id).padStart(2, "0")}`,
+                `<div class="manju-video-preview"><video src="/api/manju/shot/video?config=${encodeURIComponent(this.project)}&episode=${encodeURIComponent(this._vmEp)}&shot=${id}" controls autoplay></video></div>`);
+            })
+          );
+          top.querySelectorAll("[data-vmdbg]").forEach((btn) =>
+            btn.addEventListener("click", () => this.openShotDebug(this._vmEp, parseInt(btn.dataset.vmdbg, 10)))
+          );
+          top.querySelectorAll("[data-vmedit]").forEach((btn) =>
+            btn.addEventListener("click", () => this.openShotEditForm(this._vmEp, parseInt(btn.dataset.vmedit, 10)))
+          );
+        })
+        .catch((e) => alert("分镜列表加载失败: " + e.message));
+    },
+
+    /* 单镜编辑表单(视频管理子弹窗):中文字段 + 可折叠 H3 提示词;
+       保存写回方案——台词变化自动逐句同步进提示词,时长/场景/角色/提示词变化
+       纳入渲染指纹→该镜下次渲染自动重出 */
+    openShotEditForm(ep, shotId) {
+      const epData = this._vmData && (this._vmData.episodes || []).find((x) => x.episode === ep);
+      const s = epData && (epData.shots || []).find((x) => x.id === shotId);
+      if (!s) { alert("镜头数据缺失,请刷新"); return; }
+      const chars = Array.isArray(s.characters) ? s.characters.join(",") : "";
+      const nn = String(shotId).padStart(2, "0");
+      this.openModal(`✏️ 编辑分镜 ${ep} · 镜 ${nn}`,
+        `<div class="sef-wrap">
+          <div class="dbg-form">
+            <div class="dbg-row"><label>场景</label><input id="sef-scene" type="text" value="${esc(s.scene || "")}"></div>
+            <div class="dbg-row"><label>景别</label><input id="sef-size" type="text" value="${esc(s.shot_size || "")}"></div>
+            <div class="dbg-row"><label>运镜</label><input id="sef-camera" type="text" value="${esc(s.camera || "")}"></div>
+            <div class="dbg-row"><label>登场角色(逗号分隔)</label><input id="sef-chars" type="text" value="${esc(chars)}"></div>
+            <div class="dbg-row"><label>时长(秒 1-60)</label><input id="sef-dur" type="number" min="1" max="60" value="${esc(String(s.duration || 5))}"></div>
+            <div class="dbg-row"><label>动作描述</label><textarea id="sef-action" rows="3">${esc(s.action || "")}</textarea></div>
+            <div class="dbg-row"><label>台词(每行「角色:台词」)</label><textarea id="sef-dlg" rows="3">${esc(s.dialogue || "")}</textarea></div>
+            <div class="dbg-row"><label>旁白</label><textarea id="sef-nar" rows="2">${esc(s.narration || "")}</textarea></div>
+          </div>
+          <details class="sef-prompt">
+            <summary>H3 提示词(高级,默认收起)——改台词会自动逐句同步;增删台词句数/改动作旁白请手动编辑此处</summary>
+            <textarea id="sef-prompt" rows="10" spellcheck="false">${esc(s.h3_prompt || "")}</textarea>
+          </details>
+          <div class="manju-row" style="justify-content:center;gap:10px;margin-top:12px">
+            <button id="sef-save" class="hrs-btn hrs-btn-primary">💾 保存</button>
+            <button id="sef-cancel" class="hrs-btn">取消</button>
+          </div>
+          <p class="mc-d" style="font-size:11px">保存即写回该集分镜方案;时长/场景/角色/提示词变化纳入渲染指纹,该镜在镜头列表会标 ⚠️ 过期,下次渲染自动重出。</p>
+        </div>`, true);
+      $("sef-cancel").addEventListener("click", () => this.closeModal());
+      $("sef-save").addEventListener("click", () => {
+        const fields = {
+          scene: $("sef-scene").value.trim(),
+          shot_size: $("sef-size").value.trim(),
+          camera: $("sef-camera").value.trim(),
+          action: $("sef-action").value.trim(),
+          dialogue: $("sef-dlg").value.trim(),
+          narration: $("sef-nar").value.trim(),
+          duration: parseInt($("sef-dur").value, 10) || 5,
+          characters: $("sef-chars").value.split(/[,，]/).map((x) => x.trim()).filter(Boolean),
+        };
+        const promptNow = $("sef-prompt").value;
+        if (promptNow !== (s.h3_prompt || "")) fields.h3_prompt = promptNow;
+        const btn = $("sef-save");
+        btn.disabled = true; btn.textContent = "保存中…";
+        post("/api/manju/shot/edit", { config: this.project, episode: ep, shot: shotId, fields })
+          .then((r) => {
+            this.closeModal(); // 关编辑表单,露出视频管理弹窗
+            let note = `(✏️ 镜 ${nn} 已保存: ${(r.updated || []).join("、")})`;
+            if (r.prompt_synced) note += ` 台词同步进提示词 ${r.prompt_synced} 句`;
+            if (r.prompt_sync_miss) note += `(${r.prompt_sync_miss} 句未命中,如需生效请手动编辑提示词)`;
+            this.logNote(note);
+            this.openVideoManager(true); // 原地刷新视频管理弹窗
+          })
+          .catch((e) => { btn.disabled = false; btn.textContent = "💾 保存"; alert("保存失败: " + e.message); });
+      });
+    },
+
+    /* 场景管理(独立弹窗):场景卡网格(图/名称/描述/登场镜数/尾帧)+预览+删除 */
+    openSceneManager(inPlace) {
+      if (this.denyNoProject()) return;
+      get("/api/manju/scenes?config=" + encodeURIComponent(this.project))
+        .then((d) => {
+          const scenes = d.scenes || [];
+          const cards = scenes.map((c) => {
+            const img = c.has_image
+              ? `<img class="scm-img" src="/api/fs/file?path=${encodeURIComponent(c.image)}" loading="lazy" alt="" data-scmpv="${esc(c.image)}" data-scmname="${esc(c.id)}">`
+              : `<div class="scm-img scm-noimg" title="场景图未生成(资产阶段重出)">🖼 暂无场景图</div>`;
+            return `<div class="scm-card">
+              ${img}
+              <button class="scm-del" data-scmdel="${esc(c.id)}" title="删除场景「${esc(c.id)}」图(主图+尾帧;下次资产阶段可重出)">✕</button>
+              <div class="scm-body">
+                <div class="scm-name">${esc(c.id)}<span class="itmd-badge${c.shots ? " itmd-rich" : " itmd-warn"}" style="margin-left:6px">${c.shots} 镜</span>${c.has_end ? '<span class="itmd-badge itmd-rich" style="margin-left:4px">尾帧</span>' : ""}</div>
+                <div class="scm-desc" title="${esc(c.description)}">${esc(c.description || "—")}</div>
+              </div>
+            </div>`;
+          }).join("");
+          const html = `<div class="scm-wrap">
+            <p class="mc-d">本集场景卡与场景图;点击图片放大预览。✕ 删除场景图(下次资产阶段自动重出)。</p>
+            <div class="scm-grid">${cards || '<div class="mc-d" style="padding:16px;text-align:center">暂无场景卡——先跑「1 方案」</div>'}</div>
+          </div>`;
+          const title = "🏞 场景管理 · " + this.projName() + (d.episode ? " · " + esc(d.episode) : "");
+          if (inPlace && this._modalEl && document.body.contains(this._modalEl)) {
+            this.rerenderModal(title, html, true);
+          } else {
+            this.openModal(title, html, true, () => this.openSceneManager(true));
+          }
+          const top = this._modalEl;
+          if (!top) return;
+          top.querySelectorAll(".scm-img").forEach((el) => {
+            if (!el.dataset.scmpv) return;
+            el.addEventListener("click", () => this.previewImage(el.dataset.scmpv, el.dataset.scmname));
+          });
+          top.querySelectorAll("[data-scmdel]").forEach((btn) =>
+            btn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              const id = btn.dataset.scmdel;
+              if (!(await this.uiConfirm({
+                title: "删除场景资产", confirmText: "删除",
+                message: `确认删除场景「<b>${id}</b>」的图?`,
+                list: ["主图 + 尾帧一并删除", "下次资产阶段可重新生成"],
+              }))) return;
+              post("/api/manju/output/delete", { config: this.project, scope: "scene", path: id })
+                .then((r) => {
+                  this.logNote(`(🗑 已删除场景「${id}」资产 ${((r.removed) || []).length} 张)`);
+                  this.openSceneManager(true);
+                })
+                .catch((err) => alert("删除失败: " + err.message));
+            })
+          );
+        })
+        .catch((e) => alert("场景列表加载失败: " + e.message));
     },
 
     /* 弹窗公共按钮的执行载体:only 空=该集全量,非空=指定镜 */
@@ -2843,26 +3531,44 @@
 
     /* ---- 项目体检:全项诊断 + 一键修复 ---- */
     /* 项目体检(整合):智能体检 items(可一键修复) + 环境自检文本(ComfyUI/模型/依赖就绪性,只读) */
-    openHealth() {
+    openHealth(inPlace) {
       if (this.denyNoProject()) return;
       this._healthJustFixed = false; // 新弹窗重置:成功态默认显示「已全部修复」,点击修复后才显示「修复成功」
-      this.openModal("🔍 项目体检", `<div class="mj-health">
-        <div class="mj-health-load" id="mj-hp-load">🤖 智能体正在体检项目…</div>
+      // 2026-09-03 UI 卡片化:智能体检卡片网格 + 环境自检折叠卡;刷新按钮走 inPlace 原地重渲
+      const body = `<div class="mj-health">
+        <div class="mj-health-load" id="mj-hp-load"><span class="hc-spin"></span>🤖 智能体正在体检项目…</div>
         <div id="mj-hp-items"></div>
-        <div class="mj-hp-env-sec">
-          <div class="mj-hp-env-title">🧰 环境自检（ComfyUI / 模型 / 依赖就绪性，只读）</div>
-          <pre id="mj-hp-env" class="manju-log">(运行中…)</pre>
-        </div>
-      </div>`, true);
+      </div>`;
+      if (inPlace && this._modalEl && document.body.contains(this._modalEl) && this._modalEl.querySelector("#mj-hp-items")) {
+        this.rerenderModal("🔍 项目体检", body, true);
+      } else {
+        this._envState = { status: "loading" }; // 新弹窗:环境自检回加载态(原地刷新保留结果)
+        this.openModal("🔍 项目体检", body, true, () => this.openHealth(true));
+      }
       const gen = this._modalGen;
+      const envState = (st) => {
+        if (gen !== this._modalGen) return;
+        this._envState = st;
+        // 只更新网格里的环境卡(整网格重渲会闪,卡片内容小且状态独立)
+        const card = this._modalEl && this._modalEl.querySelector("#mj-hp-env-card");
+        if (!card) return;
+        const map = {
+          ok: { cls: "ok", ic: "✅", tag: "就绪", spin: false },
+          exit: { cls: "warn", ic: "⚠️", tag: "exit " + st.exit, spin: false },
+          fail: { cls: "bad", ic: "❌", tag: "检测失败", spin: false },
+        }[st.status] || { cls: "warn", ic: "⟳", tag: "检测中…", spin: true };
+        card.className = "hc-card " + map.cls;
+        card.title = st.output || "";
+        const ic = card.querySelector(".hc-ic");
+        const tag = card.querySelector(".hc-fixtag");
+        if (ic) { ic.textContent = map.ic; ic.classList.toggle("hc-ic-spin", !!map.spin); }
+        if (tag) { tag.textContent = map.tag; tag.classList.toggle("hc-tag-ok", st.status === "ok"); }
+      };
       post("/api/manju/env", { config: this.project }).then((r) => {
-        if (gen !== this._modalGen) return;
-        const el = $("mj-hp-env");
-        if (el) el.textContent = (r.output || "") + "\n[exit " + r.exitCode + "]";
+        envState({ status: r.exitCode === 0 ? "ok" : "exit", exit: r.exitCode,
+          output: (r.output || "") + "\n[exit " + r.exitCode + "]" });
       }).catch((e) => {
-        if (gen !== this._modalGen) return;
-        const el = $("mj-hp-env");
-        if (el) el.textContent = "错误: " + e.message;
+        envState({ status: "fail", output: "错误: " + e.message });
       });
       get("/api/manju/agent/health?config=" + encodeURIComponent(this.project)).then((r) => {
         if (gen !== this._modalGen) return;
@@ -2875,32 +3581,57 @@
       }).catch(() => {});
     },
 
-    /* 智能体检 items → HTML(徽章计数 + 逐项状态 + 可修复按钮) */
+    /* 智能体检 items → HTML(2026-09-03 卡片化二轮:一行式均匀卡片,详情/建议
+       不直接展示——整卡 title 悬浮气泡;环境自检同网格一张卡,原始日志悬浮显示) */
     _healthItemsHTML(items) {
       const n = { ok: 0, warn: 0, bad: 0 };
       items.forEach((it) => n[it.status]++);
+      const total = items.length;
+      const allOk = n.bad === 0 && n.warn === 0;
       const ic = { ok: "✅", warn: "⚠️", bad: "❌" };
-      return `<div class="mj-health-head">
-        <span class="mj-hh-title">🤖 智能体检</span>
-        <span class="mj-hh-pill bad">❌ 异常 ${n.bad}</span>
-        <span class="mj-hh-pill warn">⚠️ 建议 ${n.warn}</span>
-        <span class="mj-hh-pill ok">✅ 正常 ${n.ok}</span>
-      </div>
-      <div class="mj-health-items">
-        ${items.map((it) => `
-        <div class="mj-health-item ${it.status}">
-          <span class="mj-hi-ic">${ic[it.status] || "•"}</span>
-          <div class="mj-hi-body">
-            <div class="mj-hi-top">
-              <b>${esc(it.label)}</b>
-              ${it.fixable && it.status !== "ok" ? '<span class="mj-hi-fixtag">可自动修复</span>' : ""}
-            </div>
-            <div class="mj-hi-detail">${esc(it.detail)}</div>
-            ${it.fixHint ? `<div class="mj-hi-hint">💡 ${esc(it.fixHint)}</div>` : ""}
+      // 汇总计分板:整体状态大卡 + 三色计数
+      const score = `<div class="hc-score ${allOk ? "hc-all-ok" : ""}">
+        <div class="hc-score-main">
+          <span class="hc-score-ic">${allOk ? "🎯" : n.bad ? "🩺" : "🧭"}</span>
+          <div>
+            <div class="hc-score-t">${allOk ? "全部正常" : n.bad ? "发现 " + n.bad + " 项异常" : n.warn + " 项建议优化"}</div>
+            <div class="hc-score-d">共 ${total} 项检查 · 本地秒查(不调用模型) · 悬停卡片查看详情</div>
           </div>
-        </div>`).join("")}
-      </div>
-      <div class="mj-health-foot">体检为本地秒查(不调用模型);右上角「🔧 一键修复」统一修复全部可自动修复项并写回 config.json。</div>`;
+        </div>
+        <div class="hc-score-counts">
+          <span class="hc-count hc-c-bad">❌ ${n.bad}</span>
+          <span class="hc-count hc-c-warn">⚠️ ${n.warn}</span>
+          <span class="hc-count hc-c-ok">✅ ${n.ok}</span>
+        </div>
+      </div>`;
+      // 一行式卡片:标题省略显示,详情+建议收进悬浮气泡(排版均匀)
+      const tip = (it) => {
+        let t = it.detail || "";
+        if (it.fixHint) t += (t ? "\n" : "") + "💡 " + it.fixHint;
+        return t;
+      };
+      const cards = items.map((it) => `
+        <div class="hc-card ${it.status}" title="${esc(tip(it))}">
+          <span class="hc-ic">${ic[it.status] || "•"}</span>
+          <b class="hc-label">${esc(it.label)}</b>
+          ${it.fixable && it.status !== "ok" ? '<span class="hc-fixtag">可自动修复</span>' : ""}
+        </div>`).join("");
+      // 环境自检同网格卡(与智能体检区同步加载态;原始日志悬浮气泡)
+      const ev = this._envState || { status: "loading" };
+      const evMap = {
+        loading: { cls: "warn", ic: "⟳", tag: "检测中…" },
+        ok: { cls: "ok", ic: "✅", tag: "就绪" },
+        exit: { cls: "warn", ic: "⚠️", tag: "exit " + ev.exit },
+        fail: { cls: "bad", ic: "❌", tag: "检测失败" },
+      }[ev.status] || { cls: "warn", ic: "⟳", tag: "检测中…" };
+      const envCard = `<div class="hc-card ${evMap.cls}" id="mj-hp-env-card" title="${esc(ev.output || "")}">
+          <span class="hc-ic${ev.status === "loading" ? " hc-ic-spin" : ""}">${evMap.ic}</span>
+          <b class="hc-label">环境自检(ComfyUI / 模型 / 依赖)</b>
+          <span class="hc-fixtag${ev.status === "ok" ? " hc-tag-ok" : ""}">${evMap.tag}</span>
+        </div>`;
+      return `${score}
+      <div class="hc-grid">${cards}${envCard}</div>
+      <div class="hc-foot">右上角「🔧 一键修复」统一修复全部可自动修复项并写回 config.json,并自动清理残留状态文件(run_state / 损坏 agent_state)与运行/崩溃/诊断日志。</div>`;
     },
 
     /* 弹窗标题栏注入总「一键修复」按钮(2026-08-30 用户要求:关闭按钮前,一键修复全部,
@@ -3691,6 +4422,7 @@
                   <button class="hrs-btn" data-gacha="${esc(c.id)}" data-view="${esc(curView)}">🎲 抽卡</button>
                   <button class="hrs-btn" data-upload="${esc(c.id)}" data-view="${esc(curView)}" title="上传本地角色图并采纳为正式定妆照">📤 上传</button>
                   <button class="hrs-btn hrs-btn-primary" data-adopt="${esc(c.id)}" data-view="${esc(curView)}" ${cur ? "" : "disabled"}>采纳</button>
+                  <button class="hrs-btn" data-chardel="${esc(c.id)}" title="删除该角色全部资产图(定妆照/视图/Q版/抽卡候选);角色卡保留,可重新抽卡或从资产库导入">🗑 删除</button>
                 </div>
                 <div class="manju-char-voice" title="H3 原生配音音色:自动=按角色人设(性别/年龄/定位)匹配预置风格音色库;也可手动选音色覆盖(需重渲染生效);自备音色包放入 ComfyUI input/audio/voicepacks/ 后在此选用">
                   <span class="manju-meta">🎙</span>
@@ -3752,6 +4484,31 @@
       if (upFile) upFile.addEventListener("change", (e) => this.uploadCharFile(e.target.files[0]));
       mgel.querySelectorAll("[data-adopt]").forEach((b) =>
         b.addEventListener("click", () => this.adoptGacha(b.dataset.adopt, b.dataset.view || ""))
+      );
+      // 删除该角色全部资产(2026-09-02 资产管理删除清理):图删了角色卡还在,
+      // 卡片回「未抽卡」态可重新抽卡/上传/从资产库导入;跨项目 char_lib 不动
+      mgel.querySelectorAll("[data-chardel]").forEach((b) =>
+        b.addEventListener("click", async () => {
+          const id = b.dataset.chardel;
+          if (!(await this.uiConfirm({
+            title: "删除角色资产", confirmText: "删除",
+            message: `确认删除角色「<b>${id}</b>」的全部资产图?`,
+            list: [
+              "定妆照 / 视图 / Q版 / 正脸参考 / 抽卡候选一并删除",
+              "角色卡保留,可重新抽卡或从资产库导入",
+              "跨项目资产库不受影响",
+            ],
+          }))) return;
+          b.disabled = true; b.textContent = "删除中…";
+          post("/api/manju/output/delete", { config: this.project, scope: "char", path: id })
+            .then((r) => {
+              this.gacha[id] = { views: {}, cur: "" }; // 回未定妆态
+              this.logNote(`(🗑 已删除角色「${id}」资产 ${((r.removed) || []).length} 张;角色卡保留,可重新抽卡)`);
+              this.renderGachaModal();
+              this.refreshOutputs();
+            })
+            .catch((e) => { b.disabled = false; b.textContent = "🗑 删除"; this.setErr("删除失败: " + e.message); });
+        })
       );
       // 配音音色(2026-08-26):下拉选择 + 生成按钮提交(选「未指定」点生成=解绑)
       mgel.querySelectorAll("[data-voice-gen]").forEach((b) =>
@@ -4001,7 +4758,8 @@
       html += chars.length
         ? `<div class="manju-thumbs">${chars.map((c) => {
             const tag = c.adopted ? `<span class="manju-adopted-tag">✓ 已采纳</span>` : "";
-            return `<div class="manju-thumb" data-img="${esc(c.path)}" data-name="${esc(c.name)}" title="预览 ${esc(c.name)}"><img src="${fileUrl(c.path)}&v=${c.v || ""}" loading="lazy" alt=""><span class="manju-thumb-name">${esc(c.name)}</span>${tag}</div>`;
+            const cid = String(c.name || "").replace(/\.png$/i, "");
+            return `<div class="manju-thumb" data-img="${esc(c.path)}" data-name="${esc(c.name)}" title="预览 ${esc(c.name)}"><img src="${fileUrl(c.path)}&v=${c.v || ""}" loading="lazy" alt=""><span class="manju-thumb-name">${esc(c.name)}</span>${tag}<button class="manju-thumb-del" data-delchar="${esc(cid)}" title="删除「${esc(cid)}」全部资产图(定妆照/视图/Q版/候选;角色卡保留)">✕</button></div>`;
           }).join("")}</div>`
         : `<div class="manju-empty">暂无人物定妆照</div>`;
       html += `</div></div>`;
@@ -4011,7 +4769,7 @@
       html += `<div class="manju-out-title"><span class="manju-sec-foldbtn">${this._secFolded("scene") ? "▸" : "▾"}</span>🏞 场景 <span class="manju-out-count">${scenes.length}</span></div>`;
       html += `<div class="manju-sec-body">`;
       html += scenes.length
-        ? `<div class="manju-thumbs">${scenes.map((c) => `<div class="manju-thumb" data-img="${esc(c.path)}" data-name="${esc(c.name)}" title="预览 ${esc(c.name)}"><img src="${fileUrl(c.path)}" loading="lazy" alt=""><span class="manju-thumb-name">${esc(c.name)}</span></div>`).join("")}</div>`
+        ? `<div class="manju-thumbs">${scenes.map((c) => `<div class="manju-thumb" data-img="${esc(c.path)}" data-name="${esc(c.name)}" title="预览 ${esc(c.name)}"><img src="${fileUrl(c.path)}" loading="lazy" alt=""><span class="manju-thumb-name">${esc(c.name)}</span><button class="manju-thumb-del" data-delscene="${esc(String(c.name || "").replace(/\.png$/i, ""))}" title="删除场景「${esc(c.name)}」(主图+尾帧;下次资产阶段可重出)">✕</button></div>`).join("")}</div>`
         : `<div class="manju-empty">暂无场景图</div>`;
       html += `</div></div>`;
 
@@ -4065,6 +4823,32 @@
       // 绑定预览
       $("manju-outputs").querySelectorAll(".manju-thumb").forEach((el) =>
         el.addEventListener("click", () => this.previewImage(el.dataset.img, el.dataset.name))
+      );
+      // 缩略图 hover ✕:删除该角色/场景资产(2026-09-02 资产管理删除清理;
+      // 阻止冒泡不触发预览;复用 output/delete 的 char/scene scope,与角色管理弹窗同链)
+      $("manju-outputs").querySelectorAll(".manju-thumb-del").forEach((btn) =>
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const charId = btn.dataset.delchar || "", sceneId = btn.dataset.delscene || "";
+          const scope = charId ? "char" : "scene";
+          const id = charId || sceneId;
+          if (!(await this.uiConfirm({
+            title: charId ? "删除角色资产" : "删除场景资产", confirmText: "删除",
+            message: charId
+              ? `确认删除角色「<b>${id}</b>」的全部资产图?`
+              : `确认删除场景「<b>${id}</b>」的图?`,
+            list: charId
+              ? ["定妆照 / 视图 / Q版 / 候选一并删除", "角色卡保留"]
+              : ["主图 + 尾帧一并删除", "下次资产阶段可重新生成"],
+          }))) return;
+          post("/api/manju/output/delete", { config: this.project, scope, path: id })
+            .then((r) => {
+              const n = ((r.removed) || []).length;
+              this.logNote(`(🗑 已删除${charId ? "角色" : "场景"}「${id}」资产 ${n} 张)`);
+              this.refreshOutputs();
+            })
+            .catch((err) => this.setErr("删除失败: " + err.message));
+        })
       );
       $("manju-outputs").querySelectorAll(".manju-vid").forEach((el) =>
         el.addEventListener("click", () => this.previewVideo(el.dataset.video, el.dataset.name))
@@ -4316,10 +5100,14 @@
         <button id="mp-next" class="manju-pv-arrow" title="下一张 (→)" ${i === list.length - 1 ? "disabled" : ""}>▸</button>`
         : "";
       const title = `${cur.name || "预览"}（${i + 1}/${list.length}）`;
+      // 2026-09-02 修复:char_lib 资产库详情弹窗的 data-img 是应用内 URL
+      // (/api/manju/char-lib/asset?...)而非本地路径——一律包 /api/fs/file?path= 会 404,
+      // 大图预览出不来。以 / 开头=应用内 URL 直接用作 src;其余=本地路径走 fs 代理。
+      const pvSrc = (p) => String(p || "").startsWith("/") ? p : "/api/fs/file?path=" + encodeURIComponent(p);
       const body = `<div class="manju-img-preview">
           ${arrows}
           <div class="manju-pv-stage">
-            <img src="/api/fs/file?path=${encodeURIComponent(cur.path)}" alt="">
+            <img src="${pvSrc(cur.path)}" alt="">
             ${list.length > 1 ? `<span class="manju-pv-count">${i + 1} / ${list.length}</span>` : ""}
           </div>
         </div>`;
@@ -4362,6 +5150,47 @@
     /* ---- 弹窗(多级:2026-08-24 用户要求) ---- */
     /* 每个弹窗独立遮罩层,压栈管理——弹窗里再弹窗时父弹窗保留在后面,
        关闭子弹窗自动露出父弹窗,不再"弹窗里弹窗就全部关闭"。 */
+
+    /* 统一二次确认弹窗(2026-09-03 美化:全部确认场景一个组件,弃原生 confirm 白框;
+       SVG 图标/危险双态/后果列表/警示行,复用弹窗栈与 hrs-btn 标准按钮)。
+       返回 Promise<boolean>:确认=true;取消/✕/遮罩/Esc=false。 */
+    uiConfirm(opt) {
+      opt = opt || {};
+      const danger = opt.danger !== false;
+      const ic = danger
+        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 3.2 19.2h17.6Z"/><path d="M12 10v4.2"/><circle cx="12" cy="16.9" r=".7" fill="currentColor" stroke="none"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.4a2.7 2.7 0 1 1 3.5 2.6c-.8.3-1.2.9-1.2 1.8v.3"/><circle cx="11.7" cy="16.8" r=".7" fill="currentColor" stroke="none"/></svg>';
+      const listHtml = (opt.list && opt.list.length)
+        ? '<ul class="uic-list">' + opt.list.map((s) => "<li>" + s + "</li>").join("") + "</ul>" : "";
+      const warnHtml = opt.warn ? '<p class="uic-warn">' + opt.warn + "</p>" : "";
+      this.openModal(opt.title || "确认操作",
+        '<div class="uic-wrap' + (danger ? " uic-danger" : "") + '">' +
+          '<div class="uic-ic">' + ic + '</div>' +
+          '<p class="uic-q">' + (opt.message || "") + '</p>' + listHtml + warnHtml +
+          '<div class="uic-row">' +
+            '<button id="uic-cancel" class="hrs-btn">' + (opt.cancelText || "取消") + '</button>' +
+            '<button id="uic-go" class="hrs-btn ' + (danger ? "uic-btn-danger" : "hrs-btn-primary") + '">' + (opt.confirmText || "确认") + '</button>' +
+          '</div>' +
+        '</div>');
+      const overlay = this._modalEl;
+      overlay.querySelector(".manju-modal-panel").classList.add("uic-panel");
+      return new Promise((resolve) => {
+        let done = false;
+        const onKey = (e) => { if (e.key === "Escape") settle(false); };
+        const settle = (v) => {
+          if (done) return; done = true;
+          document.removeEventListener("keydown", onKey);
+          resolve(v);
+        };
+        document.addEventListener("keydown", onKey);
+        // ✕ 与遮罩点击由 openModal 自身关窗,这里只补结果语义(=取消)
+        overlay.addEventListener("click", (e) => { if (e.target === overlay) settle(false); });
+        overlay.querySelector(".manju-modal-close").addEventListener("click", () => settle(false));
+        overlay.querySelector("#uic-cancel").addEventListener("click", () => { settle(false); this.closeModal(); });
+        overlay.querySelector("#uic-go").addEventListener("click", () => { settle(true); this.closeModal(); });
+      });
+    },
+
     openModal(title, bodyHtml, wide, refresh) {
       if (!this._bound) this.bind();   // 自愈:任何页面(未进漫剧页)调用弹窗都先绑定
       // 代次守卫:任何开/关弹窗都会使挂起的异步渲染(设置/体检)失效,
@@ -4741,23 +5570,16 @@
       });
     },
     doScriptClear() {
-      // 2026-08-28:弃原生 confirm(项目弹窗体系已统一,原生白框与主题割裂)
-      this.openModal("⚠️ 清除视频脚本?",
-        `<div class="cc-confirm">
-          <div class="cc-confirm-ic">🗑️</div>
-          <p class="cc-confirm-q">将清除视频脚本并回到<b>小说解析模式</b>:</p>
-          <ul class="cc-confirm-list">
-            <li>删除 script/ 目录(各集脚本文件)</li>
-            <li>本集已生成的方案不会自动删除,下次运行按小说重新生成</li>
-          </ul>
-          <div class="manju-row" style="justify-content:center;gap:12px;margin-top:16px">
-            <button id="sc-cancel" class="hrs-btn">取消</button>
-            <button id="sc-go" class="hrs-btn cc-btn-danger">确认清除</button>
-          </div>
-        </div>`);
-      $("sc-cancel").addEventListener("click", () => this.closeModal());
-      $("sc-go").addEventListener("click", () => {
-        this.closeModal();
+      // 2026-09-03:统一 uiConfirm 组件(弃 emoji 图标老式确认弹窗)
+      this.uiConfirm({
+        title: "清除视频脚本?", confirmText: "确认清除",
+        message: "将清除视频脚本并回到<b>小说解析模式</b>:",
+        list: [
+          "删除 script/ 目录(各集脚本文件)",
+          "本集已生成的方案不会自动删除,下次运行按小说重新生成",
+        ],
+      }).then((ok) => {
+        if (!ok) return;
         post("/api/manju/script/clear?project=" + encodeURIComponent(this.projName()), {}).then((r) => {
           this.refreshScriptStatus();
           // 2026-08-24 合并「内容来源」卡片:清除脚本=回小说 → 自动切回小说区块

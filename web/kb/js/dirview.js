@@ -103,7 +103,13 @@ class DirView {
     menu.innerHTML = `<button class="cm-item cm-hide">${I18N.t("book.hide")}</button>` +
       (this.mode === "book"
         ? `<button class="cm-item cm-continue">✍ 小说续作</button><button class="cm-item cm-manju">🎬 漫剧制作</button><button class="cm-item cm-del-book danger">🗑 删除小说</button>`
-        : (this.id === "manju" ? `<button class="cm-item cm-del danger">🗑 删除项目</button>` : ""));
+        : (this.id === "manju"
+          ? `<button class="cm-item cm-play">▶ 播放视频</button>` +
+            `<button class="cm-item cm-video-mgr">🎬 视频管理</button>` +
+            `<button class="cm-item cm-char-mgr">🎭 角色管理</button>` +
+            `<button class="cm-item cm-scene-mgr">🏞 场景管理</button>` +
+            `<button class="cm-item cm-del danger">🗑 删除项目</button>`
+          : ""));
     const del = menu.querySelector(".cm-del");
     if (del) del.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -136,9 +142,47 @@ class DirView {
       this.closeCardMenu();
       if (name) NovelView.openManjuFrom(name);           // 漫剧制作:与阅读器功能一致
     });
+    // 2026-09-03 成品封面菜单:播放/视频管理/角色管理/场景管理(后三者先激活项目再开弹窗)
+    const play = menu.querySelector(".cm-play");
+    if (play) play.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const name = this._menuName;
+      this.closeCardMenu();
+      const p = (this._projects || []).find((x) => x.name === name);
+      if (p) this.openFilmModal(p);
+    });
+    const mgr = (fn) => (e) => {
+      e.stopPropagation();
+      const name = this._menuName;
+      this.closeCardMenu();
+      const wb = typeof ManjuWorkbench !== "undefined" ? ManjuWorkbench : null;
+      if (!name || !wb) return;
+      if (wb.activateProject) wb.activateProject(this.root.replace(/\\/g, "/") + "/" + name + "/config.json");
+      if (wb[fn]) wb[fn]();
+    };
+    const vm = menu.querySelector(".cm-video-mgr");
+    if (vm) vm.addEventListener("click", mgr("openVideoManager"));
+    const cm = menu.querySelector(".cm-char-mgr");
+    if (cm) cm.addEventListener("click", mgr("openGachaModal"));
+    const sm = menu.querySelector(".cm-scene-mgr");
+    if (sm) sm.addEventListener("click", mgr("openSceneManager"));
     document.body.appendChild(menu);
     this._menu = menu;
     return menu;
+  }
+
+  /* 2026-09-03 封面单击:激活当前项目(工作台项目下拉/方案/产物全链联动);
+     工作台不可用时回退原播放行为 */
+  activateWork(p) {
+    const wb = typeof ManjuWorkbench !== "undefined" ? ManjuWorkbench : null;
+    if (wb && wb.activateProject && p && p.name) {
+      const cfgPath = this.root.replace(/\\/g, "/") + "/" + p.name + "/config.json";
+      if (wb.activateProject(cfgPath)) {
+        wb.logNote && wb.logNote("(📌 已切换当前项目:" + p.name + ")");
+        return;
+      }
+    }
+    if (p) this.openFilmModal(p);
   }
 
   openCardMenu(anchor, p) {
@@ -505,14 +549,67 @@ class DirView {
       const r = await fetch("/api/fs/read?path=" + encodeURIComponent(f.path), { cache: "no-store" });
       if (!r.ok) throw new Error("read failed");
       const d = await r.json();
-      const isMd = /\.(md|markdown)$/i.test(d.ext || "");
-      sc.innerHTML = isMd ? Markdown.render(d.content || "", "") : `<pre>${this.escapeHtml(d.content || "")}</pre>`;
+      // 2026-09-03 分镜脚本 json:结构化分镜卡片(镜号/景别/运镜/角色/动作/台词/灯光/音效),
+      // h3 提示词默认折叠;解析失败回退原文
+      if (f.kind === "storyboard" && /\.json$/i.test(d.ext || f.name || "")) {
+        try {
+          const sb = JSON.parse(d.content || "");
+          sc.innerHTML = this.storyboardHtml(sb, d.content || "");
+        } catch (_e) {
+          sc.innerHTML = `<pre>${this.escapeHtml(d.content || "")}</pre>`;
+        }
+      } else {
+        const isMd = /\.(md|markdown)$/i.test(d.ext || "");
+        sc.innerHTML = isMd ? Markdown.render(d.content || "", "") : `<pre>${this.escapeHtml(d.content || "")}</pre>`;
+      }
     } catch (e) {
       sc.innerHTML = `<div class="dir-empty">⚠️ ${I18N.t("book.readError")}</div>`;
     }
     this.renderNav();
     this.highlightToc(f);
     sc.scrollTop = 0;
+    // 分镜卡 h3 提示词折叠开关
+    sc.querySelectorAll(".sb-toggle").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const pre = btn.closest(".sb-shot").querySelector(".sb-prompt");
+        if (pre) pre.classList.toggle("is-open");
+        btn.textContent = pre && pre.classList.contains("is-open") ? "▲ 收起提示词" : "▼ H3 提示词";
+      })
+    );
+  }
+
+  /* 分镜脚本 json → 结构化分镜卡片(2026-09-03 小说详情弹窗查看分镜详情) */
+  storyboardHtml(sb, raw) {
+    const shots = Array.isArray(sb.shots) ? sb.shots : [];
+    if (!shots.length) return `<pre>${this.escapeHtml(raw)}</pre>`;
+    const esc = (s) => this.escapeHtml(s == null ? "" : String(s));
+    const head = `<div class="sb-head">
+      <span class="sb-title">🎬 ${esc(sb.chapter_title || "")}</span>
+      <span class="sb-meta">${shots.length} 镜${sb.episode ? " · " + esc(sb.episode) : ""}${sb.global_style ? " · " + esc(sb.global_style) : ""}</span>
+    </div>`;
+    const bridge = sb.bridge
+      ? `<div class="sb-bridge" title="上一镜衔接说明">🔗 衔接: ${esc(typeof sb.bridge === "string" ? sb.bridge : JSON.stringify(sb.bridge))}</div>`
+      : "";
+    const cards = shots.map((s) => {
+      const chars = Array.isArray(s.characters) && s.characters.length ? esc(s.characters.join("、")) : '<span class="sb-na">无</span>';
+      return `<div class="sb-shot">
+        <div class="sb-top">
+          <span class="sb-no">${String(s.shot_id || "").padStart(2, "0")}</span>
+          <span class="sb-tags">
+            <span class="sb-tag">${esc(s.shot_size || "—")}</span>
+            <span class="sb-tag">${esc(s.camera || "—")}</span>
+            <span class="sb-tag">${esc(s.duration || 5)}s</span>
+          </span>
+          <span class="sb-chars" title="登场角色">🎭 ${chars}</span>
+        </div>
+        ${s.action ? `<div class="sb-line"><span class="sb-k">动作</span><span class="sb-v">${esc(s.action)}</span></div>` : ""}
+        ${s.dialogue ? `<div class="sb-line"><span class="sb-k">台词</span><span class="sb-v sb-say">${esc(s.dialogue).replace(/\n/g, "<br>")}</span></div>` : ""}
+        ${s.light ? `<div class="sb-line"><span class="sb-k">灯光</span><span class="sb-v">${esc(s.light)}</span></div>` : ""}
+        ${s.sound ? `<div class="sb-line"><span class="sb-k">音效</span><span class="sb-v">${esc(s.sound)}</span></div>` : ""}
+        ${s.h3_prompt ? `<button class="hrs-btn sb-toggle">▼ H3 提示词</button><pre class="sb-prompt">${esc(s.h3_prompt)}</pre>` : ""}
+      </div>`;
+    }).join("");
+    return `<div class="sb-wrap">${head}${bridge}${cards}</div>`;
   }
 
   renderNav() {
@@ -1315,8 +1412,9 @@ class DirView {
       <div class="fm-wall">${this._projects.map((p, i) => this.filmCard(p, i)).join("")}</div>`;
     listEl.querySelectorAll(".fm-card").forEach((card, i) => {
       card.addEventListener("click", (e) => {
-        e.stopPropagation(); // 防止"打开弹窗"的点击被 document 层当作外部点击而立刻关闭
-        this.openFilmModal(this._projects[i]);
+        e.stopPropagation();
+        // 2026-09-03 用户要求:单击封面=激活当前项目(播放视频移到封面 ⋮ 菜单)
+        this.activateWork(this._projects[i]);
       });
     });
     listEl.querySelectorAll(".fm-more").forEach((btn, i) => {
@@ -1347,7 +1445,6 @@ class DirView {
         <div class="fm-poster">
           ${this.coverArea(p)}
           <button class="fm-more" title="${I18N.t("book.more")}" aria-label="${I18N.t("book.more")}">⋮</button>
-          <span class="fm-play">▶</span>
           <div class="fm-scrim">
             <div class="fm-cname">${this.escapeHtml(p.name)}</div>
             <div class="fm-cmeta">${meta}</div>

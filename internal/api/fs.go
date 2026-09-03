@@ -253,6 +253,13 @@ func walkProject(root, dir string, p *dirProject, depth int) {
 				df.Kind = extraKind(rel, e.Name()) // 创作输出分类(分镜脚本/提示词),前端独立一栏(2026-08-23 用户规则)
 				p.Extras = append(p.Extras, df)
 			}
+		} else if ef := strings.ToLower(filepath.Ext(e.Name())); ef == ".json" && isStoryboardFile(rel, e.Name()) {
+			// 2026-09-03 用户要求:详情弹窗显示分镜脚本列表——技能侧分镜是 .json
+			// (素材/分镜脚本/第NNN章_标题_分镜脚本.json),此前 isTextFile 只认
+			// .md/.txt 导致全部不可见。json 不计字数/MdCount(不污染全书字数统计),
+			// 仅进 Extras 供右栏「分镜脚本」一栏列出;点击由前端渲染结构化分镜视图。
+			p.Extras = append(p.Extras, dirFile{Name: e.Name(), Path: full, IsDir: false,
+				Size: sz, Mtime: mt, Dir: rel, Kind: "storyboard", No: chapterNo(e.Name())})
 		}
 		if isImageFile(e.Name()) {
 			dl := strings.ToLower(rel)

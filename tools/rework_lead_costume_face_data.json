@@ -1,0 +1,5 @@
+{
+  "_说明": "全库主角服装演化+正角面容优化数据表(2026-09-02 用户规矩:主角服装随剧情实时变化,禁一套穿到底;正角面容必须好看:男俊帅/女美萌可爱/老者慈祥硬朗)。stages按章号区间取档,幂等可重跑。wear=英文服装主体(不含冠词),zh=中文说明,reason=剧情依据。",
+  "WEAR_RE": "((?:[\\w'-]+[- ']){0,4}(?:dresses|dress|uniform|uniforms|robe|robes|jacket|coat|suit|gown|outfit|tunic|hanfu|t-shirt|tee|shirt|pajamas|nightshirt|pajama)(?: with [a-zA-Z][^,.;]{1,50})?)",
+  "books": {}
+}

@@ -317,7 +317,7 @@ func TestManjuCharsFromH3UniqueWords(t *testing.T) {
 	}
 	ids := []string{"陈默", "赵德柱", "林小满"}
 	h3 := "subject_definitions:\n<Subject 1> is the living form of Chen Mo in <Picture 1>, a lean engineer with short messy black hair, dark circles, black-framed glasses, plaid flannel shirt with sleeves rolled to the elbows.\n<Subject 2> is the dark reflective monitor face in <Picture 2>, glowing cold white.\n\nsummary:\n[reference generation] test.\n\ndetailed_description:\nThe navy polo manager walks in with his gold watch and comb-over."
-	got := manjuCharsFromH3(h3, cards, ids)
+	got := manjuCharsFromH3(h3, cards, ids, 0)
 	if len(got) != 1 || got[0] != "陈默" {
 		t.Fatalf("镜3 应只捞回陈默(独有词 plaid/flannel/glasses), got %v", got)
 	}
@@ -331,11 +331,35 @@ func TestManjuCharsFromH3UniqueWords(t *testing.T) {
 	// 短词 dark(陈默卡 dark circles 拆出的"独有"词)+环境句曾把陈默/林小满/猫全捞出,
 	// 4 人超 H3 参考图上限。收紧后:环境句无人物外观信号词不参与,独有词 ≥5 字母。
 	h3m9 := "subject_definitions:\n<Subject 1> is Zhao Dezhu in <Picture 1>, a middle manager with combed-over hair, navy polo shirt and gold watch.\n<Subject 2> is the dark office aisle in <Picture 2>, with cubicle partitions and the lit workstation.\n\nsummary:\n[reference generation] test."
-	got9 := manjuCharsFromH3(h3m9, cards, ids)
+	got9 := manjuCharsFromH3(h3m9, cards, ids, 0)
 	for _, c := range got9 {
 		if c != "赵德柱" {
 			t.Fatalf("镜9 环境句/短词不得捞人, want only 赵德柱(名字匹配层), got %v", got9)
 		}
+	}
+}
+
+// 回归(2026-09-03 老K误捞根治,修仙界EP01 实锤):镜1 主体句是季一星本人定义行,
+// 季一星卡命中 5 词正确,老K卡(同为上班族形象)独有词 crumpled/office 命中 2 词
+// 即入画 → 镜1~8 连续误挂老K参考图 → H3 给画外角色编人声。双层收紧:
+// ①声明优先(declared ≥ 主体句数不捞);②同句唯一归属(argmax 且严格领先)。
+func TestManjuCharsFromH3NoTandemFishing(t *testing.T) {
+	cards := []map[string]any{
+		{"id": "季一星", "image_prompt": "a lean 26-year-old office worker with short black textured fringe hair, scar through left eyebrow, pale-blue shirt with rolled sleeves, monitor-lit face"},
+		{"id": "老K", "image_prompt": "a senior colleague with trimmed beard, loose office tie, crumpled jacket over crumpled shirt, standing near the office pantry"},
+	}
+	ids := []string{"季一星", "老K"}
+	// 镜1 主体句(季一星本人):季一星命中 textured/fringe/eyebrow(≥5字母独有)5 词,
+	// 老K 命中 crumpled 类 2 词——旧逻辑两卡都 ≥2 全入画
+	h3 := "subject_definitions:\n<Subject 2> is Ji Yixing in <Picture 2>, slumped over his keyboard, short black textured fringe hair, scar through the tail of his left eyebrow, wearing a crumpled pale-blue office shirt with rolled-up sleeves.\n\nsummary:\n[reference generation] test."
+	// ① 已声明季一星(declared=1)且主体句 1 句:不捞,老K 不入画
+	if got := manjuCharsFromH3(h3, cards, ids, 1); len(got) != 0 {
+		t.Fatalf("声明已覆盖主体句数时不得捞人(老K 误捞根), got %v", got)
+	}
+	// ② 未声明(declared=0):逐句 argmax,季一星 5 词严格领先老K 2 词 → 只归季一星
+	got0 := manjuCharsFromH3(h3, cards, ids, 0)
+	if len(got0) != 1 || got0[0] != "季一星" {
+		t.Fatalf("同句唯一归属应只归重叠最多的季一星, got %v", got0)
 	}
 }
 

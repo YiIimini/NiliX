@@ -296,7 +296,13 @@ func knownKeys(m map[string]bool) []string {
 //    内嵌台词 → H3 念两遍);②alignAudioDefsReg @offscreen 重写剥掉幂等锚前缀 → 每轮
 //    finalize 重复注入叠加;③补写判定 key 剥引号(带引号台词与六段式 <d> 无引号形态
 //    匹配不上 → 误补写重复 <d>)。bump 强制存量 plan 重解析。
-const manjuScriptParseVer = 20
+// 21=2026-09-03 登场角色误捞根治(修仙界EP01 老K实锤):manjuCharsFromH3 对每卡独立
+//    判定无同句竞争——镜1主体句是季一星本人定义行,季一星卡命中5词正确,老K卡(同为
+//    上班族形象)独有词 crumpled/office 命中2词即入画,镜1~8连续误挂老K参考图 → H3
+//    给画外角色编人声(无台词镜出说话声)。收紧双层:④a 声明优先(已判定登场人数 ≥
+//    主体句数时不捞,声明权威只补真漏);④b 同句唯一归属(每句只归重叠最多且严格
+//    领先次名者,平票不归属)。bump 强制存量 plan 重解析。
+const manjuScriptParseVer = 22
 
 // scriptParsePlan 脚本直出程序化解析入口。
 // 解析出 characters/scenes/shots/directing/episode_title/chapters=script。
@@ -754,8 +760,9 @@ func (ctx *manjuCtx) buildPlanFromRaws(raws []scriptShotRaw, text string, lg *ma
 		// 渲染端不挂人物参考图,h3 的 <Picture 1> 错位指到场景图 → H3 拿城市夜景图当
 		// 陈默的长相参考,人物与定妆照完全脱钩。这里用 h3 主体句与角色卡英文提示词的
 		// 特征词重叠把漏判人物捞回(有参考图,Picture 编号自然对齐)。
+		// declared=当前已判定登场人数(声明/文本匹配/说话人):不少于主体句数时不捞(2026-09-03)。
 		if raw.H3Prompt != "" {
-			for _, cid := range manjuCharsFromH3(raw.H3Prompt, charCards, charIDs) {
+			for _, cid := range manjuCharsFromH3(raw.H3Prompt, charCards, charIDs, len(charSet)) {
 				charSet[cid] = true
 			}
 		}
@@ -2191,15 +2198,21 @@ func scriptDirectingFrom(text string) map[string]any {
 // manjuCharsFromH3 从六段式主体句捞回漏判登场角色(2026-08-28 EP01 人物不一致根治)。
 // 脚本画面列常以「屏幕前的男人」代称不写角色名,但 h3 的 subject_definitions 会照角色卡
 // 写英文外观(short messy black hair, black-framed glasses…)——人物主体句与角色卡的
-// **独有外观词**重叠 ≥2 才认定在场。三层收紧(2026-08-29 镜9 误捞实测):
+// **独有外观词**重叠 ≥2 才认定在场。五层收紧(2026-08-29 镜9 误捞 / 2026-09-03 老K误捞实测):
 //   ①独有词=该卡有而其它卡没有(消共享模板词 cinematic/photorealistic/doll/aesthetic
 //     ——第一版"卡内词重叠≥3"曾把 12 角色全捞进 chars);
 //   ②独有词长度 ≥5 字母:dark/black 这类短常见词可能在全书恰好独有(陈默卡 dark circles
 //     的 dark),环境句「dark office aisle」就会被当成陈默在场——镜9 曾因此捞出 4 人
 //     超参考图上限;glasses/flannel/ponytail 才有外观专属性;
 //   ③主体句必须含人物外观信号词(hair/glasses/shirt/collar/watch/skin/…):环境/道具
-//     主体句(office aisle/monitor face)不参与捞人。
-func manjuCharsFromH3(h3 string, charCards []map[string]any, charIDs []string) []string {
+//     主体句(office aisle/monitor face)不参与捞人;
+//   ④a 声明优先(2026-09-03):已判定登场人数(显式声明/文本匹配/说话人)不少于主体句数
+//     时不捞——修仙界EP01实锤:镜1主体句是季一星本人定义行,季一星卡命中5词正确,但老K卡
+//     (同为上班族形象)独有词 crumpled/office 也命中2词即入画,镜1~8连续误挂老K参考图,
+//     H3 给画外角色编人声;
+//   ④b 同句唯一归属(2026-09-03):每个主体句只归重叠词最多且严格领先次名的角色,
+//     平票/领先不足不归属——相似形象不再搭车入画。
+func manjuCharsFromH3(h3 string, charCards []map[string]any, charIDs []string, declared int) []string {
 	// 人物外观信号词:句含其一才算"人物主体句"(环境/道具句跳过)
 	personSignals := []string{"hair", "glasses", "shirt", "face", "eyes", "collar",
 		"watch", "skin", "jacket", "dress", "beard", "ponytail", "blouse", "suit",
@@ -2233,6 +2246,17 @@ func manjuCharsFromH3(h3 string, charCards []map[string]any, charIDs []string) [
 	if len(subLines) == 0 {
 		return nil
 	}
+	// 2026-09-03 门槛④(老K误捞根治,修仙界EP01实锤):镜1主体句是季一星本人定义行,
+	// 季一星卡命中5词正确归属,但老K卡(同为上班族形象)独有词 crumpled/office 也命中
+	// 2词即入画——旧逻辑对每卡独立判定、无同句竞争,形象相近的角色被成对误捞(镜1~8
+	// 连续多挂老K参考图 → H3 给画外角色编人声)。收紧为双层:
+	// ④a 声明优先:已判定登场人数(declared,含显式声明/文本匹配/说话人)不少于主体句
+	//     数时不捞——声明权威,只补"句多于人"的真漏;
+	// ④b 同句唯一归属:每个主体句只归重叠词最多且严格领先次名的角色(≥2 门槛保留),
+	//     平票/领先不足不归属——相似形象的次名不再搭车入画。
+	if declared >= len(subLines) {
+		return nil
+	}
 	// 卡间独有词(≥5 字母,word -> 拥有它的卡数;只留仅 1 卡有的词)
 	wordOwners := map[string]int{}
 	cardWords := map[string]map[string]bool{}
@@ -2254,31 +2278,46 @@ func manjuCharsFromH3(h3 string, charCards []map[string]any, charIDs []string) [
 		}
 	}
 	h3Low := strings.ToLower(h3)
+	outSet := map[string]bool{}
 	var out []string
-	for _, cid := range charIDs {
-		if cid == "" {
-			continue
-		}
-		// 中文名直写兜底(脚本文风混杂时)
-		if strings.Contains(h3Low, strings.ToLower(cid)) {
+	addOut := func(cid string) {
+		if cid != "" && !outSet[cid] {
+			outSet[cid] = true
 			out = append(out, cid)
-			continue
 		}
-		words := cardWords[cid]
-		if len(words) == 0 {
-			continue
+	}
+	// 中文名直写兜底(脚本文风混杂时):全角色逐一直写检查
+	for _, cid := range charIDs {
+		if cid != "" && strings.Contains(h3Low, strings.ToLower(cid)) {
+			addOut(cid)
 		}
-		for _, line := range subLines {
-			overlap := 0
-			for w := range words {
-				if wordOwners[w] == 1 && strings.Contains(line, w) {
-					overlap++
-				}
+	}
+	// 逐句竞争归属:每句计算各卡重叠数,唯一最大者(严格领先次名,≥2)归属
+	overlapOf := func(line string, cid string) int {
+		n := 0
+		for w := range cardWords[cid] {
+			if wordOwners[w] == 1 && strings.Contains(line, w) {
+				n++
 			}
-			if overlap >= 2 {
-				out = append(out, cid)
-				break
+		}
+		return n
+	}
+	for _, line := range subLines {
+		best, bestN, secondN := "", 0, 0
+		for _, cid := range charIDs {
+			if cid == "" || len(cardWords[cid]) == 0 {
+				continue
 			}
+			n := overlapOf(line, cid)
+			if n > bestN {
+				secondN = bestN
+				best, bestN = cid, n
+			} else if n > secondN {
+				secondN = n
+			}
+		}
+		if bestN >= 2 && bestN > secondN {
+			addOut(best)
 		}
 	}
 	return out

@@ -393,7 +393,7 @@ func TestInnerVoiceAssignedFixed(t *testing.T) {
 	}
 	// 挂载侧与注入侧同源:offscreenVoiceKeyFor 解析注入的 desc 得到同一变体 key
 	hp := "subject_definitions:\n<Subject 1> is 阿影.\n\nsummary:\n.\n\ndetailed_description:\nThe narrator says in an off-screen voiceover: <d>他竟敢这样看我。</d> while the on-screen characters' lips remain completely closed."
-	obs := ctx.manjuOffscreenBindings(hp, cid, key)
+	obs := ctx.manjuOffscreenBindings(hp, cid, key, "")
 	found := false
 	for _, ob := range obs {
 		if strings.Contains(ob.Desc, "quiet inner voice of 阿影") {

@@ -155,12 +155,18 @@ func TestCharIDMatchBracket(t *testing.T) {
 // ---- 问题3/4:站位不清 / 运镜垃圾 ----
 
 // manjuCameraPhrase:括号英文直取 / 固定 / 中文映射兜底 / 空
+// 2026-09-03 电影级升级:中文映射短语升级为电影术语(cinematic dolly/tracking/
+// orbital),断言同步;「固定（Static）」类裸静态英文归一为 canonical 短语。
 func TestManjuCameraPhrase(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"缓推（Push In, small, slow）", "Push In, small, slow"},
 		{"跟移（Track, medium, slow）", "Track, medium, slow"},
 		{"固定", "static locked-off camera"},
-		{"横移", "lateral truck with medium amplitude"},
+		{"固定（Static）", "static locked-off camera"},
+		{"横移", "cinematic lateral dolly truck with medium amplitude"},
+		{"左摇", "smooth pan to the left"},
+		{"左横移", "cinematic dolly truck to the left with medium amplitude"},
+		{"跟拍", "steady cinematic tracking shot following the subject at matching speed"},
 		{"低机位微推", "low-angle shot"},
 		{"慢升（Rise, small, slow）", "Rise, small, slow"},
 		{"", ""},

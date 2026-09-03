@@ -11,7 +11,9 @@ func TestLipGuardInjection(t *testing.T) {
 	if !strings.Contains(out, "LIP DISCIPLINE") {
 		t.Error("缺 LIP DISCIPLINE")
 	}
-	if !strings.Contains(out, "lips remain completely closed") {
+	// 2026-09-03 无台词镜走静音契约("lips completely closed"),有台词镜走原版
+	// ("lips remain completely closed")——两版都承载唇闭合约束
+	if !strings.Contains(out, "lips remain completely closed") && !strings.Contains(out, "lips completely closed") {
 		t.Error("LIP 纪律缺闭合约束")
 	}
 	// EXECUTION 不再诱导画面角色动嘴(删除了 mouth movement 措辞)

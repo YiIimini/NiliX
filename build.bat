@@ -1,20 +1,25 @@
 @echo off
-chcp 65001 >nul
+rem NiliX build script.
+rem
+rem [ENCODING RULE - do not break] Keep this file ASCII-only.
+rem cmd.exe parses .bat files with the system codepage (GBK on zh-CN Windows),
+rem so UTF-8 Chinese comments here get mis-decoded and corrupt multi-line caret
+rem continuations - comment fragments become bogus commands (repro: cmd /c from
+rem Git Bash). Chinese docs live in tools\build_refresh_version.ps1 (UTF-8 BOM).
+rem See tools\build_refresh_version.ps1 header for the full history.
+
 cd /d "%~dp0"
 
-rem Refresh frontend cache-buster (?v=) using PowerShell (UTF-8 safe).
-rem 2026-08-25 修复:缓存戳用 年月日时分(精确到分钟)——旧逻辑固定 yyyyMMdd+'x',
-rem 同一天多次 build 戳不变,浏览器缓存旧 JS/CSS(改前端不生效的隐性根源);自定义戳(xbb 等)
-rem 也因正则不匹配而永远不刷新。
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$p='web\kb\index.html';" ^
-  "$b=[IO.File]::ReadAllBytes((Resolve-Path $p));" ^
-  "$s=[Text.Encoding]::UTF8.GetString($b);" ^
-  "$v='?v=' + (Get-Date -Format 'yyyyMMddHHmm');" ^
-  "$n=[regex]::Replace($s, '\?v=20\d{6,12}[a-z]*\d*', $v);" ^
-  "if ($n -ne $s) { [IO.File]::WriteAllText((Resolve-Path $p), $n, [Text.UTF8Encoding]::new($false)); Write-Host 'refreshed ?v=' $v } else { Write-Host '?v up-to-date' }"
+rem Step 1: refresh frontend cache-buster (?v=) - minutes-precision timestamp,
+rem so browsers force-reload JS/CSS on every build. Old fixed-date stamps kept
+rem serving stale JS on same-day rebuilds.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\build_refresh_version.ps1"
+if errorlevel 1 (
+  echo VERSION REFRESH FAILED.
+  exit /b 1
+)
 
-rem Compile as GUI subsystem (no terminal window on launch).
+rem Step 2: compile as GUI subsystem (no terminal window on launch).
 go build -ldflags "-H windowsgui -s -w" -o NiliX.exe .
 if %errorlevel%==0 (
   echo BUILD OK: NiliX.exe

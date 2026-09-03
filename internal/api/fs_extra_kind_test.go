@@ -163,3 +163,46 @@ func mustWrite(t *testing.T, p, content string) {
 		t.Fatal(err)
 	}
 }
+
+// 2026-09-03 用户要求:详情弹窗显示分镜脚本列表——技能侧分镜是 .json
+// (素材/分镜脚本/第NNN章_标题_分镜脚本.json),必须进 Extras(storyboard)、
+// 不混入正文、不污染全书字数统计;无关 json(如 立项.json)不进 Extras。
+func TestAnalyzeDirStoryboardJSON(t *testing.T) {
+	dir := t.TempDir()
+	book := filepath.Join(dir, "JSON书")
+	mustMkdir(t, filepath.Join(book, "正文"))
+	mustMkdir(t, filepath.Join(book, "素材", "分镜脚本"))
+	mustWrite(t, filepath.Join(book, "正文", "第001章_开篇.md"), "第一章正文")
+	mustWrite(t, filepath.Join(book, "素材", "分镜脚本", "第022章_捏碎的测试仪_分镜脚本.json"),
+		`{"book":"JSON书","shots":[{"shot_id":1,"action":"a"}]}`)
+	mustWrite(t, filepath.Join(book, "素材", "分镜脚本", "第023章_豆豆失踪_分镜脚本.json"), `{"shots":[]}`)
+	mustWrite(t, filepath.Join(book, "立项.json"), `{"title":"x"}`)
+
+	res := analyzeDir(dir)
+	projs, ok := res["projects"].([]dirProject)
+	if !ok || len(projs) != 1 {
+		t.Fatalf("projects = %#v, want 1", res["projects"])
+	}
+	p := projs[0]
+	if len(p.Chapters) != 1 {
+		t.Fatalf("Chapters = %d, want 1(json 分镜不得混入正文)", len(p.Chapters))
+	}
+	var sb int
+	for _, e := range p.Extras {
+		switch {
+		case e.Kind == "storyboard":
+			sb++
+			if filepath.Ext(e.Name) != ".json" {
+				t.Errorf("storyboard 应为 json: %s", e.Name)
+			}
+		case e.Name == "立项.json":
+			t.Error("无关 json 不应进 Extras")
+		}
+	}
+	if sb != 2 {
+		t.Errorf("Extras storyboard json = %d, want 2", sb)
+	}
+	if p.Words != len([]rune("第一章正文")) {
+		t.Errorf("字数统计被 json 污染: %d", p.Words)
+	}
+}

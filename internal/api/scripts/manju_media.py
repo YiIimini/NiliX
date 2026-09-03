@@ -42,6 +42,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 def check_video(path, threshold=0.5):
     import av
+    import numpy as np
     c = av.open(path)
     v = c.streams.video[0]
     a = list(c.streams.audio)
@@ -50,15 +51,18 @@ def check_video(path, threshold=0.5):
     res = (v.width, v.height)
     samples, n = [], 0
     n_a = 0  # 音频帧计数(独立于视频帧;rms 全片均匀采样用)
-    # 冻结检测(2026-08-24 知识库「H3长镜连续与工作室实战」freeze-aware 整合):
-    # H3 段尾可能提前到达 Last Frame 后几乎静止(冻结),且冻结长度每段不同——固定裁剪不可靠。
-    # 每采样帧记录整帧灰度均值,末尾窗口内相邻差 < 阈值(0.8/255)占比高=段尾冻结。
-    frame_means = []
+    # 冻结检测(2026-08-24 知识库「H3长镜连续与工作室实战」freeze-aware 整合;
+    # 2026-09-03 判据根治:旧「整帧灰度均值相邻差」对慢速运镜结构性误报——渲染
+    # 契约强化 small/slow 运镜后整帧亮度统计几乎不变而画面持续位移,修仙界 EP01
+    # 24/35 镜被误报「段尾冻结100%」(抽帧 hash 全异=画面实际在动)。改用降采样
+    # 像素差:相邻采样帧的逐像素绝对差均值——推/摇/移/人物动作都会显著位移,真
+    # 冻结(编码噪声级 <0.1)与慢运镜(≥0.3)分界清晰,阈值 0.25 取保守侧)。
+    frame_sigs = []
     # 音频响度:全片均匀采样(每 4 个音频帧取 1≈128ms 一点,覆盖全程)。原「前 40 帧」只采开头
     # ≈1.3s,H3 音频常带前奏/渐入,开头静音会把有台词镜整段误判为「静音丢台词」
     # (2026-08-29 实测:04 镜 whisper 逐字命中台词,QC 却报 rms 0.002)。静音判定
-    # 另取音频峰值窗口 audio_peak:任一采样帧 rms≥0.06 即认为有声音内容。
-    np = None
+    # 另取音频峰值:2026-09-03 改用采样帧内样本最大绝对值(旧「帧均值」会把瞬态
+    # 冲击型声音/短台词低估成静音——镜14 max -0.6dB 却被报 peak 0.044 丢台词)。
     rms_sum, rms_n = 0.0, 0
     audio_peak = 0.0
     # 视频+音频必须交错解码(PyAV 先解完视频再解音频会拿不到音频帧),单遍同时完成两项检测
@@ -70,35 +74,33 @@ def check_video(path, threshold=0.5):
                 # 近黑判据:整帧平均亮度 < 20 才算接近全黑(亮度护栏防的是整帧黑屏);
                 # 用像素占比会把合法夜景(暗背景+火把/月光)误判为过暗
                 samples.append(float(g.mean() < 20))
-                frame_means.append(float(g.mean()))
+                frame_sigs.append(g[::8, ::8].astype("float32"))
             n += 1
         elif n_a % 4 == 0:
-            if np is None:
-                import numpy as _np
-                np = _np
             arr = fr.to_ndarray()
             mx = 1.0
             if arr.dtype.kind in "iu":  # 音频可能是 s16(±32768),归一化到 [-1,1]
                 mx = float(np.iinfo(arr.dtype).max)
-            frm = float(np.abs(arr).mean() / mx)
-            rms_sum += frm
+            ab = np.abs(arr) / mx
+            rms_sum += float(ab.mean())
             rms_n += 1
-            if frm > audio_peak:
-                audio_peak = frm
+            pm = float(ab.max())
+            if pm > audio_peak:
+                audio_peak = pm
         n_a += 1
     c.close()
     # 结尾淡出带(提示词常带 fade out):丢弃最后 5% 采样,合法淡出不计入暗比
     if samples:
         cut = max(1, int(len(samples) * 0.05))
         samples = samples[:-cut]
-    # 冻结检测计算:末尾 25% 采样点窗口(至少 4 个点),相邻灰度均值差 < 0.8/255 记一次"冻结";
-    # 冻结占比 = 冻结邻接数 / 窗口邻接总数。结尾淡出带丢弃(淡出是合法暗化,不是冻结)。
+    # 冻结检测计算:末尾 25% 采样点窗口(至少 4 个点),相邻采样帧降采样像素差均值
+    # < 0.25 记一次"冻结";冻结占比 = 冻结邻接数 / 窗口邻接总数。
     freeze_ratio = 0.0
-    if len(frame_means) >= 6:
-        win = frame_means[-max(4, int(len(frame_means) * 0.25)):]
-        diffs = [abs(win[i + 1] - win[i]) for i in range(len(win) - 1)]
+    if len(frame_sigs) >= 6:
+        win = frame_sigs[-max(4, int(len(frame_sigs) * 0.25)):]
+        diffs = [float(np.abs(win[i + 1] - win[i]).mean()) for i in range(len(win) - 1)]
         if diffs:
-            freeze_ratio = round(sum(1 for d in diffs if d < 0.8) / len(diffs), 3)
+            freeze_ratio = round(sum(1 for d in diffs if d < 0.25) / len(diffs), 3)
     audio_rms = rms_sum / max(rms_n, 1)
     # 音轨规格(H3 原生规格 32kHz 立体声;审计升级 P0:静音/单声道/采样率异常在合成前拦截)
     audio_rate = 0
@@ -123,26 +125,31 @@ def trim_frozen_tail(path, min_tail=0.5, max_cut_ratio=0.4, sample_every=2):
     且换 seed 重渲也不解决(模型固有特性)——旧 QC 判不合格触发重渲纯属烧 GPU。
     正确姿势:程序检测冻结尾巴并 packet-copy 截除(无损重封装,秒级完成)。
 
-    逻辑:每 sample_every 帧采样整帧灰度均值,从尾部向前找连续冻结游程
-    (相邻差 < 0.8,容忍 1 个孤立抖动点);冻结尾 >= min_tail 秒且不超过总时长
-    max_cut_ratio 时截到冻结起点前(留 0.2s 余量)。返回截除秒数(0=未处理)。
+    逻辑:每 sample_every 帧采样降采样像素签名,从尾部向前找连续冻结游程
+    (相邻像素差均值 < 0.25,容忍 1 个孤立抖动点;2026-09-03 与 check_video
+    同步换判据——灰度均值对慢运镜误判,会把运动镜的好尾巴当冻截止掉);
+    冻结尾 >= min_tail 秒且不超过总时长 max_cut_ratio 时截到冻结起点前
+    (留 0.2s 余量)。返回截除秒数(0=未处理)。
     """
     import av
+    import numpy as np
     c = av.open(path)
     v = c.streams.video[0]
     fps = float(v.average_rate) if v.average_rate else 24.0
-    means = []
+    sigs = []
     n = 0
     for fr in c.decode(v):
         if n % sample_every == 0:
             g = fr.to_ndarray(format="gray")
-            means.append(float(g.mean()))
+            sigs.append(g[::8, ::8].astype("float32"))
         n += 1
     c.close()
-    if len(means) < 8 or n == 0:
+    if len(sigs) < 8 or n == 0:
         return 0.0
+    means = [float(np.abs(sigs[i + 1] - sigs[i]).mean()) for i in range(len(sigs) - 1)]
+    means = [0.0] + means  # 对齐游程索引(第 i 点的"到前帧差")
     # 从尾向前的冻结游程(容忍 1 个孤立非冻结抖动点)
-    TH = 0.8
+    TH = 0.25
     j = len(means) - 1
     outlier = False
     while j > 0:
@@ -387,7 +394,10 @@ def cmd_qc(args):
                 sid = int(s.get("shot_id") or 0)
                 if not sid:
                     continue
-                if str(s.get("dialogue", "")).strip() or "<d>" in str(s.get("h3_prompt", "")):
+                _d = str(s.get("dialogue", "")).strip()
+                # 2026-09-03:「台词:无」是技能侧占位契约,非空字符串真值曾把无台词镜
+                # 全判成"有台词"→ 静音契约正常生效的空镜被误报「静音丢台词」(镜1/2/5/9)
+                if (_d and _d != "无") or "<d>" in str(s.get("h3_prompt", "")):
                     dlg_shots.add(sid)
         except Exception:
             pass

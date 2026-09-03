@@ -2780,6 +2780,11 @@ func manjuShots(w http.ResponseWriter, r *http.Request) {
 				"shot_size":   str(m["shot_size"]),
 				"camera":      str(m["camera"]),
 				"duration":    m["duration"],
+				"characters":  m["characters"],  // 登场角色(中文详情,2026-09-03 视频管理弹窗)
+				"action":      str(m["action"]), // 动作描述(中文详情)
+				"dialogue":    str(m["dialogue"]),
+				"narration":   str(m["narration"]),
+				"h3_prompt":   str(m["h3_prompt"]), // 原始提示词(编辑用;最终化版走 shot/workflow)
 				"has_dialogue": str(m["dialogue"]) != "" || strings.Contains(str(m["h3_prompt"]), "<d>"),
 				"rendered":    rendered,
 				"stale":       stale,
@@ -3402,6 +3407,7 @@ func manjuVoiceGen(w http.ResponseWriter, r *http.Request) {
 		_ = os.Remove(out)
 		if VoiceLibDir != "" {
 			_ = os.Remove(filepath.Join(VoiceLibDir, filepath.FromSlash(rel)))
+			_ = rebuildVoiceLibIndex()
 		}
 		setVoiceBinding(plan, char, "", "")
 		if err := ctx.writePlan(plan); err != nil {
@@ -3485,7 +3491,9 @@ func (ctx *manjuCtx) syncVoiceBindingAuthoritative(rel string) {
 	}
 	dst := filepath.Join(VoiceLibDir, filepath.FromSlash(rel))
 	_ = os.MkdirAll(filepath.Dir(dst), 0755)
-	_ = copyFile(src, dst)
+	if copyFile(src, dst) == nil {
+		_ = rebuildVoiceLibIndex() // 汇总索引实时同步(2026-09-03)
+	}
 }
 
 // setVoiceBinding 写角色音色绑定到方案 characters(voice 为空清绑定)
@@ -3588,12 +3596,23 @@ func registerManjuRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/manju/shot/overrides", manjuShotOverridesHandler)
 	mux.HandleFunc("GET /api/manju/shot/asset", manjuShotDebugStatic)
 	mux.HandleFunc("GET /api/manju/shot/video", manjuShotVideoHandler)
+	// 2026-09-03 画布三期:参数模板(批量应用)+ 渲染中间产物(缓存/latent/抽帧)
+	mux.HandleFunc("GET /api/manju/shot/templates", manjuShotTemplatesHandler)
+	mux.HandleFunc("POST /api/manju/shot/template/save", manjuShotTemplateSaveHandler)
+	mux.HandleFunc("POST /api/manju/shot/template/delete", manjuShotTemplateDeleteHandler)
+	mux.HandleFunc("POST /api/manju/shot/template/apply", manjuShotTemplateApplyHandler)
+	mux.HandleFunc("GET /api/manju/shot/intermediates", manjuShotIntermediatesHandler)
+	mux.HandleFunc("GET /api/manju/shot/frame", manjuShotFrameHandler)
+	// 2026-09-03 视频管理三弹窗:单镜编辑(分镜中文详情)/场景管理列表
+	mux.HandleFunc("POST /api/manju/shot/edit", manjuShotEditHandler)
+	mux.HandleFunc("GET /api/manju/scenes", manjuScenesHandler)
 	// 2026-09-02 角色资产库(跨项目复用)
 	mux.HandleFunc("GET /api/manju/char-lib/list", manjuCharLibHandler)
 	mux.HandleFunc("GET /api/manju/char-lib/detail", manjuCharLibDetailHandler)
 	mux.HandleFunc("GET /api/manju/char-lib/asset", manjuCharLibAssetHandler)
 	mux.HandleFunc("POST /api/manju/char-lib/import", manjuCharLibImportHandler)
 	mux.HandleFunc("POST /api/manju/char-lib/delete", manjuCharLibDeleteHandler)
+	mux.HandleFunc("POST /api/manju/char-lib/delete-batch", manjuCharLibDeleteBatchHandler)
 	mux.HandleFunc("GET /api/manju/notes", manjuNotesGet)
 	mux.HandleFunc("POST /api/manju/notes", manjuNotesPost)
 	mux.HandleFunc("GET /api/manju/paths", manjuPathsGet)

@@ -2357,14 +2357,16 @@ func registerAgentRoutes(mux *http.ServeMux) {
 	})
 
 	// 产物删除:file=删单个文件(成片/镜头 mp4);episode=删整集目录(镜头目录+成片)。
+	// 2026-09-02 资产管理删除清理:char=删角色全部资产图+候选+asset_map 条目(角色卡保留);
+	// scene=删场景图(主图+尾帧)+asset_map 条目。
 	// 安全护栏:目标必须位于该项目工作目录之内,拒绝删工作目录本身。
 	mux.HandleFunc("POST /api/manju/output/delete", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		configPath := str(body["config"])
 		scope := str(body["scope"])
-		if configPath == "" || (scope != "file" && scope != "episode") {
-			http.Error(w, `{"error":"missing config/scope(file|episode)"}`, http.StatusBadRequest)
+		if configPath == "" || (scope != "file" && scope != "episode" && scope != "char" && scope != "scene") {
+			http.Error(w, `{"error":"missing config/scope(file|episode|char|scene)"}`, http.StatusBadRequest)
 			return
 		}
 		// 审计 F4:config 归属校验(output/delete;workdir 取自 config,越界可删任意文件)
@@ -2381,6 +2383,25 @@ func registerAgentRoutes(mux *http.ServeMux) {
 		}
 		wd := filepath.Clean(ctx.workdir)
 		removed := []string{}
+		if scope == "char" || scope == "scene" {
+			// 资产删除(2026-09-02):与渲染/资产阶段并发会撕扯产物,运行中拒绝(S7 同款闸门)
+			if manjuStateRunningFor(configPath) {
+				http.Error(w, `{"error":"项目正在渲染中,请先停止再删除资产"}`, http.StatusConflict)
+				return
+			}
+			id := strings.TrimSpace(str(body["path"]))
+			if id == "" || strings.ContainsAny(id, `\/`) || id == "." || id == ".." {
+				http.Error(w, `{"error":"missing path(角色/场景名)"}`, http.StatusBadRequest)
+				return
+			}
+			if scope == "char" {
+				removed = ctx.manjuDeleteCharAssets(id)
+			} else {
+				removed = ctx.manjuDeleteSceneAssets(id)
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": removed})
+			return
+		}
 		if scope == "file" {
 			p := filepath.Clean(str(body["path"]))
 			if p == "" || !strings.HasPrefix(p, wd+string(filepath.Separator)) {
