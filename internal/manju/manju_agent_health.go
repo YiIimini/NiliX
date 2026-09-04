@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -960,45 +961,40 @@ func manjuFaceFeatureItems(ctx *manjuCtx) []manjuHealthItem {
 		Fixable:  false}}
 }
 
+// manjuFaceCatRX 七类五官特征的形态容忍正则(2026-09-04 修复:旧整词子串匹配
+// 形态敏感——"almond-shaped dark brown eyes" 不含 "almond eyes" 子串即漏检,
+// 小满 6 类特征+印记被判 cats=2 实锤误报。正则允许形容词插入/连字符形态,
+// 与 tools/face_feature_rescan.py 及技能侧 storyboard_check 契约同源)。
+var manjuFaceCatRX = map[string]*regexp.Regexp{
+	"eye":  regexp.MustCompile(`(?i)\b(?:almond|slanting|narrow|round|droopy|deep[- ]?set|sharp|keen|warm|sunken|beady|piercing|gentle|sleepy|hooded|bright|dark|big)[\w-]*(?:\s+[\w-]+){0,3}\s+eyes?\b`),
+	"brow": regexp.MustCompile(`(?i)\b(?:thick|arched|straight|fierce|bushy|heavy|slanting|gentle|curved|slim)[\w-]*(?:\s+[\w-]+){0,2}\s+(?:brows|eyebrows)\b`),
+	"nose": regexp.MustCompile(`(?i)\b(?:straight|hooked|snub|broad|aquiline|flat|bulbous|small|sharp|pointed|button)[\w-]*(?:\s+[\w-]+){0,2}\s+nose\b|\bbroken nose\b`),
+	"lip":  regexp.MustCompile(`(?i)\b(?:thin|full|firm|tight|soft|small|wide)[\w-]*(?:\s+[\w-]+){0,2}\s+lips?\b|\bfull mouth\b`),
+	"face": regexp.MustCompile(`(?i)\b(?:square|round|oval|lean|gaunt|long|broad|narrow|haggard|baby|heart)[\w-]*(?:\s+[\w-]+){0,2}\s+face\b|\b(?:angular|chiseled|strong|soft|firm|delicate)[\w-]*(?:\s+[\w-]+){0,2}\s+jaw\b|\b(?:sunken|hollow|full|soft|high) cheek(?:bones|s)?\b`),
+	"skin": regexp.MustCompile(`(?i)\bweather[- ]?beaten\b|\bweathered\b|\bwrinkled\b|\bleathery\b|\bsallow\b|\bruddy\b|\bsun[- ]?darkened\b|\blined\b|\bcalloused\b|\bgreasy\b|\bpallid\b|\bfair rosy cheeks\b|\btanned\b`),
+	"hair": regexp.MustCompile(`(?i)\bcrew cut\b|\bbuzz cut\b|\blong hair\b|\bshort hair\b|\bslicked[- ]?back\b|\bponytail\b|\bbuns?\b|\bbald\b|\bwhite hair\b|\bgrey hair\b|\bgray hair\b|\bblack hair\b|\bbraid\w*\b|\bcurly hair\b|\bmohawk\b|\bside parting\b|\bmiddle part\b|\btousled\b|\bshaved head\b|\bthin hair\b|\bwispy bangs?\b|\bsalt[- ]and[- ]pepper\b|\breceding hairline\b|\bhair buns?\b|\bbangs\b`),
+}
+
+// manjuFaceMarkRX 独有印记/胡须;manjuFaceGenericRX 泛化词(同上正则化)。
+// dead-regular features 豁免:"过分工整"是有意的伪善人设描写(宋明堂卡实锤),
+// 不是泛化美颜词——检测前剥除该形态防子串误命中。
+var manjuFaceMarkRX = regexp.MustCompile(`(?i)\bscar\w*\b|\bmole\b|\bbirthmark\b|\bearring\w*\b|\btattoo\w*\b|\bgold tooth\b|\bfreckles\b|\bbeauty mark\b|\bmissing tooth\b|\bbroken nose\b|\bblind eye\b|\bglass eye\b|\beyepatch\b|\bbrand mark\b|\bbeard\w*\b|\bmustache\b|\bmoustache\b|\bgoatee\b|\bstubble\b|\bwhiskers\b|\bsideburns\b`)
+var manjuFaceGenericRX = regexp.MustCompile(`(?i)handsome face|fair face|standard face|ordinary face|good-looking|attractive face|clean-cut face|regular features`)
+
 // manjuFaceWeakness 单卡面容检测:返回不达标原因(空=达标)。
 // 特征类别≥4 且(有印记或胡须)且无泛化词。
 func manjuFaceWeakness(img string) string {
-	low := strings.ToLower(img)
-	has := func(ws ...string) bool {
-		for _, w := range ws {
-			if strings.Contains(low, w) {
-				return true
-			}
-		}
-		return false
-	}
+	// "过分工整"伪善人设词豁免(宋明堂 dead-regular features 实锤,非泛化美颜)
+	img = regexp.MustCompile(`(?i)dead-regular features`).ReplaceAllString(img, "")
 	cats := 0
-	if has("almond eyes", "slanting eyes", "narrow eyes", "round eyes", "droopy eyes", "deep-set eyes", "sharp eyes", "keen eyes", "warm eyes", "dark eyes", "bright eyes", "sunken eyes", "beady eyes", "piercing eyes", "gentle eyes", "sleepy eyes", "hooded eyes", "big round eyes") {
-		cats++
+	for _, rx := range manjuFaceCatRX {
+		if rx.MatchString(img) {
+			cats++
+		}
 	}
-	if has("thick brows", "arched brows", "straight brows", "fierce brows", "bushy brows", "heavy brows", "slanting brows", "thick eyebrows") {
-		cats++
-	}
-	if has("straight nose", "hooked nose", "snub nose", "broad nose", "aquiline nose", "flat nose", "bulbous nose") {
-		cats++
-	}
-	if has("thin lips", "full lips", "firm lips", "tight lips", "full mouth") {
-		cats++
-	}
-	if has("square face", "angular jaw", "round face", "oval face", "lean face", "gaunt face", "long face", "broad face", "chiseled jaw", "strong jaw", "soft jaw", "sunken cheeks", "hollow cheeks", "high cheekbones", "haggard face") {
-		cats++
-	}
-	if has("weather-beaten", "weathered", "wrinkled", "leathery", "sallow", "ruddy", "sun-darkened", "lined", "calloused", "greasy", "pallid") {
-		cats++
-	}
-	if has("crew cut", "buzz cut", "long hair", "short hair", "slicked-back", "ponytail", "bun", "bald", "white hair", "grey hair", "gray hair", "black hair", "braid", "curly hair", "mohawk", "side parting", "middle part", "tousled", "shaved head", "thin hair", "wispy hair", "salt-and-pepper hair", "receding hairline") {
-		cats++
-	}
-	mark := has("scar", "mole", "birthmark", "earring", "tattoo", "gold tooth", "freckles", "beauty mark", "missing tooth", "broken nose", "blind eye", "glass eye", "eyepatch", "twin scars", "brand mark") ||
-		has("beard", "mustache", "goatee", "stubble", "whiskers", "sideburns")
-	generic := has("handsome face", "fair face", "standard face", "ordinary face", "good-looking", "attractive face", "clean-cut face", "regular features")
+	mark := manjuFaceMarkRX.MatchString(img)
 	switch {
-	case generic:
+	case manjuFaceGenericRX.MatchString(img):
 		return "含泛化词"
 	case cats < 4:
 		return fmt.Sprintf("五官特征仅 %d 类(<4)", cats)

@@ -3974,7 +3974,10 @@ const manjuQGen = 23
 // 4=face裁切窗口定版(2026-08-28 标尺实测:单人白底方形主图头顶20%/下巴70%,旧窗
 //   口 8%-52% 切口鼻、8%-70% 贴下巴线切嘴;定版 8%-88% 对齐检测命中分支比例,
 //   主图重出联动 face/视图/Q版 全链重出重裁)。
-const manjuPortraitGen = 5
+// 6=面容特征补写(2026-09-04):三部书 24 张角色卡 image_prompt 补五官特征+独有印记
+//   (面容独特性硬规范双侧同步,tools/rework_face_features.py)——存量主图按旧卡
+//   生成(五官细节不足易撞脸),须按新卡重出定妆。
+const manjuPortraitGen = 6
 
 // portraitWF 定妆照工作流按风格分流:含写实元素用 Z-Image(真人级),其余用 SDXL checkpoint。
 // 尺寸固定为标准 1024×1024(与项目画幅无关);正脸参考(ensureFaceCrop)再从该图按视频比例裁切。
