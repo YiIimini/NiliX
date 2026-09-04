@@ -1,11 +1,12 @@
 package manju
 
 import (
-	"nilix/internal/paths"
 	"encoding/json"
+	"nilix/internal/paths"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestCharLibFingerprint 形象指纹:提示词变化 → 指纹变化(同名不同形象不误复用)
@@ -277,5 +278,58 @@ func TestCharLibCrossNameReuse(t *testing.T) {
 	empty := map[string]any{"id": "丁"}
 	if _, lc := manjuCharLibMatch(empty); lc != "" {
 		t.Errorf("空卡不得跨名匹配")
+	}
+}
+
+// TestCharLibReuseIdempotentMtime 复用内容相同不覆盖(2026-09-05 续跑全量重渲根因):
+// 无条件 copyFile 每次运行刷新主图 mtime → ensureFaceCrop 判正脸过期重裁 → 参考图
+// 指纹全 stale → 每次续跑整集从镜 1 重渲(当晚三次运行三次全量重渲实锤)。
+// 同内容复用必须保持目标 mtime 不变;内容变化才覆盖。
+func TestCharLibReuseIdempotentMtime(t *testing.T) {
+	oldCharLib := paths.CharLibDir
+	paths.CharLibDir = filepath.Join(t.TempDir(), "char_lib")
+	defer func() { paths.CharLibDir = oldCharLib }()
+
+	projDir := filepath.Join(t.TempDir(), "proj")
+	assetsDir := filepath.Join(projDir, "assets", "characters")
+	_ = os.MkdirAll(assetsDir, 0o755)
+	card := map[string]any{
+		"id": "阿萤", "image_prompt": "a girl with silver hair and amber eyes",
+		"q_form": "chibi", "species": "人", "gender": "女", "age": "17岁",
+	}
+	ctx := &manjuCtx{workdir: projDir, assetsDir: filepath.Join(projDir, "assets")}
+	_ = os.WriteFile(filepath.Join(assetsDir, "阿萤.png"), []byte("main-png-bytes"), 0o644)
+	_ = os.WriteFile(filepath.Join(assetsDir, "阿萤_front.png"), []byte("front-png-bytes"), 0o644)
+	if err := ctx.manjuCharLibStore(card); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟新项目首次复用
+	_ = os.RemoveAll(assetsDir)
+	_ = os.MkdirAll(assetsDir, 0o755)
+	if ctx.manjuCharLibReuse(card, nil, nil) == 0 {
+		t.Fatal("应复用")
+	}
+	main := filepath.Join(assetsDir, "阿萤.png")
+	// 固定旧时间(昨夜渲染时的产物 mtime)
+	old := time.Now().Add(-26 * time.Hour)
+	if err := os.Chtimes(main, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// 二次复用(同内容):mtime 必须不变
+	if ctx.manjuCharLibReuse(card, nil, nil) == 0 {
+		t.Fatal("二次复用仍应命中")
+	}
+	fi, _ := os.Stat(main)
+	if !fi.ModTime().Equal(old) {
+		t.Fatalf("同内容复用刷新了 mtime(%v ≠ %v)——续跑会全量重渲", fi.ModTime(), old)
+	}
+	// 库内容变化:必须覆盖(mtime 刷新=指纹失效链路保持)
+	libMain := filepath.Join(manjuCharLibPath("阿萤"), "阿萤.png")
+	_ = os.WriteFile(libMain, []byte("new-main-png-bytes"), 0o644)
+	if ctx.manjuCharLibReuse(card, nil, nil) == 0 {
+		t.Fatal("内容变化仍应复用(覆盖)")
+	}
+	if b, _ := os.ReadFile(main); string(b) != "new-main-png-bytes" {
+		t.Fatal("库内容变化未覆盖到项目资产")
 	}
 }

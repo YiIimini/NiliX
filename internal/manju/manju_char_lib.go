@@ -182,10 +182,17 @@ func (ctx *manjuCtx) manjuCharLibReuse(m map[string]any, cmap map[string]any, lg
 			continue
 		}
 		name := cid + suf + ".png" // 跨名复用:按本项目角色名落地
-		if err := copyFile(src, filepath.Join(dstDir, name)); err != nil {
+		dst := filepath.Join(dstDir, name)
+		// 2026-09-05 续跑全量重渲根因修复:内容相同不覆盖——此前无条件 copyFile,
+		// 每次运行 mtime 刷新 → ensureFaceCrop 判正脸"早于主图"重裁 → 参考图指纹
+		// 全 stale → 每次续跑整集从镜 1 重渲(当晚三次运行三次全量重渲实锤)。
+		if fileExists(dst) && filesEqual(src, dst) {
+			n++
+		} else if err := copyFile(src, dst); err != nil {
 			continue
+		} else {
+			n++
 		}
-		n++
 		if cmap != nil {
 			rel := "characters/" + name
 			key := cid
