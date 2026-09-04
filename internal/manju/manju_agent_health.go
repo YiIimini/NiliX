@@ -333,7 +333,10 @@ func (ctx *manjuCtx) missingModels() []string {
 		{str(ctx.R["z_image_unet"]), "diffusion_models", "unet"},
 		{str(ctx.R["z_image_clip"]), "text_encoders", "clip"},
 		{str(ctx.R["z_image_vae"]), "vae", ""},
-		{str(ctx.R["turbo_lora"]), "loras", ""},
+		// 2026-09-04:PDD Acc 单文件(trunk+head bank)节点从 pdd_acc 目录读,
+		// turbo LoRA 检查兼容两目录;顺带补 turbo_lora_r2v 漏检
+		{str(ctx.R["turbo_lora"]), "loras", "pdd_acc"},
+		{str(ctx.R["turbo_lora_r2v"]), "loras", "pdd_acc"},
 		{str(ctx.R["unet_fl2va"]), "diffusion_models", "unet"},
 		{str(ctx.R["unet_ref2va"]), "diffusion_models", "unet"},
 		{str(ctx.R["vae_video"]), "vae", ""},

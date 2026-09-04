@@ -1749,8 +1749,9 @@ var manjuModelDirs = map[string][]string{
 	"vae_video":      {"vae"},
 	"vae_audio":      {"vae"},
 	"z_image_vae":    {"vae"},
-	"turbo_lora":     {"loras"},
-	"turbo_lora_r2v": {"loras"},
+	// 2026-09-04:PDD Acc 单文件在 pdd_acc 目录,与 loras 合并列出(下拉可选)
+	"turbo_lora":     {"loras", "pdd_acc"},
+	"turbo_lora_r2v": {"loras", "pdd_acc"},
 	"char_male":      {"checkpoints"},
 	"char_female":    {"checkpoints"},
 	"animagine":      {"checkpoints"},
@@ -1761,6 +1762,9 @@ func manjuModels(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{}
 	for field, dirs := range manjuModelDirs {
 		names := []string{}
+		// turbo_* 字段=合并模式(loras+pdd_acc 都列出;PDD 单文件在 pdd_acc 目录);
+		// 其余=互斥备选目录,取第一个非空(unet/diffusion_models 类)
+		merge := strings.HasPrefix(field, "turbo_")
 		for _, d := range dirs {
 			dir := filepath.Join(paths.ComfySharedDir, "models", d)
 			entries, err := os.ReadDir(dir)
@@ -1776,7 +1780,7 @@ func manjuModels(w http.ResponseWriter, r *http.Request) {
 					names = append(names, e.Name())
 				}
 			}
-			if len(names) > 0 {
+			if len(names) > 0 && !merge {
 				break
 			}
 		}

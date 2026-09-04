@@ -69,6 +69,7 @@ func defaultExtraModelPaths(base string) string {
 		"audio_encoders", "style_models", "hypernetworks", "photomaker", "ipadapter",
 		"unet", "gguf", "reference", "reactor", "insightface", "animatediff_models",
 		"animatediff_motion_models", "sam", "grounding", "LLM", "custom_nodes",
+		"pdd_acc", // 2026-09-04:PDD Acc 单文件目录(MiniMaxH3PDDAccApply 读取)
 	}
 	var b strings.Builder
 	b.WriteString("shared:\n    base_path: " + base + "\n")
