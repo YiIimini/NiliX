@@ -723,8 +723,8 @@ func parseScriptJSON(text string) ([]scriptShotRaw, []scriptJSONBlock, error) {
 // h3_prompt】(与 LLM 多切点路径同款数据形态)——finalize 汇点(纪律注入/音色
 // 兜底/对齐层)自然作用于块提示词,不绕过任何加工;组头单镜六段式仍在脚本源,
 // 脚本指纹变化重解析时重建。校验不过的块降级丢弃、组内逐镜独立渲染(安全回退,
-// 绝不丢镜):镜号存在且严格连续 / ≥2 镜 / 组内时长和 ≤15s(API 上限,语音预算
-// 补偿后的 plan 值)/ 块级六段式含 [Shot 切点标记 / 块间不重叠。
+// 绝不丢镜):镜号存在且严格连续 / ≥2 镜 / 组内时长和 ≤10s(GPU 实证上限,语音
+// 预算补偿后的 plan 值)/ 块级六段式含 [Shot 切点标记 / 块间不重叠。
 // 返回保留的块数。
 func attachNarrativeBlocks(plan map[string]any, blocks []scriptJSONBlock, lg *manjuLogger) int {
 	if len(blocks) == 0 {
@@ -766,8 +766,8 @@ func attachNarrativeBlocks(plan map[string]any, blocks []scriptJSONBlock, lg *ma
 				}
 				sum += d
 			}
-			if bad == "" && sum > 15 {
-				bad = fmt.Sprintf("组内时长和 %ds 超 15s 上限", sum)
+			if bad == "" && sum > 10 {
+				bad = fmt.Sprintf("组内时长和 %ds 超 10s 上限(2026-09-04 GPU 实证:15s/360帧块渲染采样器内核级挂死;常规镜 ≤9s 稳定)", sum)
 			}
 		}
 		if bad != "" {

@@ -12,19 +12,21 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"nilix/internal/paths"
 )
 
 const blockBookScript = `{
   "book": "叙事块测试书",
   "episode": 1,
   "shots": [
-    {"shot_id":1,"shot_size":"特写","camera":"Static","action":"【青萝村】小满抱葫芦","dialogue":"旁白：她递了十万九千五百碗水。","characters":["小满"],"duration":6,"h3_prompt":"subject_definitions:\n[Shot 1] solo prompt A"},
-    {"shot_id":2,"shot_size":"中景","camera":"Pan","action":"【青萝村】村民围观","dialogue":"(S1)何大勇:\"把善缘簿交出来。\"","characters":["何大勇"],"duration":5,"h3_prompt":"summary:\nsolo prompt B"},
-    {"shot_id":3,"shot_size":"远景","camera":"Static","action":"【山道】空景","duration":5,"h3_prompt":"summary:\nsolo prompt C"},
+    {"shot_id":1,"shot_size":"特写","camera":"Static","action":"【青萝村】小满抱葫芦","dialogue":"旁白：她递了十万九千五百碗水。","characters":["小满"],"duration":5,"h3_prompt":"subject_definitions:\n[Shot 1] solo prompt A"},
+    {"shot_id":2,"shot_size":"中景","camera":"Pan","action":"【青萝村】村民围观","dialogue":"(S1)何大勇:\"把善缘簿交出来。\"","characters":["何大勇"],"duration":4,"h3_prompt":"summary:\nsolo prompt B"},
+    {"shot_id":3,"shot_size":"远景","camera":"Static","action":"【山道】空景","duration":4,"h3_prompt":"summary:\nsolo prompt C"},
     {"shot_id":4,"shot_size":"近景","camera":"Static","action":"【山道】小满起身","dialogue":"旁白：风起了。","characters":["小满"],"duration":4,"h3_prompt":"summary:\nsolo prompt D"}
   ],
   "narrative_blocks": [
-    {"shots":[1,2],"h3_prompt":"subject_definitions:\n[Shot 1] ... [Shot 2] At 00:06.000 block prompt covering both"},
+    {"shots":[1,2],"h3_prompt":"subject_definitions:\n[Shot 1] ... [Shot 2] At 00:05.000 block prompt covering both"},
     {"shots":[3,99],"h3_prompt":"bad: missing shot 99"},
     {"shots":[4],"h3_prompt":"single shot not a block [Shot 1]"},
     {"shots":[3,4,2],"h3_prompt":"non-consecutive [Shot 1]"}
@@ -82,8 +84,8 @@ func TestNarrativeBlockParseAndApply(t *testing.T) {
 		byID[s.ID] = s
 	}
 	head, tail := byID[1], byID[2]
-	if head.Duration != 11 {
-		t.Fatalf("组头时长应=组和 6+5=11, got %d", head.Duration)
+	if head.Duration != 9 {
+		t.Fatalf("组头时长应=组和 5+4=9, got %d", head.Duration)
 	}
 	if !strings.Contains(head.H3Prompt, "block prompt covering both") {
 		t.Fatalf("组头提示词应被块级六段式覆盖, got %.60s", head.H3Prompt)
@@ -127,8 +129,8 @@ func TestNarrativeBlockOnlyPromotesHead(t *testing.T) {
 	ctx2 := ctx
 	ctx2.only = "2"
 	sel := ctx2.selectedShots(shots)
-	if len(sel) != 1 || sel[0].ID != 1 || sel[0].Duration != 11 {
-		t.Fatalf("定点内镜 2 应映射组头整块(时长 11), got %v", idsOf(sel))
+	if len(sel) != 1 || sel[0].ID != 1 || sel[0].Duration != 9 {
+		t.Fatalf("定点内镜 2 应映射组头整块(时长 9), got %v", idsOf(sel))
 	}
 	ctx3 := ctx
 	ctx3.only = "3,4"
@@ -162,18 +164,18 @@ func TestNarrativeBlockValidationMatrix(t *testing.T) {
 		block scriptJSONBlock
 		ok    bool
 	}{
-		{"合法两镜", scriptJSONBlock{Shots: []int{1, 2}, H3Prompt: "x [Shot 2] At 00:05.000"}, true},
-		{"合法三镜", scriptJSONBlock{Shots: []int{2, 3, 4}, H3Prompt: "x [Shot 3] At 00:10.000"}, true},
+		{"合法两镜", scriptJSONBlock{Shots: []int{3, 4}, H3Prompt: "x [Shot 2] At 00:04.000"}, true}, // 4+4=8≤10
+		{"三镜超10s上限", scriptJSONBlock{Shots: []int{2, 3, 4}, H3Prompt: "x [Shot 3] At 00:08.000"}, false}, // 4+4+4=12>10(360帧挂死防线)
 		{"镜号缺失", scriptJSONBlock{Shots: []int{1, 99}, H3Prompt: "x [Shot 2]"}, false},
 		{"镜号不连续", scriptJSONBlock{Shots: []int{1, 3}, H3Prompt: "x [Shot 2]"}, false},
 		{"单镜非块", scriptJSONBlock{Shots: []int{1}, H3Prompt: "x [Shot 1]"}, false},
 		{"无切点标记", scriptJSONBlock{Shots: []int{1, 2}, H3Prompt: "no cut marker"}, false},
-		{"超15s上限", scriptJSONBlock{Shots: []int{1, 2, 3, 4}, H3Prompt: "x [Shot 2]"}, false}, // 6+5+5+4=20
+		{"超10s两镜", scriptJSONBlock{Shots: []int{1, 2}, H3Prompt: "x [Shot 2]"}, false}, // 用例时长 6+5=11>10
 	}
 	plan := map[string]any{"shots": []any{
 		map[string]any{"shot_id": 1, "duration": 6},
 		map[string]any{"shot_id": 2, "duration": 5},
-		map[string]any{"shot_id": 3, "duration": 5},
+		map[string]any{"shot_id": 3, "duration": 4},
 		map[string]any{"shot_id": 4, "duration": 4},
 	}}
 	for _, c := range cases {
@@ -251,13 +253,20 @@ func TestNarrativeBlockRealChapter(t *testing.T) {
 		t.Skip("真实分镜不在本机,跳过")
 	}
 	dir := t.TempDir()
+	lgf, _ := os.Create(filepath.Join(dir, "parse.log"))
+	defer lgf.Close()
+	lg := &manjuLogger{state: manjuState, file: lgf}
+	defer func() {
+		if b, err := os.ReadFile(filepath.Join(dir, "parse.log")); err == nil && len(b) > 0 {
+			t.Logf("解析日志:\n%s", b)
+		}
+	}()
 	cfgPath := filepath.Join(dir, "config.json")
 	_ = os.WriteFile(cfgPath, []byte(`{"paths":{"script":"`+filepath.ToSlash(sb)+`"},"render":{}}`), 0o644)
 	ctx, err := newManjuCtx(cfgPath, "EP02", "", "", "")
 	if err != nil {
 		t.Fatalf("newManjuCtx: %v", err)
 	}
-	lg := &manjuLogger{state: manjuState}
 	plan, err := ctx.scriptParsePlan(lg)
 	if err != nil {
 		t.Fatalf("scriptParsePlan: %v", err)
@@ -279,8 +288,8 @@ func TestNarrativeBlockRealChapter(t *testing.T) {
 			if strings.Contains(s.H3Prompt, "[Shot 2] At ") {
 				withCut++
 			}
-			if s.Duration > 15 {
-				t.Fatalf("块 %d 时长 %d 超 15", s.ID, s.Duration)
+			if s.Duration > 10 {
+				t.Fatalf("块 %d 时长 %d 超 10(360帧挂死防线)", s.ID, s.Duration)
 			}
 		}
 	}
@@ -302,6 +311,12 @@ func TestNarrativeBlockRenderPilot(t *testing.T) {
 	const cfg = `D:/Ai/NiliX/manju/递了三千年葫芦，她给自己发了飞升任务/config.json`
 	if _, err := os.Stat(cfg); err != nil {
 		t.Skip("递葫芦项目不在本机")
+	}
+	// 真渲染试点必须用真实 Comfy 路径(TestMain 默认指向临时目录,缓存判定会
+	// 与 ComfyUI 实际落盘目录错位——三轮"未落盘"误报的根因)
+	paths.ComfySharedDir = `D:/Ai/NiliX/comfyui/shared`
+	if paths.ComfyRootDir == "" {
+		paths.ComfyRootDir = `D:/Ai/NiliX/comfyui/ComfyUI`
 	}
 	ctx, err := newManjuCtx(cfg, "EP02", "", "", "")
 	if err != nil {

@@ -39,7 +39,9 @@ NOVEL_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "logs")
 PROGRESS = os.path.join(LOG_DIR, "narrative_blocks_progress.json")
 
-MAX_BLOCK_SEC = 15
+MAX_BLOCK_SEC = 10  # 2026-09-04 GPU 实证:15s/360帧块渲染把采样器挂死在 step1→2
+                    # (interrupt 无法抢占的内核级冻结,23:06-23:43 实锤);常规镜 ≤9s
+                    # (216帧)全程稳定——上限收到 10s(240帧),3×4s=12s 也不允许
 MAX_BLOCK_SHOTS = 3
 MAX_SPEAKERS = 3
 
@@ -109,6 +111,29 @@ def dur_of(shot):
         return int(shot.get("duration") or 5)
     except Exception:
         return 5
+
+
+def speech_chars(shot):
+    n = 0
+    for field in ("dialogue", "narration"):
+        for ch in (shot.get(field) or ""):
+            if "\u4e00" <= ch <= "\u9fff":
+                n += 1
+    return n
+
+
+def effective_durations(shots):
+    """语音预算补偿同款口径(NiliX buildPlanFromRaws:字数/4cps 向上取整延长,
+    clamp 15)——分组用补偿后时长,否则脚本 10s 块在解析端被撑超限降级
+    (递葫芦 ch2 实锤:工具 9 块过检,解析后仅 5 块存活)。"""
+    out = []
+    for s in shots:
+        d = dur_of(s)
+        need = -(-speech_chars(s) // 4)
+        if need > d:
+            d = min(need, 15)
+        out.append(dict(s, duration=d))
+    return out
 
 
 def propose_blocks(shots):
@@ -328,7 +353,13 @@ def gen_block(cfg, block, sem, cached=None):
             last = "LLM异常:" + str(e)[:60]
             time.sleep(2)
             continue
-        hp = normalize_hp((data.get("h3_prompt") or "").strip())
+        raw = data.get("h3_prompt")
+        if isinstance(raw, dict):
+            raw = json.dumps(raw, ensure_ascii=False)  # 嵌套对象先展成字符串再归一
+        if not isinstance(raw, str):
+            last = "h3_prompt 非文本(%s)" % type(raw).__name__
+            continue
+        hp = normalize_hp(raw.strip())
         if not hp:
             last = "空输出"
             continue
@@ -359,12 +390,14 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="只统计分组,不调 LLM")
     ap.add_argument("--book", default="")
     ap.add_argument("--chapter", type=int, default=0, help="只处理指定章号")
+    ap.add_argument("--skip", default="", help="跳过的章号(逗号分隔,如 1,2——正在渲染的章禁改,防续跑指纹失效全量重渲)")
     ap.add_argument("--limit", type=int, default=0, help="最多处理文件数(试点用)")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--force", action="store_true", help="文件已有 narrative_blocks 也重做")
     args = ap.parse_args()
 
     cfg = sr.load_api(None)
+    skip = {int(x) for x in args.skip.split(",") if x.strip().isdigit()}
     books = sorted(os.listdir(NOVEL_ROOT)) if not args.book else [args.book]
     progress = load_progress()
     tot_files = tot_blocks = tot_shots = tot_covered = 0
@@ -374,6 +407,8 @@ def main():
         sbs = sorted(glob.glob(os.path.join(bdir, "素材", "分镜脚本", "*.json")))
         if args.chapter:
             sbs = [f for f in sbs if re.search(r"第0*%d章" % args.chapter, os.path.basename(f))]
+        if skip:
+            sbs = [f for f in sbs if not any(re.search(r"第0*%d章" % n, os.path.basename(f)) for n in skip)]
         b_blocks = b_cover = 0
         for sb in sbs:
             if args.limit and done_files >= args.limit:
@@ -388,7 +423,7 @@ def main():
             if data.get("narrative_blocks") and not args.force:
                 continue
             shots = data.get("shots") or []
-            blocks = propose_blocks(shots)
+            blocks = propose_blocks(effective_durations(shots))
             cov = sum(len(b) for b in blocks)
             tot_files += 1
             tot_blocks += len(blocks)
