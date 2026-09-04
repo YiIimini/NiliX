@@ -330,7 +330,8 @@ func knownKeys(m map[string]bool) []string {
 // 23:叙事块(narrative_blocks)解析——块级六段式+plan.takes 源头化(takes_src=blocks)
 // 24:块级六段式改写进 plan 组头 h3_prompt(finalize 汇点加工;23 的过渡 plan 头
 //     仍是单镜提示词,必须重解析)
-const manjuScriptParseVer = 24
+// 25:台词列「无」占位符规范化(按空台词,幽灵人声检测不再逃逸)
+const manjuScriptParseVer = 25
 
 // scriptParsePlan 脚本直出程序化解析入口。
 // 解析出 characters/scenes/shots/directing/episode_title/chapters=script。
@@ -677,6 +678,13 @@ func parseScriptJSON(text string) ([]scriptShotRaw, []scriptJSONBlock, error) {
 		for _, line := range strings.Split(s.Dialogue, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
+				continue
+			}
+			// 2026-09-05 「无台词」占位符规范化(万物 EP01 镜6/11 实锤):台词列写
+			// 「无」被当普通台词行进 Dialogue → 幽灵人声检测判其"有台词"不检 →
+			// H3 自发幻觉人声漏网(ASR 实测镜6"超厉害"/镜11"你今天怎么…"两镜)。
+			// 占位符一律按空台词处理,静音契约自然接管。
+			if line == "无" || line == "无。" || line == "无台词" || line == "—" || line == "-" {
 				continue
 			}
 			if i := strings.Index(line, "内心·"); i >= 0 {

@@ -361,3 +361,22 @@ func idsOf(ss []manjuShot) []int {
 	}
 	return out
 }
+
+// 「无台词」占位符规范化(2026-09-05 万物 EP01 镜6/11 实锤):台词列写「无」
+// 不得进 Dialogue——否则幽灵人声检测按"有台词"判,静音契约失效漏检。
+func TestParseScriptJSONPlaceholderNone(t *testing.T) {
+	j := `{"shots":[
+	  {"shot_id":1,"shot_size":"远景","action":"【a】空景","dialogue":"无","duration":5,"h3_prompt":"summary:\nx"},
+	  {"shot_id":2,"shot_size":"中景","action":"【a】对话","dialogue":"无\n(S1)甲:\"好\"","duration":5,"h3_prompt":"summary:\ny"}
+	]}`
+	raws, _, err := parseScriptJSON(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raws[0].Dialogue != "" {
+		t.Fatalf("占位符「无」应按空台词, got %q", raws[0].Dialogue)
+	}
+	if raws[1].Dialogue != "(S1)甲:\"好\"" {
+		t.Fatalf("占位符行后真实台词应保留, got %q", raws[1].Dialogue)
+	}
+}

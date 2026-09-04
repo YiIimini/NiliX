@@ -116,6 +116,20 @@ def main():
     asr.model = WhisperModel("small", device="cpu", compute_type="int8")
 
     n_pass = n_fail = 0
+    from difflib import SequenceMatcher
+
+    def heard(hit_want, joined):
+        """ASR 转写噪声容忍匹配:6 字精确子串 → 退字符多重集相似度 ≥0.6
+        (small 模型对咬字/繁简变体误转写普遍,精确子串必误报,2026-09-05 实锤:
+        生死簿→生死不化/寫回,台词实际念了)"""
+        import re as _re
+        probe = _re.sub(r"[^\u4e00-\u9fff]", "", hit_want)[:6]
+        if probe and probe in _re.sub(r"[^\u4e00-\u9fff]", "", joined):
+            return True
+        a = sorted(_re.sub(r"[^\u4e00-\u9fff]", "", hit_want))
+        b = sorted(_re.sub(r"[^\u4e00-\u9fff]", "", joined))
+        return SequenceMatcher(None, "".join(a), "".join(b)).ratio() >= 0.6
+
     for f in files:
         sid = int(os.path.splitext(os.path.basename(f))[0])
         dur, v, a = probe(f)
@@ -124,10 +138,9 @@ def main():
         tag = ""
         if lines:
             hit = 0
+            joined = "".join(x[3] for x in segs)
             for txt in lines:
-                probe6 = re.sub(r"[^\u4e00-\u9fff]", "", txt)[:6]
-                joined = "".join(x[3] for x in segs)
-                if probe6 and probe6 in re.sub(r"[^\u4e00-\u9fff]", "", joined):
+                if heard(txt, joined):
                     hit += 1
             if hit == 0:
                 tag = "FAIL-漏句"
