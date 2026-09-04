@@ -10,7 +10,7 @@ func TestDedupDbg15(t *testing.T) {
 	if err != nil {
 		t.Skip()
 	}
-	raws, err := parseScriptJSON(string(toUTF8(b)))
+	raws, _, err := parseScriptJSON(string(toUTF8(b)))
 	if err != nil {
 		t.Fatal(err)
 	}

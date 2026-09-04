@@ -24,7 +24,7 @@ func TestJSONScriptParseAll(t *testing.T) {
 			if err != nil {
 				t.Fatalf("读 %s: %v", f, err)
 			}
-			raws, err := parseScriptJSON(string(text))
+			raws, _, err := parseScriptJSON(string(text))
 			if err != nil {
 				t.Fatalf("解析 %s: %v", f, err)
 			}
@@ -53,7 +53,7 @@ func TestParseScriptJSONBasic(t *testing.T) {
 	  {"shot_id":1,"shot_size":"特写","action":"【场景】A","dialogue":"(S1)甲:\"你好\"","duration":5,"h3_prompt":"subject_definitions:\nx"},
 	  {"shot_id":2,"shot_size":"中景","action":"【场景】B","dialogue":"内心·甲:\"想什么。\"\n旁白：风声。","duration":6,"h3_prompt":"summary:\ny"}
 	]}`
-	raws, err := parseScriptJSON(j)
+	raws, _, err := parseScriptJSON(j)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestParseScriptJSONBasic(t *testing.T) {
 	}
 	// 重复镜号递增
 	j2 := `{"shots":[{"shot_id":3,"action":"a","duration":5},{"shot_id":3,"action":"b","duration":5}]}`
-	raws2, err := parseScriptJSON(j2)
+	raws2, _, err := parseScriptJSON(j2)
 	if err != nil || len(raws2) != 2 || raws2[0].ID == raws2[1].ID {
 		t.Fatalf("重复镜号未递增分配: %+v err=%v", raws2, err)
 	}
@@ -81,7 +81,7 @@ func TestParseScriptJSONBasic(t *testing.T) {
 func TestJSONDialogueMultiLine(t *testing.T) {
 	re := regexp.MustCompile(`\(S\d+\)[^：:]*[：:]`)
 	j := `{"shots":[{"shot_id":1,"action":"a","dialogue":"(S1)甲:\"第一句\"\n(S1)甲:\"第二句\"","duration":5}]}`
-	raws, err := parseScriptJSON(j)
+	raws, _, err := parseScriptJSON(j)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestAutoStoryboardFindsJSON(t *testing.T) {
 // 被论斤18章字符串内裸控制字符——技能侧产出形态漂移不得让解析层直接拒稿。
 func TestParseScriptJSONTolerantForms(t *testing.T) {
 	j := `{"shots":[{"shot_id":1,"action":"a","light":["火把光明灭"],"sound":["欢呼如潮","压住的呼吸"],"duration":5,"h3_prompt":"x"}]}`
-	raws, err := parseScriptJSON(j)
+	raws, _, err := parseScriptJSON(j)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestParseScriptJSONTolerantForms(t *testing.T) {
 	}
 	// 字符串字面量内裸换行(JSON 标准禁止)转空格宽容解析;token 间换行本合法
 	j2 := "{\n\"shots\":[{\"shot_id\":1,\"action\":\"甲说\n继续\",\"duration\":5}]}"
-	raws2, err := parseScriptJSON(j2)
+	raws2, _, err := parseScriptJSON(j2)
 	if err != nil {
 		t.Fatalf("裸控制字符应被宽容解析: %v", err)
 	}

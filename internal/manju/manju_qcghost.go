@@ -231,14 +231,34 @@ func (ctx *manjuCtx) asrGhostVoiceBatch(cands []ghostCand) map[string]string {
 // qcGhostVoiceCheck 无台词镜幽灵人声检测,命中写回 QC 报告(appendQCFlag,与
 // 视觉抽检同款机制:追加 flag 且 ok=false → 渲染阶段自动删旧重渲)。
 func (ctx *manjuCtx) qcGhostVoiceCheck(lg *manjuLogger, reportPath string, failed map[int]bool) {
-	_, shots, err := ctx.loadPlan()
+	plan, shots, err := ctx.loadPlan()
 	if err != nil {
 		return
 	}
+	// 与渲染同口径过 takes(叙事块组头携带 TakeGroup;裸 shots 无分组信息)
+	shots = applyTakes(plan, shots)
 	eligible := map[int]float64{}
 	for _, s := range shots {
 		if ghostVoiceEligible(s.Dialogue, s.Narration, s.H3Prompt) {
 			eligible[s.ID] = float64(s.Duration)
+		}
+	}
+	// 叙事块组头(2026-09-04):组内任一镜有台词,组头文件就会合法出现人声——
+	// 单看组头自身台词会把「头静尾说」的块误判幽灵人声 → 无限重渲循环。
+	// 组头候选要求全组无台词;组头台词已在 applyTakes 并入(Dialogue/Narration),
+	// 此处再按 TakeGroup 复核兜底(两端独立演进,口径双保险)。
+	for _, s := range shots {
+		if len(s.TakeGroup) < 2 {
+			continue
+		}
+		if _, ok := eligible[s.ID]; !ok {
+			continue
+		}
+		for _, g := range s.TakeGroup {
+			if g.ID != s.ID && !ghostVoiceEligible(g.Dialogue, g.Narration, g.H3Prompt) {
+				delete(eligible, s.ID)
+				break
+			}
 		}
 	}
 	if len(eligible) == 0 {

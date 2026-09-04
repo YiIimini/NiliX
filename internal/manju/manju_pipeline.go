@@ -5917,11 +5917,11 @@ func stageEncode(ctx *manjuCtx, lg *manjuLogger) error {
 	return nil
 }
 
-// manjuEncEstMin 单镜 H3 预编码预计耗时(分钟):条件编码约 10min + 视频采样
-// 8 步 × 帧数 × ~1.42s/帧(107 帧 ≈ 152s/步,实测)。仅作进度提示,不参与逻辑。
+// manjuEncEstMin 单镜 H3 预编码预计耗时(分钟):2026-09-04 实测校准(旧版
+// "10min+采样外推"高估 20 倍——RTX5090L 24G 实测单镜编码≈45s,768P PDD8 渲染
+// ≈2-4min;预估只为进度提示,取保守上限 1+3 分钟,不参与逻辑)。
 func manjuEncEstMin(seconds, fps int) int {
-	frames := h3Length(seconds, fps)
-	return 10 + frames*8*142/6000
+	return 4
 }
 
 // ensurePlanAndPrompts 方案 + 多切点分组 + 逐镜提示词(渲染/预编码前置)
@@ -5940,6 +5940,10 @@ func (ctx *manjuCtx) ensurePlanAndPrompts(lg *manjuLogger) (map[string]any, []ma
 	if err != nil {
 		return nil, nil, err
 	}
+	// takes 先行(2026-09-04 叙事块):组头此时携带块级提示词+组和时长+组内并集,
+	// 下面的 finalize 汇点(纪律/音色/对齐/写实化)必须加工块提示词本体——此前
+	// 在此之后才 applyTakes,块提示词绕过全部渲染端加工直交 H3。
+	shots = applyTakes(plan, shots)
 	// 全局说话人注册表(2026-08-30 ver14):按全集首次发声顺序为有音色绑定角色分配
 	// 全局 (Sx),finalize 汇点(finalizeAlignedPrompt)据此跨镜稳定说话人 ID——
 	// 音色一致性依赖该注册表,必须先于任何 finalize 构建。
@@ -5993,7 +5997,7 @@ func (ctx *manjuCtx) ensurePlanAndPrompts(lg *manjuLogger) (map[string]any, []ma
 		}
 		_ = ctx.writePlan(plan)
 	}
-	return plan, applyTakes(plan, shots), nil
+	return plan, shots, nil
 }
 
 // shotsPerTake 多切点长镜每组镜头数(1=关闭;render.shots_per_take 2-3)
@@ -6013,6 +6017,12 @@ func (ctx *manjuCtx) ensureTakes(plan map[string]any, shots []manjuShot, lg *man
 	// 不会出现在任何提示词里 → 整镜内容丢失、产物数量凭空减半。脚本直出一律逐镜独立渲染;
 	// 旧 plan 已写入的 takes 一并清除自愈(applyTakes 不再吞掉内镜)。
 	if ctx.scriptMode {
+		// 2026-09-04 叙事块(STEP 2):源头声明的块(takes_src=blocks,块级六段式
+		// 覆盖组内全部画面与台词)与逐镜提示词权威不冲突——保留分组;旧启发式
+		// takes(无源头块级提示词,组头沿用单镜六段式)仍按 2026-08-26 修复清除。
+		if str(plan["takes_src"]) == "blocks" {
+			return
+		}
 		if plan["takes"] != nil {
 			delete(plan, "takes")
 			_ = ctx.writePlan(plan)
@@ -6066,10 +6076,22 @@ func (ctx *manjuCtx) ensureTakes(plan map[string]any, shots []manjuShot, lg *man
 
 // applyTakes 解析 plan.takes:组头 Duration=组内总和(clamp 15s,渲染一次),
 // 内镜标 TakeTail(渲染阶段跳过;字幕/ASR 由组头文件按 takes 合并承载)。
+// 叙事块(takes_src=blocks,2026-09-04):块级六段式在解析期已写进 plan 组头
+// h3_prompt(attachNarrativeBlocks),这里不换提示词,只做:时长/分组/内镜标记/
+// 组内登场角色+台词旁白并入组头(音色绑定兜底、画外音口径、QC 预期全组覆盖)/
+// take_group 标记写回 plan(合成前镜数比对按组头计数,与渲染口径一致)。
 func applyTakes(plan map[string]any, shots []manjuShot) []manjuShot {
 	byID := map[int]*manjuShot{}
 	for i := range shots {
 		byID[shots[i].ID] = &shots[i]
+	}
+	planMaps := map[int]map[string]any{}
+	for _, x := range anyArr(plan["shots"]) {
+		if m, ok := x.(map[string]any); ok {
+			if id, ok := manjuToInt(m["shot_id"]); ok {
+				planMaps[id] = m
+			}
+		}
 	}
 	for _, g := range anyArr(plan["takes"]) {
 		var ids []int
@@ -6103,6 +6125,38 @@ func applyTakes(plan map[string]any, shots []manjuShot) []manjuShot {
 		}
 		head.Duration = sum
 		head.TakeGroup = group
+		if pm := planMaps[head.ID]; pm != nil {
+			pm["take_group"] = true // 顶层提示词不变,只打组头标记(合成镜数口径)
+		}
+		// 组内登场/台词/旁白并入组头(块级提示词已覆盖画面与台词,这里是音色
+		// 绑定兜底与 QC 预期的数据面)
+		seenCh := map[string]bool{}
+		for _, c := range head.Characters {
+			seenCh[c] = true
+		}
+		for _, g2 := range group[1:] {
+			for _, c := range g2.Characters {
+				if !seenCh[c] {
+					seenCh[c] = true
+					head.Characters = append(head.Characters, c)
+				}
+			}
+			for _, kv := range []struct {
+				dst *string
+				src string
+			}{
+				{&head.Dialogue, g2.Dialogue}, {&head.Narration, g2.Narration},
+			} {
+				if kv.src == "" {
+					continue
+				}
+				if *kv.dst == "" {
+					*kv.dst = kv.src
+				} else if !strings.Contains(*kv.dst, kv.src) {
+					*kv.dst += "\n" + kv.src
+				}
+			}
+		}
 	}
 	return shots
 }
@@ -6135,6 +6189,17 @@ func (ctx *manjuCtx) selectedShots(shots []manjuShot) []manjuShot {
 		}
 	}
 	var out []manjuShot
+	// 叙事块定点映射(2026-09-04):块内镜号(组头之外)无独立产物,定点它=整块重渲
+	// ——把选中号映射到所属组头,防「选了内镜却一个都不渲」的静默空跑。
+	if !all {
+		for _, s := range shots {
+			for _, g := range s.TakeGroup {
+				if sel[g.ID] && g.ID != s.ID {
+					sel[s.ID] = true
+				}
+			}
+		}
+	}
 	for _, s := range shots {
 		if s.TakeTail {
 			continue

@@ -764,7 +764,7 @@ func TestParseInnerMultiLine(t *testing.T) {
     "h3_prompt":"subject_definitions:\n<Subject 1> is Tangtang in <Picture 1>.\n\ndetailed_description:\nX\n"
   }]
 }`
-	raws, err := parseScriptJSON(text)
+	raws, _, err := parseScriptJSON(text)
 	if err != nil {
 		t.Fatal(err)
 	}

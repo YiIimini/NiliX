@@ -30,7 +30,7 @@ func TestDedupAllStoryboards(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			raws, err := parseScriptJSON(string(toUTF8(b)))
+			raws, _, err := parseScriptJSON(string(toUTF8(b)))
 			if err != nil {
 				t.Logf("parse skip %s: %v", e.Name(), err)
 				continue

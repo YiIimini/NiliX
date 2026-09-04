@@ -29,7 +29,7 @@ func TestDedupStats(t *testing.T) {
 			if err != nil {
 				continue
 			}
-			raws, err := parseScriptJSON(string(toUTF8(b)))
+			raws, _, err := parseScriptJSON(string(toUTF8(b)))
 			if err != nil {
 				continue
 			}

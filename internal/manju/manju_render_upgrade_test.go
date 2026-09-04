@@ -373,10 +373,12 @@ func TestApplyTakes(t *testing.T) {
 	if fmt.Sprint(ids) != "[1 4 5]" {
 		t.Errorf("selectedShots 应只剩组头与独立镜: %v", ids)
 	}
-	// only 过滤同时生效:only=2(内镜)→ 空
+	// only 过滤同时生效:only=2(内镜)→ 映射到组头整块重渲(2026-09-04 叙事块语义,
+	// 旧「静默空跑一个不渲」废除——块内镜号无独立产物,定点它=整块)
 	ctx2 := &manjuCtx{only: "2"}
-	if sel2 := ctx2.selectedShots(out); len(sel2) != 0 {
-		t.Errorf("only=内镜应无渲染目标: %v", sel2)
+	sel2 := ctx2.selectedShots(out)
+	if len(sel2) != 1 || sel2[0].ID != 1 || sel2[0].Duration != 13 {
+		t.Errorf("only=内镜应映射组头整块: %v", sel2)
 	}
 }
 

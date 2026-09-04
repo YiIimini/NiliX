@@ -327,7 +327,10 @@ func knownKeys(m map[string]bool) []string {
 //    给画外角色编人声(无台词镜出说话声)。收紧双层:④a 声明优先(已判定登场人数 ≥
 //    主体句数时不捞,声明权威只补真漏);④b 同句唯一归属(每句只归重叠最多且严格
 //    领先次名者,平票不归属)。bump 强制存量 plan 重解析。
-const manjuScriptParseVer = 22
+// 23:叙事块(narrative_blocks)解析——块级六段式+plan.takes 源头化(takes_src=blocks)
+// 24:块级六段式改写进 plan 组头 h3_prompt(finalize 汇点加工;23 的过渡 plan 头
+//     仍是单镜提示词,必须重解析)
+const manjuScriptParseVer = 24
 
 // scriptParsePlan 脚本直出程序化解析入口。
 // 解析出 characters/scenes/shots/directing/episode_title/chapters=script。
@@ -347,7 +350,7 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 
 	// ---- JSON 分镜脚本分支(2026-08-31 技能侧新格式) ----
 	if strings.HasSuffix(ctx.novel, ".json") || strings.HasPrefix(trimmed, "{") {
-		raws, err := parseScriptJSON(text)
+		raws, blocks, err := parseScriptJSON(text)
 		if err != nil {
 			return nil, fmt.Errorf("JSON 分镜脚本解析失败: %w", err)
 		}
@@ -355,7 +358,18 @@ func (ctx *manjuCtx) scriptParsePlan(lg *manjuLogger) (map[string]any, error) {
 			return nil, fmt.Errorf("JSON 分镜脚本无镜头(shots 为空)")
 		}
 		lg.logf(fmt.Sprintf("  📦 JSON 分镜脚本: %d 镜结构化解析(字段直读,零表格断行风险)", len(raws)))
-		return ctx.buildPlanFromRaws(raws, text, lg)
+		plan, err := ctx.buildPlanFromRaws(raws, text, lg)
+		if err != nil {
+			return nil, err
+		}
+		if attachNarrativeBlocks(plan, blocks, lg) > 0 {
+			// 块级提示词写进 plan 组头(与 LLM 多切点路径同款数据形态)——finalize 汇点
+			// (纪律注入/音色兜底/对齐层)随后自然作用于块提示词,不绕过任何加工
+			if err := ctx.writePlan(plan); err != nil {
+				return nil, err
+			}
+		}
+		return plan, nil
 	}
 
 	// 1) 每镜六段式代码块 → h3_prompt 逐字保留
@@ -564,6 +578,18 @@ type scriptJSON struct {
 	GlobalStyle  string            `json:"global_style"`
 	Bridge       map[string]string `json:"bridge"`
 	Shots        []scriptShotJSON  `json:"shots"`
+	// NarrativeBlocks 叙事块(2026-09-04 多镜合渲转正):技能侧分镜源头把 2-3 个
+	// 连续镜合成一个叙事块,块级六段式用官方 [Shot N] At MM:SS.mmm 切点在单次
+	// 生成内切镜——H3 叙事在视频内,衔接由模型原生完成,根治「切镜在视频外」
+	// 的硬拼感。shots[] 逐镜数据仍是权威(编辑/QC/单镜回退),块只是渲染分组。
+	NarrativeBlocks []scriptJSONBlock `json:"narrative_blocks"`
+}
+
+// scriptJSONBlock 叙事块声明:shots=组内镜号(≥2 连续),h3_prompt=块级六段式
+// (时长=组内各镜之和,时码 clip-local,切点 [Shot N] At 由技能侧按镜时长直供)。
+type scriptJSONBlock struct {
+	Shots    []int  `json:"shots"`
+	H3Prompt string `json:"h3_prompt"`
 }
 
 // salvageJSONControlChars 把 JSON 字符串字面量内部的裸控制字符(<0x20,JSON 标准
@@ -598,17 +624,17 @@ func salvageJSONControlChars(text string) (string, bool) {
 // parseScriptJSON JSON 分镜脚本 → []scriptShotRaw(与 md 路径等效,后续组装共用):
 // 台词列按行拆分「内心·/旁白」进 Narration(前缀保留,渲染端 Q 版/音色差异化依赖);
 // 镜号重复递增分配(防同名覆盖,同 md 路径);时长 4-15 校验。
-func parseScriptJSON(text string) ([]scriptShotRaw, error) {
+func parseScriptJSON(text string) ([]scriptShotRaw, []scriptJSONBlock, error) {
 	var sj scriptJSON
 	if err := json.Unmarshal([]byte(text), &sj); err != nil {
 		// 存量容错(被论斤卖掉第018章实测):个别技能侧产物字符串内含未转义控制
 		// 字符(裸换行),标准解析必拒;字面量内裸控制字符转空格后重试。
 		if salvaged, changed := salvageJSONControlChars(text); changed {
 			if err2 := json.Unmarshal([]byte(salvaged), &sj); err2 != nil {
-				return nil, fmt.Errorf("JSON 格式错误: %w", err2)
+				return nil, nil, fmt.Errorf("JSON 格式错误: %w", err2)
 			}
 		} else {
-			return nil, fmt.Errorf("JSON 格式错误: %w", err)
+			return nil, nil, fmt.Errorf("JSON 格式错误: %w", err)
 		}
 	}
 	var raws []scriptShotRaw
@@ -686,9 +712,91 @@ func parseScriptJSON(text string) ([]scriptShotRaw, error) {
 		raws = append(raws, raw)
 	}
 	if len(raws) == 0 {
-		return nil, fmt.Errorf("shots 为空")
+		return nil, nil, fmt.Errorf("shots 为空")
 	}
-	return raws, nil
+	return raws, sj.NarrativeBlocks, nil
+}
+
+// attachNarrativeBlocks 叙事块校验与落 plan(2026-09-04 多镜合渲转正,STEP 2):
+// 源头声明的块写入 plan.narrative_blocks + plan.takes(takes_src=blocks 标记源头
+// 权威,ensureTakes 脚本直出分支据此保留而非清除);块级六段式【写进 plan 组头
+// h3_prompt】(与 LLM 多切点路径同款数据形态)——finalize 汇点(纪律注入/音色
+// 兜底/对齐层)自然作用于块提示词,不绕过任何加工;组头单镜六段式仍在脚本源,
+// 脚本指纹变化重解析时重建。校验不过的块降级丢弃、组内逐镜独立渲染(安全回退,
+// 绝不丢镜):镜号存在且严格连续 / ≥2 镜 / 组内时长和 ≤15s(API 上限,语音预算
+// 补偿后的 plan 值)/ 块级六段式含 [Shot 切点标记 / 块间不重叠。
+// 返回保留的块数。
+func attachNarrativeBlocks(plan map[string]any, blocks []scriptJSONBlock, lg *manjuLogger) int {
+	if len(blocks) == 0 {
+		return 0
+	}
+	dur := map[int]int{}
+	headOf := map[int]map[string]any{}
+	for _, x := range anyArr(plan["shots"]) {
+		if m, ok := x.(map[string]any); ok {
+			if id, ok := manjuToInt(m["shot_id"]); ok {
+				if d, ok := manjuToInt(m["duration"]); ok {
+					dur[id] = d
+				}
+				headOf[id] = m
+			}
+		}
+	}
+	used := map[int]bool{}
+	var takes, kept []any
+	for _, b := range blocks {
+		prompt := strings.TrimSpace(b.H3Prompt)
+		bad := ""
+		switch {
+		case len(b.Shots) < 2:
+			bad = "组内 <2 镜"
+		case prompt == "" || !strings.Contains(prompt, "[Shot "):
+			bad = "块级六段式缺失或无 [Shot 切点"
+		default:
+			sum := 0
+			for i, id := range b.Shots {
+				d, ok := dur[id]
+				if !ok || used[id] {
+					bad = "镜号不存在或块间重叠"
+					break
+				}
+				if i > 0 && id != b.Shots[i-1]+1 {
+					bad = "镜号不连续"
+					break
+				}
+				sum += d
+			}
+			if bad == "" && sum > 15 {
+				bad = fmt.Sprintf("组内时长和 %ds 超 15s 上限", sum)
+			}
+		}
+		if bad != "" {
+			lg.logf(fmt.Sprintf("  ⚠️ 叙事块 %v 降级逐镜渲染: %s", b.Shots, bad))
+			continue
+		}
+		ids := make([]any, 0, len(b.Shots))
+		for _, id := range b.Shots {
+			used[id] = true
+			ids = append(ids, id)
+		}
+		takes = append(takes, ids)
+		kept = append(kept, map[string]any{"shots": ids, "h3_prompt": prompt})
+		if m := headOf[b.Shots[0]]; m != nil {
+			m["h3_prompt"] = prompt // 块级六段式=组头 plan 提示词(finalize 汇点加工)
+		}
+	}
+	if len(kept) == 0 {
+		return 0
+	}
+	plan["narrative_blocks"] = kept
+	plan["takes"] = takes
+	plan["takes_src"] = "blocks"
+	n := 0
+	for _, t := range takes {
+		n += len(anyArr(t))
+	}
+	lg.logf(fmt.Sprintf("  🎬 叙事块: %d 组(覆盖 %d 镜,单次生成内 [Shot N] 官方切点,组头时长=组和)", len(kept), n))
+	return len(kept)
 }
 
 // buildPlanFromRaws 从分镜表行(raws)组装方案(md 与 JSON 分镜脚本共用,
