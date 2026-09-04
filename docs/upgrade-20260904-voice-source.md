@@ -76,14 +76,17 @@
 ·_2←坎蒂丝 / female_narrator←琴 / male_mag_3←赛诺 / beast_cute←早柚·_2←砂糖 /
 male_elder←钟离(帝王厚重)·_2←荒泷一斗(浑厚大嗓) / child_boy←五郎·_2←鹿野院平藏。
 
-**剩余 12 档(方言6/港台4/老年女2)确认无开源合法干声渠道,暂留 edge-tts**:
-- 方言×6(东北/陕西/四川/河南/广西/湖南):开源世界无可直接下载的方言干声(数据堂/
-  海天瑞声全付费;Common Voice 无方言);
-- 港台×4(粤语/台普男女):Common Voice 有标注但 modelscope 镜像无音频文件;
-- 老年女×2:原神全角色无老年女声(数据集捞不到);方言/港台 10 档 edge-tts 用的是
-  **原生方言声源**(zh-CN-liaoning/shaanxi/zh-HK/zh-TW,edge-tts 里效果最好的用法,
-  非普通话合成改造);真"合成味"残留仅 female_elder×2(基音偏移)。
-- **补齐路径(三选一,用户决策)**:①付费数据集(数据堂方言 30h 级)②GPT-SoVITS 整合包
-  +方言/老年模型克隆 ③自录/用户提供素材,`voice_import.py` 一条命令导入。——用 `--list` 查看,渠道见上表,
+**GitHub 开源挖掘终态 35/39(第五轮,Tele-AI/TELEVAL,Apache-2.0)**:ModelScope
+`TeleAI/TELEVAL` 评测集(parquet 内嵌 wav)补 7 档——cn_dongbei←东北话女声 / cn_henan←
+河南话男声 / cn_sichuan←四川话男声 / hk_female←粤语女声 / hk_male←粤语男声(单条 5.6s
+略短) / female_elder·_2←老年女声两组(age-zh 老年 70 条按 F0 男女分流)。工具
+`tools/voice_src/extract_televal.py`:按 speaker 分组 + numpy 自相关基频自动判性别
+(F0≥165Hz 女),多句拼接。
+
+**剩余 5 档(陕西/广西/湖南方言 + 台普×2)为开源数据边界**:KeSpeech/WenetSpeech 系均
+注册申请制,Common Voice 无方言/台腔音频,ModelScope 个人免费集无此三省——暂留
+edge-tts(陕/湘/桂本就无方言声源走普通话+口音描述;台普为 zh-TW 原生声源,edge-tts
+里效果最好的用法)。补齐路径:①KeSpeech 申请(学术) ②GPT-SoVITS 整合包克隆
+(含台配角色模型) ③自录,`voice_import.py` 一条命令导入。——用 `--list` 查看,渠道见上表,
 `voice_import.py --src 干声 --key <档位>` 一条命令替换。多句拼接成 8-17s 参考
 (ffmpeg concat)更贴官方 10s+ 建议。
