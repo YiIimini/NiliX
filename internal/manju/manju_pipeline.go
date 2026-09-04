@@ -6526,6 +6526,15 @@ func (ctx *manjuCtx) genVoiceLibAudio(key string) error {
 	out := ctx.voiceLibAuthoritative(voiceLibRel(item.Key))
 	text := manjuVoiceGenTextFor(item.Key)
 	metaPath := strings.TrimSuffix(out, ".mp3") + ".txt"
+	// 2026-09-04 外部音源优先(配音去 AI 味升级):权威目录 audio/lib_xxx.mp3 旁挂
+	// lib_xxx.src 标记(tools/voice_import.py 导入的真实人声干声——动漫角色台词/
+	// 真人录音/GPT-SoVITS 克隆产物,约 8-15s 情感念白,官方音色克隆最佳实践=干声
+	// 无混响无背景噪音)时,该音色为外部音源:跳过 edge-tts 合成与 meta 一致性
+	// 自愈(防手工导入的真实音源被合成版覆盖),只同步到 Comfy input。
+	if fileExists(strings.TrimSuffix(out, ".mp3") + ".src") {
+		ctx.syncVoiceLibToComfy(voiceLibRel(item.Key))
+		return nil
+	}
 	// 2026-09-03 配音去 AI 味·存量自愈:参考音频旁挂 .txt 记录念白文本——文本升级
 	// (中性句→按人设情感句)后旧 mp3 与 meta 不一致即自动重生成,无需手动清理;
 	// 旧版无 meta 文件同样触发重生成。
@@ -7937,9 +7946,9 @@ func manjuEnvCheck(configPath string) string {
 			ok = false
 		}
 	}
-	b.WriteString(check("diffusion_models", str(ctx.R["z_image_unet"])))
-	b.WriteString(check("text_encoders", str(ctx.R["z_image_clip"])))
-	b.WriteString(check("vae", str(ctx.R["z_image_vae"])))
+	b.WriteString(check(str(ctx.R["z_image_unet"]), "diffusion_models", "unet"))
+	b.WriteString(check(str(ctx.R["z_image_clip"]), "text_encoders", "clip"))
+	b.WriteString(check(str(ctx.R["z_image_vae"]), "vae"))
 	// 2026-08-24 用户规则:SDXL 已禁用——定妆照只用 Z-Image/Krea-2,不再检查/提示 SDXL checkpoint
 	b.WriteString("🐍 PyAV(质检/合成): " + manjuPythonPath() + "\n")
 	if fileExists(manjuPythonPath()) {

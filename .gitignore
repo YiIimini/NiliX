@@ -32,7 +32,7 @@ NiliX.exe.bak-*
 NiliX.exe.WebView2/
 
 # 运行时数据目录(漫剧项目/小说库,自包含部署后位于 exe 目录旁,勿入库)
-manju/
+/manju/
 novel/
 
 # 会话误产 JSON 草稿(文件名 "...tmp"+时间戳)与运行时目录
@@ -55,3 +55,7 @@ asset_lib/
 
 # 会话临时截图
 docs/截图/
+tools/voice_src/*.parquet
+tools/voice_src/*/*.wav
+tools/voice_src/*/*.mp3
+internal/manju/analysis/
