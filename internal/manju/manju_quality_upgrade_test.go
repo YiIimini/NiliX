@@ -361,3 +361,19 @@ func TestMinorCastNoWrongSubjectFallback(t *testing.T) {
 		t.Fatalf("小蒋应跨镜认领镜5 的 scrap-metal 行, got %q", ip)
 	}
 }
+
+// TestParseCharCardsVoiceLibLine 2026-09-04 md「配音档位:」行解析回归:
+// 角色卡 md 节内该行 → card["voice_lib"],autoVoiceFor 最优先消费。
+func TestParseCharCardsVoiceLibLine(t *testing.T) {
+	md := "# 人物生成提示词\n\n## 1. 小满（女主）\n\n配音档位:girl_lively\n\n音色：少女音,软糯\n\n```\nFront-facing portrait\n```\n"
+	cards := parseCharCards(md, "real", false)
+	if len(cards) == 0 {
+		t.Fatal("应解析出角色卡")
+	}
+	if got := str(cards[0]["voice_lib"]); got != "girl_lively" {
+		t.Fatalf("voice_lib 解析失败, got %q", got)
+	}
+	if got := str(cards[0]["voice"]); got != "少女音,软糯" {
+		t.Fatalf("voice 行不应被影响, got %q", got)
+	}
+}
