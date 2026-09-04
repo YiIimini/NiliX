@@ -299,3 +299,36 @@ func TestAutoVoiceForVoiceLibPriority(t *testing.T) {
 		t.Fatalf("无 voice_lib 走自动匹配, got %q", got)
 	}
 }
+
+// TestVoiceBindingsSkipSilentShot 2026-09-04 无台词镜悬空 Audio 行根治:
+// voiceBindingsFor 此前按登场角色(不看台词)建绑定,ensureVoiceBindings 注入
+// "containing a spoken voiceover" 定义行而 ref_audios 无从挂载(空)——文本承诺
+// 画外音+音频为空 = H3 幻觉补人声(被论斤 EP01 镜1/2 无台词出怪配音实锤)。
+// 无台词镜(与 ghostVoiceEligible 同口径)不绑;有台词/旁白/内心镜照旧。
+func TestVoiceBindingsSkipSilentShot(t *testing.T) {
+	dir := t.TempDir()
+	audio := filepath.Join(dir, "audio")
+	_ = os.MkdirAll(audio, 0755)
+	_ = os.WriteFile(filepath.Join(audio, "lib_female_warm.mp3"), []byte("voice-bytes"), 0644)
+	oldLib := paths.VoiceLibDir
+	paths.VoiceLibDir = dir
+	defer func() { paths.VoiceLibDir = oldLib }()
+	ctx := &manjuCtx{charInfo: map[string]map[string]any{
+		"小铁": {"gender": "女", "age": "20岁", "role": "正角", "species": "人"},
+	}, comfyInput: filepath.Join(dir, "input")}
+	silent := manjuShot{ID: 1, Characters: []string{"小铁"}, Dialogue: "无", H3Prompt: "subject_definitions:\n<Subject 1> is Xiao Tie.\n\ndetailed_description:\n[Shot 1] She walks."}
+	if got := ctx.voiceBindingsFor(silent); len(got) != 0 {
+		t.Fatalf("无台词镜不应绑定音色(悬空 Audio 行=幽灵人声诱因), got %v", got)
+	}
+	spoken := silent
+	spoken.Dialogue = "(S1)小铁:「粥还在锅里呢。」"
+	spoken.H3Prompt += "\n<Subject 1> (S1) says: <d>[Chinese] 粥还在锅里呢。</d>"
+	if got := ctx.voiceBindingsFor(spoken); len(got) == 0 {
+		t.Fatal("有台词镜应保留音色绑定")
+	}
+	inner := silent
+	inner.Narration = "内心·小铁:今天的任务……"
+	if got := ctx.voiceBindingsFor(inner); len(got) == 0 {
+		t.Fatal("内心戏镜应保留音色绑定(内心画外音需要)")
+	}
+}

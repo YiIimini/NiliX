@@ -247,7 +247,8 @@ func TestCharVoiceNamesIntegration(t *testing.T) {
 	// 只给「阿拾」建音色文件(路人/小雅无音色)
 	_ = os.WriteFile(filepath.Join(comfyIn, "audio", "voice_testproj_阿拾.mp3"), []byte("x"), 0644)
 	ctx := &manjuCtx{project: "testproj", comfyInput: comfyIn}
-	s := manjuShot{Characters: []string{"阿拾", "路人", "小雅"}}
+	// 2026-09-04:无台词镜不绑音色(悬空 Audio 行=幽灵人声),本测试验证绑定链故补台词
+	s := manjuShot{Characters: []string{"阿拾", "路人", "小雅"}, Dialogue: "(S1)阿拾:「测试台词。」"}
 
 	got := ctx.charVoiceNames(s)
 	if len(got) != 1 || got[0] != "audio/voice_testproj_阿拾.mp3" {

@@ -6601,6 +6601,14 @@ type voiceBinding struct {
 // voiceBindingsFor 该镜绑定音色角色的 <Audio N> 编号映射(按登场顺序,≤3;与 charVoiceNames 同序)。
 // 注入 genShotPromptRaw 的 data,LLM 据此在 subject_definitions 写音色定义、对白处引用。
 func (ctx *manjuCtx) voiceBindingsFor(s manjuShot) []voiceBinding {
+	// 2026-09-04 无台词镜不绑音色(被论斤 EP01 镜1/2 无台词却出怪配音实锤):
+	// 无台词时 ensureVoiceBindings 仍会注入 <Audio N> 定义行(措辞"containing a
+	// spoken voiceover"),而 charVoiceNames 按原始 plan 的 Audio 行挂 ref_audios——
+	// 原文无此行 → ref_audios 传空。文本宣称有画外音+音频实际为空 = H3 幻觉补出
+	// 随机人声。与 ghostVoiceEligible 同口径:无 <d>/无台词/无旁白/无内心 → 不绑。
+	if ghostVoiceEligible(s.Dialogue, s.Narration, s.H3Prompt) {
+		return nil
+	}
 	var out []voiceBinding
 	for i, cid := range s.Characters {
 		if i >= 3 {
