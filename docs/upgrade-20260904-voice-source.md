@@ -66,8 +66,14 @@
 | lib_child_girl(童声) | 派蒙 | 咕咕高亢 | 正 |
 | lib_male_narrator(旁白) | 戴因斯雷布 | 沧桑叙事 | 叙述 |
 | **lib_male_deep(反派·威压)** | **深渊法师** | **阴森谄媚(「殿下…您的仆人又为您带回了一场胜利」)** | **反** |
+| **lib_male_deep_2(反派·沙哑)** | **散兵** | **尖刻嘲讽** | **反** |
+| **lib_female_deep(反派·冷冽)** | **罗莎莉亚** | **冷淡暗黑(「…哼,会是什么呢?」)** | **反** |
+| **lib_female_deep_2(反派·肃杀)** | **雷电将军** | **威压庄重** | **反** |
+| lib_boy_teen_2(少年·清亮) | 雷泽 | 野性直觉 | 正 |
+| lib_male_sun_2(青年·清爽) | 托马 | 爽朗可靠 | 正 |
 
-待补(仍是 edge-tts):female_deep×2(反派女)/male_deep_2(沙哑)/beast_cute×2/
-child_boy×2/elder 系/方言×6/港台×4 等 28 档——用 `--list` 查看,渠道见上表,
+四大反派档全配"不好听"系声线,主角/正面档全好听——正反声线对位完成(17 档位真实干声)。
+待补(仍是 edge-tts):beast_cute×2/child_boy×2/elder 系/female_mature×2/male_mag_3/
+female_narrator/方言×6/港台×4 等 22 档——用 `--list` 查看,渠道见上表,
 `voice_import.py --src 干声 --key <档位>` 一条命令替换。多句拼接成 8-17s 参考
 (ffmpeg concat)更贴官方 10s+ 建议。
