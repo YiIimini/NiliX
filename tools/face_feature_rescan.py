@@ -20,7 +20,7 @@ RX = {
     'skin': re.compile(r'\bweather[- ]?beaten\b|\bweathered\b|\bwrinkled\b|\bleathery\b|\bsallow\b|\bruddy\b|\bsun[- ]?darkened\b|\blined\b|\bcalloused\b|\bgreasy\b|\bpallid\b|\bfair rosy cheeks\b|\btanned\b', re.I),
     'hair': re.compile(r'\bcrew cut\b|\bbuzz cut\b|\blong hair\b|\bshort hair\b|\bslicked[- ]?back\b|\bponytail\b|\bbuns?\b|\bbald\b|\bwhite hair\b|\bgrey hair\b|\bgray hair\b|\bblack hair\b|\bbraid\w*\b|\bcurly hair\b|\bmohawk\b|\bside parting\b|\bmiddle part\b|\btousled\b|\bshaved head\b|\bthin hair\b|\bwispy bangs?\b|\bsalt[- ]and[- ]pepper\b|\breceding hairline\b|\bhair buns?\b|\bbangs\b', re.I),
 }
-MARK = re.compile(r'\bscar\w*\b|\bmole\b|\bbirthmark\b|\bearring\w*\b|\btattoo\w*\b|\bgold tooth\b|\bfreckles\b|\bbeauty mark\b|\bmissing tooth\b|\bbroken nose\b|\bblind eye\b|\bglass eye\b|\beyepatch\b|\bbrand mark\b|\bbeard\w*\b|\bmustache\b|\bmoustache\b|\bgoatee\b|\bstubble\b|\bwhiskers\b|\bsideburns\b', re.I)
+MARK = re.compile(r'\bhairpin\b|\bpendant\b|\blocket\b|\bbrooch\b|\bbead\b|\bscar\w*\b|\bmole\b|\bbirthmark\b|\bearring\w*\b|\btattoo\w*\b|\bgold tooth\b|\bfreckles\b|\bbeauty mark\b|\bmissing tooth\b|\bbroken nose\b|\bblind eye\b|\bglass eye\b|\beyepatch\b|\bbrand mark\b|\bbeard\w*\b|\bmustache\b|\bmoustache\b|\bgoatee\b|\bstubble\b|\bwhiskers\b|\bsideburns\b', re.I)
 GEN = re.compile(r'handsome face|fair face|standard face|ordinary face|good-looking|attractive face|clean-cut face|regular features', re.I)
 
 

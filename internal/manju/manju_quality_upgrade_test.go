@@ -377,3 +377,12 @@ func TestParseCharCardsVoiceLibLine(t *testing.T) {
 		t.Fatalf("voice 行不应被影响, got %q", got)
 	}
 }
+
+// TestFaceMarkHairpin 2026-09-04 印记词表补充回归:发卡/吊坠/胸针/珠类实体饰物
+// 是合格独有印记(阿九铜铃发卡实锤——五官齐全却因 hairpin 不在词表被报"无印记")。
+func TestFaceMarkHairpin(t *testing.T) {
+	ok := "oval face, bright amber eyes, straight thin silver-blue eyebrows, small pointed nose, soft lips, pale teal hair in a short angled bob, a small antique copper bell hairpin clipped above her right ear"
+	if why := manjuFaceWeakness(ok); why != "" {
+		t.Fatalf("含发卡印记应达标, got %q", why)
+	}
+}

@@ -980,7 +980,7 @@ var manjuFaceCatRX = map[string]*regexp.Regexp{
 // manjuFaceMarkRX 独有印记/胡须;manjuFaceGenericRX 泛化词(同上正则化)。
 // dead-regular features 豁免:"过分工整"是有意的伪善人设描写(宋明堂卡实锤),
 // 不是泛化美颜词——检测前剥除该形态防子串误命中。
-var manjuFaceMarkRX = regexp.MustCompile(`(?i)\bscar\w*\b|\bmole\b|\bbirthmark\b|\bearring\w*\b|\btattoo\w*\b|\bgold tooth\b|\bfreckles\b|\bbeauty mark\b|\bmissing tooth\b|\bbroken nose\b|\bblind eye\b|\bglass eye\b|\beyepatch\b|\bbrand mark\b|\bbeard\w*\b|\bmustache\b|\bmoustache\b|\bgoatee\b|\bstubble\b|\bwhiskers\b|\bsideburns\b`)
+var manjuFaceMarkRX = regexp.MustCompile(`(?i)\bhairpin\b|\bpendant\b|\blocket\b|\bbrooch\b|\bbead\b|\bscar\w*\b|\bmole\b|\bbirthmark\b|\bearring\w*\b|\btattoo\w*\b|\bgold tooth\b|\bfreckles\b|\bbeauty mark\b|\bmissing tooth\b|\bbroken nose\b|\bblind eye\b|\bglass eye\b|\beyepatch\b|\bbrand mark\b|\bbeard\w*\b|\bmustache\b|\bmoustache\b|\bgoatee\b|\bstubble\b|\bwhiskers\b|\bsideburns\b`)
 var manjuFaceGenericRX = regexp.MustCompile(`(?i)handsome face|fair face|standard face|ordinary face|good-looking|attractive face|clean-cut face|regular features`)
 
 // manjuFaceWeakness 单卡面容检测:返回不达标原因(空=达标)。
