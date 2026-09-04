@@ -209,7 +209,7 @@ func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs [
 	if hasChar {
 		inputs := map[string]any{
 			"clip": refOf(clip), "vae": refOf(vae), "audio_vae": refOf(audioVae),
-			"prompt": prompt, "width": w, "height": h, "length": length, "ref_image_size": "match",
+			"prompt": prompt, "width": w, "height": h, "length": length, "ref_image_size": h3RefImageSize(R),
 		}
 		var refs []any
 		for _, cr := range charRefs { // 多角色:每个登场角色一张参考图(正脸优先)
@@ -269,6 +269,17 @@ func h3EncWorkflow(R map[string]any, prompt string, w, h, length int, charRefs [
 	}
 	wfAdd(wf, "MiniMaxH3CondSave", map[string]any{"conditioning": refOf(condID), "cache_name": cacheName})
 	return wf
+}
+
+// h3RefImageSize 参考图编码分辨率模式(2026-09-04 画质升级):
+// 官方语义 match=缩到生成分辨率再编码(快,丢身份细节);max=保留最高 2048 短边编码
+// (身份保真更强,预编码略慢)。ComfyUI 官方文档明示 max 对 identity fidelity 更好,
+// 定妆照(1024+)在 match 下会被降到 768 再编码——人脸细节折损,默认 max。
+func h3RefImageSize(R map[string]any) string {
+	if v := strings.TrimSpace(str(R["ref_image_size"])); v == "match" || v == "max" {
+		return v
+	}
+	return "max"
 }
 
 // turboLoRASpec 不同 Turbo LoRA 的最优参数(按文件名识别,数据驱动可扩展):

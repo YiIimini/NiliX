@@ -38,7 +38,7 @@
   const STYLE_CN = Object.fromEntries(STYLE_PRESETS);
 
   /* 分辨率档位中文名(chips 展示;key 与后端 manjuResTiers 一致) */
-  const RES_TIER_CN = { draft: "416P 草稿", standard: "768P 标准", fhd: "1088P 高清" };
+  const RES_TIER_CN = { draft: "416P 草稿", standard: "768P 标准", fhd: "1088P（超模型上限·实验）" };
 
   const INT_KEYS = ["width", "height", "fps", "steps", "turbo_steps", "seed", "min_shot_seconds", "max_shot_seconds", "shots_per_take"];
   const STR_KEYS = ["comfy_url", "unet_fl2va", "unet_ref2va", "clip", "vae_video", "vae_audio",
@@ -147,7 +147,8 @@
     ] },
     { ic: "📐", t: "渲染参数", ps: [
       "<b>画幅</b>官方 6 档：21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16，竖屏短剧推荐 <b>9:16（768×1344）</b>",
-      "<b>档位</b>快捷切换分辨率：416P 草稿（快速试片）→ 768P 标准（默认）→ 1088P 高清，按画幅等比换算并对齐 32；选「手动宽高」则直接用上面的宽高值",
+      "<b>档位</b>快捷切换分辨率：416P 草稿（快速试片）→ 768P 标准（默认，本地模型原生最优档）→ 1088P（⚠️超本地模型 768×1344 像素面积上限约 2 倍，慢 4 倍且质量不可控，仅实验用；更高清晰度请用「云端 2K 精修」），按画幅等比换算并对齐 32；选「手动宽高」则直接用上面的宽高值",
+      "<b>画质档</b>(2026-09-04 官方最佳实践升级,存量项目自动迁移):视频 VAE int8→<b>fp16</b> + Turbo LoRA 4步→<b>PDD Acc 8步</b>(官方文档明示蒸馏降音频/运动质量) + 参考图编码 ref_image_size=<b>max</b>(身份保真更强);追求速度可在高级配置改回 4step LoRA + int8 VAE;采样参数已进镜头指纹,改档位自动全量重渲",
       "<b>步数</b>默认 20；<b>Turbo步</b>默认 8（8 步 ≈ 20 步画质、约 2.9 倍提速）",
       "<b>seed</b> 全剧固定保证跨镜头一致；<b>seed策略</b>控制返工：固定（默认）/ 重试递增（第 N 次返工 seed+N）/ 重试随机（返工换新随机）——返工仍抽同一 seed 等于重抽同一命运的卡",
       "<b>SageAttn</b>：SageAttention 注意力加速补丁（需 ComfyUI-KJNodes），RTX 50 系白捡提速；开启后「项目体检」会校验节点是否可用",

@@ -160,13 +160,15 @@ func TestManjuCameraPhrase(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"缓推（Push In, small, slow）", "Push In, small, slow"},
 		{"跟移（Track, medium, slow）", "Track, medium, slow"},
-		{"固定", "static locked-off camera"},
+		// 2026-09-04 官方词表对齐:固定→官方 Static Shot 动词句式;
+		// 横移/左横移→Truck;左摇→Pan;跟拍→Tracking;角度类→frames the subject
+		{"固定", "holds a static shot"},
 		{"固定（Static）", "static locked-off camera"},
-		{"横移", "cinematic lateral dolly truck with medium amplitude"},
-		{"左摇", "smooth pan to the left"},
-		{"左横移", "cinematic dolly truck to the left with medium amplitude"},
-		{"跟拍", "steady cinematic tracking shot following the subject at matching speed"},
-		{"低机位微推", "low-angle shot"},
+		{"横移", "trucks across the frame"},
+		{"左摇", "pans left"},
+		{"左横移", "trucks left"},
+		{"跟拍", "tracks the moving subject"},
+		{"低机位微推", "frames the subject from a low angle"},
 		{"慢升（Rise, small, slow）", "Rise, small, slow"},
 		{"", ""},
 		{"无意义", ""},
@@ -191,7 +193,7 @@ func TestInjectDisciplines(t *testing.T) {
 		t.Fatalf("运镜纪律复核应不变(幂等)")
 	}
 	outS := injectCameraDiscipline(hp, "固定")
-	if !strings.Contains(outS, "static locked-off camera") {
+	if !strings.Contains(outS, "holds a static shot") {
 		t.Fatalf("固定镜应注入 static: %s", outS)
 	}
 	outP := injectPositionDiscipline(hp)

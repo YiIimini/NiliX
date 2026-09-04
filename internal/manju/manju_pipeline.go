@@ -357,6 +357,9 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	// 落 output/h3_context/ 全局共享,项目 B 定点重渲会接续项目 A 的画面;草稿/定稿分辨率也混用
 	ctx.R["_latent_ns"] = reNonWord.ReplaceAllString(ctx.project, "_") + "_" + reNonWord.ReplaceAllString(ctx.episode, "_")
 	// turbo LoRA 存在性归一化(必须早于 ctx.steps 计算:回退后按实际生效的 LoRA 取步数)
+	// 2026-09-04 画质档迁移先行:旧 4step/int8 组合升 PDD 8step/fp16(quality_gen 版本键,
+	// 一次迁移),再走存在性归一(迁移写入的文件必然存在,归一不触发)
+	ctx.normalizeQualityUpgrade()
 	ctx.normalizeTurboLora()
 	if n, ok := manjuToInt(R["width"]); ok && n > 0 {
 		ctx.w = n
@@ -422,6 +425,67 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 	}
 	ctx.draftJudge, _ = R["draft_judge"].(bool)
 	return ctx, nil
+}
+
+// normalizeQualityUpgrade 存量项目画质档一次性迁移(2026-09-04,用户主诉"成片拉跨
+// 不如 Seedance/LibTV"全网调研后的根治项):旧默认(int8 VAE + lightx2v 4step 双 LoRA
+// + ref_image_size=match)按官方最佳实践升级为 fp16 VAE + PDD Acc 8step + max。
+// 官方依据:ComfyUI 官方文档明示 turbo 蒸馏降音频/运动质量、ref_image_size max 身份
+// 保真更强、模型清单 VAE 用 fp16;社区 benchmark 实测 14 步内质量随步数单调上升,
+// 4 步远低于甜点。迁移条件=磁盘存在对应文件且当前配置是旧组合;quality_gen 版本键
+// 防重复迁移(迁后用户手动改回 4step 不再被覆盖)。采样参数已进镜头指纹
+// (shotCondFingerprintAt),迁移后全量 stale 重编重渲,升级即刻生效。
+func (ctx *manjuCtx) normalizeQualityUpgrade() {
+	if g, ok := manjuToInt(ctx.R["quality_gen"]); ok && g >= 2 {
+		return
+	}
+	loraDir := filepath.Join(ctx.sharedModels, "loras")
+	vaeDir := filepath.Join(ctx.sharedModels, "vae")
+	var msgs []string
+	// ① VAE int8 量化 → fp16(官方模型清单同款,解码无损折衷)
+	if v := strings.TrimSpace(str(ctx.R["vae_video"])); strings.Contains(v, "int8_convrot") {
+		const fp16 = "minimax_h3_video_vae_fp16.safetensors"
+		if fileExists(filepath.Join(vaeDir, fp16)) {
+			ctx.R["vae_video"] = fp16
+			msgs = append(msgs, "vae_video int8→fp16")
+		}
+	}
+	// ② lightx2v 4step → PDD Acc 8step(阿里官方并行解码蒸馏;fl2v/ref2v 双键独立判定)
+	const pddFl2v = "minimax_h3_fl2va_pdd_acc_8step_comfyui.safetensors"
+	const pddR2v = "minimax_h3_ref2va_pdd_acc_8step_comfyui.safetensors"
+	loraUp := false
+	if t := strings.TrimSpace(str(ctx.R["turbo_lora"])); strings.Contains(t, "4step") && fileExists(filepath.Join(loraDir, pddFl2v)) {
+		ctx.R["turbo_lora"] = pddFl2v
+		loraUp = true
+		msgs = append(msgs, "turbo_lora(空镜)4step→PDD 8step")
+	}
+	if t := strings.TrimSpace(str(ctx.R["turbo_lora_r2v"])); strings.Contains(t, "4step") && fileExists(filepath.Join(loraDir, pddR2v)) {
+		ctx.R["turbo_lora_r2v"] = pddR2v
+		loraUp = true
+		msgs = append(msgs, "turbo_lora_r2v(角色镜)4step→PDD 8step")
+	}
+	// PDD 是 8 步蒸馏配方(官方强制 euler/cfg1.0/8步),显式 turbo_steps≠8 时归 8
+	// (非用户偏好,蒸馏步数不匹配会静默劣化)
+	if loraUp {
+		if n, ok := manjuToInt(ctx.R["turbo_steps"]); ok && n > 0 && n != 8 {
+			ctx.R["turbo_steps"] = 8
+		}
+	}
+	// ③ 参考图编码分辨率 → max(match/未配置都升;match 会把 1024+ 定妆照缩到 768 编码)
+	if v := strings.TrimSpace(str(ctx.R["ref_image_size"])); v != "max" {
+		if v == "match" {
+			msgs = append(msgs, "ref_image_size match→max")
+		}
+		ctx.R["ref_image_size"] = "max"
+	}
+	ctx.R["quality_gen"] = 2
+	if len(msgs) > 0 {
+		ctx.loraRepair += "🎨 画质档升级(2026-09-04 官方最佳实践): " + strings.Join(msgs, "; ") +
+			"(采样参数已进指纹,存量镜头将自动重编重渲;要快出片可改回 4step/int8)"
+	}
+	if err := writeManjuConfig(ctx.configPath, ctx.cfg); err != nil && len(msgs) > 0 {
+		ctx.loraRepair += "(config 写回失败,仅本次运行生效: " + truncate(err.Error(), 60) + ")"
+	}
 }
 
 // normalizeTurboLora 渲染入口 turbo LoRA 文件存在性归一化(2026-08-26):
@@ -885,6 +949,9 @@ func (ctx *manjuCtx) finalizeAlignedPrompt(hp string, s manjuShot, picSlots int)
 	out = ctx.fixSubjectHairColor(out, s)
 	// 2026-09-03 内心 Q 版表情随剧情:chibi 行无表情词时按 narration 情绪注入
 	out = ctx.fixChibiEmotion(out, s)
+	// 2026-09-04 运镜句官方句式归一:存量 h3_prompt 正文里的电影术语黑话
+	// (performs a slow cinematic dolly push-in...)返正为官方动词三要素句式
+	out = manjuOfficializeCameraVerbs(out)
 	// 2026-08-30 五问整改(问题④运镜垃圾):分镜运镜列三要素机械注入——
 	// LLM 软规则可忽略,纪律句是渲染前硬兜底;「固定」镜与 MOTION DISCIPLINE
 	// 不冲突(static camera + 画面动作/环境动效持续,官方三选一)。
@@ -913,11 +980,14 @@ func (ctx *manjuCtx) finalizeAlignedPrompt(hp string, s manjuShot, picSlots int)
 // ①括号内英文直取(「缓推（Push In, small, slow）」→ Push In, small, slow);
 // ②「固定」→ static locked-off camera;③中文词走映射表兜底;④解析不出返回空
 // (不注入,信任既有提示词文本)。
-// 2026-09-03 电影级升级:①静态归一——括号直取的纯静态词(「固定（Static）」直取
-// "Static")不再原样返回,归一为 static locked-off camera(下游 static 判定/
-// 运镜纪律分支依赖该短语);②映射表扩充——方向性 pan/truck(左/右)、变焦、手持、
-// 倾斜、中幅档与电影术语(dolly/tracking/orbital),已实证有效的三要素结构
-// (幅度+速度)保留不动。
+// 2026-09-04 官方词表对齐(重大返正):2026-09-03 的"电影术语升级"(dolly/orbital/crane/
+// cinematic dolly truck 等)是负优化——官方 VIDEO_PROMPT_WRITING_GUIDE 词表只有 15 个
+// motion type(Push In/Pull Out/Pan L/R/Truck L/R/Tilt/Pedestal/Arc/Tracking/Static/
+// Shake/POV/Roll)+ 幅度(with small/large amplitude)+ 速度(at slow/fast speed),
+// 且要求"natural English action within the shot"。dolly push-in/orbital arc/crane rise
+// 是行业黑话,H3 训练对齐的是官方动词句式("The camera pushes in with small amplitude
+// at slow speed"),黑话服从性打折。映射表全部输出官方动词短语;角度类(低机位/俯拍/
+// 仰拍/过肩)输出 frames the subject from ...(构图描述,非运动)。
 func manjuCameraPhrase(camera string) string {
 	cm := strings.TrimSpace(camera)
 	if cm == "" {
@@ -943,53 +1013,54 @@ func manjuCameraPhrase(camera string) string {
 			break
 		}
 	}
-	// ②固定机位
+	// ②固定机位(官方 Static Shot 的动词化句式;含 static 字样供静态判定)
 	if strings.Contains(cm, "固定") {
-		return "static locked-off camera"
+		return "holds a static shot"
 	}
-	// ③中文映射表(注意顺序:复合词在前,单字在后;方向词在泛词前)
+	// ③中文映射表(注意顺序:复合词在前,单字在后;方向词在泛词前)。
+	// 输出一律官方词表动词短语(2026-09-04 返正,见函数头注释)。
 	table := []struct{ zh, en string }{
-		{"低机位", "low-angle shot"},
-		{"贴地", "ground-level shot"},
-		{"过肩", "over-the-shoulder shot"},
-		{"俯拍", "high-angle shot"},
-		{"仰拍", "low-angle shot"},
-		{"左横移", "cinematic dolly truck to the left with medium amplitude"},
-		{"右横移", "cinematic dolly truck to the right with medium amplitude"},
-		{"左移", "cinematic dolly truck to the left with medium amplitude"},
-		{"右移", "cinematic dolly truck to the right with medium amplitude"},
-		{"向左横移", "cinematic dolly truck to the left with medium amplitude"},
-		{"向右横移", "cinematic dolly truck to the right with medium amplitude"},
-		{"缓推", "slow cinematic dolly push-in with small amplitude"},
-		{"急推", "fast dolly push-in with large amplitude"},
-		{"缓拉", "slow dolly pull-back with small amplitude"},
-		{"急拉", "fast dolly pull-back with large amplitude"},
-		{"横移", "cinematic lateral dolly truck with medium amplitude"},
-		{"跟移", "steady cinematic tracking shot following the subject at matching speed"},
-		{"跟拍", "steady cinematic tracking shot following the subject at matching speed"},
-		{"跟踪", "steady cinematic tracking shot following the subject at matching speed"},
-		{"甩镜", "fast whip pan"},
-		{"环绕", "slow orbital arc around the subject"},
-		{"环摇", "slow orbital arc around the subject"},
-		{"慢升", "slow cinematic crane rise"},
-		{"快升", "fast crane rise"},
-		{"慢降", "slow crane drop"},
-		{"左摇", "smooth pan to the left"},
-		{"右摇", "smooth pan to the right"},
-		{"摇左", "smooth pan to the left"},
-		{"摇右", "smooth pan to the right"},
-		{"缓摇", "smooth slow pan"},
-		{"变焦推", "slow cinematic zoom-in"},
-		{"变焦拉", "slow cinematic zoom-out"},
-		{"变焦", "slow cinematic zoom"},
-		{"手持", "handheld camera with subtle organic sway"},
-		{"微移", "subtle drift with small amplitude at slow speed"},
-		{"推", "cinematic dolly push-in"},
-		{"拉", "dolly pull-back"},
-		{"摇", "pan"},
-		{"移", "lateral dolly truck"},
-		{"升", "crane rise"},
-		{"降", "crane drop"},
+		{"低机位", "frames the subject from a low angle"},
+		{"贴地", "frames the subject at ground level"},
+		{"过肩", "frames the subject over the shoulder"},
+		{"俯拍", "frames the subject from a high angle"},
+		{"仰拍", "frames the subject from a low angle"},
+		{"左横移", "trucks left"},
+		{"右横移", "trucks right"},
+		{"左移", "trucks left"},
+		{"右移", "trucks right"},
+		{"向左横移", "trucks left"},
+		{"向右横移", "trucks right"},
+		{"缓推", "pushes in with small amplitude at slow speed"},
+		{"急推", "pushes in with large amplitude at fast speed"},
+		{"缓拉", "pulls out with small amplitude at slow speed"},
+		{"急拉", "pulls out with large amplitude at fast speed"},
+		{"横移", "trucks across the frame"},
+		{"跟移", "tracks the moving subject"},
+		{"跟拍", "tracks the moving subject"},
+		{"跟踪", "tracks the moving subject"},
+		{"甩镜", "pans with large amplitude at fast speed"},
+		{"环绕", "arcs around the subject"},
+		{"环摇", "arcs around the subject"},
+		{"慢升", "pedestals up at slow speed"},
+		{"快升", "pedestals up at fast speed"},
+		{"慢降", "pedestals down at slow speed"},
+		{"左摇", "pans left"},
+		{"右摇", "pans right"},
+		{"摇左", "pans left"},
+		{"摇右", "pans right"},
+		{"缓摇", "pans at slow speed"},
+		{"变焦推", "zooms in at slow speed"},
+		{"变焦拉", "zooms out at slow speed"},
+		{"变焦", "zooms in at slow speed"},
+		{"手持", "shakes slightly with handheld sway"},
+		{"微移", "drifts with small amplitude at slow speed"},
+		{"推", "pushes in"},
+		{"拉", "pulls out"},
+		{"摇", "pans"},
+		{"移", "trucks across the frame"},
+		{"升", "pedestals up"},
+		{"降", "pedestals down"},
 	}
 	for _, t := range table {
 		if strings.Contains(cm, t.zh) {
@@ -997,6 +1068,31 @@ func manjuCameraPhrase(camera string) string {
 		}
 	}
 	return ""
+}
+
+// manjuOfficialCameraRepl 存量运镜黑话 → 官方句式(2026-09-04 返正)。精确反解
+// tools/rework_cinematic_phrases.py 2026-09-03 写入全库的 6 个"电影术语"模式——
+// 官方 VIDEO_PROMPT_WRITING_GUIDE 的训练句式是动词三要素结构
+// ("the camera pushes in with small amplitude at slow speed"),dolly/orbital 黑话
+// 服从性打折。幂等:官方句式不命中;挂渲染/指纹共用链,存量 plan 自动 stale 重渲。
+var manjuOfficialCameraRepl = []struct {
+	re  *regexp.Regexp
+	rep string
+}{
+	{regexp.MustCompile(`\bperforms a (\w+) cinematic dolly push-in with (\w+) amplitude\b`), "pushes in with $2 amplitude at $1 speed"},
+	{regexp.MustCompile(`\bperforms a cinematic dolly push-in with (\w+) amplitude\b`), "pushes in with $1 amplitude"},
+	{regexp.MustCompile(`\bperforms a (\w+) dolly pull-back with (\w+) amplitude\b`), "pulls out with $2 amplitude at $1 speed"},
+	{regexp.MustCompile(`\bperforms a dolly pull-back with (\w+) amplitude\b`), "pulls out with $1 amplitude"},
+	{regexp.MustCompile(`\bperforms a (\w+) orbital arc with (\w+) amplitude\b`), "arcs with $2 amplitude at $1 speed"},
+	{regexp.MustCompile(`\bperforms an orbital arc with (\w+) amplitude\b`), "arcs with $1 amplitude"},
+}
+
+// manjuOfficializeCameraVerbs 运镜句官方句式归一(纯函数,渲染/指纹共用)。
+func manjuOfficializeCameraVerbs(hp string) string {
+	for _, r := range manjuOfficialCameraRepl {
+		hp = r.re.ReplaceAllString(hp, r.rep)
+	}
+	return hp
 }
 
 // manjuNormalizeStaticPhrase 静态类短语归一:裸 Static/static camera/locked-off 等
@@ -1027,11 +1123,22 @@ func injectCameraDiscipline(hp, camera string) string {
 	if ph == "" {
 		return strings.TrimRight(hp, " \n")
 	}
-	guard := "CAMERA DISCIPLINE: this shot's camera performs " + ph
+	// 2026-09-04 官方句式:映射表产物(官方动词短语)直接以 "the camera {动词句}"
+	// 呈现=官方指南原文句式;括号直取的名词三要素("Push In, small, slow",大写开头/
+	// 含逗号)沿用 "this shot's camera performs" 包装(尊重技能侧契约原文形态)。
+	guardLead := "the camera "
+	if rs := []rune(ph); len(rs) > 0 && (unicode.IsUpper(rs[0]) || strings.Contains(ph, ",")) {
+		guardLead = "this shot's camera performs "
+	}
+	guard := "CAMERA DISCIPLINE: " + guardLead + ph
 	// 2026-09-03 大小写修复:「固定(Static)」括号直取的 "Static" 旧判定 Contains(ph,"static")
-	// 漏过 → 静态镜被注入"运镜必须可见、不许定机"的运动分支,自相矛盾(镜8/13/18 实锤)
+	// 漏过 → 静态镜被注入"运镜必须可见、不许定机"的运动分支,自相矛盾(镜8/13/18 实锤)。
+	// 2026-09-04 角度类分支:frames the subject ...(低机位/俯拍/仰拍/过肩)是构图描述
+	// 非运动指令,不强制运镜,只要求画面内容持续有戏。
 	if strings.Contains(strings.ToLower(ph), "static") {
 		guard += "; the camera stays locked but on-screen character action or environmental motion must keep every second of the frame alive"
+	} else if strings.Contains(ph, "frames the subject") {
+		guard += "; the framing holds while on-screen character action or environmental motion keeps every second of the frame alive"
 	} else {
 		guard += "; keep that camera movement visible from the first frame to the last frame - never settle into a static locked-off frame"
 	}
@@ -1072,7 +1179,8 @@ func injectPositionDiscipline(hp string) string {
 // 管风格句措辞,此纪律在高服从位(detailed_description 前)以任务句式强制电影
 // 摄影观感:自然动机光、真实皮肤/材质纹理、电影镜头浅景深、细微胶片颗粒、
 // 胶片级低饱和调色、物理可信的运动重量,并显式否定 anime/cartoon/CGI/风格化。
-const manjuCinematographyGuard = "CINEMATOGRAPHY: photorealistic cinematic film look - natural motivated lighting with realistic falloff, true-to-life skin tones and material textures, shallow depth of field through a cinematic lens, subtle film grain, muted filmic color grading, and physically grounded weight and inertia in every motion; absolutely no anime, cartoon, CGI or over-stylized rendering."
+// 2026-09-04 压缩:正文扩容(250-350 词)后纪律同步瘦身 ~30%,保语义减稀释。
+const manjuCinematographyGuard = "CINEMATOGRAPHY: photorealistic cinematic film look - motivated natural lighting, true skin tones and material textures, shallow depth of field, subtle film grain, muted filmic grading, physically grounded motion weight; no anime, cartoon, CGI or over-stylized rendering."
 
 // injectCinematographyDiscipline 电影级纪律注入(纯函数,幂等:先删后插)。
 // 条件是文本级写实判定:提示词含 photorealistic/realistic(写实书的风格句/
@@ -5608,9 +5716,14 @@ func (ctx *manjuCtx) shotCondFingerprintAt(s manjuShot, w, h int) string {
 	// 与 stale 检查(下次运行)都必须基于与渲染完全相同的"对齐+guard 最终化文本"算指纹,
 	// 否则对齐改词不触发重渲(旧缓存继续指鹿为马)或恒 stale 反复重渲。
 	finalPrompt := ctx.finalizeAlignedPrompt(s.H3Prompt, s, ctx.shotPicSlots(s))
-	fmt.Fprintf(hh, "w=%d|h=%d|len=%d|chars=%s|scene=%s|refs=%s|fl2va_end=%t|prompt=%s",
+	// 2026-09-04 画质升级·采样参数维度:VAE/LoRA/步数/ref_image_size 此前不进指纹——
+	// 换质量配置(如 int8 VAE→fp16、4step→PDD 8step)后旧条件缓存与旧成片继续命中,
+	// 升级静默失效。全部计入指纹,配置变化即全量 stale 重编重渲。
+	fmt.Fprintf(hh, "w=%d|h=%d|len=%d|chars=%s|scene=%s|refs=%s|fl2va_end=%t|samp=%s|%s|%s|%d|%s|prompt=%s",
 		w, h, h3Length(s.Duration, ctx.fps),
-		strings.Join(s.Characters, ","), s.Scene, strings.Join(refs, ","), endFrame, finalPrompt)
+		strings.Join(s.Characters, ","), s.Scene, strings.Join(refs, ","), endFrame,
+		str(ctx.R["vae_video"]), str(ctx.R["turbo_lora"]), str(ctx.R["turbo_lora_r2v"]), ctx.steps, h3RefImageSize(ctx.R),
+		finalPrompt)
 	sum := fmt.Sprintf("%x", hh.Sum(nil))
 	if len(sum) > 10 {
 		sum = sum[:10]
@@ -8069,7 +8182,18 @@ func manjuDefaultConfig(name, novelFile, novelDir, apiKey string) map[string]any
 			"unet_fl2va":     "MiniMax_H3_fl2va_pruned_int8_convrot.safetensors",
 			"unet_ref2va":    "MiniMax_H3_ref2va_pruned_int8_convrot.safetensors",
 			"clip":           "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-			"vae_video":      "minimax_h3_video_vae_int8_convrot.safetensors",
+			// 2026-09-04 画质升级(对标官方最佳实践,用户主诉"成片拉跨"):
+			// ① vae_video int8→fp16(官方模型清单/模板均 fp16,int8 解码有损);
+			// ② Turbo LoRA lightx2v 4step→阿里 PDD Acc 8step(官方文档明示 turbo 蒸馏
+			//    降音频与运动质量;4 步远低于质量甜点,benchmark 实测 14 步内质量随步数
+			//    单调上升;PDD 8 步为质量/速度平衡点,comfyui 蒸馏家族 euler/cfg1.0 配方);
+			// ③ ref_image_size=max(官方:identity fidelity 更强,定妆照不再被缩到 768 编码);
+			// ④ 采样参数纳入镜头指纹(shotCondFingerprintAt),配置升级自动触发全量重渲。
+			// 速度回退:需要快出片时改回 turbo_lora=...4step...+vae_video=...int8... 即可。
+			"vae_video":      "minimax_h3_video_vae_fp16.safetensors",
+			"turbo_lora":     "minimax_h3_fl2va_pdd_acc_8step_comfyui.safetensors",
+			"turbo_lora_r2v": "minimax_h3_ref2va_pdd_acc_8step_comfyui.safetensors",
+			"ref_image_size": "max",
 			"vae_audio":      "minimax_h3_audio_vae_fp32.safetensors",
 			"z_image_unet":   "z_image_turbo_bf16.safetensors",
 			"z_image_clip":   "qwen_3_4b.safetensors",
@@ -8082,11 +8206,6 @@ func manjuDefaultConfig(name, novelFile, novelDir, apiKey string) map[string]any
 			// 仅保留作场景图引擎(无人脸)。SDXL 全面禁用。
 			"char_engine":    "krea2",
 			"voiceover":      false, // 2026-08-23 用户规则:默认 H3 自带配音;仅角色内心活动(Q版)需后期 TTS 时手动开启
-			// 2026-08-26 Turbo LoRA 默认对齐磁盘实际部署(larryvrh 4step EMA 旧文件已停分发,
-			// 此前新项目默认指旧名 → 体检「未找到」);fl2v v1.1 空镜/ref2v v0.1 角色镜,
-			// 与全局 settings 默认(config.Render)一致。
-			"turbo_lora":     "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors",
-			"turbo_lora_r2v": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
 			// 不再配置 SDXL checkpoint(char_models/animagine_ckpt 置空,渲染不用它们)。
 			"animagine_ckpt": "",
 			"char_models":    map[string]any{},

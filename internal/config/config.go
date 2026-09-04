@@ -100,6 +100,9 @@ type RenderSettings struct {
 	// 2026-08-26 教训:该字段缺位时,启动 Load→Save 循环会把 settings.json 里手写的
 	// turbo_lora_r2v 静默抹掉,角色镜永远吃不上专用 LoRA——强类型字段必须与管线键对齐。
 	TurboLoraR2V   string            `json:"turbo_lora_r2v,omitempty"`
+	// RefImageSize 参考图编码分辨率(match=缩到生成分辨率再编码,max=保留最高 2048
+	// 短边,官方文档明示 max 身份保真更强;2026-09-04 画质升级默认 max)。
+	RefImageSize   string            `json:"ref_image_size,omitempty"`
 	ZImageUnet     string            `json:"z_image_unet"`
 	ZImageClip     string            `json:"z_image_clip"`
 	ZImageVae      string            `json:"z_image_vae"`
@@ -162,17 +165,20 @@ func Default() *Settings {
 			Height:         1344,
 			FPS:            24,
 			Steps:          20,
-			TurboSteps:     4,
+			TurboSteps:     8,
 			MinShotSeconds: 4,
 			MaxShotSeconds: 12,
 			Seed:           1688,
 			UnetFL2VA:      "MiniMax_H3_fl2va_pruned_int8_convrot.safetensors",
 			UnetRef2VA:     "MiniMax_H3_ref2va_pruned_int8_convrot.safetensors",
 			Clip:           "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-			VaeVideo:       "minimax_h3_video_vae_int8_convrot.safetensors",
+			// 2026-09-04 画质升级:fp16 VAE + PDD 8step LoRA(官方最佳实践对齐,
+			// turbo 蒸馏降音频/运动质量,4 步低于质量甜点;详见 manjuDefaultConfig 注释)
+			VaeVideo:       "minimax_h3_video_vae_fp16.safetensors",
 			VaeAudio:       "minimax_h3_audio_vae_fp32.safetensors",
-			TurboLora:      "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors",
-			TurboLoraR2V:   "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+			TurboLora:      "minimax_h3_fl2va_pdd_acc_8step_comfyui.safetensors",
+			TurboLoraR2V:   "minimax_h3_ref2va_pdd_acc_8step_comfyui.safetensors",
+			RefImageSize:   "max",
 			ZImageUnet:     "z_image_turbo_bf16.safetensors",
 			ZImageClip:     "qwen_3_4b.safetensors",
 			ZImageVae:      "ae.safetensors",

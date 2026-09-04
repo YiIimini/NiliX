@@ -80,8 +80,8 @@ func TestCameraStaticPhraseNoContradiction(t *testing.T) {
 	if strings.Contains(out, "never settle into a static locked-off frame") {
 		t.Errorf("静态镜不得注入运动纪律(自相矛盾), got: %s", stringCut(out, "CAMERA DISCIPLINE", "\n"))
 	}
-	// 运动镜方向性短语
-	if ph := manjuCameraPhrase("左摇"); ph != "smooth pan to the left" {
+	// 运动镜方向性短语(2026-09-04 官方词表:pans left=官方 Pan Left 动词句式)
+	if ph := manjuCameraPhrase("左摇"); ph != "pans left" {
 		t.Errorf("「左摇」应有方向性短语, got %q", ph)
 	}
 	if ph := manjuCameraPhrase("缓推（Push In, small, slow）"); ph != "Push In, small, slow" {

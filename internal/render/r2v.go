@@ -24,6 +24,11 @@ func buildR2VWorkflow(cfg config.RenderSettings, prompt string, length, seed int
 		refImagesInput[fmt.Sprintf("ref_image_%d", i)] = []any{nodeID, 0}
 	}
 
+	// ref_image_size:max=保留参考图原分辨率编码(官方:identity fidelity 更强,2026-09-04)
+	refSize := cfg.RefImageSize
+	if refSize != "match" && refSize != "max" {
+		refSize = "max"
+	}
 	wf["50"] = map[string]any{"class_type": "MiniMaxH3ReferenceToVideo", "inputs": map[string]any{
 		"clip":           []any{"2", 0},
 		"vae":            []any{"3", 0},
@@ -32,7 +37,7 @@ func buildR2VWorkflow(cfg config.RenderSettings, prompt string, length, seed int
 		"width":          cfg.Width,
 		"height":         cfg.Height,
 		"length":         length,
-		"ref_image_size": "match",
+		"ref_image_size": refSize,
 		"ref_images":     refImagesInput,
 	}}
 

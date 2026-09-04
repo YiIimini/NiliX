@@ -1136,11 +1136,11 @@ const manjuShotWritingRules = `
 
 func manjuShotPromptSystem(hasChar bool, style string) string {
 	sys := "你是 MiniMax H3 视频生成模型的提示词专家。基于给定镜头的分镜信息与角色/场景卡，直出该镜【完整】H3 提示词（英文主体、中文台词/旁白原文）。\n\n输出严格 JSON：{\"h3_prompt\": \"提示词全文\"}\n\n"
-	sys += "【输出体积硬约束·强制(2026-08-24:此前逐镜输出超长被截断)】:\n"
-	sys += "- 六段式必须完整(字段齐全)但每字段精简:subject_definitions 逐项列角色/场景即可(不展开;每个 <Subject> 一行);\n"
-	sys += "- detailed_description 控制在 150-220 英文词(构图/动作/运镜/光影/台词逐字;禁止铺陈背景/环境细节);\n"
+	sys += "【输出体积硬约束·2026-09-04 官方对齐扩容(官方要求 detailed_description as detailed and explicit as possible,正文信息密度直接决定画面细节;旧 150-220 词约束压掉了构图/材质/光影细节,画面空洞)】:\n"
+	sys += "- 六段式必须完整(字段齐全);subject_definitions 逐项列角色/场景(不展开;每个 <Subject> 一行);\n"
+	sys += "- detailed_description 控制在 250-350 英文词(开场构图→主体外观+屏幕位置朝向→动作状态变化逐步展开→运镜句内自然英语→光影材质→台词逐字→收尾动作;每个主体首次出现处写屏幕位置+朝向;对话密集优先完整台词时间线);\n"
 	sys += "- overall_soundscape 1-2 句、non_diegetic_music 1 句、summary/retention_analysis 各 1 句;\n"
-	sys += "- 整个 h3_prompt 控制在 1500 tokens 以内(约 600 英文词),宁可精炼不可超长;\n"
+	sys += "- 整个 h3_prompt 控制在 2200 tokens 以内(约 900 英文词);正文宁详勿略,禁止背景铺陈注水;\n"
 	sys += "- 台词/旁白逐字保留(中文原文),时长=输入 duration。\n\n"
 	if hasChar {
 		opening := manjuStyleDesc(style).opening

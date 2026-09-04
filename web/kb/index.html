@@ -7,10 +7,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NiliX</title>
-<link rel="icon" type="image/png" href="/icon.png?v=202609040056">
-<link rel="stylesheet" href="/css/themes.css?v=202609040056">
-<link rel="stylesheet" href="/css/materials.css?v=202609040056">
-<link rel="stylesheet" href="/css/app.css?v=202609040056">
+<link rel="icon" type="image/png" href="/icon.png?v=202609041002">
+<link rel="stylesheet" href="/css/themes.css?v=202609041002">
+<link rel="stylesheet" href="/css/materials.css?v=202609041002">
+<link rel="stylesheet" href="/css/app.css?v=202609041002">
 </head>
 <body>
   <!-- 首帧启动加载层(2026-08-29):样式全部内联——不依赖外部 CSS/JS,HTML 解析到此处
@@ -127,7 +127,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-mark brand-mark-img" src="/icon.png?v=202609040056" alt="">
+      <img class="brand-mark brand-mark-img" src="/icon.png?v=202609041002" alt="">
       <span class="brand-name" data-i18n="app.name">NiliX</span>
       <span class="brand-tag" data-i18n="app.tagline">我的工作台</span>
     </div>
@@ -418,11 +418,11 @@
 
             <div class="manju-row">
               <span class="manju-label">档位</span>
-              <select id="manju-res-tier" class="manju-input" title="按配置画幅等比换算短边(对齐32);「手动宽高」=直接用上面的宽高值">
+              <select id="manju-res-tier" class="manju-input" title="按配置画幅等比换算短边(对齐32);「手动宽高」=直接用上面的宽高值;1088P 超本地模型 768×1344 像素面积上限约2倍,慢4倍且质量不可控,仅实验用——更高清晰度请用云端2K精修">
                 <option value="">手动宽高</option>
                 <option value="draft">416P 草稿</option>
                 <option value="standard">768P 标准</option>
-                <option value="fhd">1088P 高清</option>
+                <option value="fhd">1088P（超模型上限·实验）</option>
               </select>
               <span class="manju-label">seed策略</span>
               <select id="manju-seed-policy" class="manju-input" title="固定=全剧同一 seed;重试递增=第N次返工 seed+N;重试随机=返工换新随机">
@@ -835,12 +835,12 @@
   </div>
   <!-- 实际根路径由服务端注入(自包含部署后 manju/novel 在 exe 目录旁,dirview 勿再硬编码) -->
   <script>window.NILIX_PATHS = { manjuRoot: /*__NILIX_MANJU_ROOT__*/, novelRoot: /*__NILIX_NOVEL_ROOT__*/ };</script>
-  <script src="/js/i18n.js?v=202609040056"></script>
-  <script src="/js/markdown.js?v=202609040056"></script>
-  <script src="/js/winctl.js?v=202609040056"></script>
-  <script src="/js/app.js?v=202609040056"></script>
-  <script src="/js/comfy.js?v=202609040056"></script>
-  <script src="/js/dirview.js?v=202609040056"></script>
-  <script src="/js/manju.js?v=202609040056"></script>
+  <script src="/js/i18n.js?v=202609041002"></script>
+  <script src="/js/markdown.js?v=202609041002"></script>
+  <script src="/js/winctl.js?v=202609041002"></script>
+  <script src="/js/app.js?v=202609041002"></script>
+  <script src="/js/comfy.js?v=202609041002"></script>
+  <script src="/js/dirview.js?v=202609041002"></script>
+  <script src="/js/manju.js?v=202609041002"></script>
 </body>
 </html>
