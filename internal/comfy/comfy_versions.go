@@ -25,6 +25,7 @@ var comfyModelDirs = []struct{ Dir, Label string }{
 	{"diffusion_models", "UNet 扩散模型"},
 	{"checkpoints", "Checkpoint 模型"},
 	{"loras", "LoRA 加速/风格"},
+	{"pdd_acc", "PDD 加速蒸馏包"},
 	{"vae", "VAE 解码器"},
 	{"clip", "CLIP 文本编码"},
 	{"clip_vision", "CLIP Vision"},
@@ -186,13 +187,26 @@ func comfyVersionSnapshot() map[string]any {
 		return wfs[i].(map[string]any)["name"].(string) < wfs[j].(map[string]any)["name"].(string)
 	})
 	info["workflows"] = wfs
-	// PDD 加速 LoRA 状态(2026-08-29 整合)
+	// PDD 加速 LoRA 状态(2026-08-29 整合;2026-09-04 目录权威化:PDD 单文件
+	// trunk LoRA+head bank 由 MiniMaxH3PDDAccApply 从 models/pdd_acc 读,loras
+	// 目录不再存放——两处都查,兼容旧部署)
 	pdd := map[string]any{"available": false}
 	for _, item := range models["LoRA 加速/风格"] {
 		if m, ok := item.(map[string]any); ok && strings.Contains(strings.ToLower(str(m["name"])), "pdd_acc") {
 			pdd["available"] = true
 			pdd["file"] = m["name"]
 			break
+		}
+	}
+	if !pdd["available"].(bool) {
+		if entries, err := os.ReadDir(filepath.Join(paths.ComfySharedDir, "models", "pdd_acc")); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() && strings.Contains(strings.ToLower(e.Name()), "pdd_acc") {
+					pdd["available"] = true
+					pdd["file"] = e.Name()
+					break
+				}
+			}
 		}
 	}
 	info["pdd"] = pdd

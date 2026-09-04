@@ -207,8 +207,11 @@ func (ctx *manjuCtx) shotWorkflowNodes(s manjuShot, plan map[string]any, resp ma
 	spec := turboLoRASpecOf(loraName)
 	isPDD := spec.PDD && loraName != ""
 	if isPDD {
+		// 2026-09-04 节点真实 schema(与 h3RenderWorkflow 同源修复):必填
+		// pdd_file/nfe/lora_strength/head_strength/on_off_grid
 		pdd := add("pdd", "MiniMaxH3PDDAccApply", "MiniMaxH3PDDAccApply", 1, 2,
-			map[string]any{"lora": loraName, "steps": spec.Steps})
+			map[string]any{"pdd_file": loraName, "nfe": strconv.Itoa(spec.Steps),
+				"lora_strength": spec.Strength, "head_strength": 1.0, "on_off_grid": "error"})
 		link(model, 0, pdd, 0)
 		model = pdd
 	} else if loraName != "" {

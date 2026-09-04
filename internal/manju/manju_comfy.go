@@ -405,16 +405,33 @@ func h3RenderWorkflow(R map[string]any, seed, w, h, length, steps int, cacheName
 	// 普通 distill LoRA 走 LoraLoaderModelOnly + MiniMaxH3SigmaShift。
 	// PDD 节点未安装(ComfyUI 未重启/缺 custom_node)时回退普通模式并告警——
 	// 提交 400 missing_node_type 会白烧一轮,探测优于失败。
+	// 2026-09-04 实锤修复(镜1 提交 400 required_input_missing ×5):节点真实 schema
+	// 必填 pdd_file/nfe/lora_strength/head_strength/on_off_grid(源码 nodes.py
+	// INPUT_TYPES 权威),旧代码只传 model+lora_name——字段名就错了(lora_name 非
+	// 该节点输入),PDD 模式此前从未跑通过。PDD 文件(trunk LoRA+head bank+config
+	// 单文件,1.66GB)节点从 models/pdd_acc 目录读,文件名=配置 turbo_lora 同名。
 	pddApplyID := ""
 	if spec.PDD && loraName != "" {
 		if ok, _ := R["_pdd_ok"].(bool); ok {
-			a := wfAdd(wf, "MiniMaxH3PDDAccApply", map[string]any{"model": refOf(model), "lora_name": loraName})
+			a := wfAdd(wf, "MiniMaxH3PDDAccApply", map[string]any{
+				"model":         refOf(model),
+				"pdd_file":      loraName,
+				"nfe":           strconv.Itoa(spec.Steps),
+				"lora_strength": spec.Strength,
+				"head_strength": 1.0,
+				"on_off_grid":   "error",
+			})
 			model = a + "[0]"
 			pddApplyID = a + "[1]"
 		} else {
-			log.Printf("⚠️ PDD Acc 节点未安装(ComfyUI-MiniMax-H3-PDD-Acc),回退普通 LoRA 模式: %s", loraName)
+			log.Printf("⚠️ PDD Acc 不可用(缺节点 ComfyUI-MiniMax-H3-PDD-Acc 或 models/pdd_acc 目录为空),回退普通 LoRA 模式: %s", loraName)
 			loraName = ""
 			spec = turboLoRASpecOf("")
+			// 回退=无蒸馏全步数(与 FL2V/R2VOnly 回退分支同款):8 步 res_multistep
+			// 无 LoRA 是低质量组合,回退就该回全步数
+			if n, ok := manjuToInt(R["steps"]); ok && n > 0 {
+				steps = n
+			}
 		}
 	}
 	if loraName != "" && !spec.PDD {

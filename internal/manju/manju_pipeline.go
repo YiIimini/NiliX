@@ -137,16 +137,23 @@ func (ctx *manjuCtx) applySageToR(R map[string]any) {
 	}
 }
 
-// pddGuard PDD Acc 节点探测(2026-08-29):MiniMaxH3PDDAccApply 存在性。
-// 探测一次缓存;渲染提交前由 renderShotTo 调用并把结果注入 R 副本。
+// pddGuard PDD Acc 可用性探测(2026-08-29 节点存在性;2026-09-04 补文件存在性):
+// ①MiniMaxH3PDDAccApply 节点已装;②models/pdd_acc 目录有配置引用的 PDD 文件
+// (2026-09-04 实锤:1.66GB PDD 文件 2026-08-29 下载后误放 loras 目录,节点只从
+// pdd_acc 读——节点在而文件缺,提交 400 required_input_missing×5)。
+// 探测一次缓存;渲染提交前由 renderShotTo 调用并把结果注入 R 副本;不可用回退普通模式不阻塞。
 func (ctx *manjuCtx) pddGuard(lg *manjuLogger) {
 	if ctx.pddChecked {
 		return
 	}
 	ctx.pddChecked = true
 	ctx.pddOK = ctx.comfy.HasNode("MiniMaxH3PDDAccApply")
+	if ctx.pddOK {
+		ctx.pddOK = fileExists(filepath.Join(ctx.sharedModels, "pdd_acc", str(ctx.R["turbo_lora"]))) ||
+			fileExists(filepath.Join(ctx.sharedModels, "pdd_acc", str(ctx.R["turbo_lora_r2v"])))
+	}
 	if !ctx.pddOK && strings.Contains(strings.ToLower(str(ctx.R["turbo_lora"])), "pdd_acc") {
-		lg.logf("  ⚠️ 检测到 PDD Acc LoRA 但 ComfyUI 缺少 MiniMaxH3PDDAccApply 节点(未装 ComfyUI-MiniMax-H3-PDD-Acc 或未重启),已回退普通 LoRA 模式;装好节点后恢复")
+		lg.logf("  ⚠️ 检测到 PDD Acc 配置但不可用(缺节点 ComfyUI-MiniMax-H3-PDD-Acc,或 models/pdd_acc 目录缺 PDD 文件——1.66GB 单文件含 trunk LoRA+head bank,须放 pdd_acc 目录而非 loras),已回退普通模式;补齐后恢复")
 	}
 }
 
@@ -506,6 +513,16 @@ func (ctx *manjuCtx) normalizeTurboLora() {
 			hasLora = append(hasLora, e.Name())
 		}
 	}
+	// 2026-09-04:PDD 文件(trunk+head bank 单文件)节点从 models/pdd_acc 读,
+	// 不在 loras——存在性判定须两目录任一命中,否则 PDD 配置会被误回退 4step
+	pddDir := filepath.Join(ctx.sharedModels, "pdd_acc")
+	if pd, perr := os.ReadDir(pddDir); perr == nil {
+		for _, e := range pd {
+			if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".safetensors") {
+				hasLora = append(hasLora, e.Name())
+			}
+		}
+	}
 	if len(hasLora) == 0 {
 		return
 	}
@@ -519,7 +536,7 @@ func (ctx *manjuCtx) normalizeTurboLora() {
 	}
 	fix := func(key, pat string) string {
 		cur := strings.TrimSpace(str(ctx.R[key]))
-		if cur == "" || fileExists(filepath.Join(loraDir, cur)) {
+		if cur == "" || fileExists(filepath.Join(loraDir, cur)) || fileExists(filepath.Join(pddDir, cur)) {
 			return ""
 		}
 		if fb := firstOf(pat); fb != "" && fb != cur {
