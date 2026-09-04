@@ -15,7 +15,6 @@ import wave
 import pyarrow.parquet as pq
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SHARD = os.path.join(HERE, "shard0.parquet")
 
 
 def wav_bytes_len(b):
@@ -34,13 +33,14 @@ def save_wav(b, path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--npc", default="")
+    ap.add_argument("--shard", default="shard0.parquet")
     ap.add_argument("--out", default="")
     ap.add_argument("--min-sec", type=float, default=6.0)
     ap.add_argument("--max-sec", type=float, default=18.0)
     ap.add_argument("--limit", type=int, default=6)
     args = ap.parse_args()
 
-    t = pq.read_table(SHARD, columns=["npcName", "text", "audio"])
+    t = pq.read_table(os.path.join(HERE, args.shard), columns=["npcName", "text", "audio"])
     d = t.to_pydict()
     n = len(d["npcName"])
     print("分片总条数:", n)

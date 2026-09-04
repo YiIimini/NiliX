@@ -59,3 +59,4 @@ tools/voice_src/*.parquet
 tools/voice_src/*/*.wav
 tools/voice_src/*/*.mp3
 internal/manju/analysis/
+tools/voice_src/*.wav
