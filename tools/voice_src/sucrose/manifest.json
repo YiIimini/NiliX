@@ -1,0 +1,17 @@
+[
+ {
+  "file": "sucrose_01_4.0s.wav",
+  "sec": 4.0,
+  "text": "#咦，旅行者和{PLAYERAVATAR#SEXPRO[INFO_MALE_PRONOUN_HE|INFO_FEMALE_PRONOUN_SHE]}的朋友们也在这儿，你们好呀！"
+ },
+ {
+  "file": "sucrose_02_4.0s.wav",
+  "sec": 4.0,
+  "text": "#咦，旅行者和{PLAYERAVATAR#SEXPRO[INFO_MALE_PRONOUN_HE|INFO_FEMALE_PRONOUN_SHE]}的朋友们也在这儿，你们好呀！"
+ },
+ {
+  "file": "sucrose_03_3.4s.wav",
+  "sec": 3.4,
+  "text": "意思是说，你也没有进展？"
+ }
+]

@@ -6388,6 +6388,9 @@ func (ctx *manjuCtx) assignedVoiceFor(cid string) string {
 
 // autoVoiceFor 自动音色匹配:按角色卡 种族/阵营/性别/年龄 返回音色库 Key
 // (voice_lib 权威音色文件,详见 manjuVoiceLibFor)。返回 "" = 无角色卡。
+// 2026-09-04 创作侧音色确认:角色卡 voice_lib 字段(声源档位 key,技能侧创作时
+// 必填——主角好听系/反派不好听系对位由创作者把关)最优先;合法值校验(manjuVoiceLibFor
+// 命中),非法值忽略走自动匹配(渲染不阻塞,体检侧另行提示)。
 func (ctx *manjuCtx) autoVoiceFor(cid string) string {
 	c := ctx.charInfoFor(cid)
 	if c == nil {
@@ -6397,6 +6400,11 @@ func (ctx *manjuCtx) autoVoiceFor(cid string) string {
 	age := str(c["age"])
 	role := str(c["role"])
 	species := str(c["species"])
+	if vl := str(c["voice_lib"]); vl != "" {
+		if manjuVoiceLibFor(vl) != nil {
+			return vl
+		}
+	}
 	// 非人种族(灵宠/妖兽/神兽/精怪/鬼物/机械):萌系活泼声
 	if species != "" && species != "人" {
 		return "beast_cute"

@@ -69,6 +69,8 @@ func manjuHealthCheck(ctx *manjuCtx) []manjuHealthItem {
 	// image_prompt 需 ≥4 类具体五官特征+≥1 独有印记、无泛化词(handsome face 等),
 	// 与技能侧 SKILL.md 面容独特性硬规范同口径。不达标→warn 提示(定妆图会撞脸)。
 	items = append(items, manjuFaceFeatureItems(ctx)...)
+	// 2026-09-04 创作侧音色确认:voice_lib(声源档位)缺失/非法提示
+	items = append(items, manjuVoiceLibItems(ctx)...)
 	// 3. LLM 配置
 	if ctx.llm == nil || ctx.llm.apiKey == "" {
 		items = append(items, manjuHealthItem{Key: "llm", Label: "LLM 配置", Status: "bad", Detail: "未填 DeepSeek Key", FixHint: "设置 → 智能体调度 → 填 Key 并应用/保存"})
@@ -983,6 +985,65 @@ var manjuFaceGenericRX = regexp.MustCompile(`(?i)handsome face|fair face|standar
 
 // manjuFaceWeakness 单卡面容检测:返回不达标原因(空=达标)。
 // 特征类别≥4 且(有印记或胡须)且无泛化词。
+// manjuVoiceLibItems 配音音色档位确认体检(2026-09-04,技能侧创作时绑定 voice_lib):
+// 主要人类角色卡缺 voice_lib 或值不在音色库 → WARN(附真实音源档位清单速查)。
+// 非人种/物品(minor/影灵/species!=人)不适用。缺失时渲染端按性别年龄自动匹配
+// (不阻塞),但主角好听/反派不好听的对位由创作时确认才是本字段的意义。
+func manjuVoiceLibItems(ctx *manjuCtx) []manjuHealthItem {
+	roots := []string{}
+	if ctx.workdir != "" {
+		roots = append(roots, filepathJoin(ctx.workdir, "素材"))
+	}
+	if d := ctx.novelRootDir(); d != "" {
+		roots = append(roots, filepathJoin(d, "素材"))
+	}
+	charFile := firstExisting(roots, "人物生成提示词.md")
+	if charFile == "" {
+		return nil
+	}
+	b, err := os.ReadFile(charFile)
+	if err != nil {
+		return nil
+	}
+	cards := parseCharCards(string(toUTF8(b)), manjuAssetStyle(ctx.style), manjuStyleIs3D(ctx.style))
+	missing, invalid := []string{}, []string{}
+	for _, c := range cards {
+		id, _ := c["id"].(string)
+		if id == "" || c["minor"] == true {
+			continue
+		}
+		if strings.Contains(id, "影灵") || strings.Contains(id, "影子") {
+			continue
+		}
+		if sp := str(c["species"]); sp != "" && sp != "人" {
+			continue
+		}
+		vl := str(c["voice_lib"])
+		if vl == "" {
+			missing = append(missing, id)
+		} else if manjuVoiceLibFor(vl) == nil {
+			invalid = append(invalid, id+"("+vl+")")
+		}
+	}
+	if len(missing) == 0 && len(invalid) == 0 {
+		return []manjuHealthItem{{Key: "voice_lib", Label: "配音音色档位", Status: "ok",
+			Detail: "全部主要角色已绑定 voice_lib(创作侧确认声源)"}}
+	}
+	var shows []string
+	if len(missing) > 0 {
+		shows = append(shows, "未绑定: "+strings.Join(missing, "、"))
+	}
+	if len(invalid) > 0 {
+		shows = append(shows, "非法值: "+strings.Join(invalid, "、"))
+	}
+	txt := strings.Join(shows, ";")
+	if len(txt) > 120 {
+		txt = txt[:120] + "…"
+	}
+	return []manjuHealthItem{{Key: "voice_lib", Label: "配音音色档位", Status: "warn", Detail: txt,
+		FixHint: "人物卡补 voice_lib 字段(NiliX 音色档位 key):主角/正角选好听系 male_sun/male_sun_2/boy_teen/boy_teen_2/female_warm/female_warm_2/girl_lively/girl_lively_2/child_girl/male_mag/male_mag_2,反派选不好听系 male_deep/male_deep_2/female_deep/female_deep_2,旁白 male_narrator/female_narrator,童声/老年/方言另有档位(voice_import.py --list 全量);同剧同性龄角色用 _2 变体互异"}}
+}
+
 func manjuFaceWeakness(img string) string {
 	// "过分工整"伪善人设词豁免(宋明堂 dead-regular features 实锤,非泛化美颜)
 	img = regexp.MustCompile(`(?i)dead-regular features`).ReplaceAllString(img, "")

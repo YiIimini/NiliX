@@ -78,6 +78,9 @@ var (
 	// 角色卡音色字段(2026-08-30 ver15 技能侧配置):节内「音色:/声线:/方言:」行
 	// (记忆点列表项常见「- 音色:xxx」,允许列表前缀)
 	reCharVoiceLine = regexp.MustCompile(`(?m)^\s*(?:[-*]+\s*)?(?:音色|声线|方言)\s*[：:]\s*([^\n]+)`)
+	// 配音档位行(2026-09-04 创作侧音色确认):「配音档位:/voice_lib:」→ card["voice_lib"]
+	// (NiliX 音色库档位 key,autoVoiceFor 最优先)
+	reCharVoiceLibLine = regexp.MustCompile(`(?m)^\s*(?:[-*]+\s*)?(?:配音档位|voice_lib)\s*[：:]\s*([A-Za-z_0-9]+)`)
 	// 素材代码块(英文提示词)
 	reMdCodeBlock = regexp.MustCompile("(?s)```[^\\n]*\\n(.*?)\\n```")
 	// 台词:(S1)沈玉衡:"晚老板..."(非贪婪到闭合引号,多句逐条匹配;兼容无引号句)
@@ -1685,6 +1688,13 @@ func parseCharCards(text, assetStyle string, is3D bool) []map[string]any {
 		if vm := reCharVoiceLine.FindStringSubmatch(sec.body); vm != nil {
 			if v := strings.TrimSpace(vm[1]); v != "" && !strings.HasPrefix(v, "（") {
 				card["voice"] = v
+			}
+		}
+		// 配音档位(2026-09-04 创作侧音色确认):「配音档位:male_sun」行 → voice_lib,
+		// 渲染端 autoVoiceFor 最优先(合法值校验在消费侧,解析侧宽松收字母数字下划线)
+		if vm := reCharVoiceLibLine.FindStringSubmatch(sec.body); vm != nil {
+			if v := strings.TrimSpace(vm[1]); v != "" {
+				card["voice_lib"] = v
 			}
 		}
 		if role != "" {

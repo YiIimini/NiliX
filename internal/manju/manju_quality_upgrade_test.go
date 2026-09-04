@@ -277,3 +277,25 @@ func TestManjuEnvCheckModelLines(t *testing.T) {
 		}
 	}
 }
+
+// TestAutoVoiceForVoiceLibPriority 2026-09-04 创作侧音色确认:角色卡 voice_lib
+// (声源档位 key)最优先于 role/性别/年龄自动匹配;非法值忽略回退自动。
+func TestAutoVoiceForVoiceLibPriority(t *testing.T) {
+	ctx := &manjuCtx{}
+	ctx.charInfo = map[string]map[string]any{}
+	// 反派角色但创作时显式绑定好听档 male_sun → 尊重创作选择
+	ctx.charInfo["甲"] = map[string]any{"gender": "男", "age": "25岁", "role": "反派", "species": "人", "voice_lib": "male_sun"}
+	if got := ctx.autoVoiceFor("甲"); got != "male_sun" {
+		t.Fatalf("voice_lib 应最优先, got %q", got)
+	}
+	// 非法值 → 回退自动匹配(反派→male_deep)
+	ctx.charInfo["乙"] = map[string]any{"gender": "男", "age": "25岁", "role": "反派", "species": "人", "voice_lib": "不存在的档位"}
+	if got := ctx.autoVoiceFor("乙"); got != "male_deep" {
+		t.Fatalf("非法 voice_lib 应回退自动匹配, got %q", got)
+	}
+	// 未绑定 → 自动匹配照旧
+	ctx.charInfo["丙"] = map[string]any{"gender": "女", "age": "8岁", "role": "正角", "species": "人"}
+	if got := ctx.autoVoiceFor("丙"); got != "child_girl" {
+		t.Fatalf("无 voice_lib 走自动匹配, got %q", got)
+	}
+}
