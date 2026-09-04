@@ -72,8 +72,18 @@
 | lib_boy_teen_2(少年·清亮) | 雷泽 | 野性直觉 | 正 |
 | lib_male_sun_2(青年·清爽) | 托马 | 爽朗可靠 | 正 |
 
-四大反派档全配"不好听"系声线,主角/正面档全好听——正反声线对位完成(17 档位真实干声)。
-待补(仍是 edge-tts):beast_cute×2/child_boy×2/elder 系/female_mature×2/male_mag_3/
-female_narrator/方言×6/港台×4 等 22 档——用 `--list` 查看,渠道见上表,
+**终态 28/39 档真实干声**(多轮补齐):第四轮再补 child_girl_2←七七 / female_mature←申鹤
+·_2←坎蒂丝 / female_narrator←琴 / male_mag_3←赛诺 / beast_cute←早柚·_2←砂糖 /
+male_elder←钟离(帝王厚重)·_2←荒泷一斗(浑厚大嗓) / child_boy←五郎·_2←鹿野院平藏。
+
+**剩余 12 档(方言6/港台4/老年女2)确认无开源合法干声渠道,暂留 edge-tts**:
+- 方言×6(东北/陕西/四川/河南/广西/湖南):开源世界无可直接下载的方言干声(数据堂/
+  海天瑞声全付费;Common Voice 无方言);
+- 港台×4(粤语/台普男女):Common Voice 有标注但 modelscope 镜像无音频文件;
+- 老年女×2:原神全角色无老年女声(数据集捞不到);方言/港台 10 档 edge-tts 用的是
+  **原生方言声源**(zh-CN-liaoning/shaanxi/zh-HK/zh-TW,edge-tts 里效果最好的用法,
+  非普通话合成改造);真"合成味"残留仅 female_elder×2(基音偏移)。
+- **补齐路径(三选一,用户决策)**:①付费数据集(数据堂方言 30h 级)②GPT-SoVITS 整合包
+  +方言/老年模型克隆 ③自录/用户提供素材,`voice_import.py` 一条命令导入。——用 `--list` 查看,渠道见上表,
 `voice_import.py --src 干声 --key <档位>` 一条命令替换。多句拼接成 8-17s 参考
 (ffmpeg concat)更贴官方 10s+ 建议。
