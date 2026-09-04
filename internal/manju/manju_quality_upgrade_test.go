@@ -386,3 +386,17 @@ func TestFaceMarkHairpin(t *testing.T) {
 		t.Fatalf("含发卡印记应达标, got %q", why)
 	}
 }
+
+// TestMaleOracleTier 2026-09-04 神谕档回归:male_oracle 在库(autoVoiceFor 消费链)+九霄绑定生效。
+func TestMaleOracleTier(t *testing.T) {
+	if manjuVoiceLibFor("male_oracle") == nil {
+		t.Fatal("male_oracle 应在音色库表")
+	}
+	ctx := &manjuCtx{}
+	ctx.charInfo = map[string]map[string]any{
+		"九霄": {"gender": "男", "age": "老年", "role": "反派", "species": "主脑投影", "voice_lib": "male_oracle"},
+	}
+	if got := ctx.autoVoiceFor("九霄"); got != "male_oracle" {
+		t.Fatalf("九霄 voice_lib 应最优先, got %q", got)
+	}
+}

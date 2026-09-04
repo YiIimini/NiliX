@@ -1,1 +1,12 @@
-[]
+[
+ {
+  "file": "herald_01_2.4s.wav",
+  "sec": 2.4,
+  "text": "#「{PLAYERAVATAR#SEXPRO[INFO_MALE_PRONOUN_GIRLD|INFO_FEMALE_PRONOUN_BOYD]}」殿下。"
+ },
+ {
+  "file": "herald_02_2.3s.wav",
+  "sec": 2.3,
+  "text": "#「{PLAYERAVATAR#SEXPRO[INFO_MALE_PRONOUN_GIRLD|INFO_FEMALE_PRONOUN_BOYD]}」殿下。"
+ }
+]

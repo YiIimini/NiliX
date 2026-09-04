@@ -1464,6 +1464,7 @@ func manjuVoicePhraseFor(key string) string {
 		"male_deep_2":     "a sinister man's voice, hoarse and unhurried, talks with a lurking half-sneer",
 		"female_deep":     "a cold sharp woman's voice, clipped and precise, every word landing like a blade",
 		"female_deep_2":   "a stern woman's voice, icy and measured, speaks with chilling calm before striking",
+		"male_oracle":     "a vast genderless voice of divine decree, deep and cavernous with long hollow reverberation, each pronouncement delivered slowly from everywhere at once",
 		// 方言/区域(2026-08-30 ver15):口音描述注入 Audio 定义行——H3 按描述
 		// 带口音生成(edge-tts 无四川/河南/广西/湖南方言声源,参考音频只锁音色基底)
 		"cn_dongbei":  "a woman speaking Mandarin with a cheerful Northeastern accent, hearty and loud",

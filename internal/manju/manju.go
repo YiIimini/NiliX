@@ -3225,6 +3225,10 @@ var manjuVoiceLib = []manjuVoiceLibItem{
 	{"male_deep_2", "zh-CN-YunxiNeural", "反派 · 沙哑男声", "男", "通用", "沙哑", "-10Hz", "-10%"},
 	{"female_deep", "zh-CN-XiaoxiaoNeural", "反派 · 冷冽女声", "女", "通用", "冷冽", "-6Hz", "-8%"},
 	{"female_deep_2", "zh-CN-XiaoxiaoNeural", "反派 · 肃杀女声", "女", "通用", "肃杀", "-8Hz", "-10%"},
+	// 2026-09-04 神谕档(九霄·主脑投影实配):无面光体/天道/系统主脑类"空旷神谕感"
+	// 专用——外部音源(钟离基底 ffmpeg 空旷化:微降调+大空间回声+低通),edge-tts
+	// 参数仅为兜底占位(有 .src 外部音源时不会用到)
+	{"male_oracle", "zh-CN-YunjianNeural", "神谕 · 空旷男声", "男", "通用", "空旷神谕", "-12Hz", "-14%"},
 	{"beast_cute", "zh-CN-XiaoyiNeural", "萌系 · 灵宠兽类", "通用", "通用", "呆萌", "+12Hz", "+8%"},
 	{"beast_cute_2", "zh-CN-XiaoyiNeural", "萌系 · 奶音兽类", "通用", "通用", "奶音", "+16Hz", "+10%"},
 	// ---- 叙述(旁白专属,autoVoiceFor 不返回;manjuOffscreenBindings 绑定客观旁白) ----
