@@ -120,6 +120,7 @@ func manjuIsOffScreenSpeaker(speaker string) bool {
 func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogger) []map[string]any {
 	firstShot := map[string]int{}
 	sNum := map[string]string{}
+	appearShots := map[string][]int{} // 2026-09-04 跨镜扫描:说话人出现过的全部镜号(台词+characters 声明)
 	var order []string
 	for i := range raws {
 			for _, m := range reSpeakerTag.FindAllStringSubmatch(raws[i].Dialogue, -1) {
@@ -140,6 +141,7 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 				firstShot[name] = raws[i].ID
 				order = append(order, name)
 			}
+			appearShots[name] = append(appearShots[name], raws[i].ID)
 			sNum[name] = m[1]
 		}
 	}
@@ -171,15 +173,33 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 	claimed := map[int]map[string]bool{} // 镜号 → 该镜已被其他群演认领的主体描述
 	out := []map[string]any{}
 	for _, name := range order {
-		raw := rawByID[firstShot[name]]
+		// 2026-09-04 跨镜扫描(被论斤 EP01 实锤:小蒋/回收员/地磅电子音三名同一人,
+		// 首开镜(镜3)只有小铁的 Subject 行,0 分兜底错拿 Subject 1=小铁脸,三套错卡
+		// 入库):首开镜无正分认领时,依次扫该角色后续出现镜,找有归属证据(>0 分)的行
 		desc := ""
-		if raw != nil && raw.H3Prompt != "" {
+		for _, sid := range appearShots[name] {
+			if desc != "" {
+				break
+			}
+			raw := rawByID[sid]
+			if raw == nil || raw.H3Prompt == "" {
+				continue
+			}
 			// 台词句 "(SN) says:" 前的说话人描述 → 词集(与 Subject 行词重叠匹配归属)
 			voiceWords := map[string]map[string]bool{}
 			for _, m := range reH3VoiceDesc.FindAllStringSubmatch(raw.H3Prompt, -1) {
-				voiceWords[m[2]] = words(m[1])
+				// 2026-09-04 句界截断(被论斤实锤:捕获组非贪婪仍会吞掉前文——
+				// "The android works. The scrap-metal worker…(S2) says" 把别人的
+				// android 混进词集 → 群演错认主角行 → 三名同错卡):只取紧邻
+				// says 的最后一句作说话人描述
+				d := m[1]
+				if i := strings.LastIndex(d, "."); i >= 0 && i < len(d)-1 {
+					d = d[i+1:]
+				}
+				voiceWords[m[2]] = words(d)
 			}
 			vw := voiceWords[sNum[name]]
+			fmt.Printf("DBG sid=%d vw=%v\n", sid, vw)
 			type cand struct {
 				line  string
 				score int
@@ -200,9 +220,11 @@ func scriptMinorCast(raws []scriptShotRaw, known map[string]bool, lg *manjuLogge
 				}
 				cands = append(cands, cand{c, sc})
 			}
+			// 2026-09-04:0 分不认领(旧版 best=第一个 cand,首开镜常是 Subject 1=
+			// 另一角色的行——三名群演错拿主角脸的根源);有正分才认领
 			best := -1
 			for i, c := range cands {
-				if best < 0 || c.score > cands[best].score {
+				if c.score > 0 && (best < 0 || c.score > cands[best].score) {
 					best = i
 				}
 			}

@@ -332,3 +332,32 @@ func TestVoiceBindingsSkipSilentShot(t *testing.T) {
 		t.Fatal("内心戏镜应保留音色绑定(内心画外音需要)")
 	}
 }
+
+// TestMinorCastNoWrongSubjectFallback 2026-09-04 回归(被论斤实锤):无卡说话人
+// 建卡形象归属——首开镜只有他人 Subject 行时不得 0 分兜底错拿(三名群演错拿
+// 主角小铁脸→三套同错资产入库);跨镜扫描后续出现镜找正分行;全 0 分用通用群演句。
+func TestMinorCastNoWrongSubjectFallback(t *testing.T) {
+	raws := []scriptShotRaw{
+		{ID: 1, Dialogue: "(S1)小铁:「今天天气不错。」", H3Prompt: "subject_definitions:\n<Subject 1> is a young female Chinese caregiver android in <Picture 1>, amber eyes.\n\ndetailed_description:\n[Shot 1] The young female caregiver android (S1) says: <d>[Chinese] 你好。</d>"},
+		{ID: 3, Dialogue: "(S2)小蒋:「院里接的上头文件。」", H3Prompt: "subject_definitions:\n<Subject 1> is a young female Chinese caregiver android in <Picture 1>, amber eyes.\n\ndetailed_description:\n[Shot 3] The android works. The scrap-metal worker in grey jacket (S2) says: <d>[Chinese] 文件。</d>"},
+		{ID: 5, Dialogue: "(S2)小蒋:「过磅了。」", H3Prompt: "subject_definitions:\n<Subject 1> is a young female Chinese caregiver android in <Picture 1>, amber eyes.\n<Subject 2> is a scrap-metal recycler in <Picture 2>, thickset man grey work jacket.\n\ndetailed_description:\n[Shot 5] The thickset scrap-metal worker with grey jacket (S2) says: <d>[Chinese] 过磅。</d>"},
+	}
+	st := manjuTask{}
+	cards := scriptMinorCast(raws, map[string]bool{"小铁": true}, &manjuLogger{state: &st})
+	var jiang *map[string]any
+	for i := range cards {
+		if cards[i]["id"] == "小蒋" {
+			jiang = &cards[i]
+		}
+	}
+	if jiang == nil {
+		t.Fatal("小蒋应建群演卡")
+	}
+	ip := str((*jiang)["image_prompt"])
+	if strings.Contains(ip, "caregiver android") {
+		t.Fatalf("小蒋形象不得错拿小铁 Subject 1(0 分兜底 bug), got %q", ip)
+	}
+	if !strings.Contains(ip, "scrap-metal") {
+		t.Fatalf("小蒋应跨镜认领镜5 的 scrap-metal 行, got %q", ip)
+	}
+}

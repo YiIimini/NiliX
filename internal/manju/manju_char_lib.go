@@ -208,6 +208,9 @@ func (ctx *manjuCtx) manjuCharLibReuse(m map[string]any, cmap map[string]any, lg
 // manjuCharLibStore 角色资产入库(2026-09-02):把项目 assets/characters 下的
 // 该角色全部资产 + 角色卡复制到 char_lib/<角色名>/。调用时机:角色全部资产
 // (主图+视图+Q版)生成完成后。幂等(重复入库覆盖同指纹)。
+// 2026-09-04 同形象合并(回收员/地磅电子音/小蒋三套同脸资产实锤):六字段去名
+// 形象指纹已存在于库(不同名同形象=同一人的不同称呼)→ 不新建条目直接跳过——
+// 跨名复用走 look 指纹匹配自动命中已有条目,库里一种形象只存一份。
 func (ctx *manjuCtx) manjuCharLibStore(m map[string]any) error {
 	if paths.CharLibDir == "" && paths.ManjuRootDir == "" {
 		return nil // 路径未解析(测试环境):跳过
@@ -215,6 +218,9 @@ func (ctx *manjuCtx) manjuCharLibStore(m map[string]any) error {
 	cid := str(m["id"])
 	if cid == "" {
 		return nil
+	}
+	if _, libCid := manjuCharLibMatch(m); libCid != "" && libCid != sanitizeFileName(cid) {
+		return nil // 同形象已在库(名字不同):复用已有条目,不新建重复条目
 	}
 	libDir := manjuCharLibPath(cid)
 	_ = os.MkdirAll(libDir, 0o755)
