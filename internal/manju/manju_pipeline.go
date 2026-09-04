@@ -7896,23 +7896,28 @@ func manjuEnvCheck(configPath string) string {
 		b.WriteString("  ❌ 离线: " + err.Error() + "\n")
 		ok = false
 	}
-	check := func(label, name string) string {
-		p := filepath.Join(ctx.sharedModels, label, name)
-		if fileExists(p) {
-			return "  ✅ " + name + "\n"
+	// 2026-09-04:模型检查支持备选目录(同 missingModels 口径)——PDD Acc 单文件
+	// 在 pdd_acc 目录;顺带补 turbo_lora_r2v 环境检查
+	check := func(name string, dirs ...string) string {
+		if name == "" {
+			return ""
+		}
+		for _, d := range dirs {
+			if fileExists(filepath.Join(ctx.sharedModels, d, name)) {
+				return "  ✅ " + name + "\n"
+			}
 		}
 		ok = false
 		return "  ❌ " + name + "（未找到）\n"
 	}
 	b.WriteString("🧠 H3 模型:\n")
-	b.WriteString(check("diffusion_models", str(ctx.R["unet_ref2va"])))
-	b.WriteString(check("diffusion_models", str(ctx.R["unet_fl2va"])))
-	b.WriteString(check("text_encoders", str(ctx.R["clip"])))
-	b.WriteString(check("vae", str(ctx.R["vae_video"])))
-	b.WriteString(check("vae", str(ctx.R["vae_audio"])))
-	if l := str(ctx.R["turbo_lora"]); l != "" {
-		b.WriteString(check("loras", l))
-	}
+	b.WriteString(check(str(ctx.R["unet_ref2va"]), "diffusion_models", "unet"))
+	b.WriteString(check(str(ctx.R["unet_fl2va"]), "diffusion_models", "unet"))
+	b.WriteString(check(str(ctx.R["clip"]), "text_encoders", "clip"))
+	b.WriteString(check(str(ctx.R["vae_video"]), "vae"))
+	b.WriteString(check(str(ctx.R["vae_audio"]), "vae"))
+	b.WriteString(check(str(ctx.R["turbo_lora"]), "loras", "pdd_acc"))
+	b.WriteString(check(str(ctx.R["turbo_lora_r2v"]), "loras", "pdd_acc"))
 	if sageEnabled(ctx.R) {
 		b.WriteString("⚡ SageAttention 加速(已开启):\n")
 		sageNode := ""
