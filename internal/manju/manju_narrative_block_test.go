@@ -380,3 +380,23 @@ func TestParseScriptJSONPlaceholderNone(t *testing.T) {
 		t.Fatalf("占位符行后真实台词应保留, got %q", raws[1].Dialogue)
 	}
 }
+
+// 质检重试轮数持久化(2026-09-05:qcRerender 内存 map 跨运行重置 → 续跑每次都从
+// 同一 seed 序列开始 = 字节级复刻旧幻觉,万物 EP01 镜2/3 两轮同 seed 实锤)
+func TestQcRerunCountsPersist(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &manjuCtx{workdir: dir, qcRerender: map[int]int{}}
+	ctx.loadQcRerunCounts()
+	if len(ctx.qcRerender) != 0 {
+		t.Fatalf("空侧车应空表")
+	}
+	ctx.qcRerender[2] = 1
+	ctx.qcRerender[3] = 2
+	ctx.saveQcRerunCounts()
+	// 新 ctx(模拟重启后新进程)恢复
+	ctx2 := &manjuCtx{workdir: dir}
+	ctx2.loadQcRerunCounts()
+	if ctx2.qcRerender[2] != 1 || ctx2.qcRerender[3] != 2 {
+		t.Fatalf("重试轮数未跨运行持久: %v", ctx2.qcRerender)
+	}
+}

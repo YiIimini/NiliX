@@ -294,8 +294,9 @@ func newManjuCtx(configPath, episode, chapters, only, novel string) (*manjuCtx, 
 		comfyInput:   comfyIn,
 		sharedModels: filepath.Join(paths.ComfySharedDir, "models"),
 		workdir:      str(P["workdir"]),
-		qcRerender:   map[int]int{},
 	}
+	// 质检重试轮数从侧车恢复(跨运行单调,防同 seed 复刻幻觉)
+	ctx.loadQcRerunCounts()
 	// 视频脚本直出模式:config paths.script 指向 H3 官方格式分镜脚本 md 时启用——
 	// ctx.novel 切换到脚本文件(复用指纹/复用校验/章节范围标记),方案由 manjuScriptSystem 直出。
 	// 章节范围固定 "script"(脚本无章节概念),保证复用校验稳定;脚本文件变化(指纹)强制重生成。
@@ -7240,6 +7241,7 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 					continue
 				}
 				ctx.qcRerender[s.ID] = reruns + 1
+				ctx.saveQcRerunCounts() // 持久化:跨续跑单调递增,同 seed 复刻旧幻觉根治
 				_ = os.Remove(dst)
 				lg.logf("  ♻️ 镜头 " + strconv.Itoa(s.ID) + " 质检未过,换 seed 重渲(第 " + strconv.Itoa(reruns+1) + " 次)")
 			} else {
@@ -7575,6 +7577,18 @@ func stageQC(ctx *manjuCtx, lg *manjuLogger) error {
 	// 跳过镜头(用户决定不修,质检不计失败、合成时排除):从失败集中剔除
 	skip := ctx.qcSkipSet()
 	failed := ctx.qcFailedShots()
+	// 重试计数复位(2026-09-05 持久化配套):质检通过的镜头清掉历史重试轮数——
+	// 之后该镜再失败时从第 1 轮重新计,不会一直顶着旧轮数提前触顶
+	changed := false
+	for sid := range ctx.qcRerender {
+		if !failed[sid] {
+			delete(ctx.qcRerender, sid)
+			changed = true
+		}
+	}
+	if changed {
+		ctx.saveQcRerunCounts()
+	}
 	// 基础设施失败防线(审计 S4):脚本崩溃/python 缺失/报告未落盘 → 失败集为空,
 	// 此时 err != nil 必须显式报错,绝不静默"通过"放坏片进成片
 	if err != nil && len(failed) == 0 {
@@ -7725,6 +7739,39 @@ func expandShotList(s string) string {
 // qcReportPath 质检报告路径:<workdir>/qc/<ep>_qc.json(逐集独立,渲染阶段消费后清除)
 func (ctx *manjuCtx) qcReportPath() string {
 	return filepath.Join(ctx.workdir, "qc", ctx.episode+"_qc.json")
+}
+
+// qcRerunPath 质检自愈重试轮数侧车(2026-09-05:qcRerender 是进程内存 map,跨运行
+// 重置——续跑每次都从第 1 次尝试的同一 seed 序列开始=字节级复刻旧幻觉,重试
+// 永远不收敛(万物 EP01 镜2/3 两轮同 seed 实锤)。轮数持久化,跨运行单调递增,
+// 换 seed 真正生效;重试成功(QC 过)后清零复位。
+func (ctx *manjuCtx) qcRerunPath() string {
+	return filepath.Join(ctx.workdir, "qc", ctx.episode+"_rerun.json")
+}
+
+func (ctx *manjuCtx) loadQcRerunCounts() {
+	ctx.qcRerender = map[int]int{}
+	if b, err := os.ReadFile(ctx.qcRerunPath()); err == nil {
+		var m map[string]int
+		if json.Unmarshal(b, &m) == nil {
+			for k, v := range m {
+				if n, err := strconv.Atoi(k); err == nil && v > 0 {
+					ctx.qcRerender[n] = v
+				}
+			}
+		}
+	}
+}
+
+func (ctx *manjuCtx) saveQcRerunCounts() {
+	out := map[string]int{}
+	for k, v := range ctx.qcRerender {
+		if v > 0 {
+			out[strconv.Itoa(k)] = v
+		}
+	}
+	b, _ := json.Marshal(out)
+	_ = atomicWrite(ctx.qcRerunPath(), b)
 }
 
 // qcFailedShots 读取最近一次质检报告中的失败镜头号(无报告/文件损坏返回空)
