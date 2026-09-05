@@ -92,6 +92,37 @@ def match_window(line, segs):
     return None
 
 
+FT_DIR = r"D:/Ai/NiliX/asset_lib/voices/ft"
+_loaded_model = {}
+
+
+def ft_weights(key):
+    """微调声模优先:asset_lib/voices/ft/<key>/*.pth 存在即返回(取最新)。"""
+    d = os.path.join(FT_DIR, key)
+    if os.path.isdir(d):
+        pths = [os.path.join(d, x) for x in os.listdir(d) if x.endswith(".pth")]
+        if pths:
+            return max(pths, key=os.path.getmtime)
+    return None
+
+
+def ensure_model(key, api):
+    """该档微调声模切到服务(幂等:服务当前档=目标则跳过;失败回落零射击)。"""
+    w = ft_weights(key)
+    if not w:
+        return
+    if _loaded_model.get("sovits") == w:
+        return
+    q = urllib.parse.urlencode({"weights_path": w})
+    try:
+        with urllib.request.urlopen(api + "/set_sovits_weights?" + q, timeout=600) as r:
+            if b"success" in r.read():
+                _loaded_model["sovits"] = w
+                print("  [model] 微调声模上线:", os.path.basename(w))
+    except Exception as e:
+        print("  [model-warn] 切换失败,回落零射击:", str(e)[:80])
+
+
 def synth(text, key, speed, api):
     wav = os.path.join(GS_DIR, key + ".wav")
     txt = os.path.join(GS_DIR, key + ".txt")
@@ -128,6 +159,7 @@ def revoice_shot(src, dst, windows, api, speed, tmpdir, duck_spans):
     mix_labels = []
     for i, (t0, t1, key, text) in enumerate(windows):
         win = max(t1 - t0, 0.5)
+        ensure_model(key, api)
         data, err = synth(text, key, speed, api)
         if not data:
             print("    [tts-fail] 镜内句 %d: %s" % (i + 1, err))
