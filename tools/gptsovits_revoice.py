@@ -4,7 +4,7 @@
 原理:H3 渲染照常出声(口型/节奏由它定)→ 后期把台词人声换成 GPT-SoVITS 克隆声:
   ①读 plan:每镜 <d>[Chinese] 台词逐句 + 说话角色(音色绑定 voice_lib 档)
   ②ASR 原音频定位每句时间窗(faster-whisper,与 QC 同源)
-  ③逐句调 GPT-SoVITS API(/tts,声库 gs 参考件+1.25 默认语速)
+  ③逐句调 GPT-SoVITS API(/tts,声库 gs 参考件+1.05 默认语速(2026-09-05 成片语境回退:1.25 单听合适但配画面偏快+口型赶))
   ④ffmpeg:原声在台词窗内压 -18dB(保环境音/配乐),克隆声按窗起点叠入
   ⑤输出 revoice/<EP>/NN.mp4(不动原 clips;合成时优先取 revoice 版)
 
@@ -127,6 +127,7 @@ def revoice_shot(src, dst, windows, api, speed, tmpdir, duck_spans):
     filters = []
     mix_labels = []
     for i, (t0, t1, key, text) in enumerate(windows):
+        win = max(t1 - t0, 0.5)
         data, err = synth(text, key, speed, api)
         if not data:
             print("    [tts-fail] 镜内句 %d: %s" % (i + 1, err))
@@ -134,21 +135,48 @@ def revoice_shot(src, dst, windows, api, speed, tmpdir, duck_spans):
         w = os.path.join(tmpdir, "line_%d.wav" % i)
         io.open(w, "wb").write(data)
         d = dur_of(w)
-        win = max(t1 - t0, 0.5)
-        if d > win * 1.02:
-            tempo = min(d / win, 1.6)
+        # 口型对齐核心(2026-09-05 用户验收:语速快+对不上嘴型):H3 的口型动画
+        # 跟着原声台词窗走,克隆声必须占满同一窗口——失配>8% 按窗口反推合成侧
+        # speed_factor 重合成(音质优于 atempo),残余再 atempo 微调(夹 0.85~1.4)
+        if abs(d - win) / win > 0.08:
+            adj = max(0.8, min(2.0, speed * d / win))
+            data2, err2 = synth(text, key, adj, api)
+            if data2:
+                io.open(w, "wb").write(data2)
+                d = dur_of(w)
+        if d > win * 1.02 or d < win * 0.98:
+            tempo = max(0.85, min(1.4, d / win))
             w2 = w
             w = os.path.join(tmpdir, "line_%d_t.wav" % i)
             subprocess.run([FFMPEG, "-y", "-v", "error", "-i", w2, "-filter:a",
                             "atempo=%.3f" % tempo, w], capture_output=True)
         delay = int(t0 * 1000)
+        # 克隆件输出后处理(与参考件预制同链,C 案):压残余混响与高频毛刺
+        w3 = w
+        w = os.path.join(tmpdir, "line_%d_clean.wav" % i)
+        d = dur_of(w3)
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-i", w3, "-af",
+                        "highpass=f=140,lowpass=f=6800,anlmdn=s=7:p=0.002:m=11,"
+                        "afade=t=in:st=0:d=0.005,afade=t=out:st=%.3f:d=0.005" % max(d - 0.005, 0),
+                        w], capture_output=True)
         filters.append("[%d:a]adelay=%d:all=1[v%d]" % (i + 1, delay, i))
         mix_labels.append("[v%d]" % i)
         inputs += ["-i", w]
     if not mix_labels:
         return False
-    duck_expr = "".join("between(t,%.2f,%.2f)+" % (t0, t1) for t0, t1 in duck_spans)
-    duck_expr = duck_expr.rstrip("+")
+    # 接缝伪影修复(2026-09-05 用户实锤"电子噪音只在成片"):帧级硬切在窗边界产生
+    # 咔啦声——每窗边界 ±8ms 线性斜坡过渡(下坡 1→0,上坡 0→1)
+    F = 0.008
+    # 标准梯形窗:下行坡 [t0-F,t0] 1→0,平台 [t0,t1] 0,上行坡 [t1,t1+F] 0→1。
+    # 多窗用 min 连接(任一窗激活即压),单表达式无重叠恒真段。
+    ramps = []
+    for t0, t1 in duck_spans:
+        ramps.append(
+            "min(1,"
+            "max(0,(%.4f-t)/%.4f)+"    # t0-F..t0 下坡: (t0-t)/F 当 t<=t0
+            "max(0,(t-%.4f)/%.4f))"    # t1..t1+F 上坡: (t-t1)/F 当 t>=t1
+            % (t0, F, t1, F))
+    duck_expr = "min(1," + ",".join(ramps) + ")"
     af = ("[0:a]volume='if(%s,0.0,1.0)':eval=frame[base];" % duck_expr +
           ";".join(filters) + ";[base]%samix=inputs=%d:duration=first:normalize=0[aout]"
           % ("".join(mix_labels), len(mix_labels) + 1))
@@ -166,7 +194,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("workdir")
     ap.add_argument("episode")
-    ap.add_argument("--speed", type=float, default=1.25)
+    ap.add_argument("--speed", type=float, default=1.05)
     ap.add_argument("--api", default="http://127.0.0.1:9880")
     ap.add_argument("--shots", default="", help="只处理指定镜(逗号分隔)")
     ap.add_argument("--narrator-key", default="male_sun", help="旁白/无绑定角色兜底音色档")
