@@ -176,7 +176,7 @@ def revoice_shot(src, dst, windows, api, speed, tmpdir, duck_spans):
     chain = "[0:a]"
     for t0, t1 in duck_spans:
         ramp = "max(0,min(1,(%.4f-t)/%.4f))+max(0,min(1,(t-%.4f)/%.4f))" % (t0, F, t1, F)
-        chain += "volume='if(min(1,%s),0.0,1.0)':eval=frame," % ramp
+        chain += "volume='if(min(1,%s),1.0,0.0)':eval=frame," % ramp
     chain += "anull[base];"
     af = (chain + ";".join(filters) +
           ";[base]%samix=inputs=%d:duration=first:normalize=0[aout]"
