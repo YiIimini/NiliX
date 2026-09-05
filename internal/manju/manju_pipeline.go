@@ -7952,7 +7952,7 @@ func (ctx *manjuCtx) runMicroVoiceover(lg *manjuLogger) {
 			tail = strings.Join(lines, " | ")
 		}
 		if err != nil {
-			lg.logf("  🎙 微创步骤失败(%s): %v %s", filepath.Base(script), err, tail)
+			lg.logf("  🎙 微创步骤失败(" + filepath.Base(script) + "): " + err.Error() + " " + tail)
 			return false
 		}
 		if tail != "" {
