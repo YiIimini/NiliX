@@ -7219,6 +7219,16 @@ func stageRender(ctx *manjuCtx, lg *manjuLogger) error {
 		}
 		lg.logf(fmt.Sprintf("[%d/%d] 镜头 %d: [%s] %s", i+1, len(selected), s.ID, s.Scene, s.Camera))
 		dst := filepath.Join(clipsEp, fmt.Sprintf("%02d.mp4", s.ID))
+		// 质检失败镜产物缺失(中断残留):也要走重试计数自增——此前该分支只处理
+		// "文件存在"的删旧重渲,产物缺失时直接用侧车旧计数渲染=复刻上一次的
+		// seed(万物 EP01 镜2 第三轮 seed=1691 复刻实锤)
+		if !fileExists(dst) && qcFailed[s.ID] {
+			if reruns := ctx.qcRerender[s.ID]; reruns < 2 {
+				ctx.qcRerender[s.ID] = reruns + 1
+				ctx.saveQcRerunCounts()
+				lg.logf("  ♻️ 镜头 " + strconv.Itoa(s.ID) + " 产物缺失且质检未过,按第 " + strconv.Itoa(reruns+1) + " 次重试(换 seed)")
+			}
+		}
 		if fileExists(dst) {
 			if fi, err := os.Stat(dst); err == nil && fi.Size() == 0 {
 				// 中断残留的 0 字节文件:跳过会让坏产物混进成片,QC 阶段才暴露,直接删除重渲
