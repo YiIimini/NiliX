@@ -7906,7 +7906,69 @@ func stageAssemble(ctx *manjuCtx, lg *manjuLogger) error {
 	if err := ctx.runMedia(lg, args...); err != nil {
 		return fmt.Errorf("合成失败: %w", err)
 	}
+	// 微创配音(2026-09-06 用户拍板路线:H3 原生为主,音色锁+幽灵静音+漏句补配):
+	// 成片后自动采集角色音色锁并产出 <EP>_成片_微创版.mp4;render.micro_voiceover=false 关闭。
+	// 独立产物不阻断主链(微创失败不影响原版成片)。
+	if v, _ := ctx.R["micro_voiceover"].(bool); !v {
+		lg.logf("  🎙 微创配音已关闭(render.micro_voiceover=false)")
+		return nil
+	}
+	ctx.runMicroVoiceover(lg)
 	return nil
+}
+
+// runMicroVoiceover 音色锁采集 + 幽灵静音/漏句补配微创成片(2026-09-06)。
+// tools/ 下 python 工具直跑(ASR 用 comfy venv 的 faster-whisper;补配需
+// GPT-SoVITS 服务在线,离线时仅静音降级)。任何失败只告警不动主成片。
+func (ctx *manjuCtx) runMicroVoiceover(lg *manjuLogger) {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	root := filepath.Dir(exe)
+	lockTool := filepath.Join(root, "tools", "voice_char_lock.py")
+	surgTool := filepath.Join(root, "tools", "h3_microsurgery.py")
+	if !fileExists(lockTool) || !fileExists(surgTool) {
+		lg.logf("  🎙 微创配音工具缺失(tools/*.py),跳过")
+		return
+	}
+	py := manjuPythonPath()
+	if !fileExists(py) {
+		lg.logf("  🎙 微创配音 python 缺失,跳过")
+		return
+	}
+	runPy := func(script string, args ...string) bool {
+		argv := append([]string{"-X", "utf8", script}, args...)
+		cmd := exec.Command(py, argv...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUNBUFFERED=1", "HF_HUB_OFFLINE=1")
+		out, err := cmd.CombinedOutput()
+		tail := ""
+		if len(out) > 0 {
+			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+			if len(lines) > 2 {
+				lines = lines[len(lines)-2:]
+			}
+			tail = strings.Join(lines, " | ")
+		}
+		if err != nil {
+			lg.logf("  🎙 微创步骤失败(%s): %v %s", filepath.Base(script), err, tail)
+			return false
+		}
+		if tail != "" {
+			lg.logf("  🎙 " + tail)
+		}
+		return true
+	}
+	lg.logf("  🎙 微创配音:音色锁采集(新角色)...")
+	runPy(lockTool, ctx.workdir, "--episodes", ctx.episode)
+	lg.logf("  🎙 微创配音:幽灵静音+漏句补配...")
+	if runPy(surgTool, ctx.workdir, ctx.episode) {
+		out := filepath.Join(ctx.workdir, ctx.episode+"_成片_微创版.mp4")
+		if fileExists(out) {
+			lg.logf("  ✅ 微创成片: " + out)
+		}
+	}
 }
 
 // seamHardCuts 接缝镜头号列表(MotionContext 渲染的镜头,其起始边界画面连续,
