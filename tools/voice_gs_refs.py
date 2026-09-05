@@ -38,8 +38,13 @@ def main():
         if os.path.exists(wav) and os.path.exists(txt) and not args.force:
             skip += 1
             continue
+        # 2026-09-05 音源去混响(用户验收 C 案):原神游戏语音带引擎混响,克隆会
+        # 连混响一起学走=「电子回音」;参考件统一过高通切低频+anlmdn 降噪收窄,
+        # 与换声输出后处理同链(cmp_C 拍板)
+        af = "highpass=f=140,lowpass=f=6800,afftdn=nr=12:nf=-25"
         r = subprocess.run([FFMPEG, "-y", "-v", "error", "-i", mp3, "-ss", "0",
-                            "-t", str(SEG_SEC), "-ac", "1", "-ar", "32000", wav],
+                            "-t", str(SEG_SEC), "-ac", "1", "-ar", "32000",
+                            "-af", af, wav],
                            capture_output=True)
         if r.returncode != 0 or not os.path.exists(wav):
             print("[fferr]", key, r.stderr.decode("utf-8", "replace")[:80])

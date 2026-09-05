@@ -155,10 +155,13 @@ def revoice_shot(src, dst, windows, api, speed, tmpdir, duck_spans):
         w3 = w
         w = os.path.join(tmpdir, "line_%d_clean.wav" % i)
         d = dur_of(w3)
-        subprocess.run([FFMPEG, "-y", "-v", "error", "-i", w3, "-af",
-                        "highpass=f=140,lowpass=f=6800,anlmdn=s=7:p=0.002:m=11,"
-                        "afade=t=in:st=0:d=0.005,afade=t=out:st=%.3f:d=0.005" % max(d - 0.005, 0),
+        rc = subprocess.run([FFMPEG, "-y", "-v", "error", "-i", w3, "-af",
+                        "highpass=f=140,lowpass=f=6800,afftdn=nr=12:nf=-25,"
+                        "afade=t=in:st=0:d=0.005,afade=t=out:st=%.3f:d=0.005" % max(d - 0.01, 0),
                         w], capture_output=True)
+        if rc.returncode != 0 or not os.path.exists(w) or os.path.getsize(w) == 0:
+            print("    [clean-fail] %s -> %s" % (w3, rc.stderr.decode("utf-8", "replace")[-100:]))
+            w = w3  # 后处理失败降级用未清理件(可听但不静默出坏档)
         filters.append("[%d:a]adelay=%d:all=1[v%d]" % (i + 1, delay, i))
         mix_labels.append("[v%d]" % i)
         inputs += ["-i", w]
@@ -167,18 +170,16 @@ def revoice_shot(src, dst, windows, api, speed, tmpdir, duck_spans):
     # 接缝伪影修复(2026-09-05 用户实锤"电子噪音只在成片"):帧级硬切在窗边界产生
     # 咔啦声——每窗边界 ±8ms 线性斜坡过渡(下坡 1→0,上坡 0→1)
     F = 0.008
-    # 标准梯形窗:下行坡 [t0-F,t0] 1→0,平台 [t0,t1] 0,上行坡 [t1,t1+F] 0→1。
-    # 多窗用 min 连接(任一窗激活即压),单表达式无重叠恒真段。
-    ramps = []
+    # 逐窗链式 volume(2026-09-05:多窗单表达式超 ffmpeg 解析长度;每窗一层
+    # volume 滤镜做 8ms 梯形坡,链式相乘等效多窗同时压,无表达式长度限制)
+    duck_expr = ""
+    chain = "[0:a]"
     for t0, t1 in duck_spans:
-        ramps.append(
-            "min(1,"
-            "max(0,(%.4f-t)/%.4f)+"    # t0-F..t0 下坡: (t0-t)/F 当 t<=t0
-            "max(0,(t-%.4f)/%.4f))"    # t1..t1+F 上坡: (t-t1)/F 当 t>=t1
-            % (t0, F, t1, F))
-    duck_expr = "min(1," + ",".join(ramps) + ")"
-    af = ("[0:a]volume='if(%s,0.0,1.0)':eval=frame[base];" % duck_expr +
-          ";".join(filters) + ";[base]%samix=inputs=%d:duration=first:normalize=0[aout]"
+        ramp = "max(0,min(1,(%.4f-t)/%.4f))+max(0,min(1,(t-%.4f)/%.4f))" % (t0, F, t1, F)
+        chain += "volume='if(min(1,%s),0.0,1.0)':eval=frame," % ramp
+    chain += "anull[base];"
+    af = (chain + ";".join(filters) +
+          ";[base]%samix=inputs=%d:duration=first:normalize=0[aout]"
           % ("".join(mix_labels), len(mix_labels) + 1))
     r = subprocess.run([FFMPEG, "-y", "-v", "error"] + inputs +
                        ["-filter_complex", af, "-map", "0:v", "-map", "[aout]",
