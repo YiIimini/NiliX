@@ -627,7 +627,7 @@ func manjuStyleInfo(w http.ResponseWriter, r *http.Request) {
 	if style == "" {
 		style = "2.5d"
 	}
-	spec := manjuStyleDesc(style)
+	spec := manjuStyleDescQuiet(style)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"style":   style,
 		"asset":   spec.asset,

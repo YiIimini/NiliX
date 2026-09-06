@@ -601,6 +601,14 @@ func manjuStyleDesc(style string) manjuStyleSpec {
 }
 
 // manjuAssetStyle 返回给图片模型(定妆照/场景图)的风格措辞，与逐镜 H3 风格保持一致。
+// manjuStyleDescQuiet 展示用解析:不留净化痕迹(2026-09-06 误报实锤:UI 画风
+// 查询污染全局 manjuStyleLastDropped,plan 日志错报「已从 image_prompt 剔除」
+// 17 项画风词,实际卡内全英文从未剥离)。
+func manjuStyleDescQuiet(style string) manjuStyleSpec {
+	defer func() { manjuStyleLastDropped = nil }()
+	return manjuStyleDesc(style)
+}
+
 func manjuAssetStyle(style string) string {
 	return manjuStyleDesc(style).asset
 }

@@ -164,17 +164,17 @@ func TestNarrativeBlockValidationMatrix(t *testing.T) {
 		block scriptJSONBlock
 		ok    bool
 	}{
-		{"合法两镜", scriptJSONBlock{Shots: []int{3, 4}, H3Prompt: "x [Shot 2] At 00:04.000"}, true}, // 4+4=8≤10
-		{"三镜超10s上限", scriptJSONBlock{Shots: []int{2, 3, 4}, H3Prompt: "x [Shot 3] At 00:08.000"}, false}, // 4+4+4=12>10(360帧挂死防线)
+		{"合法两镜", scriptJSONBlock{Shots: []int{3, 4}, H3Prompt: "x [Shot 2] At 00:04.000"}, true}, // 4+4=8≤12
+		{"合法三镜12s", scriptJSONBlock{Shots: []int{2, 3, 4}, H3Prompt: "x [Shot 3] At 00:08.000"}, true}, // 4+4+4=12≤12(12s 阶梯开放)
 		{"镜号缺失", scriptJSONBlock{Shots: []int{1, 99}, H3Prompt: "x [Shot 2]"}, false},
 		{"镜号不连续", scriptJSONBlock{Shots: []int{1, 3}, H3Prompt: "x [Shot 2]"}, false},
 		{"单镜非块", scriptJSONBlock{Shots: []int{1}, H3Prompt: "x [Shot 1]"}, false},
 		{"无切点标记", scriptJSONBlock{Shots: []int{1, 2}, H3Prompt: "no cut marker"}, false},
-		{"超10s两镜", scriptJSONBlock{Shots: []int{1, 2}, H3Prompt: "x [Shot 2]"}, false}, // 用例时长 6+5=11>10
+		{"合法11s两镜", scriptJSONBlock{Shots: []int{1, 2}, H3Prompt: "x [Shot 2]"}, true}, // 6+5=11≤12
 	}
 	plan := map[string]any{"shots": []any{
 		map[string]any{"shot_id": 1, "duration": 6},
-		map[string]any{"shot_id": 2, "duration": 5},
+		map[string]any{"shot_id": 2, "duration": 4},
 		map[string]any{"shot_id": 3, "duration": 4},
 		map[string]any{"shot_id": 4, "duration": 4},
 	}}
@@ -288,8 +288,8 @@ func TestNarrativeBlockRealChapter(t *testing.T) {
 			if strings.Contains(s.H3Prompt, "[Shot 2] At ") {
 				withCut++
 			}
-			if s.Duration > 10 {
-				t.Fatalf("块 %d 时长 %d 超 10(360帧挂死防线)", s.ID, s.Duration)
+			if s.Duration > 12 {
+				t.Fatalf("块 %d 时长 %d 超 12(12s 阶梯上限)", s.ID, s.Duration)
 			}
 		}
 	}
