@@ -73,7 +73,7 @@ def main():
             hp = s.get("h3_prompt") or ""
             lines = D_LINE.findall(hp)
             chars = s.get("characters") or []
-            if not lines or not chars:
+            if not lines:
                 continue
             mp4 = os.path.join(args.workdir, "clips", ep, "%02d.mp4" % int(s.get("shot_id") or 0))
             if not os.path.exists(mp4):
