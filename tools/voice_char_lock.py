@@ -92,7 +92,12 @@ def main():
                 want = re.sub(r"[^\u4e00-\u9fff]", "", re.sub(r"<[^>]+>", "", text))[:8]
                 for i, sg in enumerate(segs):
                     got = re.sub(r"[^\u4e00-\u9fff]", "", sg.text)
-                    if want[:5] and want[:5] in got:
+                    # 探针子串→相似度 0.6 兜底(转写噪声:生死簿→生死不化,严格探针漏采实锤)
+                    ok = bool(want[:5]) and want[:5] in got
+                    if not ok and want and got:
+                        from difflib import SequenceMatcher
+                        ok = SequenceMatcher(None, want, got).ratio() >= 0.6
+                    if ok:
                         t0, t1 = max(sg.start - 0.2, 0), min(sg.end + 0.2, dur_of(mp4))
                         cands.setdefault(cid, []).append((mp4, t0, t1, sg.avg_logprob,
                                                          re.sub(r"<[^>]+>", "", text)))
