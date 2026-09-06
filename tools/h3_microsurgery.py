@@ -63,14 +63,50 @@ def plan_shots(workdir, ep):
     return out
 
 
+GS_START = r"C:/Mi/Apps/GPT-SoVITS/gsenv/python.exe"
+GS_CWD = r"C:/Mi/Apps/GPT-SoVITS"
+
+
+def ensure_service(api):
+    """GPT-SoVITS 服务自愈(2026-09-06):不可达则拉起并等待就绪(补配无人值守)。"""
+    try:
+        urllib.request.urlopen(api + "/control", timeout=5)
+        return True
+    except urllib.error.HTTPError:
+        return True  # 400=活着(control 需参数)
+    except Exception:
+        subprocess.Popen([GS_START, "api_v2.py", "-a", "127.0.0.1", "-p", "9880"], cwd=GS_CWD,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=0x08000000)
+        import time
+        for _ in range(20):
+            time.sleep(3)
+            try:
+                urllib.request.urlopen(api + "/control", timeout=5)
+                return True
+            except urllib.error.HTTPError:
+                return True
+            except Exception:
+                continue
+        return False
+
+
 def synth(text, ref_wav, ref_text, speed, api):
     body = {"text": text, "text_lang": "zh", "ref_audio_path": ref_wav,
             "prompt_text": ref_text, "prompt_lang": "zh", "media_type": "wav",
             "streaming_mode": False, "speed_factor": speed}
     req = urllib.request.Request(api + "/tts", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=900) as r:
-        return r.read()
+    try:
+        with urllib.request.urlopen(req, timeout=900) as r:
+            return r.read()
+    except urllib.error.HTTPError:
+        raise
+    except Exception:
+        if ensure_service(api):
+            with urllib.request.urlopen(req, timeout=900) as r:
+                return r.read()
+        raise
 
 
 def lock_for(workdir, cid):
@@ -150,6 +186,16 @@ def main():
         # 补配:该镜角色的音色锁→GPT-SoVITS 合成→压掉 H3 对应残句段→叠入
         cid = next((c for c in chars), None)
         ref_wav, ref_txt = (lock_for(args.workdir, cid) if cid else (None, None))
+        if not ref_wav and not chars:
+            # 旁白镜(无登场角色):旁白锁→叙述档 gs 件回退
+            ref_wav, ref_txt = lock_for(args.workdir, "旁白")
+            if not ref_wav or dur_of(ref_wav) < 3.0:
+                for k in ("female_narrator", "male_narrator"):
+                    w = os.path.join(GS_DIR, k + ".wav")
+                    t = os.path.join(GS_DIR, k + ".txt")
+                    if os.path.exists(w) and os.path.exists(t) and dur_of(w) >= 3.0:
+                        ref_wav, ref_txt = w, io.open(t, encoding="utf-8").read().strip()
+                        break
         # 锁段不足 3s(GPT-SoVITS 硬下限)回落 voice_lib 参考件;弱锁待后续集采集
         # 更长段自动升级后自然接管
         if ref_wav and dur_of(ref_wav) < 3.0:

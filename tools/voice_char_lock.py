@@ -78,10 +78,14 @@ def main():
             mp4 = os.path.join(args.workdir, "clips", ep, "%02d.mp4" % int(s.get("shot_id") or 0))
             if not os.path.exists(mp4):
                 continue
-            # 单角色镜→归属明确;多角色镜跳过(说者歧义)
-            if len(chars) != 1:
+            # 单角色镜→归属明确;无角色单句镜→旁白伪角色(2026-09-06 叙述者音色锁,
+            # 镜1类纯旁白漏句补配此前无锁可用);多角色镜跳过(说者歧义)
+            if len(chars) == 1:
+                cid = str(chars[0])
+            elif not chars and len(lines) == 1:
+                cid = "旁白"
+            else:
                 continue
-            cid = str(chars[0])
             segs, _ = model.transcribe(mp4, language="zh", vad_filter=True)
             segs = list(segs)
             for text in lines:
