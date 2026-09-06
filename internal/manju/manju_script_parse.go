@@ -81,6 +81,10 @@ var (
 	// 配音档位行(2026-09-04 创作侧音色确认):「配音档位:/voice_lib:」→ card["voice_lib"]
 	// (NiliX 音色库档位 key,autoVoiceFor 最优先)
 	reCharVoiceLibLine = regexp.MustCompile(`(?m)^\s*(?:[-*]+\s*)?(?:配音档位|voice_lib)\s*[：:]\s*([A-Za-z_0-9]+)`)
+	// 行内尾缀形态(2026-09-06 七界实锤):技能侧 md 把绑定写在音色行尾
+	// 「…（voice_lib: male_deep_2，修饰词）」——行首正则漏读=体检全量误报未绑定。
+	// 行首优先(权威),行内兜底;key 后的中文修饰词由 [A-Za-z_0-9] 天然截断。
+	reCharVoiceLibInline = regexp.MustCompile(`(?:（|\()voice_lib\s*[：:]\s*([A-Za-z_0-9]+)`)
 	// 素材代码块(英文提示词)
 	reMdCodeBlock = regexp.MustCompile("(?s)```[^\\n]*\\n(.*?)\\n```")
 	// 台词:(S1)沈玉衡:"晚老板..."(非贪婪到闭合引号,多句逐条匹配;兼容无引号句)
@@ -1831,6 +1835,10 @@ func parseCharCards(text, assetStyle string, is3D bool) []map[string]any {
 		// 配音档位(2026-09-04 创作侧音色确认):「配音档位:male_sun」行 → voice_lib,
 		// 渲染端 autoVoiceFor 最优先(合法值校验在消费侧,解析侧宽松收字母数字下划线)
 		if vm := reCharVoiceLibLine.FindStringSubmatch(sec.body); vm != nil {
+			if v := strings.TrimSpace(vm[1]); v != "" {
+				card["voice_lib"] = v
+			}
+		} else if vm := reCharVoiceLibInline.FindStringSubmatch(sec.body); vm != nil {
 			if v := strings.TrimSpace(vm[1]); v != "" {
 				card["voice_lib"] = v
 			}

@@ -1020,6 +1020,12 @@ func manjuVoiceLibItems(ctx *manjuCtx) []manjuHealthItem {
 		}
 		vl := str(c["voice_lib"])
 		if vl == "" {
+			// 声明式自动匹配豁免(2026-09-06 七界体检实锤):卡面 voice 字段明写
+			// 「渲染端自动匹配」的特殊声线角色(渊种=主人声线扭曲版/纸壳人=空声),
+			// 是创作侧有意不绑档——体检按声明放行,不再 WARN
+			if strings.Contains(str(c["voice"]), "自动匹配") {
+				continue
+			}
 			missing = append(missing, id)
 		} else if manjuVoiceLibFor(vl) == nil {
 			invalid = append(invalid, id+"("+vl+")")

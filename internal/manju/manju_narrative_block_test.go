@@ -400,3 +400,18 @@ func TestQcRerunCountsPersist(t *testing.T) {
 		t.Fatalf("重试轮数未跨运行持久: %v", ctx2.qcRerender)
 	}
 }
+
+// voice_lib 行内尾缀形态解析(2026-09-06 七界实锤:绑定写音色行尾被行首正则漏读)
+func TestParseVoiceLibInlineSuffix(t *testing.T) {
+	md := "# 人物\n\n## 1. 玄机子（男，老年，道士）\n- 音色：沙哑官腔（voice_lib: male_deep_2，沙哑尖刻的笑面声）\n\n```text\nFront-facing portrait.\n```\n"
+	cards := parseCharCards(md, "real", false)
+	if len(cards) == 0 || cards[0]["voice_lib"] != "male_deep_2" {
+		t.Fatalf("行内 voice_lib 未解析: %+v", cards)
+	}
+	// 行首权威格式优先
+	md2 := "# 人物\n\n## 1. 甲（男，青年）\n配音档位: male_sun\n- 音色：（voice_lib: male_deep）\n```text\nx\n```\n"
+	cards2 := parseCharCards(md2, "real", false)
+	if len(cards2) == 0 || cards2[0]["voice_lib"] != "male_sun" {
+		t.Fatalf("行首格式应优先, got %+v", cards2)
+	}
+}
